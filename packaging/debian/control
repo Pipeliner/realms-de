@@ -19,13 +19,14 @@ Source: helm
 Section: x11
 Priority: optional
 Maintainer: helm contributors <helm-maintainers@helm.invalid>
-# Ubuntu 24.04 ships rustc/cargo 1.75, which is below helm's declared MSRV of
-# 1.82 (Cargo.toml). noble-updates carries versioned rustc-1.82/cargo-1.82
-# packages (verified present), so those are named first and debian/rules puts
-# the versioned toolchain on PATH.
+# Ubuntu 24.04's default rustc/cargo is 1.75, below helm's declared MSRV of 1.85
+# (Cargo.toml). The archive carries versioned toolchain packages: rustc-1.85 and
+# cargo-1.85 are present as 1.85.1+dfsg0ubuntu2~bpo0 (verified against noble's
+# package lists on 2026-08-26). Those are named first, and debian/rules puts the
+# newest versioned toolchain it finds on PATH and checks it before building.
 Build-Depends: debhelper-compat (= 13),
-               cargo-1.82 | cargo (>= 1.82),
-               rustc-1.82 | rustc (>= 1.82),
+               cargo-1.85 | cargo (>= 1.85),
+               rustc-1.85 | rustc (>= 1.85),
                pkg-config
 Standards-Version: 4.7.0
 Homepage: https://github.com/pipeliner/realms-de

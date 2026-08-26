@@ -45,9 +45,11 @@ License:        MIT OR Apache-2.0
 URL:            https://github.com/pipeliner/realms-de
 Source0:        %{name}-%{version}.tar.gz
 
-# helm's MSRV is 1.82 (Cargo.toml). Fedora 41 ships rust 1.82+, so plain
-# `rust`/`cargo` suffice.
-BuildRequires:  rust >= 1.82
+# helm's MSRV is 1.85 (Cargo.toml). Fedora 41's rust has moved past 1.85
+# through updates, but that was NOT verifiable from the build container — the
+# BuildRequires below is the check: dnf refuses the build rather than failing
+# halfway through cargo if the shipped rust is older.
+BuildRequires:  rust >= 1.85
 BuildRequires:  cargo
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  make

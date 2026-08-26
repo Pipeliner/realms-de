@@ -131,7 +131,7 @@ There is no apt repository yet (`NEEDS-HUMAN` in `packaging/debian/control`:
 PPA, self-hosted apt, or GitHub Releases). Build it yourself:
 
 ```sh
-sudo apt install devscripts debhelper rustc-1.82 cargo-1.82
+sudo apt install devscripts debhelper rustc-1.85 cargo-1.85
 git clone https://github.com/pipeliner/realms-de && cd realms-de
 
 ln -s packaging/debian debian        # Debian tooling insists on ./debian
@@ -139,10 +139,10 @@ dpkg-buildpackage -us -uc -b
 sudo apt install ../helm_0.1.0_*.deb
 ```
 
-Ubuntu 24.04 ships rustc 1.75, which is below helm's MSRV of 1.82.
-`noble-updates` carries `rustc-1.82`/`cargo-1.82`; `debian/rules` puts a
-versioned toolchain on PATH and fails with a clear message rather than building
-with the wrong compiler.
+Ubuntu 24.04's default rustc is 1.75, which is below helm's MSRV of 1.85. The
+archive carries versioned toolchain packages — `rustc-1.85`/`cargo-1.85` are
+there (1.85.1) — and `debian/rules` puts the newest one it finds on PATH,
+failing with a clear message rather than building with the wrong compiler.
 
 **Three runtime dependencies are not in the Ubuntu 24.04 archive** (checked
 against noble's package lists):

@@ -20,7 +20,8 @@ After=graphical-session-pre.target
 # NEEDS-HUMAN (idle + lock): docs/PITFALLS.md requires an idle+lock unit as part
 # of the session ("laptop lid closes, session stays unlocked"). No lock screen
 # has been chosen yet. Options: (a) swayidle + swaylock — packaged on Ubuntu
-# 24.04 and Fedora 41, wlr-layer-shell based, works under niri; (b) gtklock —
+# 24.04 and Fedora 41, wlr-layer-shell based, and river 0.4 is wlroots-based;
+# (b) gtklock —
 # nicer, more deps; (c) a helm-native locker in M6, which is a security-sensitive
 # thing to write ourselves. Once chosen, ship helm-idle.service with
 # PartOf=graphical-session.target and WantedBy=helm-session.target.

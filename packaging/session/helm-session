@@ -52,12 +52,13 @@ HELM_STRICT="${HELM_STRICT:-0}"
 # environment. Anything a portal, a launched app or a user unit needs to find
 # the display belongs in this list; nothing else does.
 #
-# DISPLAY is in the list on purpose, with a caveat: niri starts XWayland itself
-# and does not hand its :N back to us, so importing DISPLAY here is a no-op
-# today and XWayland apps rely on the compositor's own environment. Importing an
-# unset variable is silently harmless — but it is *not* the same as having done
-# it, so this is a known gap, not a solved problem (M3 follow-up; the compositor
-# has to publish the display for us to propagate it).
+# DISPLAY is in the list on purpose, with a caveat: the compositor starts
+# XWayland itself and does not hand its :N back to this script, which is its
+# *parent* — so importing DISPLAY here is a no-op today, and XWayland apps rely
+# on the compositor's own environment instead. Importing an unset variable is
+# silently harmless, but it is not the same as having done it: this is a known
+# gap, not a solved problem. Closing it needs river (or helm's window manager,
+# which sees river's environment) to publish the display for us to propagate.
 readonly SESSION_ENV_VARS=(
 	WAYLAND_DISPLAY
 	DISPLAY

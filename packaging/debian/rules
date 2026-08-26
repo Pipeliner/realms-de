@@ -41,12 +41,13 @@ export CARGO_HOME = $(CURDIR)/debian/.cargo
 # enough for its MSRV.
 export CARGO_TERM_COLOR = never
 
-# Ubuntu 24.04's default cargo is 1.75, below helm's MSRV of 1.82. The
+# Ubuntu 24.04's default cargo is 1.75, below helm's MSRV of 1.85. The
 # versioned toolchain packages install under /usr/lib/rust-<version>/bin, which
-# is the Debian convention for them; the wildcard means a newer versioned
-# toolchain is picked up without editing this file. NOT verified on a live
-# noble box from this container — if the path is wrong the guard below fails
-# loudly with the versions it found rather than building with the wrong rustc.
+# is the Debian convention for them; the wildcard takes the newest one present,
+# so a newer toolchain is picked up without editing this file. The path itself
+# is NOT verified on a live noble box from this container — if it is wrong,
+# nothing is added to PATH and the version guard below fails loudly with the
+# rustc it did find, rather than building with the wrong compiler.
 RUST_VERSIONED_BIN := $(lastword $(sort $(wildcard /usr/lib/rust-1.[89][0-9]/bin)))
 ifneq ($(RUST_VERSIONED_BIN),)
 export PATH := $(RUST_VERSIONED_BIN):$(PATH)
@@ -60,9 +61,9 @@ override_dh_auto_configure:
 
 override_dh_auto_build:
 	@echo "cargo: $$(cargo --version) / rustc: $$(rustc --version)"
-	@rustc --version | awk '{split($$2,v,"."); if (v[1] < 1 || (v[1] == 1 && v[2] < 82)) { \
-		print "helm: rustc " $$2 " is older than the MSRV 1.82 declared in Cargo.toml."; \
-		print "      Install rustc-1.82/cargo-1.82 (noble-updates) or a newer toolchain."; \
+	@rustc --version | awk '{split($$2,v,"."); if (v[1] < 1 || (v[1] == 1 && v[2] < 85)) { \
+		print "helm: rustc " $$2 " is older than the MSRV 1.85 declared in Cargo.toml."; \
+		print "      Install rustc-1.85/cargo-1.85 (in the Ubuntu 24.04 archive) or newer."; \
 		exit 1 }}'
 	# --locked: the build must use Cargo.lock, never silently resolve something
 	# else. A Debian archive upload additionally needs `cargo vendor` output and
