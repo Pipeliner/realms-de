@@ -27,6 +27,7 @@ Legend: **Guard** = the thing that would fail loudly if the mitigation regressed
 | `helm-session` stalls | Keys stop responding; river raises `unresponsive`; the session is effectively dead | Nothing on the input path may block — no theme apply, no write to a wedged subscriber. §4 budgets are correctness bounds here | *planned:* M2 watchdog asserting no handler exceeds its budget |
 | `helm-session` dies | Windows unplaced, keybindings gone — a sharper failure than a crashed bar | Supervised restart with ledger recovery from the last snapshot | *planned:* M2 |
 | Layer-shell not served | **The bar never appears**, and it looks like the bar is broken rather than the WM | helm implements `river-layer-shell-v1`; `doctor` checks it is being served | *planned:* M2 |
+| Position submitted during the management phase | Session dies at startup with a protocol error | `set_position` is rendering state and `propose_dimensions` is management state; the backend respects the phase boundary | *planned:* M2 test asserting no `error::sequence_order` across a scripted mutation sweep |
 | Protocol version drift after a river bump | Session fails to start after a routine upgrade | Pin a tested river; version-check at connect and refuse with a clear message rather than misbehaving | *planned:* M2 |
 
 ## Fonts and glyphs

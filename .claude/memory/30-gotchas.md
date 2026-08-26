@@ -46,3 +46,15 @@ issue.
 **Fix:** check the release announcement and the protocol file itself (a `z`
 prefix, an `unstable/` directory, the interface version) before repeating a
 stability claim. `river-window-management-v1` is declared stable as of 0.4.0.
+
+**Symptom:** river protocol URLs 404.
+**Cause:** the default branch is `main`, not `master`.
+**Fix:** fetch from `codeberg.org/river/river` branch `main`.
+
+**Symptom:** a river integration dies at startup with `error::sequence_order`.
+**Cause:** `set_position` is *rendering* state while `propose_dimensions` is
+*window-management* state, so one placement spans both phases of the
+manage/render cycle.
+**Fix:** sizes between `manage_start` and `manage_finish`; positions after
+`render_start`. Never assume a protocol's two phases split along the same line
+your own abstraction does.

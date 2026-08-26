@@ -53,7 +53,14 @@ pub trait WmBackend: Send {
 /// What a backend can and cannot do, so helm degrades honestly rather than
 /// pretending. `helm ctl doctor` prints this.
 pub struct Capabilities {
-    pub exact_geometry: bool,     // can we place windows at arbitrary rects?
+    /// True when the *rendered* rectangle is exactly the projected one.
+    ///
+    /// Not "can we ask for arbitrary rects" — we always can. This asks whether
+    /// what lands on screen matches, which `propose_dimensions` alone cannot
+    /// promise because clients may quantise. True at `river_window_v1` >= 3,
+    /// where `set_content_clip_box` lets helm clip to the exact tile; false
+    /// below it, with `"unclipped-dimension-quantisation"` in `unsupported`.
+    pub exact_geometry: bool,
     pub server_side_borders: bool,
     pub hide_show: bool,          // is stow expressible?
     pub explicit_ordering: bool,  // can we set stacking order directly?
@@ -88,11 +95,20 @@ backend is a translation rather than an approximation:
 | Ledger order | *helm's own*, expressed through the positions it computes | Exact, because helm owns it outright |
 | Stacking (mono occlusion, overlays) | `river_node_v1::place_top` / `place_bottom` / `place_above` / `place_below` | Exact |
 | Stow | `river_window_v1::hide` / `show` — *rendering* state, so the window stays managed and stays in the ledger | Exact, and a closer match to `Orbit::stowed` than we expected |
-| Focus | `river_seat_v1::focus_window` / `clear_focus` | Exact |
+| Focus | `river_seat_v1::focus_window` / `clear_focus` | Exact. Note `focus_exclusive` / `focus_non_exclusive` / `focus_none` are **events**, not requests: helm is told about exclusive focus, it does not grant it |
 | 1px seams | `set_borders`, drawn by the compositor | Exact |
-| Fullscreen | `fullscreen` / `exit_fullscreen` | Exact |
-| Workarea | `river_layer_shell_output_v1::non_exclusive_area` | Exact — arrives as an event, and is literally `Workarea::new(w, h, top, bottom)` |
-| Atomic relayout | the `manage` → `render` sequence | Exact, and frame-perfect by construction |
+| Fullscreen | `fullscreen` / `exit_fullscreen` | Exact. Whether the bar draws over a fullscreen window is decided by the bar's chosen *layer*, not by node ordering: `river-layer-shell-v1` exposes no node and no ordering request at all |
+| Window identity | `river_window_v1` `identifier` (up to 32 printable ASCII bytes) | **Requires a mapping.** `WinId` is a `u64`, so helm-session holds a bijection and allocates ids from a monotonic counter keyed on river's identifier. The never-reused property survives, but via helm's counter rather than river's string |
+| Workarea | `river_layer_shell_output_v1::non_exclusive_area` | Exact — arrives as an event. It is a free rectangle in global coordinates, *not* the `Workarea::new(w, h, top, bottom)` shape, so the backend converts |
+| Atomic relayout | the `manage` **and** `render` sequences, in that order | Exact, but it is **two** phases and helm must respect the boundary — see below |
+
+**A placement spans both phases.** `propose_dimensions` is window-management
+state; `set_position` is *rendering* state. So a single `apply()` is not one
+manage sequence: sizes go between `manage_start` and `manage_finish`, then
+positions go after `render_start`. Submitting a position in the management phase
+raises `error::sequence_order` and kills the connection — this is a protocol
+error, not a style preference, and it is the single easiest way to get river
+integration wrong.
 
 `place_*` orders the **render list**, not the ledger. The ledger is *layout*
 order, which helm computes itself and expresses as positions; the `place_*`
@@ -118,7 +134,7 @@ companion protocols are obligations, and the first is load-bearing:
 | Protocol | What helm owes it | Consequence if unimplemented |
 |---|---|---|
 | `river-layer-shell-v1` | Serve layer-shell on river's behalf | **The bar does not appear at all.** `wlr-layer-shell` works under river only if the window manager implements it |
-| `river-xkb-bindings-v1` | The entire keymap | No keybinding works. `ensure_next_key_eaten` and `ate_unbound_key` are purpose-built for chorded submaps, which is exactly helm's chord model |
+| `river-xkb-bindings-v1` | The entire keymap, **and key repeat for bound keys** | No keybinding works. `ensure_next_key_eaten` and `ate_unbound_key` (on `river_xkb_bindings_seat_v1`, reached via `get_seat`) are purpose-built for chorded submaps, which is exactly helm's chord model. `stop_repeat` establishes that repeat for bound keys is the window manager's job, so helm owns a second timer — armed only between `pressed` and `released`, which is the justification ADR 0009's no-timers rule requires |
 | `river-input-management-v1` | Seats, repeat rate, pointer config | No input configuration |
 
 This is a materially larger phase-1 surface than "write a backend", and M2 is
