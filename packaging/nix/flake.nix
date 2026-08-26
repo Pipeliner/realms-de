@@ -31,6 +31,19 @@
 #    relative path, so the move needs no other edit.
 # ─────────────────────────────────────────────────────────────────────────────
 #
+# COMPOSITOR: river 0.4.x, not niri (ADR 0013 supersedes ADR 0002). river 0.4
+# removed window management from the compositor and exposes it over
+# `river-window-management-v1`; helm-session is the window manager that drives
+# it. Consequences for this file, in order of how much they will surprise you:
+#
+#   * `programs.helm.compositor` defaults to a pinned river 0.4.x, and river is
+#     in the helm package's runtime closure. A river older than 0.4 does not
+#     speak the protocol at all — hence the version guard in `riverFor`.
+#   * The pin is the nixpkgs input plus flake.lock. That is a rev pin: locking
+#     nixpkgs locks river's source tag, its hash, and its zig dependency hash
+#     together. See the NEEDS-HUMAN block on `riverFor` for the alternative
+#     (a dedicated tag input) and why it is not the default.
+#
 # PRE-ALPHA (0.1.0). The Cargo workspace currently contains one crate,
 # helm-core, and it is a *library*: this package installs no helm binaries,
 # because none exist yet. What it does install is real and testable today — the
@@ -97,6 +110,51 @@
             in here rather than building with a different compiler than CI.
           '';
 
+      # The river release helm's protocol mapping is written and tested against.
+      # Bump deliberately, never incidentally.
+      riverTested = "0.4.8";
+
+      # river, version-guarded.
+      #
+      # 0.4 is a hard floor, not a preference: river 0.3.x and river-classic
+      # (0.3.17 in nixpkgs) have window management *inside* the compositor and
+      # do not implement river-window-management-v1, so helm-session has nothing
+      # to drive and the desktop is inert. 0.5 is excluded because the protocol
+      # is registry-classified unstable — a minor bump is exactly where it may
+      # move, and helm should refuse to build rather than fail at runtime.
+      #
+      # NEEDS-HUMAN — how river is pinned. Two options:
+      #   (a) what this file does: pin through the nixpkgs input. flake.lock
+      #       fixes nixpkgs, which fixes river's tag, its source hash and its
+      #       zig-dependency hash in one place, using nixpkgs' tested build
+      #       recipe. Cost: bumping river means bumping nixpkgs.
+      #   (b) a dedicated tag-pinned input,
+      #       `https://codeberg.org/river/river/archive/refs/tags/vX.Y.Z.tar.gz`
+      #       (the upstream URL nixpkgs itself fetches), fed to
+      #       `pkgs.river.overrideAttrs`. Cost: river's derivation carries TWO
+      #       fixed-output hashes — `src.hash` and `zigDeps.hash` (zig 0.16
+      #       package cache) — and the second cannot be derived from the tag.
+      #       Someone with a nix build must produce it. Guessing it produces a
+      #       hash-mismatch build failure at install time, which is why (b) is
+      #       not the default.
+      # Decide when we first need a river newer than nixpkgs carries.
+      riverFor =
+        pkgs:
+        let
+          v = pkgs.river.version;
+        in
+        if !(lib.versionAtLeast v "0.4" && lib.versionOlder v "0.5") then
+          throw ''
+            helm flake: nixpkgs provides river ${v}, but helm drives river over
+            river-window-management-v1, which exists only in river 0.4.x.
+            Pin nixpkgs to a revision carrying river 0.4.x, or set
+            programs.helm.compositor to a river you have tested.
+          ''
+        else
+          lib.warnIf (v != riverTested)
+            "helm: river ${v} differs from the tested ${riverTested}; river-window-management-v1 is classified unstable, so re-test the window-manager mapping."
+            pkgs.river;
+
       # The tools helm reuses rather than rewrites (ADR 0007 / S8). These are
       # runtime dependencies of the *desktop*, not build inputs of the crate.
       reusedTools =
@@ -111,13 +169,17 @@
 
       # Everything the session wrapper shells out to. Wrapping this onto PATH is
       # what makes the wrapper work on a NixOS box, where /usr/bin is empty.
+      # river is here rather than left to the system profile because a helm
+      # package that cannot start its compositor is not a desktop.
       wrapperRuntime =
-        pkgs: with pkgs; [
+        pkgs:
+        (with pkgs; [
           coreutils # date, sleep, mkdir
           systemd # systemctl --user
           dbus # dbus-update-activation-environment
           glib # gsettings
-        ];
+        ])
+        ++ [ (riverFor pkgs) ];
 
       helmPackage =
         pkgs:
@@ -233,12 +295,17 @@
 
             compositor = lib.mkOption {
               type = lib.types.package;
-              default = pkgs.niri;
-              defaultText = lib.literalExpression "pkgs.niri";
+              default = riverFor pkgs;
+              defaultText = lib.literalExpression "pkgs.river (0.4.x, version-guarded)";
               description = ''
-                The Wayland compositor helm runs on. niri today (ADR 0002);
-                swap for pkgs.helm-compositor once M5 lands, without touching
-                anything else in this module.
+                The Wayland compositor helm runs on: river 0.4.x, driven by
+                helm-session over river-window-management-v1 (ADR 0013).
+
+                Point this elsewhere and you own the consequences — a compositor
+                that does not implement river-window-management-v1 leaves helm
+                with no way to place windows. The seam is real (helm-session
+                talks to a WmBackend, not to river), but there is exactly one
+                backend today.
               '';
             };
 
@@ -482,6 +549,12 @@
             machine.succeed("helm-session --version")
             machine.succeed("helm-session --check")
 
+            # river 0.4.x, the compositor helm drives. `-version` (one dash) is
+            # river's own spelling. Anything below 0.4 does not implement
+            # river-window-management-v1, and the flake would have refused to
+            # evaluate — this asserts the package that actually landed.
+            machine.succeed("river -version")
+
             # The user units that carry the session.
             machine.succeed("test -f /etc/systemd/user/helm-session.target")
             machine.succeed("test -f /etc/systemd/user/helm-bar.service")
@@ -555,10 +628,14 @@
               # supported rpm path; `cargo install cargo-generate-rpm` if you
               # want the metadata-driven one.
             ])
+            ++ [
+              # The same pinned river the package and the module use, so
+              # `nix develop` and a real login disagree about nothing.
+              (riverFor pkgs)
+            ]
             ++ (with pkgs; [
               # The desktop helm assembles itself out of, so `nix develop`
               # gives a runnable session and not just a compiler.
-              niri
               wayland-utils
               wl-clipboard
             ])
