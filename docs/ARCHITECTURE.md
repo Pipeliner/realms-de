@@ -106,7 +106,8 @@ Each row links to its ADR. "Reversal" is the honest cost of changing our mind.
 | # | Decision | Rationale in one line | Reversal |
 |---|---|---|---|
 | [0001](adr/0001-ledger-as-single-source-of-truth.md) | Ledger + pure projection | Undo, focus and damage-tracking all become trivial | Structural — the whole DE assumes it |
-| [0002](adr/0002-borrow-a-compositor-first.md) | Ship on **niri** first, own compositor later | A compositor is 12+ months; the DE is the product. niri is Rust, on Smithay, and daily-drivable now | Low — hidden behind `WmBackend` |
+| ~~[0002](adr/0002-borrow-a-compositor-first.md)~~ | ~~Ship on **niri** first~~ | *Superseded by 0013.* Kept for the evidence that moved us | — |
+| [0013](adr/0013-river-window-management-backend.md) | Be the window manager for **river 0.4** | river 0.4 removed window management from the compositor; `river-window-management-v1` gives exact position, dimensions, node ordering, hide/show and borders — helm's ledger model exactly | Low — hidden behind `WmBackend` |
 | [0003](adr/0003-session-daemon-owns-state.md) | A session daemon owns state; clients subscribe | Bar/launcher stay dumb; swapping the compositor changes one file | Low |
 | [0004](adr/0004-ndjson-control-socket.md) | Newline-delimited JSON over a unix socket | Scriptable with `socat`; partial frames can't be misread | Low |
 | [0005](adr/0005-palette-toml-single-source.md) | One `palette.toml` → generated themes | No colour is written down twice; contrast is derived, not filtered | Low |
@@ -121,18 +122,28 @@ Each row links to its ADR. "Reversal" is the honest cost of changing our mind.
 ### The compositor question, stated plainly
 
 The brief asks for a Smithay compositor eventually. We agree — and we are not
-starting there. `helm-session` talks to a `WmBackend` trait; `NiriBackend`
-implements it against niri's IPC today, `NativeBackend` will implement it
-in-process against `helm-compositor` later. Every client, every theme, every
-keybinding and the entire ledger are written against the trait, not against
-niri. Building the compositor first would mean a year before anyone can use the
-thing, and the interesting design work — the ledger — is testable without it.
+starting there. Building one first means a year before anyone can log in, and
+the interesting design work, the ledger, is testable without it.
 
-Marked **`needs-human`**: niri's own window model is scrollable-tiling, not
-ledger-tiling. `NiriBackend` will therefore be a *projection*, not a passthrough,
-and some helm layouts will not map perfectly onto it. See
-[#adr-0002](adr/0002-borrow-a-compositor-first.md) for the mapping table and the
-known gaps.
+So `helm-session` talks to a `WmBackend` trait. In phase 1, `RiverBackend`
+implements it by **being river's window manager**: river 0.4 removed all window
+management from the compositor and defers it to an external process over
+`river-window-management-v1`, which offers exact positions and dimensions,
+explicit node ordering, hide/show, focus control and compositor-drawn borders.
+That is helm's model rather than an approximation of it — the ledger drives real
+pixels from M2. In phase 3, `NativeBackend` implements the same trait in-process
+against `helm-compositor`, and nothing above the trait changes.
+
+This replaces an earlier decision to ship on niri, whose scrollable-tiling model
+could only approximate the triptych and had no equivalent for stow. ADR 0002
+records that reasoning and the mapping table that argued us out of it; ADR 0013
+records where we landed.
+
+The live risk, stated plainly: `river-window-management-v1` is classified
+*unstable* in the protocol registry, against which river's maintainer pledges
+"we do not break window managers". Both are true and neither cancels the other.
+We pin a tested river and treat a protocol bump as a tracked event, not a
+surprise.
 
 ---
 
@@ -180,6 +191,7 @@ Supported from day one, tested in CI:
 |---|---|---|
 | **NixOS / Nix** | Flake: packages, `nixosModules.helm`, `homeManagerModules.helm` | Reference build. A NixOS VM test boots the session and asserts the bar appears |
 | **Ubuntu** 24.04 LTS + | `.deb` via `cargo-deb`, plus a PPA-shaped repo layout | Oldest supported glibc. Note the MSRV is pinned harder by the dependency set (1.85, edition 2024) than by glibc |
+| **Compositor** | A **vendored, pinned river 0.4.x** on every target | Ubuntu and Fedora ship river 0.3.x or river-classic, neither of which speaks the WM protocol. Vendoring puts Zig in the packaging pipeline only, never in helm's own workspace |
 | **Fedora** 41 + | `.rpm` via `cargo-generate-rpm` and a `.spec` | SELinux-clean; no custom labels required |
 
 Anything else is best-effort. The flake is the definition; the distro packages

@@ -13,9 +13,9 @@
 ## 1. `WmBackend` — the compositor seam (ADR 0002, 0003)
 
 The whole point of this trait is that `helm-session` never learns which
-compositor it is talking to. `NiriBackend` implements it against niri's IPC in
-phase 1; `NativeBackend` implements it in-process against `helm-compositor` in
-M5. Nothing above this line changes when we swap them.
+compositor it is talking to. `RiverBackend` implements it in phase 1 by *being*
+river's window manager; `NativeBackend` implements it in-process against
+`helm-compositor` in M5. Nothing above this line changes when we swap them.
 
 ```rust
 /// A window manager helm can drive.
@@ -55,8 +55,9 @@ pub trait WmBackend: Send {
 pub struct Capabilities {
     pub exact_geometry: bool,     // can we place windows at arbitrary rects?
     pub server_side_borders: bool,
+    pub hide_show: bool,          // is stow expressible?
+    pub explicit_ordering: bool,  // can we set stacking order directly?
     pub fullscreen: bool,
-    pub per_output_workspaces: bool,
     pub unsupported: Vec<&'static str>, // named helm behaviours this backend cannot honour
 }
 
@@ -74,25 +75,40 @@ pub enum BackendEvent {
 }
 ```
 
-### The niri gap, stated honestly
+### Why river fits: helm *is* the window manager
 
-niri is scrollable-tiling: an infinite horizontal strip of columns. helm is
-ledger-tiling: a fixed workarea partitioned exactly. These are not the same
-model, so `NiriBackend` is a projection with losses:
+river 0.4 removed window-management policy from the compositor entirely and
+defers it to an external process over `river-window-management-v1`. helm is that
+process. The protocol's vocabulary is close enough to the ledger's that the
+backend is a translation rather than an approximation:
 
-| helm concept | niri equivalent | Fidelity |
+| helm concept | river request | Fidelity |
 |---|---|---|
-| Orbit 1–6 | niri workspace | Good |
-| Ledger order | column order within a workspace | Good |
-| `mono` layout | single maximised column | Good |
-| Fullscreen | niri fullscreen | Good |
-| `triptych` master + 2×2 stack | column widths + in-column stacking | **Approximate** — niri does not nest a 2×2 grid inside a column |
-| Stow | no direct equivalent | **Missing** — candidate: move to a hidden workspace |
-| Exact gapless 1px seams | niri gaps/borders config | **Approximate** |
+| Placement rectangle | `river_node_v1::set_position` + `river_window_v1::propose_dimensions` | Exact |
+| Ledger order | `river_node_v1::place_above` / `place_below` / `place_top` / `place_bottom` | Exact |
+| Stow | `river_window_v1::hide` / `show` | Exact |
+| Focus | `river_seat_v1::focus_window` / `clear_focus` | Exact |
+| 1px seams | `set_borders`, drawn by the compositor | Exact |
+| Fullscreen | `fullscreen` / `exit_fullscreen` | Exact |
+| Atomic relayout | the `manage` → `render` sequence | Exact, and frame-perfect by construction |
 
-`Capabilities::unsupported` names each gap at runtime rather than letting the
-user discover it by surprise. Which of these we are willing to live with in
-phase 1 is a **`needs-human`** decision; see ADR 0002.
+Two consequences worth stating plainly, because they cut both ways:
+
+1. **`apply()` maps onto one `manage` sequence.** river applies window-management
+   state atomically between `manage_start` and `manage_finish`, which is exactly
+   the guarantee the projection wants: a relayout is never observed half-done.
+2. **If `helm-session` dies, river has no window management at all.** Under niri
+   a crashed session daemon left a working, if unmanaged, desktop. Under river it
+   leaves windows unplaced. The session daemon therefore needs a restart policy
+   sharper than "on-failure and hope", and that is a requirement on M2, not a
+   nicety. See ADR 0013.
+
+The protocol is registry-classified *unstable*, against which river's maintainer
+pledges "we do not break window managers". Both are true. helm pins a tested
+river version and treats a protocol bump as a tracked event.
+
+ADR 0002 records the superseded plan to ship on niri, and the mapping table that
+argued us out of it — worth reading before anyone proposes going back.
 
 ---
 
