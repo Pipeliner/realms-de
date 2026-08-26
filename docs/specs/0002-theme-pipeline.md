@@ -1,6 +1,7 @@
 # SPEC 0002 — Theme pipeline
 
-- **Status:** Implemented (2026-08-26)
+- **Status:** Accepted; implemented through A13 (2026-08-26). A12 and A14 are
+  pending the descriptor-relative writer tracked by #110.
 - **Milestone:** M1
 - **Decisions:** [ADR 0005](../adr/0005-palette-toml-single-source.md),
   [ADR 0006](../adr/0006-oklab-contrast-not-filters.md)
@@ -67,8 +68,8 @@ The ordering is not negotiable, because a half-applied theme — a new terminal
 palette against an old GTK stylesheet — is both ugly and hard to diagnose:
 
 1. Render every template to memory.
-2. For each output whose bytes differ from what is on disk, write
-   `<target>.helm-tmp` and `fsync` it.
+2. For each output whose bytes differ from what is on disk, write a unique
+   no-follow staging sibling named from `<target>.helm-tmp`, and `fsync` it.
 3. `rename(2)` every temp file into place. (Same filesystem, so the rename is
    atomic per file.)
 4. Only then, fan out reloads — once each, deduplicated.
@@ -85,7 +86,13 @@ targets are refused before rendering or writing. The configuration root itself
 must not be a symlink. Staging files are created exclusively and without
 following links, so an existing `<target>.helm-tmp` cannot redirect or clobber
 another file. Descriptor-relative operations own the remaining replacement-race
-protection for the final writer. Palette lookup has the same containment rule:
+protection for the final writer. The writer opens the configuration root once
+with `NOFOLLOW`, opens or creates every normalized parent relative to that
+descriptor with `NOFOLLOW`, and performs comparison, staging, rename, cleanup,
+and directory `fsync` through the held descriptor. A later pathname replacement
+may prevent the requested update from becoming visible, but must never redirect
+a read, write, cleanup, or rename outside the originally opened directory.
+Palette lookup has the same containment rule:
 the configuration root's `helm` directory and `palette.toml` must be real
 children rather than symlinks before a first-run copy or a read occurs.
 
@@ -124,8 +131,9 @@ Each row is one happy path and becomes one test.
 | A9 | Given the shipped palette, when `helm ctl theme lint` runs, then it exits 0 and prints the accent hue separations | `theme::tests::lint_report_is_clean_for_the_shipped_palette_and_lists_hue_separations` |
 | A10 | Given a modified palette, when `helm ctl theme diff` runs, then it prints which outputs would change without writing any | `theme::tests::diff_reports_what_would_change_and_writes_nothing` |
 | A11 | Given an empty, escaping, duplicate, or symlinked output path, when `apply` runs, then it refuses before touching an output outside the configuration root | `theme::tests::unsafe_or_duplicate_targets_abort_before_any_output_is_written`, `theme::tests::a_symlinked_output_parent_is_refused_without_touching_its_destination`, `theme::tests::a_symlinked_configuration_root_is_refused` |
-| A12 | Given an attacker-planted staging symlink, when `apply` runs, then it refuses without modifying that symlink's destination | `theme::tests::a_symlinked_staging_file_is_refused_without_touching_its_destination` |
+| A12 | Given an attacker-planted predictable staging symlink, when `apply` runs, then it does not modify that symlink's destination and stages only through a unique no-follow sibling | `theme::tests::a_symlinked_staging_file_is_not_touched` |
 | A13 | Given a symlinked `helm` palette directory or `palette.toml`, when palette loading or first-run initialization runs, then it refuses without reading or writing the link destination | `theme::tests::a_symlinked_palette_path_is_refused_without_touching_its_destination` |
+| A14 | Given an output parent is replaced with a symlink after its directory descriptor is acquired, when staging, cleanup, or commit proceeds, then no operation reaches the symlink destination | `theme::tests::a_replaced_output_parent_cannot_redirect_descriptor_relative_writes` |
 
 A9 and A10 name `helm ctl` subcommands, but the CLI is a separate M1 slice and
 does not exist yet. Both are tested at the library boundary the subcommands will
