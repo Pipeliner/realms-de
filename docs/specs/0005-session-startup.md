@@ -65,9 +65,9 @@ paths; session teardown; the log-line contract; and the list of checks
 | Name | What it is |
 |---|---|
 | `helm-session` | The **session entry**: the shell script a display manager execs. It owns the ordering contract. |
-| `helm-sessiond` | The **window manager and session daemon** binary (crate `helm-session`, ADR 0003). Under river it *is* the window manager. |
+| `helm-wm` | The **window manager and session daemon** binary (crate `helm-session`, ADR 0003). Under river it *is* the window manager. |
 | `helm-session.target` | The systemd user target that anchors everything needing a display. |
-| `helm-daemon.service` | The unit that supervises `helm-sessiond`. |
+| `helm-wm.service` | The unit that supervises `helm-wm`. |
 
 The four-way collision between these names is a real hazard for readers and is
 raised as **OQ-4**.
@@ -207,10 +207,10 @@ still activates, and `systemctl start` still exits 0. After starting the target
 the entry must verify, per unit:
 
 ```sh
-systemctl --user show -p ActiveState -p ConditionResult -p Result helm-daemon.service
+systemctl --user show -p ActiveState -p ConditionResult -p Result helm-wm.service
 ```
 
-`ActiveState=active` is the only acceptable answer for `helm-daemon.service`.
+`ActiveState=active` is the only acceptable answer for `helm-wm.service`.
 `ConditionResult=no` is reported as `FATAL WM-ABORT` with the specific message
 that the environment handshake did not reach the user manager.
 
@@ -222,7 +222,7 @@ runs the teardown in §7 from an `EXIT INT TERM HUP` trap.
 ### 2. The river-specific ordering problem
 
 Under river 0.4 the compositor performs no window management. Between step 2 and
-the moment `helm-sessiond` binds `river_window_manager_v1`, there is a window in
+the moment `helm-wm` binds `river_window_manager_v1`, there is a window in
 which river is running and nothing is placing windows.
 
 **What the user sees in that window.** The background and the cursor, and
@@ -235,13 +235,13 @@ from a crashed session.
 
 **Requirements:**
 
-1. The gap is bounded and measured. `helm-sessiond` reaches readiness within the
+1. The gap is bounded and measured. `helm-wm` reaches readiness within the
    cold-start budget (§Budgets). `Type=notify` with `sd_notify(READY=1)` sent
    once the window-management global **and** the layer-shell manager global are
    both bound is the required readiness definition, so that "the target is
    active" and "windows can be placed" are the same statement. (**OQ-6**: the
    current unit is `Type=exec` pending the daemon existing.)
-2. **`helm-sessiond` never connects.** After the start limit is reached the
+2. **`helm-wm` never connects.** After the start limit is reached the
    entry must not leave the user staring at an inert compositor. It logs
    `FATAL WM-ABORT`, with the one-line explanation *"river is running but helm
    is not managing it: no window can be placed. See <log path>."*, tears the
@@ -249,7 +249,7 @@ from a crashed session.
    is strictly better than a black screen, because the black screen has no
    surface on which to tell the user anything — with no window manager there is
    no layer shell, so helm cannot draw its own error.
-3. **`helm-sessiond` dies later.** Supervised restart, with the ledger recovered
+3. **`helm-wm` dies later.** Supervised restart, with the ledger recovered
    rather than lost. On every ledger mutation the daemon queues a snapshot to
    `$XDG_RUNTIME_DIR/helm/ledger.snapshot`; the write happens on a separate
    thread and never on the protocol input path, because under river a stall is a
@@ -258,7 +258,7 @@ from a crashed session.
    windows river no longer reports are dropped, windows the snapshot does not
    know about are appended in river's order.
 4. **river refuses the connection.** Only one window-management client may
-   connect; river answers `unavailable` to a second. A leftover `helm-sessiond`
+   connect; river answers `unavailable` to a second. A leftover `helm-wm`
    from a previous session, or one started by hand, therefore makes the
    supervised one unstartable *forever* — and a naive `Restart=` turns that into
    a permanent restart loop. See failure mode **N2**.
@@ -344,7 +344,7 @@ is guaranteed installed on any of the three targets. It connects to
                             ▼
                   graphical-session.target
                      │            │            │
-        helm-daemon.service   helm-bar.service   xdg-desktop-portal.service
+        helm-wm.service   helm-bar.service   xdg-desktop-portal.service
         (the window manager)   (Wants=daemon)    (upstream; PartOf= the target)
                      │
              helm-idle.service  ← blocked on OQ-1
@@ -353,8 +353,8 @@ is guaranteed installed on any of the three targets. It connects to
 | Unit | `[Unit]` | `[Service]` | `[Install]` |
 |---|---|---|---|
 | `helm-session.target` | `BindsTo=graphical-session.target`, `Before=graphical-session.target`, `Wants=graphical-session-pre.target`, `After=graphical-session-pre.target` | — | **none** |
-| `helm-daemon.service` | `PartOf=graphical-session.target`, `After=graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=helm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=helm-session.target` |
-| `helm-bar.service` | `PartOf=graphical-session.target`, `After=graphical-session.target helm-daemon.service`, `Wants=helm-daemon.service`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5` | `Type=exec`, `Restart=on-failure`, `RestartSec=1`, `TimeoutStopSec=5`, `Slice=app.slice` | `WantedBy=helm-session.target` |
+| `helm-wm.service` | `PartOf=graphical-session.target`, `After=graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=helm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=helm-session.target` |
+| `helm-bar.service` | `PartOf=graphical-session.target`, `After=graphical-session.target helm-wm.service`, `Wants=helm-wm.service`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5` | `Type=exec`, `Restart=on-failure`, `RestartSec=1`, `TimeoutStopSec=5`, `Slice=app.slice` | `WantedBy=helm-session.target` |
 
 The reasoning behind each relationship, because these are easy to copy wrongly:
 
@@ -373,7 +373,7 @@ The reasoning behind each relationship, because these are easy to copy wrongly:
   which is a listed pitfall, not a design.
 - **`Wants=`, never `Requires=`, from the target to the clients.** A bar that
   cannot start must leave a usable desktop.
-- **`Wants=helm-daemon.service` from the bar.** The bar reconnects to the
+- **`Wants=helm-wm.service` from the bar.** The bar reconnects to the
   control socket on its own, so a window manager that is briefly down — a
   restart, exactly the case §2 designs for — must not stop the bar running.
 - **Different slices.** The window manager is in `session.slice`; the bar is in
@@ -389,7 +389,7 @@ The reasoning behind each relationship, because these are easy to copy wrongly:
   portable across the three packagers, and if the symlinks are missing then
   `systemctl --user start helm-session.target` starts *nothing at all* and
   reports success. Ship
-  `lib/systemd/user/helm-session.target.wants/helm-daemon.service` and
+  `lib/systemd/user/helm-session.target.wants/helm-wm.service` and
   `.../helm-bar.service` as real symlinks in every package.
 - **`ConditionEnvironment=` requires systemd ≥ 246**, which all three targets
   exceed. It is worth having because it converts "started with an empty
@@ -475,7 +475,7 @@ with a stable `CODE`, so the line can be grepped, documented and referenced by
 | `NO-RUNTIME-DIR` | `XDG_RUNTIME_DIR` unset or not a directory | **Fatal.** Nothing works without it. |
 | `NO-COMPOSITOR` | river not on `PATH` | **Fatal.** |
 | `NO-SOCKET` | no new Wayland socket within the deadline | **Fatal.** |
-| `WM-ABORT` | `helm-daemon.service` failed, or was condition-skipped | **Fatal**, per §2 requirement 2. |
+| `WM-ABORT` | `helm-wm.service` failed, or was condition-skipped | **Fatal**, per §2 requirement 2. |
 | `NO-SESSION-BUS` | no `DBUS_SESSION_BUS_ADDRESS` and no `$XDG_RUNTIME_DIR/bus` | Re-exec once under `dbus-run-session -- helm-session`, guarded by `HELM_DBUS_REEXEC=1` so it cannot loop. If that binary is absent, continue and state plainly that portals, file dialogs and screen sharing will not work in this session. |
 | `NO-DBUS-ACTIVATION` | `dbus-update-activation-environment` absent | Continue. State that D-Bus-activated services will not see the display, so file dialogs will hang for twenty-five seconds. Suggest `dbus-user-session` (Debian/Ubuntu) or the equivalent dbus package (Fedora, Nix). |
 | `NO-SYSTEMD-USER` | `systemctl --user show-environment` does not succeed | Continue on the direct-launch path below. |
@@ -493,7 +493,7 @@ test is `systemctl --user show-environment` succeeding.
 and in containers:
 
 1. `dbus-update-activation-environment` is called **without** `--systemd`.
-2. `helm-sessiond` and `helm-bar` are started directly, each under a bounded
+2. `helm-wm` and `helm-bar` are started directly, each under a bounded
    shell respawn loop with the same policy as the units: restart on non-zero
    exit, at most five times in thirty seconds, never on exit codes 69 or 78.
 3. Exceeding the window manager's limit is `FATAL WM-ABORT`, exactly as under
@@ -516,7 +516,7 @@ thing that hangs a logout.
 
 1. **Stop the target first.** `systemctl --user stop helm-session.target`.
    systemd stops `WantedBy` units in reverse dependency order, so the bar (which
-   is `After=helm-daemon.service`) stops before the window manager. That order
+   is `After=helm-wm.service`) stops before the window manager. That order
    matters: a bar still drawing against a departed window manager is a burst of
    errors in the journal at exactly the moment the user is trying to read why
    their session ended.
@@ -578,7 +578,7 @@ gate (ADR 0011's guard).
 | `env/cursor` | `XCURSOR_THEME`/`SIZE` in all three, theme resolves on disk, gsettings agrees | Black X11 arrow; cursor resizes across windows | VM |
 | `env/xwayland` | `DISPLAY` in all three when XWayland is up; integer-scale policy in force | X11 apps absent or blurred | VM |
 | `units/target` | `helm-session.target` active, and its `.wants` symlinks exist | A target that starts nothing and reports success | VM |
-| `units/wm` | `helm-daemon.service` `ActiveState=active`; `ConditionResult` reported separately | **N1** — a condition-skipped unit read as success | VM |
+| `units/wm` | `helm-wm.service` `ActiveState=active`; `ConditionResult` reported separately | **N1** — a condition-skipped unit read as success | VM |
 | `units/bar` | `helm-bar.service` active or cleanly restarting | Bar gone unnoticed | VM |
 | `units/restart-policy` | The shipped units carry the policy in §4 | A crashed bar taking the session down | **CI** |
 | `units/idle-lock` | An idle and a lock unit are part of `graphical-session.target` | Lid closes, session stays unlocked | VM *(blocked on OQ-1)* |
@@ -621,11 +621,11 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A5 | Given a booted session, when `systemctl --user show-environment` and the bus activation environment are read, then every imported variable is present in both with values equal to the compositor's `/proc/<pid>/environ` | VM | |
 | A6 | Given a session started with the D-Bus import deliberately suppressed, when `doctor` runs, then `env/wayland-display/dbus` fails, names the twenty-five second hang, and `doctor` exits non-zero | VM | |
 | A7 | Given a booted session, when the cursor is checked, then the environment, the imported environment and `gsettings` all name the same theme and size, and the theme resolves to a directory on disk | VM | |
-| A8 | Given river started, when `helm-sessiond` attaches, then `doctor` reports `wm/attached` and `wm/layer-shell` served, and the measured unmanaged interval is inside the cold-start budget | VM | |
-| A9 | Given `helm-sessiond` removed from the image, when the session starts, then the entry logs `FATAL WM-ABORT` with the "no window can be placed" message, tears river down, and exits non-zero — and the same happens when the unit is condition-skipped rather than failed | VM | |
-| A10 | Given a running session with three windows, when `helm-sessiond` is killed, then it is restarted within `RestartSec`, the ledger is recovered from the snapshot, the three windows return to their projected rectangles, and `helm-bar.service` never leaves `active` | VM | |
-| A11 | Given a stale window manager already holding river's window-management global, when `helm-daemon.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed naming the holding process | VM | |
-| A12 | Given a running session, when `helm-bar` is killed, then it is restarted, and `helm-session.target` and `helm-daemon.service` both stay `active` throughout | VM | |
+| A8 | Given river started, when `helm-wm` attaches, then `doctor` reports `wm/attached` and `wm/layer-shell` served, and the measured unmanaged interval is inside the cold-start budget | VM | |
+| A9 | Given `helm-wm` removed from the image, when the session starts, then the entry logs `FATAL WM-ABORT` with the "no window can be placed" message, tears river down, and exits non-zero — and the same happens when the unit is condition-skipped rather than failed | VM | |
+| A10 | Given a running session with three windows, when `helm-wm` is killed, then it is restarted within `RestartSec`, the ledger is recovered from the snapshot, the three windows return to their projected rectangles, and `helm-bar.service` never leaves `active` | VM | |
+| A11 | Given a stale window manager already holding river's window-management global, when `helm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed naming the holding process | VM | |
+| A12 | Given a running session, when `helm-bar` is killed, then it is restarted, and `helm-session.target` and `helm-wm.service` both stay `active` throughout | VM | |
 | A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the running portal chose the backends named in `helm-portals.conf` | VM | |
 | A14 | Given a session that is ending, when teardown runs, then the target is stopped before the environment is cleared, a client that ignores `SIGTERM` is killed after its `TimeoutStopSec`, the whole teardown completes within 15 s, and a second login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
@@ -639,7 +639,7 @@ From [ARCHITECTURE.md §4](../ARCHITECTURE.md); no new numbers are invented here
 
 | Path | Budget | How it is measured |
 |---|---|---|
-| Cold session start → usable | **< 900 ms** (§4) | From the entry's first line to `helm-sessiond` sending `READY=1`. river's own start-up dominates and is measured separately so a river regression is attributable. |
+| Cold session start → usable | **< 900 ms** (§4) | From the entry's first line to `helm-wm` sending `READY=1`. river's own start-up dominates and is measured separately so a river regression is attributable. |
 | The unmanaged window (§2) | **< 300 ms**, hard ceiling the 900 ms above | From the Wayland socket becoming live to the window-management global being bound. `doctor` reports the measured value. |
 | Environment publication (step 4) | **< 50 ms** | Two D-Bus calls. If this is ever slow, the bus is the problem, not helm. |
 | Portal `FileChooser` round trip | **< 2 s** | ADR 0011's guard. The failure it exists to catch is 25 s. |
@@ -683,7 +683,7 @@ register yet. They are recorded here as findings for a human to add.
   from `ActiveState`. *Guard:* `units/wm`; A9.
 - **N2 — A stale window manager holds river's global.** *(river.)* Only one
   window-management client may connect; river answers `unavailable` to a second.
-  A leftover `helm-sessiond`, or one started by hand for testing, makes the
+  A leftover `helm-wm`, or one started by hand for testing, makes the
   supervised one permanently unstartable, and a naive restart policy turns that
   into an endless loop that buries the one message explaining it. *helm's
   answer:* a distinct exit code (69) plus `RestartPreventExitStatus=`, and
@@ -746,10 +746,10 @@ register yet. They are recorded here as findings for a human to add.
   time. The session entry currently imports `PATH` unconditionally.
 
 - **OQ-4 — the four-way name collision.** `helm-session` (script),
-  `helm-session` (crate), `helm-sessiond` (binary), `helm-session.target`
-  (target) and `helm-daemon.service` (the unit running `helm-sessiond`) are five
-  names for three things. *Recommendation:* rename `helm-daemon.service` →
-  `helm-sessiond.service` so the unit matches its binary, and leave the entry
+  `helm-session` (crate), `helm-wm` (binary), `helm-session.target`
+  (target) and `helm-wm.service` (the unit running `helm-wm`) are five
+  names for three things. *Recommendation:* rename `helm-wm.service` →
+  `helm-wm.service` so the unit matches its binary, and leave the entry
   script's name alone because display managers and `helm.desktop` already point
   at it. Low stakes, certain to confuse every future reader if left.
 
@@ -760,9 +760,9 @@ register yet. They are recorded here as findings for a human to add.
   river 0.4.8 during M3; keep discovery regardless, because it is also the
   fallback and because the liveness probe is needed either way.
 
-- **OQ-6 — `Type=notify` for `helm-daemon.service`.** Readiness should mean "the
+- **OQ-6 — `Type=notify` for `helm-wm.service`.** Readiness should mean "the
   window-management global and the layer-shell manager are both bound", which is
-  what makes `After=helm-daemon.service` meaningful for the bar and what makes
+  what makes `After=helm-wm.service` meaningful for the bar and what makes
   the unmanaged-window budget measurable. *Recommendation:* adopt in M2 when the
   daemon exists; the unit is `Type=exec` until then, and the budget in §Budgets
   is unmeasurable until it changes.

@@ -9,7 +9,7 @@
 packaging/session/helm-session             usr/bin
 packaging/session/helm.desktop             usr/share/wayland-sessions
 packaging/systemd/helm-session.target      usr/lib/systemd/user
-packaging/systemd/helm-sessiond.service    usr/lib/systemd/user
+packaging/systemd/helm-wm.service    usr/lib/systemd/user
 packaging/systemd/helm-bar.service         usr/lib/systemd/user
 packaging/systemd/helm-session-abort.service usr/lib/systemd/user
 palette.toml                               usr/share/helm

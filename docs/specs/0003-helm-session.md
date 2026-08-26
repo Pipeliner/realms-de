@@ -68,8 +68,8 @@ prevent.
 
 ### 1. Lifecycle
 
-**Start-up order.** `helm-session` runs as `helm-sessiond`, started by
-`helm-daemon.service` after the environment import in ADR 0011 step 3. It
+**Start-up order.** `helm-session` runs as `helm-wm`, started by
+`helm-wm.service` after the environment import in ADR 0011 step 3. It
 refuses to start without `WAYLAND_DISPLAY` (already enforced by the unit's
 `ConditionEnvironment`).
 
@@ -126,7 +126,7 @@ refuses to start without `WAYLAND_DISPLAY` (already enforced by the unit's
 6. **Create bindings and enter the loop.** §3 covers the keymap. The loop is
    §2's manage/render cycle plus the poll set in §4.
 7. **Report ready.** Once the socket is bound *and* the first `manage_finish`
-   has been made, the session is usable. `helm-daemon.service` currently uses
+   has been made, the session is usable. `helm-wm.service` currently uses
    `Type=exec`; M2 switches it to `Type=notify` with `sd_notify READY=1` at
    exactly this point, so `helm-bar.service` can order after a session that
    answers.
@@ -493,7 +493,7 @@ at all, which is one reason §1 refuses below 4.
 ### 6. Crash and restart
 
 A dead `helm-session` leaves windows unplaced and keys dead — a sharper failure
-than a crashed bar, and one the user cannot work around. `helm-daemon.service`
+than a crashed bar, and one the user cannot work around. `helm-wm.service`
 already specifies `Restart=on-failure`, `RestartSec=1` and a five-in-thirty-
 seconds start limit; this section specifies what a restart must restore.
 
@@ -714,7 +714,7 @@ From [PITFALLS.md](../PITFALLS.md). This component **owns** every row of the
 |---|---|
 | A client quantises its proposed size | §5: propose, observe the shortfall, re-propose once, `set_content_clip_box` to the exact tile, give up loudly rather than loop. A17 |
 | `helm-session` stalls | §4: one owner, no locks, non-blocking writes, all filesystem and process work on the worker, `manage_finish` before any subscriber byte. A12, A13 |
-| `helm-session` dies | §6: snapshot to `$XDG_RUNTIME_DIR/helm/ledger.json`, identifier-keyed reconciliation on restart, supervised by `helm-daemon.service`. A18 |
+| `helm-session` dies | §6: snapshot to `$XDG_RUNTIME_DIR/helm/ledger.json`, identifier-keyed reconciliation on restart, supervised by `helm-wm.service`. A18 |
 | Layer-shell not served | §1 step 3: bind `river_layer_shell_v1` unconditionally, before anything else needs it. A8 |
 | Protocol version drift after a river bump | §1 step 2: declared minimum versions, refuse with a message naming interface, found and required. A2 |
 
@@ -804,10 +804,10 @@ in-flight work and finishes the sequence with whatever it has, rather than being
 disconnected. This is the second reason this spec is Draft: it changes what A12
 asserts.
 
-**6. `helm-daemon.service`: `Restart=on-failure` or `Restart=always` plus an
+**6. `helm-wm.service`: `Restart=on-failure` or `Restart=always` plus an
 explicit success status?** The unit file already carries this as a `needs-human`
 note deferred to M2, and this spec does not close it: it depends on whether
-`helm-sessiond` can exit 0 for any reason other than a deliberate quit, which
+`helm-wm` can exit 0 for any reason other than a deliberate quit, which
 needs a daemon to observe. Recorded here so the two places agree.
 **`needs-human`.**
 

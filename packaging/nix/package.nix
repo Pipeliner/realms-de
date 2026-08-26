@@ -4,7 +4,7 @@
 # library — so this installs no helm binaries, because none exist. What it does
 # install is real: the session wrapper (wrapped so it can find river, systemctl,
 # dbus-update-activation-environment and gsettings), the wayland-session entry,
-# the systemd user units and the palette. helm-bar, helm-sessiond and helm land
+# the systemd user units and the palette. helm-bar, helm-wm and helm land
 # in M1–M2 and appear in $out/bin with no change here.
 {
   pkgs,
@@ -56,8 +56,8 @@
     # propagates a package's *.wants directories; the VM test asserts the
     # resulting symlink exists rather than trusting that.
     mkdir -p $out/lib/systemd/user/helm-session.target.wants
-    ln -s ../helm-sessiond.service \
-      $out/lib/systemd/user/helm-session.target.wants/helm-sessiond.service
+    ln -s ../helm-wm.service \
+      $out/lib/systemd/user/helm-session.target.wants/helm-wm.service
     ln -s ../helm-bar.service \
       $out/lib/systemd/user/helm-session.target.wants/helm-bar.service
 

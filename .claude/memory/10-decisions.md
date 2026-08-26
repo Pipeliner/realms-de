@@ -64,7 +64,9 @@ from the distro — *revisit if* the distros catch up, which would let the
 vendoring be dropped entirely.
 
 **2026-08-26 — The systemd unit for the window manager is `helm-wm.service`,
-matching the binary** — because three names for one thing (`helm-daemon`,
+matching the binary.** *(Briefly instructed as `helm-sessiond.service` before
+this was settled; caught by the packaging agent noticing the unit then matched
+no binary that existed.)* Reason: — because three names for one thing (`helm-daemon`,
 `helm-sessiond`, `helm-session`) had already produced a collision once, and a
 unit named after its binary is the one convention nobody has to look up —
 *revisit if* the daemon ever stops being the window manager.

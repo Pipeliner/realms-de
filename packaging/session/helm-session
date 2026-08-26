@@ -45,7 +45,10 @@
 #   HELM_TEARDOWN_SECONDS hard deadline for teardown            (default: 15)
 #   HELM_IMPORT_PATH      1 = also import PATH (see below)      (default: 0)
 #   HELM_ALLOW_NO_WM      1 = do not abort when no WM attaches  (default: 0)
-#   HELM_STRICT           1 = missing helm binaries are fatal   (default: 0)
+#   HELM_STRICT           1 = a missing window manager is fatal even when
+#                         HELM_ALLOW_NO_WM would have allowed it (default: 0).
+#                         A missing bar is never fatal: a desktop without a bar
+#                         is a bad desktop, not a dead one.
 #   HELM_DBUS_REEXEC      set by the session-bus re-exec guard; do not set
 #
 # Usage: helm-session [--check | --abort | --version]
@@ -72,7 +75,7 @@ HELM_DBUS_REEXEC="${HELM_DBUS_REEXEC:-0}"
 
 # The unit that supervises the window manager. Named for the daemon rather than
 # generically, per SPEC 0005 OQ-4.
-readonly WM_UNIT='helm-sessiond.service'
+readonly WM_UNIT='helm-wm.service'
 readonly BAR_UNIT='helm-bar.service'
 readonly SESSION_TARGET='helm-session.target'
 
@@ -487,7 +490,10 @@ supervise() {
 spawn_supervised() {
 	local bin="$1" essential="$2"
 	if ! have "$bin"; then
-		if ((HELM_STRICT)) || { ((essential)) && ! ((HELM_ALLOW_NO_WM)); }; then
+		# Essential means the window manager: without it river is inert, so a
+		# missing one is FATAL WM-ABORT unless HELM_ALLOW_NO_WM says otherwise —
+		# and HELM_STRICT overrides even that. A missing bar always survives.
+		if ((essential)) && { ((HELM_STRICT)) || ! ((HELM_ALLOW_NO_WM)); }; then
 			return 1
 		fi
 		log "$bin is not installed — skipping (pre-alpha: helm's own binaries are not built yet)"
@@ -553,7 +559,9 @@ verify_units() {
 # cannot draw an error onto it. Returning the user to the display manager is
 # strictly better than leaving them looking at a wallpaper.
 wm_abort() {
-	if ((HELM_ALLOW_NO_WM)); then
+	# HELM_STRICT outranks the escape hatch, so a deliberately strict session
+	# cannot be talked out of aborting.
+	if ((HELM_ALLOW_NO_WM)) && ! ((HELM_STRICT)); then
 		log "WM-ABORT suppressed by HELM_ALLOW_NO_WM=1: $* — river is running with no window management; no window can be placed"
 		return 0
 	fi
@@ -618,6 +626,11 @@ cleanup() {
 		kill "$compositor_pid" 2>/dev/null || true
 	fi
 	[[ -n "$pid_file" ]] && rm -f "$pid_file" "${XDG_RUNTIME_DIR:-/nonexistent}/helm/wm-abort.reason"
+	# Reap the runtime directory only if it is empty. The spec says to remove
+	# it; a bare `rm -rf` would also take a control socket or a ledger snapshot
+	# that something is still holding during a slow stop, and an empty-only
+	# removal gets the same result without that race.
+	rmdir --ignore-fail-on-non-empty "${XDG_RUNTIME_DIR:-/nonexistent}/helm" 2>/dev/null || true
 
 	((${#degraded_codes[@]})) && log "session ran degraded: ${degraded_codes[*]}"
 	return 0

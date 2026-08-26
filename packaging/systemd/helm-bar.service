@@ -10,17 +10,17 @@
 # stop downwards; BindsTo= would propagate failure upwards, which is the bug.
 #
 # Under river the bar is a layer-shell client served by helm's own window
-# manager, not by the compositor: if helm-sessiond is not attached, the bar maps
-# nothing however healthy it is. Check helm-sessiond.service first.
+# manager, not by the compositor: if helm-wm is not attached, the bar maps
+# nothing however healthy it is. Check helm-wm.service first.
 [Unit]
 Description=helm bar
 Documentation=https://github.com/pipeliner/realms-de/blob/main/docs/ARCHITECTURE.md
 PartOf=graphical-session.target
-After=graphical-session.target helm-sessiond.service
+After=graphical-session.target helm-wm.service
 # Wants, not Requires: the bar reconnects to the control socket on its own, so
 # a daemon that is slow or briefly down — including a window manager restarting
 # under river — must not keep the bar from running.
-Wants=helm-sessiond.service
+Wants=helm-wm.service
 ConditionEnvironment=WAYLAND_DISPLAY
 StartLimitIntervalSec=30
 StartLimitBurst=5

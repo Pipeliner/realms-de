@@ -83,8 +83,8 @@ override_dh_auto_install:
 	# symlinks are missing then `systemctl --user start helm-session.target`
 	# starts *nothing at all* and exits 0.
 	install -d debian/helm/usr/lib/systemd/user/helm-session.target.wants
-	ln -sf ../helm-sessiond.service \
-		debian/helm/usr/lib/systemd/user/helm-session.target.wants/helm-sessiond.service
+	ln -sf ../helm-wm.service \
+		debian/helm/usr/lib/systemd/user/helm-session.target.wants/helm-wm.service
 	ln -sf ../helm-bar.service \
 		debian/helm/usr/lib/systemd/user/helm-session.target.wants/helm-bar.service
 	# Install whichever helm binaries this revision actually built. Today that

@@ -84,7 +84,7 @@ in
       };
     };
 
-    systemd.user.services.helm-sessiond = {
+    systemd.user.services.helm-wm = {
       Unit = {
         Description = "helm window manager and session daemon";
         PartOf = [ "graphical-session.target" ];
@@ -130,15 +130,15 @@ in
         PartOf = [ "graphical-session.target" ];
         After = [
           "graphical-session.target"
-          "helm-sessiond.service"
+          "helm-wm.service"
         ];
-        Wants = [ "helm-sessiond.service" ];
+        Wants = [ "helm-wm.service" ];
         ConditionEnvironment = "WAYLAND_DISPLAY";
         StartLimitIntervalSec = 30;
         StartLimitBurst = 5;
       };
       Service = {
-        # PRE-ALPHA: lands in M2, like helm-sessiond above.
+        # PRE-ALPHA: lands in M2, like helm-wm above.
         ExecStart = "${cfg.package}/bin/helm-bar";
         # A crashed bar restarts itself and never takes the session with it
         # (docs/PITFALLS.md). app.slice, not session.slice: under memory

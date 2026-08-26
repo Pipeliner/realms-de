@@ -61,7 +61,7 @@
       # The user units that carry the session.
       machine.succeed("test -f /etc/systemd/user/helm-session.target")
       machine.succeed("test -f /etc/systemd/user/helm-bar.service")
-      machine.succeed("test -f /etc/systemd/user/helm-sessiond.service")
+      machine.succeed("test -f /etc/systemd/user/helm-wm.service")
       machine.succeed("test -f /etc/systemd/user/helm-session-abort.service")
 
       # The .wants symlinks. Without these, starting helm-session.target starts
@@ -69,12 +69,12 @@
       # If this assertion fails, NixOS did not propagate the package's *.wants
       # directory: fix it by declaring the wants in the module rather than by
       # deleting the assertion.
-      machine.succeed("test -e /etc/systemd/user/helm-session.target.wants/helm-sessiond.service")
+      machine.succeed("test -e /etc/systemd/user/helm-session.target.wants/helm-wm.service")
       machine.succeed("test -e /etc/systemd/user/helm-session.target.wants/helm-bar.service")
 
       # The restart policy the supervision design depends on (SPEC 0005 §2).
       machine.succeed(
-          "grep -q '^RestartPreventExitStatus=69 78$' /etc/systemd/user/helm-sessiond.service"
+          "grep -q '^RestartPreventExitStatus=69 78$' /etc/systemd/user/helm-wm.service"
       )
       machine.succeed("grep -q '^Slice=app.slice$' /etc/systemd/user/helm-bar.service")
 
@@ -93,7 +93,7 @@
       machine.succeed("test -f /etc/helm/palette.toml")
 
       # ── PENDING M2 — the assertion this test exists for ────────────────────
-      # helm-bar and helm-sessiond do not exist yet, so this block does not run.
+      # helm-bar and helm-wm do not exist yet, so this block does not run.
       # When M2 lands, delete `pending_m2` and the guard; the body is the real
       # test: log a user in, wait for the window manager to attach to river and
       # the bar to map a layer surface, and assert the environment handshake

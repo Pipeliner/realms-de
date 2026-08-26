@@ -43,7 +43,7 @@
 # is a *library*: this package installs no helm binaries, because none exist
 # yet. What it does install is real and testable today — the session wrapper,
 # the wayland-session entry, the systemd user units and the palette. helm-bar,
-# helm-sessiond and helm land in M1–M2 and will appear in $out/bin without any
+# helm-wm and helm land in M1–M2 and will appear in $out/bin without any
 # change to this file.
 {
   description = "helm — a keyboard-first, gapless-tiling Wayland desktop environment";

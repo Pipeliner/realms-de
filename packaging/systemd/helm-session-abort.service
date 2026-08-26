@@ -1,6 +1,6 @@
 # The abort path (SPEC 0005 §2 requirement 2).
 #
-# Triggered by OnFailure= on helm-sessiond.service, i.e. once the window manager
+# Triggered by OnFailure= on helm-wm.service, i.e. once the window manager
 # has exhausted its restart limit. river is still running, so the user is not
 # looking at a blank screen — they are looking at a wallpaper and a cursor, with
 # no way to open anything and no layer shell for helm to draw an explanation on.

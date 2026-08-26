@@ -115,7 +115,7 @@ For the user half — palette, generated configs, user units — add
 - `share/wayland-sessions/helm.desktop` — the login entry. river's own package
   also provides a `river` entry; only the helm one applies helm's environment
   contract.
-- `lib/systemd/user/helm-session.target`, `helm-sessiond.service`,
+- `lib/systemd/user/helm-session.target`, `helm-wm.service`,
   `helm-bar.service`, `helm-session-abort.service` — installed together with the
   `helm-session.target.wants/` symlinks that make starting the target actually
   start something. The two client services fail because their binaries do not
@@ -386,7 +386,7 @@ layer shell, helm cannot draw an explanation onto it.
 
 `HELM_ALLOW_NO_WM=1` keeps river running without a window manager — useful for
 poking at the compositor, not a desktop. Once M2 lands, the same abort means the
-window manager really failed, and `systemctl --user status helm-sessiond.service`
+window manager really failed, and `systemctl --user status helm-wm.service`
 is the next stop; `helm-session-abort.service` is what turned its failure into a
 returned login.
 
@@ -399,13 +399,13 @@ answers `unavailable` to the second, so the unit deliberately does not restart:
 
 Under river the bar is a layer-shell client served by *helm's own window
 manager*, so a missing bar usually means the window manager is not serving
-layer-shell — not that the bar is broken. Check `helm-sessiond.service` before
+layer-shell — not that the bar is broken. Check `helm-wm.service` before
 `helm-bar.service`. A crashed bar restarts on its own and never takes the
 session down; a crashed window manager leaves river unmanaged, which is the
 sharper failure.
 
 ```sh
-systemctl --user status helm-sessiond.service helm-bar.service
+systemctl --user status helm-wm.service helm-bar.service
 systemctl --user list-dependencies helm-session.target
 journalctl --user -u helm-bar.service -b
 ```

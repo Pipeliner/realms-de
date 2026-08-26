@@ -5,7 +5,7 @@
 # What it installs is the session contract — the wayland-session entry, the
 # session wrapper that performs the ADR 0011 systemd/D-Bus environment
 # handshake, the systemd user units and the palette. %install picks up
-# helm-sessiond, helm-bar and helm automatically once M1-M2 build them.
+# helm-wm, helm-bar and helm automatically once M1-M2 build them.
 #
 # BINARY NAMES ARE SETTLED (ARCHITECTURE.md, commit 4ddcc26). Fedora ships
 # Kubernetes Helm as %%{_bindir}/helm, and two packages owning one path cannot
@@ -124,7 +124,7 @@ cargo build --release --locked --workspace
 install -Dpm0755 packaging/session/helm-session %{buildroot}%{_bindir}/helm-session
 install -Dpm0644 packaging/session/helm.desktop %{buildroot}%{_datadir}/wayland-sessions/helm.desktop
 install -Dpm0644 packaging/systemd/helm-session.target %{buildroot}%{_userunitdir}/helm-session.target
-install -Dpm0644 packaging/systemd/helm-sessiond.service %{buildroot}%{_userunitdir}/helm-sessiond.service
+install -Dpm0644 packaging/systemd/helm-wm.service %{buildroot}%{_userunitdir}/helm-wm.service
 install -Dpm0644 packaging/systemd/helm-bar.service %{buildroot}%{_userunitdir}/helm-bar.service
 install -Dpm0644 packaging/systemd/helm-session-abort.service %{buildroot}%{_userunitdir}/helm-session-abort.service
 install -Dpm0644 palette.toml %{buildroot}%{_datadir}/helm/palette.toml
@@ -138,14 +138,25 @@ install -Dpm0644 configs/portal/helm-portals.conf %{buildroot}%{_datadir}/xdg-de
 # symlinks, `systemctl --user start helm-session.target` starts nothing at all
 # and exits 0, which is the hardest kind of failure to diagnose (SPEC 0005 §4).
 install -dm0755 %{buildroot}%{_userunitdir}/helm-session.target.wants
-ln -sf ../helm-sessiond.service %{buildroot}%{_userunitdir}/helm-session.target.wants/helm-sessiond.service
+ln -sf ../helm-wm.service %{buildroot}%{_userunitdir}/helm-session.target.wants/helm-wm.service
 ln -sf ../helm-bar.service %{buildroot}%{_userunitdir}/helm-session.target.wants/helm-bar.service
 
-# Install whichever helm binaries this revision actually built. Today that is
-# none of them; the loop means M1-M2 need no spec change.
+# Install whichever helm binaries this revision actually built, and record them
+# in a generated file list. Today that is none of them.
+#
+# A generated list, rather than globs in %%files: rpmbuild treats a %%files glob
+# that matches nothing as a hard error ("File not found: .../helm-wm*"), so
+# globbing for binaries that do not exist yet fails the build. Verified the hard
+# way — that is exactly how this spec first failed. The list means M1-M2 need no
+# spec change, and it can never accidentally claim %%{_bindir}/helm, which on
+# Fedora belongs to Kubernetes Helm.
+# The list starts with the session entry, which always exists — rpm rejects an
+# *empty* -f list as firmly as it rejects a glob that matches nothing.
+echo "%{_bindir}/helm-session" >%{_builddir}/helm-binaries.list
 for bin in helmctl helm-wm helm-bar; do
     if [ -x "target/release/${bin}" ]; then
         install -Dpm0755 "target/release/${bin}" "%{buildroot}%{_bindir}/${bin}"
+        echo "%{_bindir}/${bin}" >>%{_builddir}/helm-binaries.list
     fi
 done
 
@@ -162,24 +173,19 @@ cargo test --release --locked --workspace
 # shipped in %%install are what make the target start anything, and they need no
 # scriptlet.
 
-%files
+# -f: every %%{_bindir} entry this revision actually installed, recorded during
+# %%install — the session entry today, plus helmctl, helm-wm and helm-bar once
+# M1-M2 build them, with no spec change.
+%files -f %{_builddir}/helm-binaries.list
 %license LICENSE-MIT LICENSE-APACHE
 %doc docs/INSTALL.md docs/PITFALLS.md
-# Explicit paths, not a bare %%{_bindir}/helm* glob: that glob would claim
-# %%{_bindir}/helm itself the day anything created it, and on Fedora that path
-# belongs to Kubernetes Helm. helmctl and helm-wm do not exist yet, so they are
-# globbed narrowly and %%files tolerates their absence.
-%{_bindir}/helm-session
-%{_bindir}/helm-wm*
-%{_bindir}/helmctl*
-%{_bindir}/helm-bar*
 %{_datadir}/wayland-sessions/helm.desktop
 %{_userunitdir}/helm-session.target
-%{_userunitdir}/helm-sessiond.service
+%{_userunitdir}/helm-wm.service
 %{_userunitdir}/helm-bar.service
 %{_userunitdir}/helm-session-abort.service
 %dir %{_userunitdir}/helm-session.target.wants
-%{_userunitdir}/helm-session.target.wants/helm-sessiond.service
+%{_userunitdir}/helm-session.target.wants/helm-wm.service
 %{_userunitdir}/helm-session.target.wants/helm-bar.service
 %dir %{_datadir}/xdg-desktop-portal
 %{_datadir}/xdg-desktop-portal/helm-portals.conf

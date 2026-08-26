@@ -249,7 +249,7 @@ the tool's absence *is* the finding.
 | `tools/floors` | the reused tools are installed and at their version floors | each tool's own `--version` | `warn` naming the tool and the package. *"charon, horus or thoth will be missing or unthemed"* (ADR 0007) |
 
 **One name is unsettled.** SPEC 0005 §8 gives `units/wm` the unit
-`helm-daemon.service`; the session entry names it `helm-sessiond.service`. The
+`helm-wm.service`; the session entry names it `helm-wm.service`. The
 two must be reconciled in whichever spec is wrong, and `doctor` reads the name
 from one place rather than hardcoding either.
 
