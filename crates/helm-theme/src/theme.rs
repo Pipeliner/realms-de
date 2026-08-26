@@ -1,18 +1,22 @@
 //! Apply, diff and lint: the three things `helm ctl theme` does.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use helm_core::palette::Finding;
 use helm_core::Palette;
 
-use crate::{Reloader, Result, Template};
+use crate::render::render_derived;
+use crate::{templates, Error, Reload, Reloader, Result, SystemReloader, Template};
 
 /// The palette helm ships, embedded so a first run has something to copy.
 pub const SHIPPED_PALETTE: &str = include_str!("../../../palette.toml");
 
 /// Where the user's palette lives, relative to `$XDG_CONFIG_HOME`.
 pub const USER_PALETTE: &str = "helm/palette.toml";
+
+/// Suffix of the file each output is staged in before it is renamed into place.
+const STAGING_SUFFIX: &str = ".helm-tmp";
 
 /// What one apply did.
 #[derive(Debug)]
@@ -21,7 +25,7 @@ pub struct Applied {
     pub written: Vec<PathBuf>,
     /// Byte-identical files: not rewritten, not reloaded.
     pub unchanged: Vec<PathBuf>,
-    /// Reload mechanisms that fired, named by a template that owns each.
+    /// Reload mechanisms that fired, named by the first template owning each.
     pub reloaded: Vec<&'static str>,
     /// Wall time for the whole apply. Budget: < 150 ms (ARCHITECTURE.md §4).
     pub elapsed: Duration,
@@ -66,38 +70,175 @@ impl LintReport {
 }
 
 /// Read the user's palette, seeding it from the shipped one on first run.
+///
+/// The copy happens before the read so a user's first edit is to their own
+/// file, not to something inside the helm package.
 pub fn load_palette(root: &Path) -> Result<Palette> {
-    let _ = root;
-    unimplemented!()
+    let path = root.join(USER_PALETTE);
+    if !path.exists() {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+        }
+        std::fs::write(&path, SHIPPED_PALETTE).map_err(|e| Error::io(&path, e))?;
+    }
+    Ok(Palette::load(&path)?)
 }
 
 /// Render every shipped template and swap them in as one step.
 pub fn apply(palette: &Palette, root: &Path) -> Result<Applied> {
-    let _ = (palette, root);
-    unimplemented!()
+    apply_with(palette, root, &templates(), &mut SystemReloader)
 }
 
 /// [`apply`], with the template set and the reload fan-out injected.
+///
+/// The seam exists for the tests: counting reloads and pointing a whole apply
+/// at a temporary directory is the only way to assert atomicity without a
+/// desktop underneath it.
 pub fn apply_with(
     palette: &Palette,
     root: &Path,
     templates: &[Template],
     reloader: &mut dyn Reloader,
 ) -> Result<Applied> {
-    let _ = (palette, root, templates, reloader);
-    unimplemented!()
+    let started = Instant::now();
+
+    // Lint before rendering, not after writing: a palette that fails its own
+    // readability floors must leave the live theme exactly as it was.
+    let findings = palette.lint();
+    if findings.iter().any(|f| f.fatal) {
+        return Err(Error::PaletteRefused(findings));
+    }
+
+    // Contrast is folded in once, here, and every template sees the result.
+    let derived = palette.derived();
+
+    // Phase 1: everything to memory. A template that will not render must not
+    // be discovered halfway through writing the set.
+    let mut rendered = Vec::with_capacity(templates.len());
+    for t in templates {
+        let text = render_derived(&derived, t.id, t.source)?;
+        rendered.push((t, root.join(&t.target), text));
+    }
+
+    // Phase 2: stage the ones that differ.
+    let mut unchanged = Vec::new();
+    let mut staged: Vec<(&Template, PathBuf, PathBuf)> = Vec::new();
+    for (t, target, text) in &rendered {
+        if std::fs::read(target).is_ok_and(|old| old == text.as_bytes()) {
+            unchanged.push(target.clone());
+            continue;
+        }
+        match stage(target, text) {
+            Ok(tmp) => staged.push((t, tmp, target.clone())),
+            Err(e) => {
+                discard(&staged);
+                return Err(e);
+            }
+        }
+    }
+
+    // Phase 3: rename, which is atomic per file on the same filesystem.
+    let mut written = Vec::with_capacity(staged.len());
+    for (i, (_, tmp, target)) in staged.iter().enumerate() {
+        if let Err(e) = std::fs::rename(tmp, target) {
+            discard(&staged[i..]);
+            return Err(Error::io(target, e));
+        }
+        written.push(target.clone());
+    }
+
+    // Phase 4: and only now, one reload per distinct mechanism. Reloading per
+    // file would show the desktop a half-applied theme, which is the whole
+    // reason for the three phases above.
+    let mut fired: Vec<&Reload> = Vec::new();
+    let mut reloaded = Vec::new();
+    for (t, _, _) in &staged {
+        if t.reload == Reload::None || fired.contains(&&t.reload) {
+            continue;
+        }
+        reloader.reload(&t.reload)?;
+        fired.push(&t.reload);
+        reloaded.push(t.id);
+    }
+
+    Ok(Applied {
+        written,
+        unchanged,
+        reloaded,
+        elapsed: started.elapsed(),
+    })
 }
 
 /// Report what an apply would change, writing nothing.
 pub fn diff(palette: &Palette, root: &Path) -> Result<Vec<Change>> {
-    let _ = (palette, root);
-    unimplemented!()
+    let derived = palette.derived();
+    let mut out = Vec::new();
+    for t in templates() {
+        let target = root.join(&t.target);
+        let text = render_derived(&derived, t.id, t.source)?;
+        let changed = !std::fs::read(&target).is_ok_and(|old| old == text.as_bytes());
+        out.push(Change {
+            id: t.id,
+            target,
+            changed,
+        });
+    }
+    Ok(out)
 }
 
 /// Lint a palette and measure its accent hue separations.
+///
+/// The separations are reported whether or not they are in breach: "how close
+/// are these two?" is the question a palette author is actually asking.
 pub fn lint(palette: &Palette) -> LintReport {
-    let _ = palette;
-    unimplemented!()
+    let accents = palette.derived().accent.named();
+    let mut separations = Vec::new();
+    for (i, (an, a)) in accents.iter().enumerate() {
+        for (bn, b) in &accents[i + 1..] {
+            let mut degrees = (a.hue_degrees() - b.hue_degrees()).abs();
+            if degrees > 180.0 {
+                degrees = 360.0 - degrees;
+            }
+            separations.push(HueSeparation {
+                a: an,
+                b: bn,
+                degrees,
+            });
+        }
+    }
+    LintReport {
+        findings: palette.lint(),
+        separations,
+    }
+}
+
+/// Write `text` beside `target` and flush it to the disk.
+///
+/// The `fsync` is what makes the rename meaningful: without it the directory
+/// entry can land before the bytes do, and a power cut mid-apply leaves a
+/// correctly named empty stylesheet.
+fn stage(target: &Path, text: &str) -> Result<PathBuf> {
+    use std::io::Write;
+
+    if let Some(dir) = target.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+    }
+    let mut tmp = target.as_os_str().to_owned();
+    tmp.push(STAGING_SUFFIX);
+    let tmp = PathBuf::from(tmp);
+
+    let mut f = std::fs::File::create(&tmp).map_err(|e| Error::io(&tmp, e))?;
+    f.write_all(text.as_bytes())
+        .map_err(|e| Error::io(&tmp, e))?;
+    f.sync_all().map_err(|e| Error::io(&tmp, e))?;
+    Ok(tmp)
+}
+
+/// Remove staged files after a failure, so a retry does not trip over them.
+fn discard(staged: &[(&Template, PathBuf, PathBuf)]) {
+    for (_, tmp, _) in staged {
+        let _ = std::fs::remove_file(tmp);
+    }
 }
 
 #[cfg(test)]
@@ -147,8 +288,7 @@ mod tests {
     fn apply_writes_every_template_with_no_unexpanded_placeholders() {
         let root = tempfile::tempdir().unwrap();
         let set = templates();
-        let applied =
-            apply_with(&shipped(), root.path(), &set, &mut Recorder::default()).unwrap();
+        let applied = apply_with(&shipped(), root.path(), &set, &mut Recorder::default()).unwrap();
 
         assert_eq!(applied.written.len(), set.len());
         assert!(applied.unchanged.is_empty());
@@ -351,7 +491,10 @@ mod tests {
         let changes = diff(&p, root.path()).unwrap();
 
         assert_eq!(changes.len(), set.len());
-        assert!(changes.iter().any(|c| c.changed), "nothing reported changed");
+        assert!(
+            changes.iter().any(|c| c.changed),
+            "nothing reported changed"
+        );
         assert_eq!(before, tree(root.path()), "diff wrote to disk");
     }
 }

@@ -1,15 +1,15 @@
 # SPEC 0002 — Theme pipeline
 
-- **Status:** Accepted (2026-08-26) — not yet implemented
+- **Status:** Implemented (2026-08-26)
 - **Milestone:** M1
 - **Decisions:** [ADR 0005](../adr/0005-palette-toml-single-source.md),
   [ADR 0006](../adr/0006-oklab-contrast-not-filters.md)
 - **Implements:** [INTERFACES.md §2](../INTERFACES.md)
 
-> Written before the code, as S14 requires. The **Test** column below is
-> deliberately empty: those tests get written next, watched to fail, and only
-> then implemented against. Filling the column in is what moves this spec to
-> Implemented.
+> Written before the code, as S14 requires. The tests below were written from
+> these criteria, watched to fail against an unimplemented `helm-theme`, and
+> only then implemented against. All of them live in `crates/helm-theme`; run
+> them with `cargo test -p helm-theme`.
 
 ## Purpose
 
@@ -54,6 +54,13 @@ Placeholder vocabulary is defined in [INTERFACES.md §2](../INTERFACES.md).
 An unknown placeholder is a **hard error** that aborts the whole apply. A
 silently blank colour is the exact bug this design exists to prevent.
 
+Implementing it added two forms, both supersets of that table rather than
+changes to it. An alpha argument may be a path as well as a literal —
+`{{ border.seam.rgba(border.seam_alpha) }}` — so the alphas stay written down
+once, beside the colours they belong to; and because `.over(...)` yields a
+colour it may be followed by `.bare` or `.rgba(...)`, which is what lets an
+alpha-less bare-hex format like fuzzel's express a translucent seam.
+
 ### Atomic application
 
 The ordering is not negotiable, because a half-applied theme — a new terminal
@@ -94,22 +101,30 @@ Each row is one happy path and becomes one test.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| A1 | Given the shipped palette, when `apply` runs against an empty config root, then every template's output file exists and contains no unexpanded `{{` | |
-| A2 | Given a rendered theme, when `apply` runs again with the same palette, then every output is reported `unchanged` and nothing is reloaded | |
-| A3 | Given a palette with `accent.violet` changed, when `apply` runs, then only the outputs referencing violet are rewritten | |
-| A4 | Given `contrast = 1.30`, when `apply` runs, then output colours match `Palette::derived()` and no template contains the literal source colour | |
-| A5 | Given a template with an unknown placeholder, when `apply` runs, then it fails with the placeholder name and writes no file | |
-| A6 | Given a palette with a fatal lint finding, when `apply` runs, then it refuses, prints the findings, and leaves existing outputs untouched | |
-| A7 | Given a successful apply, when the reload fan-out runs, then each reload mechanism fires exactly once regardless of how many templates share it | |
-| A8 | Given no user palette, when `apply` runs, then the shipped palette is copied to the user config path first | |
-| A9 | Given the shipped palette, when `helm ctl theme lint` runs, then it exits 0 and prints the accent hue separations | |
-| A10 | Given a modified palette, when `helm ctl theme diff` runs, then it prints which outputs would change without writing any | |
+| A1 | Given the shipped palette, when `apply` runs against an empty config root, then every template's output file exists and contains no unexpanded `{{` | `theme::tests::apply_writes_every_template_with_no_unexpanded_placeholders` |
+| A2 | Given a rendered theme, when `apply` runs again with the same palette, then every output is reported `unchanged` and nothing is reloaded | `theme::tests::a_second_apply_changes_nothing_and_reloads_nothing` |
+| A3 | Given a palette with `accent.violet` changed, when `apply` runs, then only the outputs referencing violet are rewritten | `theme::tests::only_outputs_referencing_the_changed_colour_are_rewritten` |
+| A4 | Given `contrast = 1.30`, when `apply` runs, then output colours match `Palette::derived()` and no template contains the literal source colour | `theme::tests::outputs_carry_derived_colours_not_source_literals`, `render::tests::every_template_renders_across_the_whole_contrast_range` |
+| A5 | Given a template with an unknown placeholder, when `apply` runs, then it fails with the placeholder name and writes no file | `theme::tests::an_unknown_placeholder_aborts_the_apply_and_writes_nothing`, `render::tests::unknown_paths_and_transforms_are_errors_not_empty_strings` |
+| A6 | Given a palette with a fatal lint finding, when `apply` runs, then it refuses, prints the findings, and leaves existing outputs untouched | `theme::tests::a_fatally_linted_palette_is_refused_and_leaves_the_theme_live` |
+| A7 | Given a successful apply, when the reload fan-out runs, then each reload mechanism fires exactly once regardless of how many templates share it | `theme::tests::each_reload_mechanism_fires_exactly_once` |
+| A8 | Given no user palette, when `apply` runs, then the shipped palette is copied to the user config path first | `theme::tests::first_run_copies_the_shipped_palette_to_the_user_config` |
+| A9 | Given the shipped palette, when `helm ctl theme lint` runs, then it exits 0 and prints the accent hue separations | `theme::tests::lint_report_is_clean_for_the_shipped_palette_and_lists_hue_separations` |
+| A10 | Given a modified palette, when `helm ctl theme diff` runs, then it prints which outputs would change without writing any | `theme::tests::diff_reports_what_would_change_and_writes_nothing` |
+
+A9 and A10 name `helm ctl` subcommands, but the CLI is a separate M1 slice and
+does not exist yet. Both are tested at the library boundary the subcommands will
+print — `helm_theme::lint` and `helm_theme::diff` — so "exits 0" is asserted as
+"reports no fatal finding". The tests move to `ctl::tests::` when the CLI lands.
 
 ## Budgets
 
 `apply` completes in **< 150 ms** for the full template set on a warm cache
-([ARCHITECTURE.md §4](../ARCHITECTURE.md)). Templates render in parallel; the
-rename phase is serial and cheap. The budget is a CI gate, not a goal.
+([ARCHITECTURE.md §4](../ARCHITECTURE.md)). Rendering is serial: the whole
+shipped set is a few tens of kilobytes of string scanning and lands in
+single-digit milliseconds, which is less than the thread-spawn overhead that
+parallelism would add. The rename phase is serial and cheap. The budget is a CI gate, not
+a goal.
 
 ## Failure modes
 

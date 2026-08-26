@@ -7,13 +7,13 @@
 //! against an old GTK stylesheet.
 //!
 //! Three things carry the design, and all three are specified in
-//! [SPEC 0002](../../../docs/specs/0002-theme-pipeline.md):
+//! `docs/specs/0002-theme-pipeline.md`:
 //!
 //! 1. **Templates address the derived palette.** [`helm_core::Palette::derived`]
 //!    folds `contrast` in exactly once, here, at this boundary. No template
 //!    applies contrast itself and nothing downstream filters (ADR 0006).
 //! 2. **An unknown placeholder is a hard error.** A silently blank colour is the
-//!    bug the whole design exists to prevent, so [`render`] names the offending
+//!    bug the whole design exists to prevent, so [`render()`] names the offending
 //!    placeholder and aborts the apply before anything is written.
 //! 3. **Application is atomic.** Everything is rendered to memory, written to
 //!    `<target>.helm-tmp`, `fsync`ed, `rename(2)`d into place, and only then are

@@ -1,0 +1,121 @@
+/* helm — generated from palette.toml. Do not edit; `helm ctl theme apply`
+ * overwrites this file. Pull it in from your own ~/.config/gtk-3.0/gtk.css:
+ *
+ *     @import url("helm.css");
+ *
+ * GTK 3 has no libadwaita named-colour set, so this is Adwaita's own
+ * `@define-color` vocabulary instead. Same reach, same limits: colours, square
+ * corners, hairline borders and the font — not widget geometry.
+ */
+
+@define-color theme_bg_color {{ background.pane }};
+@define-color theme_fg_color {{ text.normal }};
+@define-color theme_base_color {{ background.void }};
+@define-color theme_text_color {{ text.normal }};
+@define-color theme_selected_bg_color {{ accent.violet }};
+@define-color theme_selected_fg_color {{ background.void }};
+@define-color theme_unfocused_bg_color {{ background.pane }};
+@define-color theme_unfocused_fg_color {{ text.soft }};
+@define-color theme_unfocused_base_color {{ background.void }};
+@define-color theme_unfocused_text_color {{ text.soft }};
+@define-color theme_unfocused_selected_bg_color {{ accent.violet.over(background.pane, border.focused_alpha) }};
+@define-color theme_unfocused_selected_fg_color {{ text.bright }};
+@define-color insensitive_bg_color {{ background.pane }};
+@define-color insensitive_fg_color {{ text.faint }};
+@define-color insensitive_base_color {{ background.void }};
+@define-color borders {{ border.neutral.over(background.pane, border.neutral_alpha) }};
+@define-color unfocused_borders {{ border.neutral.over(background.void, border.neutral_alpha) }};
+@define-color warning_color {{ accent.gold }};
+@define-color error_color {{ accent.gold }};
+@define-color success_color {{ accent.teal }};
+@define-color link_color {{ accent.starlight }};
+@define-color visited_link_color {{ accent.cyan }};
+@define-color content_view_bg {{ background.void }};
+@define-color wm_bg {{ background.bar_top }};
+@define-color wm_bg_unfocused {{ background.bar_bot }};
+@define-color wm_title {{ text.bright }};
+@define-color wm_unfocused_title {{ text.dim }};
+@define-color wm_border {{ border.neutral.over(background.pane, border.neutral_alpha) }};
+@define-color wm_border_unfocused {{ border.neutral.over(background.void, border.neutral_alpha) }};
+
+* {
+  border-radius: {{ metrics.radius }}px;
+  outline-color: {{ accent.violet.rgba(border.focused_alpha) }};
+  -GtkWidget-window-dragging: true;
+}
+
+window,
+.background {
+  font-family: {{ typography.fallback }};
+  font-size: {{ typography.size_body }}px;
+  background-color: {{ background.pane }};
+  color: {{ text.normal }};
+}
+
+headerbar,
+.titlebar {
+  background-image: none;
+  background-color: {{ background.bar_top }};
+  box-shadow: none;
+  border-bottom: {{ metrics.border_width }}px solid {{ border.bar_bottom.rgba(border.bar_bottom_alpha) }};
+  color: {{ text.bright }};
+}
+
+headerbar:backdrop,
+.titlebar:backdrop {
+  background-color: {{ background.bar_bot }};
+  color: {{ text.dim }};
+}
+
+button {
+  background-image: none;
+  background-color: {{ background.raised }};
+  color: {{ text.normal }};
+  border: {{ metrics.border_width }}px solid {{ border.neutral.rgba(border.neutral_alpha) }};
+  text-shadow: none;
+  box-shadow: none;
+}
+
+button:hover {
+  background-color: {{ background.focused }};
+  color: {{ text.bright }};
+}
+
+button:checked,
+button.suggested-action {
+  background-color: {{ accent.violet.over(background.pane, border.pantheon_alpha) }};
+  color: {{ text.bright }};
+  border-color: {{ border.focused.rgba(border.focused_alpha) }};
+}
+
+entry {
+  background-image: none;
+  background-color: {{ background.raised }};
+  color: {{ text.bright }};
+  border: {{ metrics.border_width }}px solid {{ border.neutral.rgba(border.neutral_alpha) }};
+  caret-color: {{ accent.violet }};
+}
+
+entry:focus {
+  border-color: {{ border.focused.rgba(border.focused_alpha) }};
+}
+
+separator {
+  background-color: {{ border.seam.rgba(border.seam_alpha) }};
+}
+
+label.dim-label,
+.dim-label {
+  color: {{ text.dim }};
+}
+
+tooltip.background {
+  background-color: {{ background.raised }};
+  color: {{ text.normal }};
+  border: {{ metrics.border_width }}px solid {{ border.neutral.rgba(border.neutral_alpha) }};
+}
+
+progressbar progress,
+levelbar block.filled {
+  background-color: {{ accent.violet }};
+}

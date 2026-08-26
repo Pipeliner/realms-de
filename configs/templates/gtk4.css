@@ -1,0 +1,147 @@
+/* helm — generated from palette.toml. Do not edit; `helm ctl theme apply`
+ * overwrites this file. Pull it in from your own ~/.config/gtk-4.0/gtk.css:
+ *
+ *     @import url("helm.css");
+ *
+ * libadwaita reads these named colours at startup and honours a live change to
+ * gtk.css, so recolouring is the reach. Geometry is not: pills, paddings and
+ * the shape of a CSD headerbar are not exposed as CSS, and helm does not fight
+ * them (design/HANDOFF.md §1c). Corners, borders and the font are.
+ */
+
+@define-color accent_color {{ accent.violet }};
+@define-color accent_bg_color {{ accent.violet }};
+@define-color accent_fg_color {{ background.void }};
+@define-color destructive_color {{ accent.gold }};
+@define-color destructive_bg_color {{ accent.gold }};
+@define-color destructive_fg_color {{ background.void }};
+@define-color success_color {{ accent.teal }};
+@define-color success_bg_color {{ accent.teal }};
+@define-color success_fg_color {{ background.void }};
+@define-color warning_color {{ accent.gold }};
+@define-color warning_bg_color {{ accent.gold }};
+@define-color warning_fg_color {{ background.void }};
+@define-color error_color {{ accent.gold }};
+@define-color error_bg_color {{ accent.gold }};
+@define-color error_fg_color {{ background.void }};
+
+@define-color window_bg_color {{ background.pane }};
+@define-color window_fg_color {{ text.normal }};
+@define-color view_bg_color {{ background.void }};
+@define-color view_fg_color {{ text.normal }};
+@define-color headerbar_bg_color {{ background.bar_top }};
+@define-color headerbar_fg_color {{ text.bright }};
+@define-color headerbar_border_color {{ border.bar_bottom.over(background.bar_top, border.bar_bottom_alpha) }};
+@define-color headerbar_backdrop_color {{ background.bar_bot }};
+@define-color headerbar_shade_color {{ background.void }};
+@define-color card_bg_color {{ background.raised }};
+@define-color card_fg_color {{ text.normal }};
+@define-color dialog_bg_color {{ background.focused }};
+@define-color dialog_fg_color {{ text.normal }};
+@define-color popover_bg_color {{ background.raised }};
+@define-color popover_fg_color {{ text.normal }};
+@define-color sidebar_bg_color {{ background.void }};
+@define-color sidebar_fg_color {{ text.normal }};
+@define-color sidebar_backdrop_color {{ background.void }};
+@define-color sidebar_shade_color {{ background.void }};
+@define-color thumbnail_bg_color {{ background.raised }};
+@define-color thumbnail_fg_color {{ text.normal }};
+@define-color shade_color {{ background.void }};
+@define-color scrollbar_outline_color {{ border.neutral.rgba(border.neutral_alpha) }};
+@define-color borders {{ border.neutral.rgba(border.neutral_alpha) }};
+
+/* helm has no border radius anywhere: metrics.radius is validated to be 0, so
+ * this rule is the palette asserting itself rather than a preference. */
+* {
+  border-radius: {{ metrics.radius }}px;
+  outline-color: {{ accent.violet.rgba(border.focused_alpha) }};
+}
+
+window,
+popover > contents,
+.background {
+  font-family: {{ typography.fallback }};
+  font-size: {{ typography.size_body }}px;
+  color: {{ text.normal }};
+}
+
+/* Flat, one hairline, no shadow — the same 1px seam the compositor draws. */
+headerbar,
+.titlebar {
+  background-image: none;
+  background-color: {{ background.bar_top }};
+  box-shadow: none;
+  border-bottom: {{ metrics.border_width }}px solid {{ border.bar_bottom.rgba(border.bar_bottom_alpha) }};
+}
+
+headerbar:backdrop,
+.titlebar:backdrop {
+  background-color: {{ background.bar_bot }};
+  color: {{ text.dim }};
+}
+
+separator,
+.toolbar separator {
+  background-color: {{ border.seam.rgba(border.seam_alpha) }};
+  min-width: {{ metrics.border_width }}px;
+  min-height: {{ metrics.border_width }}px;
+}
+
+entry,
+spinbutton,
+textview {
+  background-color: {{ background.raised }};
+  color: {{ text.bright }};
+  border: {{ metrics.border_width }}px solid {{ border.neutral.rgba(border.neutral_alpha) }};
+  caret-color: {{ accent.violet }};
+}
+
+entry:focus-within {
+  border-color: {{ border.focused.rgba(border.focused_alpha) }};
+}
+
+button {
+  background-image: none;
+  background-color: {{ background.raised }};
+  color: {{ text.normal }};
+  border: {{ metrics.border_width }}px solid {{ border.neutral.rgba(border.neutral_alpha) }};
+  text-shadow: none;
+}
+
+button:hover {
+  background-color: {{ background.focused }};
+  color: {{ text.bright }};
+}
+
+button:checked,
+button.suggested-action {
+  background-color: {{ accent.violet.over(background.pane, border.pantheon_alpha) }};
+  color: {{ text.bright }};
+  border-color: {{ border.focused.rgba(border.focused_alpha) }};
+}
+
+selection,
+:selected {
+  background-color: {{ accent.violet.over(background.pane, border.focused_alpha) }};
+  color: {{ text.bright }};
+}
+
+label.dim-label,
+.dim-label {
+  color: {{ text.dim }};
+}
+
+link {
+  color: {{ accent.starlight }};
+}
+
+progressbar > trough > progress,
+levelbar block.filled {
+  background-color: {{ accent.violet }};
+}
+
+tooltip {
+  background-color: {{ background.raised }};
+  color: {{ text.normal }};
+  border: {{ metrics.border_width }}px solid {{ border.neutral.rgba(border.neutral_alpha) }};
+}

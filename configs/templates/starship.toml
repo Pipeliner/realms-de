@@ -1,0 +1,63 @@
+# helm — generated from palette.toml. Do not edit; `helm ctl theme apply`
+# overwrites this file. starship (thoth, the prompt) re-reads its config for
+# every prompt, so a new shell — or the next Enter — is the reload.
+#
+# The sigil comes from the palette's glyph inventory, which helm-core probes
+# against the resolved font stack at startup; if the Egyptian block is missing
+# the fallback is the one in palette.toml, not one invented here.
+
+add_newline = false
+
+format = """\
+$directory\
+$git_branch\
+$git_status\
+$cmd_duration\
+$character\
+"""
+
+[character]
+success_symbol = "[{{ glyphs.prompt_sigil }}](bold fg:{{ pantheon.thoth }})"
+error_symbol = "[{{ glyphs.prompt_sigil }}](bold fg:{{ accent.gold }})"
+vimcmd_symbol = "[{{ glyphs.prompt_sigil }}](bold fg:{{ accent.violet }})"
+
+[directory]
+style = "fg:{{ accent.starlight }}"
+format = "[$path]($style)[$read_only]($read_only_style) "
+truncation_length = 3
+truncate_to_repo = true
+read_only = " ro"
+read_only_style = "fg:{{ text.faint }}"
+
+[git_branch]
+style = "fg:{{ accent.violet }}"
+format = "[$symbol$branch]($style) "
+symbol = ""
+
+[git_status]
+style = "fg:{{ accent.gold }}"
+format = "([$all_status$ahead_behind]($style) )"
+conflicted = "!"
+ahead = "+${count}"
+behind = "-${count}"
+diverged = "+-"
+untracked = "?"
+stashed = "*"
+modified = "~"
+staged = "•"
+renamed = "»"
+deleted = "x"
+
+[cmd_duration]
+style = "fg:{{ text.dim }}"
+format = "[$duration]($style) "
+min_time = 2000
+
+[status]
+style = "fg:{{ accent.gold }}"
+format = "[$status]($style) "
+disabled = false
+
+[time]
+style = "fg:{{ text.faint }}"
+disabled = true

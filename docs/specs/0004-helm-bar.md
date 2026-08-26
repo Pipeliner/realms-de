@@ -33,8 +33,8 @@ cannot render.
 **In:** the three layer-shell surfaces (32 px bar, 26 px which-key strip,
 grimoire sheet); their layers, anchors and exclusive zones; every segment's
 source of truth and palette token; the render, damage and gating rules; font
-chain resolution and the glyph probe; the clock; how the bar behaves when it
-does not fit the output.
+chain resolution and the glyph probe; how the bar behaves when it does not fit
+the output.
 
 **Out:** producing `HelmState` at all — that is `helm-session`, which owns the
 ledger, samples the modules and broadcasts snapshots (ADR 0003). Serving
@@ -53,9 +53,12 @@ context anywhere (ADR 0008).
 
 | Surface | Layer | Anchors | Size | Exclusive zone | Keyboard |
 |---|---|---|---|---|---|
-| Bar | `Top` | top, left, right | height `metrics.bar_height` (32) | `metrics.bar_height` | none |
-| Which-key strip | `Top` | bottom, left, right | height `metrics.whichkey_height` (26) | `metrics.whichkey_height` | none |
+| Bar | `Bottom` | top, left, right | height `metrics.bar_height` (32) | `metrics.bar_height` | none |
+| Which-key strip | `Bottom` | bottom, left, right | height `metrics.whichkey_height` (26) | `metrics.whichkey_height` | none |
 | Grimoire | `Overlay` | all four | full output | `-1` (reserves nothing, ignores others' zones) | none |
+
+`Bottom` rather than `Top` is a deliberate choice and it is the whole of the
+bar's fullscreen behaviour; see below.
 
 None of the three takes keyboard interactivity. Every surface is a pure view of
 `HelmState`; the keys that toggle the strip and the grimoire are ordinary
@@ -72,10 +75,10 @@ protocol, which is why `docs/PITFALLS.md` carries it as its own row and why
 `helm ctl doctor` checks it by name (SPEC 0006).
 
 **The exclusive zone is the only thing that reserves space.** river turns the
-zones into `river_layer_shell_output_v1::non_exclusive_area`, which arrives at
-`helm-session` as a `WorkareaChanged` event and is literally
-`Workarea::new(w, h, top, bottom)` ([INTERFACES.md §1](../INTERFACES.md)).
-`helm-session` uses that value as given. It must not *also* subtract
+zones into `river_layer_shell_output_v1::non_exclusive_area`, which reaches
+`helm-session` as a free rectangle in global coordinates and is converted into
+a `Workarea` by the backend ([INTERFACES.md §1](../INTERFACES.md)).
+`helm-session` uses that rectangle as given. It must not *also* subtract
 `metrics.bar_height` and `metrics.whichkey_height` from the output, or the
 tiles lose the strips twice and every window sits 58 px short with the void
 showing at the bottom.
@@ -93,11 +96,24 @@ bar renders at the next integer scale up and the compositor downscales, which
 is the documented behaviour rather than a surprise (`docs/PITFALLS.md`,
 "fractional scaling blur").
 
-When the active orbit has a fullscreen window, that window covers the bar.
-`Workarea::output` is the whole output for exactly this reason, and under river
-it is `helm-session`'s choice of node order that puts the window above the
-layer surfaces. The bar is not unmapped and its exclusive zone does not change,
-so leaving fullscreen costs no relayout.
+**Fullscreen, and why the strips are on `Bottom`.** When the active orbit has a
+fullscreen window it is placed at `Workarea::output` — the whole output,
+including the strips' rectangles. Which of the two draws on top is decided by
+the bar's chosen **layer** and by nothing else: `river-layer-shell-v1` exposes
+no node and no ordering request at all ([INTERFACES.md §1](../INTERFACES.md)),
+so there is no node order for `helm-session` to pick. On `Top` the bar would
+draw over a fullscreen video; on `Bottom` the window covers it, which is what
+`mod+f` is asking for.
+
+`Bottom` costs nothing the rest of the time, because helm *is* the window
+manager: every window's rectangle comes from `layout::project` and lands inside
+the non-exclusive area, so nothing but a fullscreen window can ever be over the
+strips' rectangles. There is no misbehaving client to defend against, which is
+the usual reason a bar sits on `Top`.
+
+The bar is not unmapped while a window is fullscreen and its exclusive zone
+does not change, so entering and leaving fullscreen costs no relayout of the
+other orbits.
 
 ### 2. Segments
 
@@ -276,7 +292,7 @@ that varies with time enters through the state, never through the drawing code.
 **Gated before any drawing.**
 
 ```rust
-if composed.renders_same_as(&last_composed) { return Damage(None); }
+if state.renders_same_as(&last_drawn) { return Damage(None); }
 ```
 
 `HelmState::renders_same_as` compares everything visible and ignores
@@ -286,10 +302,11 @@ bumped counter costs nothing
 no buffer is attached and no frame is committed — not a committed frame with an
 empty damage region.
 
-`composed` is the session's `HelmState` with the bar's own clock module
-appended (§7). Composing before comparing is what makes the clock obey the same
-gate as everything else: a 1 s tick within the same displayed minute produces
-an identical composed state and therefore no frame at all.
+The session applies the same comparison before it broadcasts at all
+([SPEC 0003](0003-helm-session.md) §8), so in a correct session this check
+never fires. It stays anyway, one process downstream, because it costs an
+equality test on a struct the bar is holding either way and it is the last
+thing between a careless producer and a frame the user cannot see.
 
 **Damage, not repaint.** `render` returns the union of the bounding boxes of
 the segments whose inputs changed since the last committed frame. A clock tick
@@ -319,8 +336,7 @@ in drawing code bypasses the fallback contract and is how tofu ships
 may appear in the bar's drawing code at all; every chrome glyph comes from
 `glyphs::inventory()`.
 
-**No timer except the clock**, and that one lives here rather than in the
-session (§7).
+**No timers.** The bar has none to justify; the clock's is the session's (§7).
 
 Shaping results for chrome strings — the logo, the runes, the badges, the
 which-key row — are shaped once and cached, and the cache is invalidated only
@@ -373,51 +389,57 @@ substitution the inventory did not specify, and it is unavoidable.
 
 ### 7. Module data sources
 
-Two timers exist in the whole desktop. Everything else is an event.
+**The bar owns no timer at all**, and it holds no module of its own. Every
+`Module` — the clock included — is produced by `helm-session` and arrives in
+`HelmState::modules`; the bar draws them verbatim, in the order they were sent
+([SPEC 0003](0003-helm-session.md) §8). That is the ownership question
+[INTERFACES.md §3](../INTERFACES.md) left open: rule 1 says "no timers except
+the clock" without saying whose it is, and SPEC 0003 settles it in the session,
+where a `timerfd` sits in the event loop beside everything else.
 
-| Module | Source | Mechanism | Where |
+Two consequences for this spec. The bar satisfies rule 1 trivially, having no
+timers to justify. And the primary no-op gate is one process upstream — the
+session compares candidate states with `renders_same_as` and does not broadcast
+at all when they render the same — so the bar's own check before drawing is
+belt and braces rather than the only defence. It stays: a subscriber that
+reconnects, or a future producer that is less careful, must not cost a frame.
+
+What the bar receives, and why each source is honest about being an event or a
+sample. The ladder is the `helm-perf-budget` skill's: an event if one exists, a
+producer that can be asked to push if not, a sample only if the data is
+genuinely not observable any other way.
+
+| Module | Source | Mechanism | Ladder |
 |---|---|---|---|
-| clock | wall clock | 1 s timer, aligned to the second boundary | **helm-bar** |
-| battery | `power_supply` | udev uevent — ladder step 1 | helm-session |
-| vol | PipeWire / WirePlumber | node param change — ladder step 1 | helm-session |
-| net | `/proc/net/dev` | sampled, 2 s — ladder step 3 | helm-session |
-| cpu | `/proc/stat` | sampled, 2 s — ladder step 3 | helm-session |
-| mem | `/proc/meminfo` | sampled, 2 s — ladder step 3 | helm-session |
-| gpu | hwmon temperature | sampled, 2 s — ladder step 3 | helm-session |
+| clock | wall clock | 1 s `timerfd` in `helm-session` | the one sanctioned timer (ADR 0009) |
+| battery | `power_supply` | udev uevent | step 1 — an event exists |
+| vol | PipeWire / WirePlumber | node param change | step 1 — an event exists |
+| net | `/proc/net/dev` | sampled | step 3 |
+| cpu | `/proc/stat` | sampled | step 3 |
+| mem | `/proc/meminfo` | sampled | step 3 |
+| gpu | hwmon temperature | sampled | step 3 |
 
-**The justification each polled module owes.** `cpu` and `net` are ratios over
-an interval; they have no event because there is nothing to signal — the value
-does not exist until you take two samples and divide. `mem` and the hwmon
-temperature have a current value but no notification mechanism at all: nothing
-in the kernel offers to tell a userspace process that `MemAvailable` moved.
-Netlink and udev were checked first and answer the wrong question — netlink
-reports link state, not throughput; thermal uevents fire on trip points, not on
-degrees. So all four reach step 3 of the ladder and are sampled, at the
-coarsest interval that still reads correctly, in **one** 2 s pass rather than
-four, so the cost is one wake rather than four. Each module damages only its
-own box.
+**The justification the four sampled modules owe.** `cpu` and `net` are ratios
+over an interval; there is nothing to signal, because the value does not exist
+until two samples have been taken and divided. `mem` and the hwmon temperature
+have a current value and no notification mechanism at all — nothing in the
+kernel offers to tell a userspace process that `MemAvailable` moved. Netlink
+and udev were checked first and answer a different question: netlink reports
+link state, not throughput, and thermal uevents fire on trip points, not on
+degrees. So all four reach step 3, are sampled at the coarsest interval that
+still reads correctly, and are sampled in **one** pass rather than four, so the
+cost is one wake rather than four.
 
-That sampler runs on its own thread in `helm-session` and hands a completed
-`Vec<Module>` to the state owner. It must never run on the input path: under
-river a stalled window manager is a dead session, not a slow frame
-(ADR 0013), and a blocking read of `/sys` is exactly the kind of stall that
-means.
+Two properties of that arrangement the bar depends on, both owed by SPEC 0003:
+a sample that recomputes to the same string must not be broadcast, and a module
+update must never take a compositor round trip. Under river a stalled window
+manager is a dead session rather than a slow frame (ADR 0013), and a 1 Hz
+round trip for a clock would multiply the session's own input latency.
 
-**The clock is the bar's**, and this is the one place the documents were silent
-about ownership. [INTERFACES.md §3](../INTERFACES.md) says "no timers except
-the clock" without saying whose. Putting it in the session would wake the
-input-path daemon 86,400 times a day and broadcast a full `HelmState` to every
-subscriber each second, for a string the bar can compute from `time(2)`. So the
-bar keeps a timer aligned to the wall-clock second, formats
-`Module { id: "clock", .. }` locally, appends it to a copy of the session's
-state, and lets `renders_same_as` decide whether anything needs drawing.
-`helm-session` must not emit a module with `id == "clock"`; if one arrives the
-bar drops it.
-
-The consequence is worth stating, because it is better than the budget asks
-for: with minute resolution, the 1 s tick commits a frame roughly once a
-minute, not once a second. ADR 0008's planned idle test — sixty seconds of no
-state change, at most sixty committed frames — passes with one.
+**What this costs in frames.** A minute-granular clock changes its text once a
+minute, so the tick produces about one committed frame per minute rather than
+one per second. ADR 0008's planned idle test — sixty seconds with no state
+change, at most sixty committed frames — passes with one.
 
 ### Additions required in `helm-core`
 
@@ -451,7 +473,8 @@ Recorded here rather than resolved in code, so nobody has to re-derive them.
 | Which-key type size | `font-size:11.5px` | 11.5 is not in the type scale. `typography.size_meta` (11.0) |
 | Hecate scrim, reused by the grimoire | `rgba(4,5,10,.6)` — `#04050a` | `background.void` (`#05060c`) at alpha 0.60 |
 | `Module::urgent` | not shown | the module's accent as a 0.14 wash behind it, matching the mode badge and active rune. It does not blink |
-| Clock ownership | "clock 1s tick", owner unstated | the bar's (§7) |
+| Clock ownership | "clock 1s tick", owner unstated; [INTERFACES.md §3](../INTERFACES.md) says "no timers except the clock" without saying whose | settled by [SPEC 0003](0003-helm-session.md) §8 in `helm-session`. The bar has no timer (§7) |
+| Bar over a fullscreen window | not drawn; ADR 0013 assumed node ordering would decide | `river-layer-shell-v1` has no node ordering, so the layer decides: both strips sit on `Bottom` and a fullscreen window covers them (§1) |
 | Uncoverable codepoints in titles | not considered | replaced with `?` before shaping (§6) |
 
 **The bar's collapse ladder.** At the reference type sizes — IBM Plex Mono's
@@ -484,13 +507,13 @@ Each row is one happy path and becomes one test.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| A1 | Given a 1920×1080 output and the shipped palette, when the bar starts, then it maps a `Top` layer surface anchored top/left/right, `metrics.bar_height` tall, with an exclusive zone of `metrics.bar_height` | |
+| A1 | Given a 1920×1080 output and the shipped palette, when the bar starts, then it maps a `Bottom` layer surface anchored top/left/right, `metrics.bar_height` tall, with an exclusive zone of `metrics.bar_height` | |
 | A2 | Given `whichkey` true, when it becomes false, then the strip's surface is destroyed, its exclusive zone is released, and the reported non-exclusive area grows by `metrics.whichkey_height` | |
 | A3 | Given a state with orbit 1 `Active`, 2–3 `Occupied` and 4–6 `Empty`, when a frame is rendered, then cell 1 is drawn in `text.bright` over an `accent.violet` wash at 0.14 with a 2 px `accent.violet` bottom border, cells 2–3 in `text.mid`, cells 4–6 in `text.faint`, each cell 28 logical px wide | |
 | A4 | Given `Layout::Mono` and `Mode::Resize`, when a frame is rendered, then the bar shows `Layout::label()` in `text.dim` after the resolved `⌗`, and `Mode::badge()` in `accent.starlight` on a starlight wash at 0.14 at `typography.size_meta` | |
 | A5 | Given a rendered frame, when a state arrives for which `renders_same_as` is true, then `render` is not called, no buffer is attached and no frame is committed | |
 | A6 | Given a frame differing only in the clock module's text at an unchanged width, when it is rendered, then the returned `Damage` contains the clock module's box and no other module's box | |
-| A7 | Given the 1 s clock tick firing within a displayed minute, when the composed state is compared, then it renders the same as the last and no frame is committed | |
+| A7 | Given a module with `urgent` true and accent `gold`, when a frame is rendered, then its box is filled with `accent.gold` at alpha 0.14 and its text drawn in `accent.gold`, with no other module's box changed and nothing blinking | |
 | A8 | Given a `Probe` built from an ASCII-only coverage predicate, when a full frame is rendered, then every chrome glyph drawn is the inventory's documented ASCII fallback, no `.notdef` mask is rasterised, and every segment keeps its width | |
 | A9 | Given a `focused_title` containing a codepoint no configured face covers, when it is rendered, then that codepoint is drawn as `?` and no `.notdef` mask is rasterised | |
 | A10 | Given `whichkey` true on a 1920 px output, when the strip is rendered, then it lists exactly `Keymap::strip()` in order, `hint_key` in `text.bright` and `label` in `text.mid`, followed by `? grimoire — full spellbook` with the `?` in `accent.gold` | |
@@ -499,6 +522,7 @@ Each row is one happy path and becomes one test.
 | A13 | Given `grimoire` true and the default keymap, when the overlay is rendered, then it lists one row per binding with a non-empty `hint_key`, grouped by mode in `Keymap::bindings` order, and no row for a binding whose `hint_key` is empty | |
 | A14 | Given identical `(HelmState, Palette, Probe)` and canvas dimensions, when `render` runs twice into two canvases, then the two pixmaps are byte-identical | |
 | A15 | Given an output at integer scale 2, when the bar is rendered, then the buffer is allocated at twice the logical size and every metric from `palette.toml` appears at exactly twice its logical value, with no fractional geometry | |
+| A16 | Given a window taking the whole output as fullscreen, when it is mapped, then both strips stay mapped on the `Bottom` layer with unchanged exclusive zones and the window covers them, and leaving fullscreen produces no relayout | |
 
 ## Budgets
 
@@ -507,7 +531,7 @@ From [ARCHITECTURE.md §4](../ARCHITECTURE.md); no new numbers are invented here
 | Path | Budget | How it is held |
 |---|---|---|
 | State change → bar redraw | **< 8 ms** | `renders_same_as` gates before any drawing; damage-tracked CPU rasterising at 1920×32; chrome shaping cached |
-| Bar idle CPU | **~0 %** | one timer, the clock; every other module push- or sampler-driven in the session. With minute resolution the tick commits about one frame per minute |
+| Bar idle CPU | **~0 %** | the bar has no timers at all; every module, the clock included, is pushed by the session, which drops no-op states before broadcasting. With minute resolution the clock commits about one frame per minute |
 | Cold session start → usable | **< 900 ms** (whole session) | no GPU context (ADR 0008); the font probe is 37 database lookups, once; no icon cache, no thumbnailer |
 
 Measured in release on the reference runner, against the same `HelmState`

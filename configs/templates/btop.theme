@@ -1,0 +1,62 @@
+# helm — generated from palette.toml. Do not edit; `helm ctl theme apply`
+# overwrites this file. btop (horus, the monitor) reads its theme at start and
+# has no reload signal, so a running instance keeps the old colours.
+#
+# Select it with `color_theme = "helm"` in btop.conf.
+#
+# The three-stop gradients run cool to warn — starlight, then teal, then gold —
+# so a meter's colour says how loaded it is without a legend. Gold is the
+# palette's warn hue; there is no red to escalate to, which is deliberate.
+
+theme[main_bg]="{{ background.void }}"
+theme[main_fg]="{{ text.normal }}"
+theme[title]="{{ text.bright }}"
+theme[hi_fg]="{{ pantheon.horus }}"
+theme[selected_bg]="{{ background.focused }}"
+theme[selected_fg]="{{ text.bright }}"
+theme[inactive_fg]="{{ text.faint }}"
+theme[graph_text]="{{ text.dim }}"
+theme[meter_bg]="{{ background.raised }}"
+theme[proc_misc]="{{ accent.starlight }}"
+
+theme[cpu_box]="{{ border.neutral.over(background.void, border.neutral_alpha) }}"
+theme[mem_box]="{{ border.neutral.over(background.void, border.neutral_alpha) }}"
+theme[net_box]="{{ border.neutral.over(background.void, border.neutral_alpha) }}"
+theme[proc_box]="{{ border.neutral.over(background.void, border.neutral_alpha) }}"
+theme[div_line]="{{ border.seam.over(background.void, border.seam_alpha) }}"
+
+theme[temp_start]="{{ accent.starlight }}"
+theme[temp_mid]="{{ accent.teal }}"
+theme[temp_end]="{{ accent.gold }}"
+
+theme[cpu_start]="{{ accent.starlight }}"
+theme[cpu_mid]="{{ accent.teal }}"
+theme[cpu_end]="{{ accent.gold }}"
+
+theme[free_start]="{{ text.faint }}"
+theme[free_mid]="{{ text.dim }}"
+theme[free_end]="{{ text.mid }}"
+
+theme[cached_start]="{{ accent.cyan }}"
+theme[cached_mid]="{{ accent.starlight }}"
+theme[cached_end]="{{ accent.violet }}"
+
+theme[available_start]="{{ accent.teal }}"
+theme[available_mid]="{{ accent.cyan }}"
+theme[available_end]="{{ accent.starlight }}"
+
+theme[used_start]="{{ accent.starlight }}"
+theme[used_mid]="{{ accent.violet }}"
+theme[used_end]="{{ accent.gold }}"
+
+theme[download_start]="{{ accent.teal }}"
+theme[download_mid]="{{ accent.cyan }}"
+theme[download_end]="{{ accent.starlight }}"
+
+theme[upload_start]="{{ accent.violet }}"
+theme[upload_mid]="{{ accent.starlight }}"
+theme[upload_end]="{{ accent.gold }}"
+
+theme[process_start]="{{ accent.starlight }}"
+theme[process_mid]="{{ accent.violet }}"
+theme[process_end]="{{ accent.gold }}"

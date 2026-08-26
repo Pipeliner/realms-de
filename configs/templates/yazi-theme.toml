@@ -1,0 +1,100 @@
+# helm — generated from palette.toml. Do not edit; `helm ctl theme apply`
+# overwrites this file. yazi (charon, the file manager) reads it at start;
+# there is no reload signal, so a running instance keeps the old colours until
+# it is restarted. `apply` says so rather than pretending otherwise.
+#
+# Section names follow yazi's post-rename schema (`[mgr]`, `[pick]`).
+
+[mgr]
+cwd = { fg = "{{ pantheon.charon }}" }
+
+hovered = { fg = "{{ text.bright }}", bg = "{{ background.focused }}" }
+preview_hovered = { fg = "{{ text.bright }}", bg = "{{ background.focused }}" }
+
+find_keyword = { fg = "{{ accent.gold }}", bold = true }
+find_position = { fg = "{{ accent.violet }}", bg = "reset", bold = true }
+
+marker_copied = { fg = "{{ accent.teal }}", bg = "{{ accent.teal }}" }
+marker_cut = { fg = "{{ accent.gold }}", bg = "{{ accent.gold }}" }
+marker_marked = { fg = "{{ accent.starlight }}", bg = "{{ accent.starlight }}" }
+marker_selected = { fg = "{{ accent.violet }}", bg = "{{ accent.violet }}" }
+
+count_copied = { fg = "{{ background.void }}", bg = "{{ accent.teal }}" }
+count_cut = { fg = "{{ background.void }}", bg = "{{ accent.gold }}" }
+count_selected = { fg = "{{ background.void }}", bg = "{{ accent.violet }}" }
+
+border_symbol = "│"
+border_style = { fg = "{{ border.seam.over(background.pane, border.seam_alpha) }}" }
+
+tab_active = { fg = "{{ background.void }}", bg = "{{ accent.violet }}" }
+tab_inactive = { fg = "{{ text.dim }}", bg = "{{ background.raised }}" }
+tab_width = 1
+
+[status]
+overall = { fg = "{{ text.normal }}", bg = "{{ background.bar_top }}" }
+sep_left = { open = "", close = "" }
+sep_right = { open = "", close = "" }
+
+mode_normal = { fg = "{{ background.void }}", bg = "{{ accent.violet }}", bold = true }
+mode_select = { fg = "{{ background.void }}", bg = "{{ accent.teal }}", bold = true }
+mode_unset = { fg = "{{ background.void }}", bg = "{{ accent.gold }}", bold = true }
+
+progress_label = { fg = "{{ text.bright }}", bold = true }
+progress_normal = { fg = "{{ accent.violet }}", bg = "{{ background.raised }}" }
+progress_error = { fg = "{{ accent.gold }}", bg = "{{ background.raised }}" }
+
+permissions_t = { fg = "{{ accent.teal }}" }
+permissions_r = { fg = "{{ accent.gold }}" }
+permissions_w = { fg = "{{ accent.violet }}" }
+permissions_x = { fg = "{{ accent.cyan }}" }
+permissions_s = { fg = "{{ text.faint }}" }
+
+[pick]
+border = { fg = "{{ border.focused.over(background.pane, border.focused_alpha) }}" }
+active = { fg = "{{ accent.violet }}", bold = true }
+inactive = { fg = "{{ text.dim }}" }
+
+[input]
+border = { fg = "{{ border.focused.over(background.pane, border.focused_alpha) }}" }
+title = { fg = "{{ text.bright }}" }
+value = { fg = "{{ text.normal }}" }
+selected = { fg = "{{ text.bright }}", bg = "{{ background.focused }}" }
+
+[cmp]
+border = { fg = "{{ border.neutral.over(background.pane, border.neutral_alpha) }}" }
+active = { fg = "{{ text.bright }}", bg = "{{ background.focused }}" }
+inactive = { fg = "{{ text.dim }}" }
+
+[tasks]
+border = { fg = "{{ border.neutral.over(background.pane, border.neutral_alpha) }}" }
+title = { fg = "{{ text.bright }}" }
+hovered = { fg = "{{ text.bright }}", bg = "{{ background.focused }}" }
+
+[which]
+mask = { bg = "{{ background.raised }}" }
+cand = { fg = "{{ accent.violet }}" }
+rest = { fg = "{{ text.dim }}" }
+desc = { fg = "{{ text.mid }}" }
+separator = "  "
+separator_style = { fg = "{{ text.faint }}" }
+
+[help]
+on = { fg = "{{ accent.violet }}" }
+run = { fg = "{{ accent.teal }}" }
+hovered = { fg = "{{ text.bright }}", bg = "{{ background.focused }}" }
+footer = { fg = "{{ text.dim }}", bg = "{{ background.bar_bot }}" }
+
+[notify]
+title_info = { fg = "{{ accent.starlight }}" }
+title_warn = { fg = "{{ accent.gold }}" }
+title_error = { fg = "{{ accent.gold }}" }
+
+[filetype]
+rules = [
+	{ mime = "image/*", fg = "{{ accent.teal }}" },
+	{ mime = "{audio,video}/*", fg = "{{ accent.cyan }}" },
+	{ mime = "application/{zip,gzip,x-tar,x-bzip*,x-7z-compressed,x-xz,x-rar,xz}", fg = "{{ accent.gold }}" },
+	{ mime = "application/{pdf,doc,rtf}", fg = "{{ accent.starlight }}" },
+	{ name = "*/", fg = "{{ accent.violet }}" },
+	{ name = "*", fg = "{{ text.normal }}" },
+]
