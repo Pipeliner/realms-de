@@ -77,6 +77,16 @@ If any step before 3 fails, nothing is renamed and the desktop is untouched.
 Outputs that are byte-identical are neither rewritten nor reloaded, so a
 no-op apply costs nothing and does not flash the desktop.
 
+### Output containment
+
+Template targets are normalized relative paths below the caller-supplied
+configuration root. Empty, absolute, traversal, duplicate, and symlinked
+targets are refused before rendering or writing. The configuration root itself
+must not be a symlink. Staging files are created exclusively and without
+following links, so an existing `<target>.helm-tmp` cannot redirect or clobber
+another file. Descriptor-relative operations own the remaining replacement-race
+protection for the final writer.
+
 ### Reload fan-out
 
 | Target | Mechanism |
@@ -111,6 +121,8 @@ Each row is one happy path and becomes one test.
 | A8 | Given no user palette, when `apply` runs, then the shipped palette is copied to the user config path first | `theme::tests::first_run_copies_the_shipped_palette_to_the_user_config` |
 | A9 | Given the shipped palette, when `helm ctl theme lint` runs, then it exits 0 and prints the accent hue separations | `theme::tests::lint_report_is_clean_for_the_shipped_palette_and_lists_hue_separations` |
 | A10 | Given a modified palette, when `helm ctl theme diff` runs, then it prints which outputs would change without writing any | `theme::tests::diff_reports_what_would_change_and_writes_nothing` |
+| A11 | Given an empty, escaping, duplicate, or symlinked output path, when `apply` runs, then it refuses before touching an output outside the configuration root | `theme::tests::unsafe_or_duplicate_targets_abort_before_any_output_is_written`, `theme::tests::a_symlinked_output_parent_is_refused_without_touching_its_destination`, `theme::tests::a_symlinked_configuration_root_is_refused` |
+| A12 | Given an attacker-planted staging symlink, when `apply` runs, then it refuses without modifying that symlink's destination | `theme::tests::a_symlinked_staging_file_is_refused_without_touching_its_destination` |
 
 A9 and A10 name `helm ctl` subcommands, but the CLI is a separate M1 slice and
 does not exist yet. Both are tested at the library boundary the subcommands will

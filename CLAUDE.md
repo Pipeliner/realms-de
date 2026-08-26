@@ -23,9 +23,12 @@ about to do, and **update it when you learn something durable**.
 
 ## The four rules that override taste
 
-1. **Spec before code.** Behaviour is written down in [`docs/specs/`](docs/specs/)
-   (and an ADR for any decision) *before* it is implemented, then covered by
-   happy-path tests that fail first. See standing order S14.
+1. **Spec before code — hard stop.** Do not write, edit, or commit implementation
+   code until its governing spec is **Accepted** and names the intended
+   behaviour; then write the test, watch it fail, and only then implement.
+   A bug fix must first amend its accepted spec with the regression criterion.
+   An unresolved design question requires an ADR or `needs-human` decision,
+   never a code guess. See standing order S14.
 2. **The ledger is the truth.** Window positions are never stored, only
    projected. See ADR 0001.
 3. **No colour outside `palette.toml`.** Everything themed is generated.

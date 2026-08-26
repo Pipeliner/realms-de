@@ -297,6 +297,7 @@ pub fn lint(palette: &Palette) -> LintReport {
 /// entry can land before the bytes do, and a power cut mid-apply leaves a
 /// correctly named empty stylesheet.
 fn stage(target: &Path, text: &str) -> Result<PathBuf> {
+    use rustix::fs::{openat, Mode, OFlags, CWD};
     use std::io::Write;
 
     if let Some(dir) = target.parent() {
@@ -306,7 +307,16 @@ fn stage(target: &Path, text: &str) -> Result<PathBuf> {
     tmp.push(STAGING_SUFFIX);
     let tmp = PathBuf::from(tmp);
 
-    let mut f = std::fs::File::create(&tmp).map_err(|e| Error::io(&tmp, e))?;
+    // `CREATE | EXCL | NOFOLLOW` makes a leftover or attacker-provided staging
+    // name fail closed instead of following it and clobbering its destination.
+    let fd = openat(
+        CWD,
+        &tmp,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW,
+        Mode::RUSR | Mode::WUSR,
+    )
+    .map_err(|e| Error::io(&tmp, e.into()))?;
+    let mut f = std::fs::File::from(fd);
     f.write_all(text.as_bytes())
         .map_err(|e| Error::io(&tmp, e))?;
     f.sync_all().map_err(|e| Error::io(&tmp, e))?;
@@ -563,6 +573,29 @@ mod tests {
             .expect_err("a symlinked configuration root must be refused");
         assert!(err.to_string().contains("root"), "{err}");
         assert!(!outside.path().join("theme.conf").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_staging_file_is_refused_without_touching_its_destination() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("victim");
+        std::fs::write(&victim, "do not overwrite").unwrap();
+        symlink(&victim, root.path().join("theme.conf.helm-tmp")).unwrap();
+        let set = [Template {
+            id: "staging-link",
+            source: "x = {{ accent.violet }}\n",
+            target: PathBuf::from("theme.conf"),
+            reload: Reload::None,
+        }];
+
+        let err = apply_with(&shipped(), root.path(), &set, &mut Recorder::default())
+            .expect_err("a symlinked staging file must be refused");
+        assert!(err.to_string().contains("helm-tmp"), "{err}");
+        assert_eq!(std::fs::read_to_string(victim).unwrap(), "do not overwrite");
     }
 
     #[test]
