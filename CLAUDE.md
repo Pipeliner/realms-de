@@ -21,20 +21,26 @@ about to do, and **update it when you learn something durable**.
 | pick up work / close it out | [`.claude/memory/40-loop.md`](.claude/memory/40-loop.md) — the agentic loop |
 | write DE code specifically | the skills in [`.claude/skills/`](.claude/skills/) |
 
-## The three rules that override taste
+## The four rules that override taste
 
-1. **The ledger is the truth.** Window positions are never stored, only
+1. **Spec before code.** Behaviour is written down in [`docs/specs/`](docs/specs/)
+   (and an ADR for any decision) *before* it is implemented, then covered by
+   happy-path tests that fail first. See standing order S14.
+2. **The ledger is the truth.** Window positions are never stored, only
    projected. See ADR 0001.
-2. **No colour outside `palette.toml`.** Everything themed is generated.
+3. **No colour outside `palette.toml`.** Everything themed is generated.
    See ADR 0005.
-3. **Snappy is a number.** Frame budgets in `docs/ARCHITECTURE.md` §4 are gates,
+4. **Snappy is a number.** Frame budgets in `docs/ARCHITECTURE.md` §4 are gates,
    not aspirations.
 
 ## House style
 
 - Comments explain *why*, never *what*. Match the density of the surrounding file.
-- Every non-trivial function gets a test; layout and colour maths get invariant
-  tests, not example tests.
+- Happy paths are tested first, from the spec's acceptance criteria, and are
+  watched to fail before anything is implemented. Keep it minimal — edge cases
+  earn their tests when they turn up. Layout and colour maths are the standing
+  exception: they get invariant tests, because example tests pass while the
+  algorithm is subtly wrong.
 - `cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test` before
   every commit. CI runs the same thing; do not make CI find it first.
 - Prefer a proven component over a rewrite, and put it behind a seam so it can

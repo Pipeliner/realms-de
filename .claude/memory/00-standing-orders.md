@@ -89,6 +89,25 @@ argued with, revisable — never set in stone, never implicit. Then prioritise
 strictly towards the MVP cut line in `docs/MVP.md`, and only then write code.
 Superseded work is fine; unplanned work is not.
 
+## S14 — Spec-driven development, with minimal TDD
+
+**Specs and ADRs outrank code.** Nothing non-trivial is implemented before its
+behaviour is written down: a spec in `docs/specs/` for a component or feature, an
+ADR in `docs/adr/` for a decision with alternatives. If implementing reveals the
+spec was wrong, fix the spec in the same commit — code that has silently
+diverged from its spec is worse than no spec.
+
+**Minimal TDD.** Once a spec exists, write the **happy-path tests first**, from
+the spec's acceptance criteria, and watch them fail. Then implement until they
+pass. Minimal means exactly that: cover the intended path, not a matrix of
+edge cases. Edge cases earn their tests when they turn up as bugs or as
+invariants worth defending (layout tiling and colour maths are the standing
+exceptions — those get invariant tests because example tests pass while the
+algorithm is subtly wrong).
+
+The order is: **spec → ADR if a decision is involved → failing happy-path tests
+→ implementation → the test names recorded back in the spec.**
+
 ## S13 — Preserve instructions in reusable form
 
 An instruction given once is written here, generalised past its immediate

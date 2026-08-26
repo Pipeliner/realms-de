@@ -1,0 +1,129 @@
+# The three first-class targets from ARCHITECTURE.md §5 and standing order S6.
+# PITFALLS.md names "works on the author's distro only" as a packaging failure
+# mode whose guard is "three distro jobs in CI" — this is that guard, wired up
+# now so it is already there when packaging/ lands in M3 rather than being
+# bolted on under deadline.
+#
+# Today these jobs build and test helm-core, which is pure Rust with no system
+# dependencies, so all three are expected to agree. The point is the scaffolding:
+# when helm-session pulls in Wayland, D-Bus and systemd, the distro that
+# disagrees will say so on the commit that broke it.
+name: distro
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: distro-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runs-on }}
+    # An empty string means "no container", which is how ubuntu runs on the
+    # host runner while fedora runs inside its own image from the same matrix.
+    container: ${{ matrix.container }}
+    strategy:
+      # One distro failing is a fact about that distro; the others still need
+      # to report, because "which ones broke" is the whole diagnostic.
+      fail-fast: false
+      matrix:
+        include:
+          # Oldest supported glibc — ARCHITECTURE.md §5 makes this the platform
+          # that pins the MSRV story.
+          - name: ubuntu-24.04
+            runs-on: ubuntu-24.04
+            container: ''
+          # Fedora 41 is the floor from §5. SELinux-clean is a packaging
+          # property, not a build one, so it is checked in M3, not here.
+          - name: fedora-41
+            runs-on: ubuntu-24.04
+            container: fedora:41
+    steps:
+      # The container image is bare: actions/checkout needs git or it silently
+      # degrades to a tarball download with no history, and rustup needs curl.
+      - name: Prepare Fedora container
+        if: matrix.container != ''
+        run: dnf -y install --setopt=install_weak_deps=False git curl gcc findutils
+
+      - uses: actions/checkout@v4
+
+      # rustup rather than the distro's rust package: Fedora's rustc floats with
+      # the release and would silently test a different compiler than the one
+      # rust-toolchain.toml pins. The toolchain must be a constant across the
+      # matrix or the matrix is measuring the wrong variable.
+      - name: Install Rust (container)
+        if: matrix.container != ''
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.container == ''
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: distro-${{ matrix.name }}
+
+      - run: cargo build --workspace --all-features --locked
+      - run: cargo test --workspace --all-features --locked
+
+  nix:
+    name: nix flake check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # ADR 0010 makes the flake the reference build and deb/rpm generated from
+      # it, so this job is load-bearing — but packaging/nix/ is scaffolded in M3
+      # (docs/MVP.md), and a job that fails for eight weeks because its input
+      # does not exist yet trains everyone to ignore red. It skips cleanly until
+      # the flake lands, then starts gating with no edit to this file.
+      - name: Look for the flake
+        id: flake
+        run: |
+          set -euo pipefail
+          if [ -f packaging/nix/flake.nix ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "packaging/nix/flake.nix found — running the reference build."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "packaging/nix/flake.nix not present yet (lands in M3); skipping." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        if: steps.flake.outputs.present == 'true'
+
+      # NEEDS-HUMAN: verify this action is still the right one before M3.
+      # magic-nix-cache was sunset by Determinate Systems in favour of
+      # FlakeHub Cache (DeterminateSystems/flakehub-cache-action), which needs
+      # a FlakeHub account and `id-token: write`. It is named here because the
+      # brief asked for it; if it no longer works, either swap in
+      # flakehub-cache-action (and add the permission) or drop caching — the
+      # flake check is correct either way, only slower.
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+        if: steps.flake.outputs.present == 'true'
+
+      # A NixOS VM test that boots the session and asserts the bar appears is
+      # the M3 acceptance check (ARCHITECTURE.md §5). It needs KVM, which
+      # GitHub-hosted runners do not have — that will arrive as its own job on a
+      # larger runner, carrying the `needs-human` label until someone picks a
+      # runner tier.
+      - name: nix flake check
+        if: steps.flake.outputs.present == 'true'
+        working-directory: packaging/nix
+        run: nix flake check --print-build-logs

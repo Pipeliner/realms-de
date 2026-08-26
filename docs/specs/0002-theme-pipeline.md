@@ -1,0 +1,131 @@
+# SPEC 0002 — Theme pipeline
+
+- **Status:** Accepted (2026-08-26) — not yet implemented
+- **Milestone:** M1
+- **Decisions:** [ADR 0005](../adr/0005-palette-toml-single-source.md),
+  [ADR 0006](../adr/0006-oklab-contrast-not-filters.md)
+- **Implements:** [INTERFACES.md §2](../INTERFACES.md)
+
+> Written before the code, as S14 requires. The **Test** column below is
+> deliberately empty: those tests get written next, watched to fail, and only
+> then implemented against. Filling the column in is what moves this spec to
+> Implemented.
+
+## Purpose
+
+One palette file must retint the entire desktop — GTK apps, Qt apps, the
+terminal, yazi, btop, the shell prompt and helm's own clients — in a single
+step, fast enough that a user tweaking a colour sees the result immediately.
+
+This is the difference between a desktop environment and a collection of
+programs that happen to be running at the same time. It is also the component
+most likely to produce a visibly broken desktop if it gets it half right, which
+is why atomicity is a hard requirement rather than a nicety.
+
+## Scope
+
+**In:** reading `palette.toml`; deriving the contrast variant; rendering every
+template; writing outputs atomically; fanning out reloads exactly once; the
+`helm ctl theme apply|lint|diff` surface.
+
+**Out:** the palette *format* and its validation (SPEC 0001, `helm-core`);
+deciding which colour goes where (that is `palette.toml` itself); anything that
+draws (`helm-bar`).
+
+## Behaviour
+
+### Inputs
+
+`~/.config/helm/palette.toml`, falling back to the shipped `palette.toml`.
+Parsed and validated by `helm_core::Palette`. A palette with any **fatal** lint
+finding is refused: nothing is written, the previous theme stays live, and the
+findings are printed. Non-fatal findings are printed and applied.
+
+### Derivation
+
+Templates address the **derived** palette (`Palette::derived()`), so `contrast`
+is folded in exactly once, at this boundary. No template may apply contrast
+itself, and nothing downstream may use a display-side contrast filter — see
+ADR 0006 for why that costs a fullscreen pass per frame and rotates hues.
+
+### Rendering
+
+Placeholder vocabulary is defined in [INTERFACES.md §2](../INTERFACES.md).
+An unknown placeholder is a **hard error** that aborts the whole apply. A
+silently blank colour is the exact bug this design exists to prevent.
+
+### Atomic application
+
+The ordering is not negotiable, because a half-applied theme — a new terminal
+palette against an old GTK stylesheet — is both ugly and hard to diagnose:
+
+1. Render every template to memory.
+2. For each output whose bytes differ from what is on disk, write
+   `<target>.helm-tmp` and `fsync` it.
+3. `rename(2)` every temp file into place. (Same filesystem, so the rename is
+   atomic per file.)
+4. Only then, fan out reloads — once each, deduplicated.
+
+If any step before 3 fails, nothing is renamed and the desktop is untouched.
+Outputs that are byte-identical are neither rewritten nor reloaded, so a
+no-op apply costs nothing and does not flash the desktop.
+
+### Reload fan-out
+
+| Target | Mechanism |
+|---|---|
+| GTK 3/4, libadwaita | `gsettings set org.gnome.desktop.interface ...`, then GTK re-reads its stylesheet |
+| Qt (qt6ct) | rewrite the colour scheme; running apps pick it up on next start |
+| foot / terminals | `SIGUSR1` to the process |
+| yazi, btop, starship | read on next start; no signal available |
+| helm's own clients | `Event::State` over the control socket |
+
+Where a target genuinely cannot hot-reload, `apply` says so in its report rather
+than pretending. Users should never wonder whether it worked.
+
+### First-run
+
+If no user palette exists, `apply` copies the shipped one to
+`~/.config/helm/palette.toml` first, so a user's first edit is to their own file.
+
+## Acceptance criteria
+
+Each row is one happy path and becomes one test.
+
+| # | Given / When / Then | Test |
+|---|---|---|
+| A1 | Given the shipped palette, when `apply` runs against an empty config root, then every template's output file exists and contains no unexpanded `{{` | |
+| A2 | Given a rendered theme, when `apply` runs again with the same palette, then every output is reported `unchanged` and nothing is reloaded | |
+| A3 | Given a palette with `accent.violet` changed, when `apply` runs, then only the outputs referencing violet are rewritten | |
+| A4 | Given `contrast = 1.30`, when `apply` runs, then output colours match `Palette::derived()` and no template contains the literal source colour | |
+| A5 | Given a template with an unknown placeholder, when `apply` runs, then it fails with the placeholder name and writes no file | |
+| A6 | Given a palette with a fatal lint finding, when `apply` runs, then it refuses, prints the findings, and leaves existing outputs untouched | |
+| A7 | Given a successful apply, when the reload fan-out runs, then each reload mechanism fires exactly once regardless of how many templates share it | |
+| A8 | Given no user palette, when `apply` runs, then the shipped palette is copied to the user config path first | |
+| A9 | Given the shipped palette, when `helm ctl theme lint` runs, then it exits 0 and prints the accent hue separations | |
+| A10 | Given a modified palette, when `helm ctl theme diff` runs, then it prints which outputs would change without writing any | |
+
+## Budgets
+
+`apply` completes in **< 150 ms** for the full template set on a warm cache
+([ARCHITECTURE.md §4](../ARCHITECTURE.md)). Templates render in parallel; the
+rename phase is serial and cheap. The budget is a CI gate, not a goal.
+
+## Failure modes
+
+From [PITFALLS.md](../PITFALLS.md), this component owns: "half-applied theme",
+"colour written down twice", "contrast implemented as a filter", and
+"unreadable palette after a tweak". It contributes to "Flatpak apps ignore the
+theme", which is documented as a limit rather than fought.
+
+## Open questions
+
+- **Kvantum SVG generation.** Generating a Kvantum theme means emitting SVG, not
+  just a colour list. Worth it in M1, or is a qt6ct colour scheme enough until
+  M6? *Recommendation: qt6ct only in M1.*
+- **Where generated files live.** Writing directly into `~/.config/gtk-4.0/`
+  risks clobbering a user's own file. An `@import` shim from their file into a
+  helm-owned one is safer but needs one manual step on first run.
+  **`needs-human`.**
+- **Reload for Qt.** No reliable hot-reload path for running Qt apps was found.
+  Accepting "applies on next start" for M1 unless someone knows better.

@@ -216,6 +216,12 @@ realms-de/
 
 ## 7. How this gets built
 
+helm is built **spec-first** (standing order S14): behaviour is written down in
+[`docs/specs/`](specs/) — and any decision in [`docs/adr/`](adr/) — before it is
+implemented, then covered by happy-path tests that are watched to fail first.
+Layout and colour maths are the standing exception and get invariant tests
+instead, because example tests pass while those algorithms are subtly wrong.
+
 Work is tracked in GitHub milestones M0–M6; see [docs/MVP.md](MVP.md) for the
 cut line and [docs/ROADMAP.md](ROADMAP.md) for what each milestone contains.
 Issues that need a human judgement call — hardware access, a design trade-off,

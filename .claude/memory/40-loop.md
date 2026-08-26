@@ -9,9 +9,9 @@ commit and an updated issue, so stopping mid-run never loses or corrupts work.
 ## One iteration
 
 ```
-  ┌─▶ 1. ORIENT ──▶ 2. PICK ──▶ 3. PLAN ──▶ 4. BUILD ──▶ 5. VERIFY ──▶ 6. LAND ─┐
-  │                                                                              │
-  └──────────────────────── 7. REFLECT ◀─────────────────────────────────────────┘
+  ┌─▶ 1. ORIENT ─▶ 2. PICK ─▶ 3. SPEC ─▶ 4. TEST ─▶ 5. BUILD ─▶ 6. VERIFY ─▶ 7. LAND ─┐
+  │                                                                                   │
+  └───────────────────────────── 8. REFLECT ◀─────────────────────────────────────────┘
 ```
 
 **1. Orient.** Read `CLAUDE.md`, then `00-standing-orders.md`. Check the open
@@ -22,24 +22,31 @@ milestone. Priority order:
 `blocked-others` › `bug` › `mvp` › everything else.
 Skip anything labelled `needs-human` — leave it and say so.
 
-**3. Plan.** Restate the issue's acceptance criteria in your own words. If they
-are ambiguous, comment on the issue asking the specific question and pick the
-next one; do not guess at a contract.
+**3. Spec.** Write or update the spec in `docs/specs/` before touching code
+(S14). If the change embeds a decision with real alternatives, write the ADR
+too. If the issue's acceptance criteria are ambiguous, that ambiguity belongs in
+the spec's "Open questions" — comment on the issue, pick the next one, and do
+not guess at a contract.
 
-**4. Build.** Smallest change that satisfies the criteria. Fan work out to
-subagents when the pieces are independent and touch disjoint paths (see S11).
+**4. Test.** Turn the spec's acceptance criteria into happy-path tests and
+**run them to watch them fail**. A test that has never failed has not been shown
+to test anything. Keep it minimal: the intended path, not an edge-case matrix.
+
+**5. Build.** Smallest change that turns those tests green. Fan work out to
+subagents when the pieces are independent and touch disjoint paths (S11).
 Serialise anything sharing a not-yet-committed contract.
 
-**5. Verify.** `cargo fmt --all && cargo clippy --all-targets -- -D warnings &&
+**6. Verify.** `cargo fmt --all && cargo clippy --all-targets -- -D warnings &&
 cargo test`. Plus the issue's own acceptance check. **A red build is never
 pushed** — if it cannot be made green, revert the change and reopen the issue
 with what was learned.
 
-**6. Land.** Commit with a message that says *why*. Reference the issue
+**7. Land.** Commit with a message that says *why*. Reference the issue
 (`Closes #N`). Push to the working branch. Update the issue with what landed and
 what remains.
 
-**7. Reflect.** Append anything durable to memory: a decision to
+**8. Reflect.** Record the passing test names back into the spec's acceptance
+criteria, then append anything durable to memory: a decision to
 `10-decisions.md`, a toolchain fact to `20-environment.md`, a time-sink to
 `30-gotchas.md`, a new DE failure mode to `docs/PITFALLS.md`. Then loop.
 
@@ -51,14 +58,16 @@ Stop and hand back to a human when any of these is true:
 
 - The milestone has no unblocked, non-`needs-human` issues left.
 - The same test has failed on two consecutive iterations for different reasons.
-- A change would alter an ADR's decision — write the superseding ADR and ask
-  first.
+- A change would alter an ADR's decision, or contradict a committed spec — write
+  the superseding ADR or the spec revision, and ask first.
 - Something needs hardware, credentials, a licence call or a design judgement:
   label it `needs-human`, state the options and the recommendation, move on.
 
 ## Invariants
 
 1. Never push red. Never force-push a shared branch.
+1b. Never implement ahead of a spec, and never leave a spec contradicted by the
+   code that implements it.
 2. Never leave an issue in progress without a comment saying where it stands.
 3. Never widen scope mid-iteration; file a follow-up issue instead.
 4. Never let the loop run against a milestone whose ADRs are unreviewed.

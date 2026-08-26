@@ -1,0 +1,125 @@
+# Standing order: "No colour outside palette.toml" (CLAUDE.md rule 2, ADR 0005).
+# PITFALLS.md lists "colour written down twice → the two drift" with the guard
+# marked *planned: M1 CI grep*. This is that grep, landed early — the cost of
+# adding it now is one job; the cost of adding it after configs/templates/
+# exists is a cleanup.
+name: palette
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: palette-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  no-stray-colour:
+    name: no colour outside palette.toml
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Grep for hex colour literals
+        run: |
+          set -uo pipefail
+
+          # ── The allowlist. One place, extend here. ──────────────────────────
+          # Bash pattern match, so `*` crosses `/`: 'docs/*' covers docs/assets/.
+          # These are the places a colour is allowed to appear as a literal:
+          # the source of truth, the design provenance, prose, and CI itself.
+          #
+          # configs/templates/ is deliberately NOT here. Those land in M1 and are
+          # rendered *from* palette.toml, so they hold placeholders, not colours
+          # — a literal in a template is exactly the drift this job exists to
+          # catch. Add a path here only when it is documentation of a colour,
+          # never when it is a consumer of one.
+          ALLOWLIST=(
+            'palette.toml'
+            'design/*'
+            'docs/*'
+            '.github/*'
+            '.claude/*'
+            'README.md'
+          )
+          # ───────────────────────────────────────────────────────────────────
+
+          HEX='#[0-9a-fA-F]{6}'
+          violations=0
+
+          while IFS= read -r f; do
+            for pat in "${ALLOWLIST[@]}"; do
+              # shellcheck disable=SC2053  # $pat is a glob on purpose
+              [[ $f == $pat ]] && continue 2
+            done
+
+            # Rust test modules may name shipped colours: they assert that
+            # palette.toml parsed to the values it claims. That is the palette
+            # being checked, not a second copy of it. Everything from the first
+            # `#[cfg(test)]` down is dropped — cutting the tail keeps the line
+            # numbers of the head honest.
+            if [[ $f == *.rs ]]; then
+              body=$(sed '/^#\[cfg(test)\]/,$d' -- "$f")
+            else
+              body=$(cat -- "$f")
+            fi
+
+            hits=$(printf '%s\n' "$body" | grep -nE "$HEX" || true)
+            [[ -z $hits ]] && continue
+
+            while IFS= read -r hit; do
+              line=${hit%%:*}
+              text=${hit#*:}
+              printf '%s:%s: %s\n' "$f" "$line" "${text#"${text%%[![:space:]]*}"}"
+              echo "::error file=$f,line=$line::hex colour literal outside palette.toml"
+              violations=$((violations + 1))
+            done <<< "$hits"
+          done < <(git ls-files)
+
+          if [ "$violations" -ne 0 ]; then
+            cat >&2 <<'MSG'
+
+          ─────────────────────────────────────────────────────────────────────
+          Colour literals found outside palette.toml (listed above, file:line).
+
+          helm writes every colour down exactly once, in palette.toml, and
+          generates everything else from it (ADR 0005). A second copy is a
+          second source of truth, and the two drift.
+
+          To fix:
+            • Themed output?  Render it from palette.toml via a template in
+                              configs/templates/ (helm-theme, M1).
+            • Rust code?      Take the colour from `Palette`, not a literal.
+            • Test fixture?   Put it inside the `#[cfg(test)]` module, which is
+                              exempt — tests are allowed to assert the palette.
+            • Genuinely docs? Add the path to ALLOWLIST at the top of this step,
+                              with a comment saying why.
+          ─────────────────────────────────────────────────────────────────────
+          MSG
+            exit 1
+          fi
+
+          echo "No colour literals outside palette.toml."
+
+  palette-lint:
+    name: shipped palette lints clean
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: palette
+      # palette.toml is include_str!-ed into helm-core's tests, so this runs the
+      # shipped palette through Palette::lint and the full contrast range. A bad
+      # palette edit fails here even when no Rust changed.
+      - run: cargo test -p helm-core palette -- --nocapture
