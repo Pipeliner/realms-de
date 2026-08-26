@@ -25,6 +25,12 @@ first.
 $ cargo fmt --all && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
+CI also runs `cargo deny` against the locked graph. `deny.toml` rejects known
+RustSec advisories and unknown dependency sources, and permits only the
+licences already present in the graph. Do not add an advisory ignore or licence
+allowlist entry casually: the dependency change must explain why it is needed,
+who owns its review, and when a temporary exception will be removed.
+
 The MSRV is **1.85** (edition 2024), declared in [`Cargo.toml`](Cargo.toml) and
 checked by its own CI job. It is not a matter of taste: Ubuntu 24.04's glibc
 sets the floor for what we can link against, and the dependency set pins it

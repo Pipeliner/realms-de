@@ -30,6 +30,18 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  dependency-policy:
+    name: dependency policy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # cargo-deny checks the locked graph against deny.toml, including RustSec
+      # advisories, the explicit licence allowlist, and dependency sources.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          rust-version: "1.85.0"
+          command: check advisories licenses sources
+
   action-pins:
     name: action pins
     runs-on: ubuntu-24.04
