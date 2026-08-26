@@ -199,6 +199,16 @@ Neither word is allowed to stay an adjective. Both are tests.
 
 ---
 
+### The rest of the desktop
+
+A DE is judged on the two dozen services it does *not* write: notifications,
+portals, lock, polkit, audio, networking, secrets. That surface is inventoried,
+researched and prioritised in
+[docs/INTEGRATION-SURFACE.md](INTEGRATION-SURFACE.md), with the evidence in
+[docs/integration/](integration/). Two findings from it changed this document:
+the bar cannot be timer-free (§4), and river has five protocols helm must serve
+rather than three (§3).
+
 ## 5. Target platforms
 
 Supported from day one, tested in CI:
