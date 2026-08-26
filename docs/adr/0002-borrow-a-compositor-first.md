@@ -15,8 +15,8 @@ minimum: xdg-shell, layer-shell, output management, fractional scaling, DRM
 leasing, XWayland, session locking, input methods, tablets, clipboard and
 primary selection, screencopy. None of that is the product. The product is the
 ledger, the theme pipeline, the bar and the key model, and all four are testable
-without owning a compositor — `helm-core` already has 2,900 lines under test and
-no Wayland dependency at all.
+without owning a compositor: `helm-core` is already roughly 2,900 lines of
+source and tests with no Wayland dependency at all.
 
 Building the compositor first means nobody, including us, uses helm for a year.
 
@@ -61,7 +61,7 @@ keymap are fully faithful; the *tiling* is an approximation until M5.
 
 | Option | Why it was attractive | Why it lost |
 |---|---|---|
-| **river** | Its layout protocol is the best structural fit in the field: river delegates tiling to an *external layout generator* over `river-layout-v3`, which is very close to what `layout::project` already is. We could ship the real triptych geometry on someone else's compositor, which niri cannot give us. River is also stable and well-regarded | Zig, not Rust, so it shares no toolchain, no CI story and no eventual code path with `helm-compositor`. It is pre-1.0 and its maintainer has signalled slow development. Its layout protocol delivers *dimensions only*, so stow and orbit-pinning still need side channels. This was a genuinely close call and the loss is real: we are trading exact geometry for a Rust codebase we can eventually absorb |
+| **river** | Its layout protocol is the best structural fit in the field: river delegates tiling to an *external layout generator* over `river-layout-v3`, which is very close to what `layout::project` already is. We could ship the real triptych geometry on someone else's compositor, which niri cannot give us. River is also stable and well-regarded | Zig, not Rust, so it shares no toolchain, no CI story and no eventual code path with `helm-compositor`. It is pre-1.0 (*assumption at time of writing; re-check before acting on this row*). Its layout protocol delivers *dimensions only*, so stow and orbit-pinning still need side channels. This was a genuinely close call and the loss is real: we are trading exact geometry for a Rust codebase we can eventually absorb |
 | **Smithay from day one** | It is where we end up anyway; no throwaway backend, no lossy mapping, the ledger drives real pixels from the first commit | Twelve months before anyone logs in. Violates the MVP cut line outright, and would mean designing the theme pipeline and bar against a compositor that does not exist yet |
 | **wlroots with C bindings** | The most mature compositor library by a wide margin; tinywl is a working starting point | Drags a C build and `unsafe` FFI into a workspace that sets `#![forbid(unsafe_code)]`. Also a full compositor build, so it costs almost as much as Smithay without the payoff of being the destination |
 

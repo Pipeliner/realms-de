@@ -116,41 +116,11 @@ jobs:
           key: msrv-${{ steps.msrv.outputs.version }}
 
       - name: Build on the declared MSRV
-        id: build
         # rust-toolchain.toml pins `stable`, and a directory toolchain file beats
         # whatever the action installed. RUSTUP_TOOLCHAIN outranks both.
         env:
           RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.version }}
-        # NEEDS-HUMAN: this step tolerates failure today, and only today.
-        # `toml = "0.9"` pulls serde_spanned 1.x / toml_parser 1.x / hashbrown
-        # 0.17, all of which are edition-2024 crates. Cargo 1.82 cannot even
-        # parse their manifests, so the declared MSRV of 1.82 is not reachable
-        # by any lockfile — verified locally: 1.82 fails, 1.85.0 builds clean.
-        # The fix belongs in Cargo.toml (bump rust-version to 1.85, or pin the
-        # toml family back), which this workflow does not own. Once that lands,
-        # delete `continue-on-error` and the guard step below: the job becomes a
-        # real gate with no other change.
-        continue-on-error: true
+        # --locked because the floor is a property of the shipped dependency
+        # graph: a resolver free to pick older versions would test a graph no
+        # user ever installs.
         run: cargo build --workspace --all-features --locked
-
-      - name: Report MSRV status
-        env:
-          OUTCOME: ${{ steps.build.outcome }}
-          MSRV: ${{ steps.msrv.outputs.version }}
-        run: |
-          set -euo pipefail
-          if [ "$OUTCOME" = "success" ]; then
-            echo "MSRV $MSRV builds clean." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          {
-            echo "### MSRV $MSRV is not satisfiable"
-            echo
-            echo "The workspace declares \`rust-version = \"$MSRV\"\` but its"
-            echo "dependency graph contains edition-2024 crates, which need"
-            echo "Rust 1.85 or newer. This job is **warning, not failing**,"
-            echo "because the fix belongs in \`Cargo.toml\`."
-            echo
-            echo "See the NEEDS-HUMAN comment in \`.github/workflows/ci.yml\`."
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "::warning file=Cargo.toml::declared MSRV $MSRV is not buildable; the real floor is 1.85"

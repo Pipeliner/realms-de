@@ -41,7 +41,7 @@ tell you whether a session starts. Only booting one does.
 4. **CI builds and installs all three.** A job per distro, installing the
    generated package into a clean container and running `helm ctl doctor`.
 5. **The MSRV is pinned by the oldest supported target.** `rust-version` in the
-   workspace manifest is currently 1.82 and moves only with a stated reason.
+   workspace manifest is currently 1.85 and moves only with a stated reason.
 6. **Nothing distro-specific may live outside `packaging/`.** No `#[cfg]` on a
    distro, no path that assumes a filesystem layout.
 
