@@ -1,0 +1,278 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080" role="img" aria-label="The helm desktop: a 32-pixel bar with six runic orbits, a gapless triptych of five panes named odin, thoth, hermes, horus and urania, and a which-key strip along the bottom.">
+<title>helm — the reference desktop</title>
+<defs>
+<linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#0a0c15"/><stop offset="1" stop-color="#080911"/>
+</linearGradient>
+<radialGradient id="glow" cx="50%" cy="50%" r="70%">
+<stop offset="0.55" stop-color="#a692ec" stop-opacity="0"/>
+<stop offset="1" stop-color="#a692ec" stop-opacity="0.07"/>
+</radialGradient>
+<g id="r1" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2,0 L2,14 M2,4.5 L8,1 M2,8.5 L8,5"/></g>
+<g id="r2" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2,14 L2,0.5 L8,3.5 L8,14"/></g>
+<g id="r3" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2,0 L2,14 M2,3 L8,6.5 L2,10 Z"/></g>
+<g id="r4" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2,0 L2,14 M2,1.5 L8,4.5 M2,5.5 L8,8.5"/></g>
+<g id="r5" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2,0 L2,14 M2,0.5 L7.5,2.5 L2.5,6.5 L8,14"/></g>
+<g id="r6" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8,0.5 L2,7 L8,13.5"/></g>
+<g id="rO" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M5,0.5 L9,5.5 L5,10.5 L1,5.5 Z M3,8.6 L0.8,13.8 M7,8.6 L9.2,13.8"/></g>
+<g id="mark"><path d="M0,-7 Q1.2,-1.2 7,0 Q1.2,1.2 0,7 Q-1.2,1.2 -7,0 Q-1.2,-1.2 0,-7 Z" fill="currentColor"/></g>
+<g id="hash" fill="none" stroke="currentColor" stroke-width="1"><path d="M3,0 L3,10 M7,0 L7,10 M0,3.2 L10,3.2 M0,6.8 L10,6.8"/></g>
+<g id="kbd" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="12" height="7"/><path d="M2.6,2.6 h1 M5.1,2.6 h1 M7.6,2.6 h1 M4,5.3 h5"/></g>
+<g id="cad" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M4.5,3.6 L4.5,14"/><circle cx="4.5" cy="2" r="1.7"/><path d="M1,5.6 Q4.5,8.2 8,5.6 M1,8.8 Q4.5,11.4 8,8.8"/></g>
+<g id="sig" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M0,8 Q3,1.4 7,4.4 Q9,5.9 11.5,2.4 M8.4,7.4 L11.8,7.4"/></g>
+<g id="bolt"><path d="M4.6,0 L0,7 L3,7 L2,12 L7,4.6 L4,4.6 Z" fill="currentColor"/></g>
+<g id="mod" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9"/><path d="M5,2.6 L5,7.4 M2.6,5 L7.4,5"/></g>
+</defs>
+
+<style>
+text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospace,monospace;white-space:pre}
+.b{font-size:12.5px}.h{font-size:11.5px}.e{font-size:10.5px}.m{font-size:11px}.s{font-size:12px}
+</style>
+
+<rect width="1920" height="1080" fill="#05060c"/>
+
+<!-- ══ bar ══ -->
+<rect width="1920" height="32" fill="url(#bar)"/>
+<g fill="#d2e1ff"><circle cx="345" cy="13" r="0.9" opacity=".6"/><circle cx="826" cy="22" r="0.9" opacity=".4"/><circle cx="1286" cy="10" r="0.9" opacity=".5"/><circle cx="1690" cy="19" r="0.9" opacity=".35"/></g>
+<rect y="31" width="1920" height="1" fill="#a692ec" opacity=".4"/>
+<g color="#a692ec"><use href="#mark" x="19" y="16"/></g>
+<text class="b" x="33" y="20.5" fill="#a692ec" letter-spacing="1">helm</text>
+<rect x="76" width="1" height="32" fill="#a692ec" opacity=".35"/>
+<rect x="82" width="28" height="32" fill="#a692ec" opacity=".14"/>
+<rect x="82" y="30" width="28" height="2" fill="#a692ec"/>
+<g color="#f2f5fb"><use href="#r1" x="91" y="9"/></g>
+<g color="#93a1ba"><use href="#r2" x="119" y="9"/><use href="#r3" x="147" y="9"/></g>
+<g color="#4a5670"><use href="#r4" x="175" y="9"/><use href="#r5" x="203" y="9"/><use href="#r6" x="231" y="9"/></g>
+<rect x="256" width="1" height="32" fill="#66748e" opacity=".35"/>
+<g color="#66748e"><use href="#hash" x="268" y="11"/></g>
+<text class="b" x="284" y="20.5" fill="#66748e">triptych</text>
+<rect x="352" y="9" width="54" height="14" fill="#a3bff2" opacity=".14"/>
+<g color="#a3bff2"><use href="#kbd" x="358" y="12"/></g>
+<text class="m" x="375" y="20" fill="#a3bff2" letter-spacing="1">NAV</text>
+<text class="b" x="876" y="20.5" fill="#aab6cc" text-anchor="middle">odin — harness · nav@caldera<tspan class="m" fill="#4a5670">      mod+ ▸ awaiting chord…</tspan></text>
+<g fill="#93a1ba" class="b">
+<text x="1347" y="20.5">↑ 18k ↓ 1.2M</text>
+<text x="1453" y="20.5" fill="#a3bff2">cpu 31%</text>
+<text x="1521" y="20.5">mem 9.8G</text>
+<text x="1597" y="20.5">gpu 44°</text>
+<text x="1666" y="20.5">♪ 64%</text>
+</g>
+<g color="#d9b06a"><use href="#bolt" x="1720" y="10"/></g>
+<text class="b" x="1732" y="20.5" fill="#d9b06a">87%</text>
+<text class="b" x="1904" y="20.5" fill="#f2f5fb" text-anchor="end">26·08·2026 ☾ 14:32</text>
+
+<!-- ══ gapless tiles: seam colour showing through 1px joins ══ -->
+<rect y="32" width="1920" height="1022" fill="#a692ec" opacity=".3"/>
+
+<!-- ── odin · agent harness · focused ── -->
+<rect x="0.5" y="32.5" width="639" height="1021" fill="#0b0d16" stroke="#a692ec" stroke-opacity=".6"/>
+<rect x="1" y="33" width="638" height="1020" fill="url(#glow)"/>
+<rect y="58" width="640" height="1" fill="#a692ec" opacity=".4"/>
+<g color="#a692ec"><use href="#rO" x="14" y="38"/></g>
+<text class="h" x="30" y="49" fill="#a692ec">odin — harness</text>
+<text class="e" x="135" y="49" fill="#4a5670">· allfather orchestrates, ravens report</text>
+<text class="h" x="628" y="49" fill="#66748e" text-anchor="end" letter-spacing="2">◈ ─ ✕</text>
+<text class="m" x="20" y="84" fill="#66748e">      familiar          role               state       tok/s</text>
+<rect x="14" y="92" width="612" height="24" fill="#a692ec" opacity=".14"/>
+<rect x="14" y="92" width="2" height="24" fill="#a692ec"/>
+<g class="s">
+<text x="26" y="108" fill="#a692ec">✶</text><text x="48" y="108" fill="#f2f5fb">odin</text><text x="210" y="108" fill="#aab6cc">orchestrate</text><text x="340" y="108" fill="#a692ec">weaving ◌</text><text x="560" y="108" fill="#f2f5fb" text-anchor="end">412</text>
+<text x="26" y="132" fill="#a3bff2">✧</text><text x="48" y="132" fill="#93a1ba">huginn</text><text x="210" y="132" fill="#8c99b2">scry · research</text><text x="340" y="132" fill="#a3bff2">weaving ◌</text><text x="560" y="132" fill="#93a1ba" text-anchor="end">388</text>
+<text x="26" y="156" fill="#a3bff2">✧</text><text x="48" y="156" fill="#93a1ba">muninn</text><text x="210" y="156" fill="#8c99b2">memory · cache</text><text x="340" y="156" fill="#a3bff2">weaving ◌</text><text x="560" y="156" fill="#93a1ba" text-anchor="end">301</text>
+<text x="26" y="180" fill="#66748e">○</text><text x="48" y="180" fill="#93a1ba">geri</text><text x="210" y="180" fill="#66748e">forge · codegen</text><text x="340" y="180" fill="#d9b06a">awaiting ◔</text><text x="560" y="180" fill="#66748e" text-anchor="end">—</text>
+<text x="26" y="204" fill="#66748e">○</text><text x="48" y="204" fill="#93a1ba">freki</text><text x="210" y="204" fill="#66748e">forge · codegen</text><text x="340" y="204" fill="#66748e">idle ○</text><text x="560" y="204" fill="#66748e" text-anchor="end">—</text>
+<text x="26" y="228" fill="#66748e">○</text><text x="48" y="228" fill="#93a1ba">valkyrja</text><text x="210" y="228" fill="#66748e">verify · tests</text><text x="340" y="228" fill="#66748e">idle ○</text><text x="560" y="228" fill="#66748e" text-anchor="end">—</text>
+</g>
+<rect x="16" y="252" width="608" height="1" fill="#66748e" opacity=".3"/>
+<text class="m" x="16" y="274" fill="#66748e">trunk plan · 4 threads · dag depth 3</text>
+<g class="s" fill="#93a1ba">
+<text x="16" y="300"><tspan fill="#7fd4c1">✓</tspan>  1  read ledger invariants · pin the exact-tiling test</text>
+<text x="16" y="324"><tspan fill="#7fd4c1">✓</tspan>  2  extract stage::relayout behind the projection seam</text>
+<text x="16" y="348"><tspan fill="#a692ec">◌</tspan>  3  thread the workarea through without storing it</text>
+<text x="16" y="372"><tspan fill="#66748e">○</tspan>  4  re-run the twelve-window sweep at five resolutions</text>
+</g>
+<rect x="16" y="404" width="608" height="1" fill="#66748e" opacity=".3"/>
+<text class="m" x="16" y="426" fill="#66748e">stream · run 7f3a</text>
+<g class="s" fill="#93a1ba">
+<text x="16" y="460"><tspan fill="#66748e">14:30:31</tspan> <tspan fill="#a692ec">odin    </tspan> merged thread-1 into trunk plan</text>
+<text x="16" y="482"><tspan fill="#66748e">14:30:38</tspan> <tspan fill="#a3bff2">muninn  </tspan> memoised 4 projections · 1.2M ctx retired</text>
+<text x="16" y="504"><tspan fill="#66748e">14:30:46</tspan> <tspan fill="#a3bff2">freki   </tspan> forge idle · awaiting thread-3 handoff</text>
+<text x="16" y="526"><tspan fill="#66748e">14:30:55</tspan> <tspan fill="#a3bff2">huginn  </tspan> cross-checked ADR 0001 · no contradiction</text>
+<text x="16" y="548"><tspan fill="#66748e">14:31:02</tspan> <tspan fill="#a692ec">odin    </tspan> decomposed thread-3 → 2 subthreads</text>
+<text x="16" y="570"><tspan fill="#66748e">14:31:09</tspan> <tspan fill="#a3bff2">geri    </tspan> patch applied · cargo fmt clean</text>
+<text x="16" y="592"><tspan fill="#66748e">14:31:11</tspan> <tspan fill="#d9b06a">valkyrja</tspan> clippy --all-targets -D warnings · clean</text>
+<text x="16" y="614"><tspan fill="#66748e">14:31:15</tspan> <tspan fill="#d9b06a">valkyrja</tspan> 54/54 tests pass · 0.00s</text>
+<text x="16" y="636"><tspan fill="#66748e">14:31:20</tspan> <tspan fill="#a692ec">odin    </tspan> merged thread-2 into trunk plan</text>
+<text x="16" y="658"><tspan fill="#66748e">14:31:28</tspan> <tspan fill="#a3bff2">muninn  </tspan> ctx 41% · pruning oldest 12 turns</text>
+<text x="16" y="680"><tspan fill="#66748e">14:31:33</tspan> <tspan fill="#a692ec">odin    </tspan> loosing freki for parallel refactor…</text>
+<text x="16" y="702" fill="#f2f5fb"><tspan fill="#66748e">14:31:38</tspan> <tspan fill="#a692ec">odin    </tspan> </text>
+</g>
+<rect x="152" y="692" width="7" height="13" fill="#a692ec"/>
+<rect x="16" y="1016" width="608" height="1" fill="#66748e" opacity=".35"/>
+<g class="m" fill="#66748e">
+<text x="16" y="1040">run 7f3a · 6m12s</text><text x="132" y="1040">ctx 41%</text><text x="200" y="1040">spend 0.84◈</text>
+<text x="522" y="1040" fill="#a692ec" text-anchor="end">3 weaving · 1 awaiting</text>
+<text x="628" y="1040" fill="#4a5670" text-anchor="end">mod+a attach</text>
+</g>
+<g color="#4a5670"><use href="#kbd" x="536" y="1030"/></g>
+
+<!-- ── thoth · shell ── -->
+<rect x="641" y="32" width="698" height="580" fill="#0a0c14"/>
+<rect x="641" y="58" width="698" height="1" fill="#7fd4c1" opacity=".28"/>
+<text class="h" x="653" y="49" fill="#7fd4c1">☽ thoth — shell</text>
+<text class="e" x="761" y="49" fill="#4a5670">· scribe of commands</text>
+<text class="h" x="1327" y="49" fill="#4a5670" text-anchor="end" letter-spacing="2">◈ ─ ✕</text>
+<g class="b">
+<text x="657" y="84"><tspan fill="#7fd4c1">nav@caldera</tspan> <tspan fill="#66748e">::</tspan></text>
+<g color="#d9b06a"><use href="#sig" x="765" y="72"/></g>
+<text x="779" y="84"><tspan fill="#d9b06a">%</tspan> <tspan fill="#c2cbde">helm ctl orbit --list</tspan></text>
+<g color="#93a1ba"><use href="#r1" x="666" y="93"/></g>
+<text x="682" y="104" fill="#93a1ba">triptych    3 vessels   focus: odin</text>
+<g color="#93a1ba"><use href="#r2" x="666" y="113"/></g>
+<text x="682" y="124" fill="#93a1ba">scriptorium 2 vessels</text>
+<g color="#93a1ba"><use href="#r3" x="666" y="133"/></g>
+<text x="682" y="144" fill="#93a1ba">observatory 1 vessel</text>
+<text x="657" y="164"><tspan fill="#7fd4c1">nav@caldera</tspan> <tspan fill="#66748e">::</tspan></text>
+<g color="#d9b06a"><use href="#sig" x="765" y="152"/></g>
+<text x="779" y="164"><tspan fill="#d9b06a">%</tspan> <tspan fill="#c2cbde">odin run refactor-stage --ravens 6</tspan></text>
+<g color="#93a1ba"><use href="#rO" x="666" y="173"/></g>
+<text x="682" y="184" fill="#93a1ba">run 7f3a summoned · attaching stream…</text>
+<text x="657" y="204"><tspan fill="#7fd4c1">nav@caldera</tspan> <tspan fill="#66748e">::</tspan></text>
+<g color="#d9b06a"><use href="#sig" x="765" y="192"/></g>
+<text x="779" y="204"><tspan fill="#d9b06a">%</tspan> <tspan fill="#c2cbde">helm ctl theme apply</tspan></text>
+<text x="682" y="224" fill="#93a1ba">14 templates rendered · 11 clients reloaded · 96ms</text>
+<text x="657" y="244"><tspan fill="#7fd4c1">nav@caldera</tspan> <tspan fill="#66748e">::</tspan></text>
+<g color="#d9b06a"><use href="#sig" x="765" y="232"/></g>
+<text x="779" y="244" fill="#d9b06a">%</text>
+</g>
+<rect x="795" y="234" width="7" height="13" fill="#7fd4c1"/>
+
+<!-- ── hermes · browser ── -->
+<rect x="1340" y="32" width="580" height="580" fill="#0a0c14"/>
+<rect x="1340" y="58" width="580" height="1" fill="#7fc9e8" opacity=".28"/>
+<g color="#7fc9e8"><use href="#cad" x="1352" y="38"/></g>
+<text class="h" x="1366" y="49" fill="#7fc9e8">hermes — wayfarer</text>
+<text class="e" x="1490" y="49" fill="#4a5670">· swift between worlds</text>
+<text class="h" x="1908" y="49" fill="#4a5670" text-anchor="end" letter-spacing="2">◈ ─ ✕</text>
+<rect x="1340" y="85" width="580" height="1" fill="#66748e" opacity=".3"/>
+<text class="h" x="1352" y="76" fill="#66748e">‹ ›</text>
+<rect x="1378.5" y="62.5" width="399" height="19" fill="#0e111b" stroke="#66748e" stroke-opacity=".4"/>
+<text class="h" x="1387" y="76" fill="#7fc9e8">◈</text>
+<text class="h" x="1402" y="76" fill="#aab6cc">docs.helm.sh/ledger/anatomy</text>
+<text class="h" x="1790" y="76" fill="#66748e">✚ ☰</text>
+<g color="#4a5670"><use href="#kbd" x="1822" y="66"/></g>
+<text class="e" x="1838" y="76" fill="#4a5670">/ seek</text>
+<rect x="1340" y="86" width="580" height="526" fill="#0c0f18"/>
+<text class="m" x="1366" y="120" fill="#66748e" letter-spacing="2">HELM MANUAL · CH. 4</text>
+<text x="1366" y="154" fill="#f2f5fb" font-size="20">Anatomy of the ledger</text>
+<g class="b" fill="#aab6cc">
+<text x="1366" y="190">Every vessel the compositor maps is entered into the</text>
+<text x="1366" y="211">ledger — a strict ordering of windows per orbit. Layouts</text>
+<text x="1366" y="232">never move windows; they project the ledger onto the</text>
+<text x="1366" y="253">output's workarea.</text>
+<text x="1366" y="285">Because the projection is pure, undo is trivial: restoring</text>
+<text x="1366" y="306">an earlier ledger restores the exact screen, gaps and all.</text>
+</g>
+<rect x="1366.5" y="330.5" width="527" height="62" fill="#0e111b" stroke="#66748e" stroke-opacity=".35"/>
+<text class="s" x="1380" y="354" fill="#7fc9e8">$ helm ctl ledger show</text>
+<g color="#7fc9e8"><use href="#r1" x="1540" y="343"/></g>
+<text class="s" x="1380" y="378" fill="#7b89a4">0 odin    1 thoth    2 hermes</text>
+<g class="b" fill="#aab6cc">
+<text x="1366" y="424">A layout is therefore not a mode the window manager is</text>
+<text x="1366" y="445">in. It is a function of three arguments, and it is total:</text>
+<text x="1366" y="466">every window in the ledger receives exactly one rectangle,</text>
+<text x="1366" y="487">and the rectangles sum to the workarea with nothing over.</text>
+</g>
+
+<!-- ── horus · monitor ── -->
+<rect x="641" y="613" width="698" height="441" fill="#0a0c14"/>
+<rect x="641" y="639" width="698" height="1" fill="#d9b06a" opacity=".3"/>
+<text class="h" x="653" y="630" fill="#d9b06a">◉ horus — the eye</text>
+<text class="e" x="775" y="630" fill="#4a5670">· nothing escapes it</text>
+<text class="h" x="1327" y="630" fill="#4a5670" text-anchor="end" letter-spacing="2">◈ ─ ✕</text>
+<g class="s" fill="#93a1ba">
+<text x="657" y="664">cpu0 <tspan fill="#a3bff2">▰▰▰▰▱▱▱▱▱▱</tspan> 41%</text><text x="1000" y="664">cpu1 <tspan fill="#a3bff2">▰▰▱▱▱▱▱▱▱▱</tspan> 18%</text>
+<text x="657" y="683">cpu2 <tspan fill="#a3bff2">▰▰▰▰▰▰▱▱▱▱</tspan> 63%</text><text x="1000" y="683">cpu3 <tspan fill="#a3bff2">▰▱▱▱▱▱▱▱▱▱</tspan> 09%</text>
+<text x="657" y="702">cpu4 <tspan fill="#a3bff2">▰▰▰▱▱▱▱▱▱▱</tspan> 32%</text><text x="1000" y="702">cpu5 <tspan fill="#a692ec">▰▰▰▰▰▰▰▰▱▱</tspan> 84%</text>
+<text x="657" y="728">mem <tspan fill="#d9b06a">▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱</tspan> 9.8G / 32G</text>
+</g>
+<text class="m" x="657" y="752" fill="#66748e">net · eth0</text>
+<text class="s" x="657" y="772" fill="#a3bff2" letter-spacing="-1">⡀⡄⣀⣠⣤⣶⣧⣆⡀⣀⣤⣄⡀⢀⣠⣶⣿⣷⣦⣄⡀⡀⣀⣄⣤⣦⣄⣀⡀⢀⣤⣶⣄⡀</text>
+<text class="m" x="1000" y="752" fill="#66748e">disk io · nvme0</text>
+<text class="s" x="1000" y="772" fill="#d9b06a" letter-spacing="-1">⡀⢀⣀⡀⣠⣀⡀⡀⣄⣤⣀⡀⢀⡀⣀⣶⣤⡀⡀⣀⡀⢀⣠⣄⡀⡀⣀⣀⡀⢀⣄⡀⡀⣀</text>
+<g class="s" fill="#93a1ba">
+<text x="657" y="800">gpu  <tspan fill="#a3bff2">▰▰▰▰▰▱▱▱▱▱</tspan> 52%</text><text x="1000" y="800">vram <tspan fill="#a3bff2">▰▰▰▱▱▱▱▱▱▱</tspan> 3.1G</text>
+<text x="657" y="819">nvme <tspan fill="#a3bff2">▰▰▰▰▰▰▰▱▱▱</tspan> 68%</text><text x="1000" y="819">swap <tspan fill="#66748e">▱▱▱▱▱▱▱▱▱▱</tspan> 0G</text>
+</g>
+<rect x="657" y="838" width="666" height="1" fill="#66748e" opacity=".3"/>
+<g class="h">
+<text x="657" y="858" fill="#66748e"> pid     cpu%  mem     command</text>
+<text x="657" y="877" fill="#93a1ba"><tspan fill="#a3bff2"> 1204</tspan>   12.3  1.1G    helm-session</text>
+<text x="657" y="895" fill="#93a1ba"> 6021   11.8  2.4G    odin-harness</text>
+<text x="657" y="913" fill="#93a1ba"> 2381    8.7  840M    hermes</text>
+<text x="657" y="931" fill="#93a1ba"> 4127    1.9   96M    mpd</text>
+</g>
+<g class="m" fill="#66748e">
+<text x="657" y="1002">Δt cpu 41° · nvme 38°</text><text x="830" y="1002">up 6d 4h</text><text x="920" y="1002">psi 0.02</text>
+<text x="1327" y="1002" fill="#4a5670" text-anchor="end">mod+x expand</text>
+</g>
+<g color="#4a5670"><use href="#kbd" x="1235" y="992"/></g>
+
+<!-- ── urania · orrery ── -->
+<rect x="1340" y="613" width="580" height="441" fill="#0a0c14"/>
+<rect x="1340" y="639" width="580" height="1" fill="#a3bff2" opacity=".28"/>
+<text class="h" x="1352" y="630" fill="#a3bff2">✶ urania — orrery</text>
+<text class="e" x="1474" y="630" fill="#4a5670">· muse of the heavens</text>
+<text class="h" x="1908" y="630" fill="#4a5670" text-anchor="end" letter-spacing="2">◈ ─ ✕</text>
+<g fill="none" stroke-width="10">
+<circle cx="1449" cy="701" r="41" stroke="#66748e" stroke-opacity=".3"/>
+<circle cx="1449" cy="701" r="41" stroke="#a3bff2" stroke-dasharray="80 178" transform="rotate(-90 1449 701)"/>
+<circle cx="1630" cy="701" r="41" stroke="#66748e" stroke-opacity=".3"/>
+<circle cx="1630" cy="701" r="41" stroke="#a692ec" stroke-dasharray="113 145" transform="rotate(-90 1630 701)"/>
+<circle cx="1811" cy="701" r="41" stroke="#66748e" stroke-opacity=".3"/>
+<circle cx="1811" cy="701" r="41" stroke="#d9b06a" stroke-dasharray="224 34" transform="rotate(-90 1811 701)"/>
+</g>
+<g text-anchor="middle">
+<text x="1449" y="702" fill="#f2f5fb" font-size="16">31%</text><text x="1449" y="719" fill="#66748e" font-size="10">load</text>
+<text x="1630" y="702" fill="#f2f5fb" font-size="16">44°</text><text x="1630" y="719" fill="#66748e" font-size="10">gpu</text>
+<text x="1811" y="702" fill="#f2f5fb" font-size="16">87%</text><text x="1811" y="719" fill="#66748e" font-size="10">cell</text>
+</g>
+<rect x="1358" y="761" width="544" height="1" fill="#66748e" opacity=".3"/>
+<g class="h" fill="#93a1ba">
+<text x="1358" y="784">☾ waning gibbous · 84%</text><text x="1646" y="784">☉ sets 20:14</text>
+<text x="1358" y="802">♆ ping 11ms · vpn warded</text><text x="1646" y="802">♄ tz UTC+2 · sid 21:07</text>
+<text x="1358" y="820">☿ entropy pool 3968b</text><text x="1646" y="820">♁ kernel 6.12.4-helm</text>
+</g>
+<rect x="1358" y="838" width="544" height="1" fill="#66748e" opacity=".3"/>
+<text class="m" x="1358" y="858" fill="#66748e">almanac · next transits</text>
+<g class="h" fill="#93a1ba">
+<text x="1358" y="878"><tspan fill="#a3bff2">15:00</tspan>   odin run 7f3a est. completion</text>
+<text x="1358" y="896"><tspan fill="#a3bff2">18:30</tspan>   backup rite → vault.caldera</text>
+<text x="1358" y="914"><tspan fill="#a3bff2">20:14</tspan>   ☉ sunset · night palette engages</text>
+</g>
+<g class="m" fill="#66748e">
+<text x="1358" y="1002">journal ✓ clean</text><text x="1480" y="1002">updates 3 held</text>
+<text x="1902" y="1002" fill="#a692ec" text-anchor="end">◈ all wards holding</text>
+</g>
+
+<!-- ══ which-key strip ══ -->
+<rect y="1054" width="1920" height="26" fill="#080911"/>
+<rect y="1054" width="1920" height="1" fill="#a692ec" opacity=".35"/>
+<g color="#a692ec"><use href="#mod" x="12" y="1062"/></g>
+<text class="h" x="26" y="1071" fill="#a692ec">mod</text>
+<rect x="59" y="1058" width="1" height="18" fill="#66748e" opacity=".3"/>
+<g class="h" fill="#93a1ba">
+<text x="73" y="1071"><tspan fill="#f2f5fb">↵</tspan> thoth</text>
+<text x="140" y="1071"><tspan fill="#f2f5fb">d</tspan> hecate</text>
+<text x="213" y="1071"><tspan fill="#f2f5fb">b</tspan> hermes</text>
+<text x="286" y="1071"><tspan fill="#f2f5fb">j/k</tspan> focus</text>
+<text x="366" y="1071"><tspan fill="#f2f5fb">h/l</tspan> swap</text>
+<text x="439" y="1071"><tspan fill="#f2f5fb">1-6</tspan> orbit</text>
+<text x="519" y="1071"><tspan fill="#f2f5fb">s</tspan> stow</text>
+<text x="579" y="1071"><tspan fill="#f2f5fb">m</tspan> mono</text>
+<text x="638" y="1071"><tspan fill="#f2f5fb">f</tspan> full</text>
+<text x="697" y="1071"><tspan fill="#f2f5fb">r</tspan> resize</text>
+<text x="771" y="1071"><tspan fill="#f2f5fb">q</tspan> banish</text>
+</g>
+<text class="h" x="1908" y="1071" fill="#66748e" text-anchor="end"><tspan fill="#d9b06a">?</tspan> grimoire — full spellbook</text>
+</svg>

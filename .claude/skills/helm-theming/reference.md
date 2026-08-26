@@ -87,12 +87,18 @@ Helpers: `Palette::load(path)`, `to_toml()`, `derived()`,
 `Palette::lint()` returns `Vec<Finding { path, message, fatal }>`, linting the
 **derived** palette against `background.pane`.
 
-- `MIN_BODY_CONTRAST = 4.5` — `text.bright`, `text.normal`, `text.soft`
-- `MIN_META_CONTRAST = 2.6` — the dimmer ramp
+- `MIN_BODY_CONTRAST = 4.5` — `text.bright`, `text.normal`, `text.soft`.
+  Failing this floor is **fatal**: the palette is refused, not warned about.
+- `MIN_META_CONTRAST = 2.6` — `text.mid`, `text.dim`, `text.faint`, and every
+  accent against `background.pane`. Non-fatal; these are meta surfaces.
 - `MIN_ACCENT_HUE_SEPARATION = 25.0` — degrees between any two accents, so a
-  new near-duplicate accent is rejected rather than quietly ambiguous
+  new near-duplicate accent is reported rather than quietly ambiguous. Pairs
+  below 0.02 chroma are skipped, because hue is numerical noise there.
+- `background.void` versus `background.pane` above 1.6:1 — the surfaces differ
+  so strongly that 1px seams start reading as gaps.
 
-`Finding` renders as `error path: message` or `warn  path: message`.
+`Finding` renders as `error path: message` or `warn  path: message`, and
+`is_applicable()` is simply "no fatal finding".
 
 ## Tests
 

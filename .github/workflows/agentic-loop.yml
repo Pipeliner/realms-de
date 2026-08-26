@@ -1,0 +1,319 @@
+# The agentic loop from .claude/memory/40-loop.md, run on CI instead of a laptop.
+#
+# Standing order S9 says the loop "must be safe to interrupt at any point and it
+# must never push a red build". On a schedule, unattended, that stops being a
+# convention and has to become an enforced property — so the guards below are
+# workflow mechanics, not prompt text the model could talk itself out of:
+#
+#   • dry-run by default, so the accident is a no-op
+#   • fork and default-branch runs are refused before anything is checked out
+#   • the verify trio runs *before* the loop; a red tree ends the job
+#   • history is checked for a rewrite afterwards, so a force-push cannot hide
+#
+# Nothing here is a substitute for reading 40-loop.md; the protocol is restated
+# in the prompt step so the model gets it verbatim, but the file is the source.
+name: agentic-loop
+
+on:
+  workflow_dispatch:
+    inputs:
+      milestone:
+        description: 'Milestone to work inside (loop scope guard: M0-M3 only)'
+        type: string
+        default: 'M0'
+        required: true
+      max_iterations:
+        description: 'Iterations before handing back to a human'
+        type: string
+        default: '1'
+        required: true
+      dry_run:
+        description: 'Plan only: pick and plan an issue, change and push nothing'
+        type: boolean
+        default: true
+        required: true
+
+  # Opt-in on purpose — do not uncomment without reading this paragraph.
+  #
+  # A cron schedule turns the loop from "a human asked for an iteration" into
+  # "an agent commits to this repo while everyone is asleep". S9 requires the
+  # loop never push a red build; the guards below enforce that for a run, but a
+  # schedule also needs someone who notices when a run goes wrong, and a
+  # milestone whose ADRs have been reviewed (invariant 4 in 40-loop.md). Both
+  # are human commitments, not workflow settings.
+  #
+  # Before enabling: set ANTHROPIC_API_KEY, wire up the executor step below
+  # (see its NEEDS-HUMAN note), run it dispatched with dry_run=true, then
+  # dispatched with dry_run=false, and only then put it on a clock.
+  #
+  # Note the schedule cannot inherit the input defaults — a scheduled run gets
+  # empty inputs, which is why every use of them below has an explicit fallback,
+  # and why the fallback for dry_run is `true`.
+  #
+  # schedule:
+  #   # 07:00 UTC weekdays: an iteration is waiting when the first human
+  #   # arrives, and nothing lands unwatched over a weekend.
+  #   - cron: '0 7 * * 1-5'
+
+concurrency:
+  # Never two loops on one branch: 40-loop.md's invariants (never push red,
+  # never leave an issue in progress without a comment) assume a single writer.
+  # In-progress runs are NOT cancelled — a half-finished iteration is exactly
+  # the state the loop is designed to avoid leaving behind.
+  group: agentic-loop-${{ github.ref }}
+  cancel-in-progress: false
+
+# Read-only at the top; the one job that writes asks for it explicitly below.
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    name: iterate
+    runs-on: ubuntu-24.04
+
+    # Guard 1, structural: a fork never runs this. The stronger half of the
+    # defence is that there is no `pull_request` or `pull_request_target`
+    # trigger above, so untrusted code has no path to this job's token at all —
+    # this condition just makes the intent unmissable and stops a scheduled run
+    # firing in someone's fork.
+    if: github.repository == 'pipeliner/realms-de' && github.event.repository.fork != true
+
+    permissions:
+      # The loop lands commits (40-loop.md step 6) and closes issues (S2).
+      # Nothing more: no packages, no deployments, no id-token.
+      contents: write
+      issues: write
+      pull-requests: write
+
+    env:
+      MILESTONE: ${{ inputs.milestone || 'M0' }}
+      MAX_ITERATIONS: ${{ inputs.max_iterations || '1' }}
+      # A scheduled run supplies no inputs at all, and in GitHub's expression
+      # language an unset input compares equal to `false` — so testing the input
+      # alone would make every scheduled run a live one. The event name is
+      # checked first so anything that is not an explicit dispatch stays dry.
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == false && 'false' || 'true' }}
+
+    steps:
+      # Guard 2: the loop pushes to a working branch. Pushing straight to the
+      # default branch would make "never push red" unrecoverable rather than
+      # merely embarrassing.
+      - name: Refuse to run on the default branch
+        run: |
+          set -euo pipefail
+          default='${{ github.event.repository.default_branch }}'
+          if [ "${{ github.ref_name }}" = "$default" ]; then
+            echo "::error::the loop works on a branch, never on $default. Dispatch it against a working branch."
+            exit 1
+          fi
+          echo "Working branch: ${{ github.ref_name }} (default is $default)."
+
+      - name: Refuse a milestone outside the loop's scope
+        run: |
+          set -euo pipefail
+          # 40-loop.md, "Scope guard": M0-M3 only unless a human moves the
+          # marker. Shipping the MVP outranks starting M4.
+          case "$MILESTONE" in
+            M0|M1|M2|M3) echo "Milestone $MILESTONE is in scope." ;;
+            *)
+              echo "::error::$MILESTONE is outside M0-M3. A human moves that marker, not the loop."
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the no-force-push check below can prove ancestry.
+          fetch-depth: 0
+
+      - name: Record the pre-loop commit
+        id: before
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: loop
+
+      # Guard 3: the trio, before anything is touched. Step 5 of the protocol
+      # forbids pushing red; if the tree is *already* red the loop cannot tell
+      # its own breakage from inherited breakage, so it must not start.
+      - name: Verify the tree is green before starting
+        run: |
+          set -euo pipefail
+          cargo fmt --all --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --workspace --all-features
+          echo "Pre-loop verify: green."
+
+      - name: Write the iteration prompt
+        id: prompt
+        run: |
+          set -euo pipefail
+          # The protocol verbatim from .claude/memory/40-loop.md, so a change to
+          # the memory file and a change to this prompt are visible as drift in
+          # the same review.
+          cat > "$RUNNER_TEMP/iteration-prompt.md" <<'PROMPT'
+          You are running one iteration of the helm agentic loop.
+
+          Read `CLAUDE.md` and `.claude/memory/00-standing-orders.md` first.
+          The protocol below is `.claude/memory/40-loop.md`; that file is the
+          source of truth and overrides anything restated here.
+
+          ## The iteration
+
+          1. ORIENT. Read `CLAUDE.md`, then `00-standing-orders.md`. Check the
+             open milestone and `git log --oneline -10`. Do not re-derive what
+             memory already says.
+
+          2. PICK. The highest-priority *unblocked* issue in the earliest open
+             milestone. Priority order: `blocked-others` > `bug` > `mvp` >
+             everything else. Skip anything labelled `needs-human` — leave it
+             and say so.
+
+          3. PLAN. Restate the issue's acceptance criteria in your own words. If
+             they are ambiguous, comment on the issue asking the specific
+             question and pick the next one. Do not guess at a contract.
+
+          4. BUILD. The smallest change that satisfies the criteria. Fan work
+             out to subagents when the pieces are independent and touch disjoint
+             paths (S11). Serialise anything sharing a not-yet-committed
+             contract.
+
+          5. VERIFY. `cargo fmt --all && cargo clippy --all-targets -- -D
+             warnings && cargo test`, plus the issue's own acceptance check.
+             A red build is never pushed. If it cannot be made green, revert the
+             change and reopen the issue with what was learned.
+
+          6. LAND. Commit with a message that says *why*. Reference the issue
+             (`Closes #N`). Push to the working branch. Update the issue with
+             what landed and what remains.
+
+          7. REFLECT. Append anything durable to memory: a decision to
+             `10-decisions.md`, a toolchain fact to `20-environment.md`, a
+             time-sink to `30-gotchas.md`, a new DE failure mode to
+             `docs/PITFALLS.md`.
+
+          ## Stop and hand back to a human when
+
+          - The milestone has no unblocked, non-`needs-human` issues left.
+          - The same test has failed on two consecutive iterations for
+            different reasons.
+          - A change would alter an ADR's decision — write the superseding ADR
+            and ask first.
+          - Something needs hardware, credentials, a licence call or a design
+            judgement: label it `needs-human`, state the options and the
+            recommendation, move on.
+
+          ## Invariants — these are not negotiable
+
+          1. Never push red. Never force-push, and never rewrite history that
+             already exists on the remote. CI checks for a rewrite after you
+             finish and fails the run if it finds one.
+          2. Never leave an issue in progress without a comment saying where it
+             stands.
+          3. Never widen scope mid-iteration; file a follow-up issue instead.
+          4. Never let the loop run against a milestone whose ADRs are
+             unreviewed.
+          5. Every iteration leaves the repo installable from a clean clone.
+
+          ## This run
+
+          - Milestone: __MILESTONE__
+          - Iterations: at most __MAX_ITERATIONS__
+          - Dry run: __DRY_RUN__
+
+          If dry run is `true`, do steps 1-3 only: orient, pick and plan. Write
+          the plan to the job summary. Change no files, create no commits, push
+          nothing, and post no issue comments.
+          PROMPT
+
+          # Placeholders substituted after the fact rather than interpolated
+          # into the heredoc, so a dispatch input can never terminate it or
+          # inject workflow syntax. Both values are already constrained: the
+          # milestone by the scope guard above, the count here.
+          case "$MAX_ITERATIONS" in
+            ''|*[!0-9]*)
+              echo "::error::max_iterations must be a positive integer, got '$MAX_ITERATIONS'"
+              exit 1
+              ;;
+          esac
+
+          sed -i \
+            -e "s/__MILESTONE__/$MILESTONE/g" \
+            -e "s/__MAX_ITERATIONS__/$MAX_ITERATIONS/g" \
+            -e "s/__DRY_RUN__/$DRY_RUN/g" \
+            "$RUNNER_TEMP/iteration-prompt.md"
+
+          echo "path=$RUNNER_TEMP/iteration-prompt.md" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Iteration prompt"
+            echo
+            echo '```markdown'
+            cat "$RUNNER_TEMP/iteration-prompt.md"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ─────────────────────────────────────────────────────────────────────
+      # NEEDS-HUMAN: the executor is deliberately not wired up.
+      #
+      # The loop is driven by a Claude Code session, not a shell script, so this
+      # is where a GitHub Action that runs one would go. The shape below is what
+      # it should look like — but the action's name, its input names and the
+      # right pin were not verified from this sandbox, and a workflow that
+      # references an action which does not exist fails at *parse* time, taking
+      # the whole run with it. An honestly disabled step is better than a
+      # confidently wrong one.
+      #
+      # To enable:
+      #   1. Confirm the action's coordinates and input names from its README.
+      #   2. Pin it to a commit SHA, not a tag — this step gets `contents:
+      #      write` and an API key, which is the one place a moved tag hurts.
+      #   3. Add the ANTHROPIC_API_KEY repository secret.
+      #   4. Uncomment, and delete the "executor not wired up" step below.
+      #
+      # - name: Run the iteration
+      #   uses: anthropics/claude-code-action@<SHA>  # verify name and pin
+      #   with:
+      #     anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+      #     prompt_file: ${{ steps.prompt.outputs.path }}
+      #     github_token: ${{ secrets.GITHUB_TOKEN }}
+      # ─────────────────────────────────────────────────────────────────────
+
+      - name: Executor not wired up
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run: prompt rendered above, nothing executed." >> "$GITHUB_STEP_SUMMARY"
+            echo "Dry run complete. The prompt is in the job summary."
+            exit 0
+          fi
+          # Failing loudly is the point: a non-dry run that quietly did nothing
+          # would look like an iteration that found no work.
+          echo "::error::dry_run=false but no executor is wired up. See the NEEDS-HUMAN block in .github/workflows/agentic-loop.yml."
+          exit 1
+
+      # Guard 4: proves the invariant rather than asserting it. If HEAD is not a
+      # descendant of where we started, history was rewritten — a force-push, a
+      # rebase, an amend of a pushed commit — and that is a hard stop under
+      # 40-loop.md invariant 1.
+      - name: Assert history was not rewritten
+        if: always()
+        run: |
+          set -euo pipefail
+          before='${{ steps.before.outputs.sha }}'
+          if [ -z "$before" ]; then
+            echo "No pre-loop commit recorded; nothing to compare."
+            exit 0
+          fi
+          if git merge-base --is-ancestor "$before" HEAD; then
+            echo "History intact: $before is still an ancestor of $(git rev-parse HEAD)."
+          else
+            echo "::error::history was rewritten during the run ($before is no longer an ancestor of HEAD). The loop must never force-push."
+            exit 1
+          fi

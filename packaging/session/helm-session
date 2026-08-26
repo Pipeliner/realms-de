@@ -1,0 +1,377 @@
+#!/usr/bin/env bash
+# helm-session — the session wrapper. This is the file that decides whether a
+# helm login is a desktop or a black screen.
+#
+# It implements the session-integration contract (ADR 0011 / docs/PITFALLS.md
+# "Session integration — the classic killers"). The *order* below is the whole
+# point; each ordering-sensitive step says why it sits where it does. If you
+# reorder something here, you are re-opening a bug that this file exists to
+# close.
+#
+# PRE-ALPHA (0.1.0): helm's own binaries — helm-sessiond (the session daemon),
+# helm-bar, helm — do not exist yet; they land in M1–M2. This script therefore
+# treats them as optional: it logs their absence and still hands you a working
+# compositor. Set HELM_STRICT=1 to make a missing helm binary fatal instead.
+#
+# Knobs (all optional, all environment):
+#   HELM_COMPOSITOR       command to run as the compositor      (default: niri)
+#   HELM_COMPOSITOR_ARGS  extra args, split on whitespace       (default: none)
+#   HELM_CURSOR_THEME     cursor theme name                     (default: Adwaita)
+#   HELM_CURSOR_SIZE      cursor size in logical px             (default: 24)
+#   HELM_WAIT_SECONDS     how long to wait for the wayland socket (default: 10)
+#   HELM_STRICT           1 = missing helm binaries are fatal   (default: 0)
+#
+# Usage: helm-session [--check | --version]
+
+set -euo pipefail
+
+readonly HELM_VERSION='0.1.0'
+readonly PROGNAME="${0##*/}"
+
+HELM_COMPOSITOR="${HELM_COMPOSITOR:-niri}"
+HELM_COMPOSITOR_ARGS="${HELM_COMPOSITOR_ARGS:-}"
+HELM_CURSOR_THEME="${HELM_CURSOR_THEME:-Adwaita}"
+HELM_CURSOR_SIZE="${HELM_CURSOR_SIZE:-24}"
+HELM_WAIT_SECONDS="${HELM_WAIT_SECONDS:-10}"
+HELM_STRICT="${HELM_STRICT:-0}"
+
+# The variables that must reach systemd --user and the D-Bus activation
+# environment. Anything a portal, a launched app or a user unit needs to find
+# the display belongs in this list; nothing else does.
+readonly SESSION_ENV_VARS=(
+	WAYLAND_DISPLAY
+	DISPLAY
+	XDG_CURRENT_DESKTOP
+	XDG_SESSION_TYPE
+	XDG_SESSION_DESKTOP
+	XDG_RUNTIME_DIR
+	XCURSOR_THEME
+	XCURSOR_SIZE
+	PATH
+)
+
+# ---------------------------------------------------------------- logging ---
+# Everything goes to the log file *and* stderr: the display manager captures
+# stderr, but on a failed login the user can only ever read the file.
+log_file=''
+
+setup_log() {
+	local dir="${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/helm"
+	if mkdir -p "$dir" 2>/dev/null; then
+		log_file="$dir/session.log"
+		: >>"$log_file" 2>/dev/null || log_file=''
+	fi
+}
+
+log() {
+	local line
+	line="$(date -Is) ${PROGNAME}: $*"
+	printf '%s\n' "$line" >&2
+	[[ -n "$log_file" ]] && printf '%s\n' "$line" >>"$log_file" 2>/dev/null
+	return 0
+}
+
+warn() { log "WARN  $*"; }
+die() {
+	log "FATAL $*"
+	exit 1
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ------------------------------------------------------------ environment ---
+# Step 1. Identity, before *anything* is started.
+#
+# The compositor and every client inherit this environment, and portals pick a
+# backend from XDG_CURRENT_DESKTOP at the moment they are activated — which can
+# be before any of our own code runs. Setting these late means a portal that
+# already chose the wrong backend, or none. (PITFALLS: "XDG_CURRENT_DESKTOP
+# unset" → screen share silently fails.)
+set_identity() {
+	export XDG_CURRENT_DESKTOP='helm'
+	export XDG_SESSION_TYPE='wayland'
+	export XDG_SESSION_DESKTOP='helm'
+	export XDG_SESSION_CLASS="${XDG_SESSION_CLASS:-user}"
+
+	[[ -n "${XDG_RUNTIME_DIR:-}" ]] ||
+		die "XDG_RUNTIME_DIR is unset — the login stack (pam_systemd) did not set up a runtime dir; nothing wayland can work without it"
+	[[ -d "$XDG_RUNTIME_DIR" ]] ||
+		die "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR does not exist"
+
+	# Cursor theme and size must be exported *before* the compositor starts:
+	# the compositor loads the cursor once at startup, so a value set later
+	# leaves the X11 default black arrow — or an invisible cursor over some
+	# surfaces. (PITFALLS: "Cursor theme unset".)
+	export XCURSOR_THEME="$HELM_CURSOR_THEME"
+	export XCURSOR_SIZE="$HELM_CURSOR_SIZE"
+
+	# Toolkit hints. Each is a preference with a fallback, never a hard
+	# switch: an app built without wayland support must still start.
+	export MOZ_ENABLE_WAYLAND="${MOZ_ENABLE_WAYLAND:-1}"
+	export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland;xcb}"
+	export QT_WAYLAND_DISABLE_WINDOWDECORATION="${QT_WAYLAND_DISABLE_WINDOWDECORATION:-1}"
+	export GDK_BACKEND="${GDK_BACKEND:-wayland,x11}"
+	# Java toolkits assume a reparenting WM; without this, menus land in the
+	# top-left corner under every tiling WM.
+	export _JAVA_AWT_WM_NONREPARENTING="${_JAVA_AWT_WM_NONREPARENTING:-1}"
+}
+
+# ------------------------------------------------- wayland socket handshake --
+# List the wayland sockets currently present in the runtime dir, one per line.
+# Pure bash on purpose — this runs in a poll loop before anything else exists.
+wayland_sockets() {
+	local sock name
+	shopt -s nullglob
+	for sock in "$XDG_RUNTIME_DIR"/wayland-*; do
+		name="${sock##*/}"
+		[[ "$name" == *.lock ]] && continue
+		printf '%s\n' "$name"
+	done
+	shopt -u nullglob
+}
+
+compositor_pid=''
+
+start_compositor() {
+	have "$HELM_COMPOSITOR" ||
+		die "compositor '$HELM_COMPOSITOR' not found on PATH — install it, or set HELM_COMPOSITOR"
+
+	# Snapshot the sockets that already exist (a nested session, another
+	# user's compositor, a leftover) so we can tell *ours* apart. We cannot
+	# simply assume wayland-1.
+	local -A pre_existing=()
+	local name
+	while IFS= read -r name; do pre_existing["$name"]=1; done < <(wayland_sockets)
+
+	# Split the extra args deliberately; they are a whitespace-separated
+	# string in the environment by design.
+	local -a args=()
+	[[ -n "$HELM_COMPOSITOR_ARGS" ]] && read -r -a args <<<"$HELM_COMPOSITOR_ARGS"
+
+	log "starting compositor: $HELM_COMPOSITOR ${args[*]:-}"
+	"$HELM_COMPOSITOR" "${args[@]}" &
+	compositor_pid=$!
+
+	# Step 2. Wait for the socket to actually exist.
+	#
+	# The compositor is our child, so it cannot export WAYLAND_DISPLAY back
+	# into this shell; we have to discover it. And a client — or an import
+	# into D-Bus — that races ahead of the socket is the single most common
+	# cause of "the bar never appeared" and of file dialogs that hang for
+	# 25 s and then fail. So: poll, with a deadline, and do nothing else
+	# until it is there.
+	local attempts=$((HELM_WAIT_SECONDS * 10))
+	local found=''
+	while ((attempts-- > 0)); do
+		if ! kill -0 "$compositor_pid" 2>/dev/null; then
+			die "compositor exited during startup — see $HELM_COMPOSITOR's own output above"
+		fi
+		while IFS= read -r name; do
+			[[ -v pre_existing["$name"] ]] && continue
+			found="$name"
+			break
+		done < <(wayland_sockets)
+		[[ -n "$found" ]] && break
+		sleep 0.1
+	done
+
+	[[ -n "$found" ]] ||
+		die "no wayland socket appeared in $XDG_RUNTIME_DIR within ${HELM_WAIT_SECONDS}s — the compositor started but never came up"
+
+	export WAYLAND_DISPLAY="$found"
+	log "wayland socket ready: WAYLAND_DISPLAY=$WAYLAND_DISPLAY (compositor pid $compositor_pid)"
+}
+
+have_systemd_user=0
+have_dbus_update=0
+
+detect_session_services() {
+	# `show-environment` is the cheapest call that proves a user manager is
+	# actually reachable; `command -v systemctl` alone does not (containers,
+	# elogind systems and `su -` sessions all have the binary and no bus).
+	if have systemctl && systemctl --user show-environment >/dev/null 2>&1; then
+		have_systemd_user=1
+	else
+		warn "no reachable systemd --user manager: helm's user units cannot be started; falling back to launching clients directly"
+	fi
+
+	if have dbus-update-activation-environment; then
+		have_dbus_update=1
+	else
+		warn "dbus-update-activation-environment not found (install dbus-user-session / dbus-daemon): D-Bus-activated services — portals above all — will not see WAYLAND_DISPLAY, so file dialogs and screen share will hang"
+	fi
+}
+
+# Step 3. Push the environment into systemd --user and D-Bus, BEFORE any client
+# starts.
+#
+# A D-Bus-activated service inherits the activation environment as it was at
+# activation time. xdg-desktop-portal is activated by the first app that opens
+# a file dialog; if WAYLAND_DISPLAY was not in the activation environment at
+# that moment, the portal comes up displayless and the dialog hangs. There is
+# no retry, and no error the user can see. Both channels are updated because
+# either one can be absent: systemd for user units, D-Bus for activation.
+import_session_environment() {
+	if ((have_systemd_user)); then
+		systemctl --user import-environment "${SESSION_ENV_VARS[@]}" ||
+			warn "systemctl --user import-environment failed; user units may not find the display"
+	fi
+
+	if ((have_dbus_update)); then
+		# --systemd also forwards to the systemd user manager, so on a
+		# normal box this is belt and braces with the call above.
+		dbus-update-activation-environment --systemd "${SESSION_ENV_VARS[@]}" ||
+			warn "dbus-update-activation-environment failed; portals may hang"
+	fi
+
+	log "session environment published to systemd(${have_systemd_user}) and dbus(${have_dbus_update})"
+}
+
+# Step 4. Cursor theme in gsettings as well as the environment.
+#
+# XCURSOR_* covers wayland clients that read the environment; GTK apps and the
+# xdg-desktop-portal settings interface read the gsettings keys instead, and a
+# mismatch shows up as a cursor that changes size when it crosses a window.
+apply_cursor_settings() {
+	have gsettings || return 0
+	gsettings set org.gnome.desktop.interface cursor-theme "$HELM_CURSOR_THEME" 2>/dev/null ||
+		warn "could not set gsettings cursor-theme (gsettings-desktop-schemas not installed?)"
+	gsettings set org.gnome.desktop.interface cursor-size "$HELM_CURSOR_SIZE" 2>/dev/null ||
+		warn "could not set gsettings cursor-size"
+	return 0
+}
+
+# ---------------------------------------------------------------- clients ---
+direct_pids=()
+
+spawn_optional() {
+	local what="$1"
+	shift
+	if ! have "$what"; then
+		if ((HELM_STRICT)); then
+			die "$what is not installed and HELM_STRICT=1"
+		fi
+		# Expected today: these binaries land in M1–M2.
+		warn "$what is not installed — skipping (pre-alpha: helm's own binaries are not built yet)"
+		return 0
+	fi
+	"$what" "$@" &
+	direct_pids+=("$!")
+	log "started $what (pid ${direct_pids[-1]})"
+}
+
+# Step 5. Only now start anything that talks to the display.
+start_session_units() {
+	if ((have_systemd_user)); then
+		# helm-session.target pulls in helm-daemon.service and
+		# helm-bar.service; both are Restart=on-failure, so a crashed bar
+		# is restarted instead of taking the session down.
+		if systemctl --user start helm-session.target; then
+			log "started helm-session.target"
+			return 0
+		fi
+		warn "helm-session.target failed to start; falling back to direct launch"
+	fi
+
+	# Fallback path for systems without a user manager. Deliberately dumb:
+	# no restart supervision, which is exactly why the systemd path is
+	# preferred.
+	spawn_optional helm-sessiond
+	spawn_optional helm-bar
+}
+
+# ---------------------------------------------------------------- teardown ---
+cleanup() {
+	local rc=$?
+	trap - EXIT INT TERM HUP
+	log "session ending (status $rc); tearing down"
+
+	if ((have_systemd_user)); then
+		systemctl --user stop helm-session.target 2>/dev/null ||
+			warn "could not stop helm-session.target"
+		# Leaving a stale WAYLAND_DISPLAY behind means the *next* session's
+		# activated services point at a socket that no longer exists.
+		systemctl --user unset-environment "${SESSION_ENV_VARS[@]}" 2>/dev/null ||
+			warn "could not unset the systemd user environment"
+	fi
+
+	if ((have_dbus_update)); then
+		# D-Bus has no "unset"; assigning empty values is the documented way
+		# to invalidate them for the next activation.
+		dbus-update-activation-environment --systemd \
+			WAYLAND_DISPLAY= XDG_CURRENT_DESKTOP= XDG_SESSION_TYPE= XDG_SESSION_DESKTOP= 2>/dev/null ||
+			warn "could not clear the dbus activation environment"
+	fi
+
+	local pid
+	for pid in ${direct_pids[@]+"${direct_pids[@]}"}; do
+		kill "$pid" 2>/dev/null || true
+	done
+	if [[ -n "$compositor_pid" ]] && kill -0 "$compositor_pid" 2>/dev/null; then
+		kill "$compositor_pid" 2>/dev/null || true
+	fi
+	return 0
+}
+
+# --------------------------------------------------------------- preflight ---
+# `--check` reports the contract without starting a session. It is the poor
+# relation of `helm ctl doctor` (M1–M2) and exists so that the contract can be
+# inspected on a box where helm's binaries are not built yet.
+preflight() {
+	local missing=0 note='(found)'
+	if ! have "$HELM_COMPOSITOR"; then
+		note='(MISSING)'
+		missing=1
+	fi
+	printf 'helm-session %s — preflight\n\n' "$HELM_VERSION"
+	printf '  compositor        %s %s\n' "$HELM_COMPOSITOR" "$note"
+	printf '  systemd --user    %s\n' "$(systemctl --user show-environment >/dev/null 2>&1 && echo 'reachable' || echo 'NOT reachable')"
+	printf '  dbus activation   %s\n' "$(have dbus-update-activation-environment && echo 'dbus-update-activation-environment found' || echo 'MISSING — portals will hang')"
+	printf '  portal backend    %s\n' "$(compgen -G '/usr/share/xdg-desktop-portal/portals/*.portal' >/dev/null 2>&1 && echo 'at least one .portal file installed' || echo 'none found in /usr/share/xdg-desktop-portal/portals')"
+	printf '  XDG_RUNTIME_DIR   %s\n' "${XDG_RUNTIME_DIR:-UNSET}"
+	printf '  cursor theme      %s @ %s\n' "$HELM_CURSOR_THEME" "$HELM_CURSOR_SIZE"
+	printf '\n  helm binaries (pre-alpha — absence here is expected today):\n'
+	local bin
+	for bin in helm helm-sessiond helm-bar; do
+		printf '    %-14s %s\n' "$bin" "$(have "$bin" && echo 'found' || echo 'not installed')"
+	done
+	return "$missing"
+}
+
+main() {
+	case "${1:-}" in
+	--version)
+		printf 'helm-session %s\n' "$HELM_VERSION"
+		return 0
+		;;
+	--check)
+		preflight
+		return $?
+		;;
+	'') ;;
+	*)
+		printf 'usage: %s [--check | --version]\n' "$PROGNAME" >&2
+		return 2
+		;;
+	esac
+
+	setup_log
+	log "helm-session $HELM_VERSION starting"
+
+	set_identity
+	detect_session_services
+	start_compositor
+	import_session_environment
+	apply_cursor_settings
+	trap cleanup EXIT INT TERM HUP
+	start_session_units
+
+	# The compositor is the session: when it exits, the session is over and
+	# the EXIT trap tears the rest down.
+	local rc=0
+	wait "$compositor_pid" || rc=$?
+	log "compositor exited with status $rc"
+	return "$rc"
+}
+
+main "$@"
