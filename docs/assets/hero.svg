@@ -281,4 +281,12 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <text x="771" y="1071"><tspan fill="#f2f5fb">q</tspan> banish</text>
 </g>
 <text class="h" x="1908" y="1071" fill="#66748e" text-anchor="end"><tspan fill="#d9b06a">?</tspan> grimoire — full spellbook</text>
+
+  <!-- Standing order S15: imagery must announce itself. This label rides inside
+       the file so the claim survives the image being embedded anywhere else. -->
+  <g id="concept-label" aria-hidden="true">
+    <text x="1906" y="1070" text-anchor="end"
+          font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" font-size="10.5"
+          fill="#4a5670" letter-spacing="1.2">CONCEPT RENDERING · NOT A SCREENSHOT · helm does not run yet</text>
+  </g>
 </svg>

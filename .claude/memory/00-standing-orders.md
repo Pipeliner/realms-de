@@ -108,6 +108,26 @@ algorithm is subtly wrong).
 The order is: **spec → ADR if a decision is involved → failing happy-path tests
 → implementation → the test names recorded back in the spec.**
 
+## S15 — Truthful presentation
+
+The repository must never imply capability it does not have.
+
+- **Imagery is labelled for what it is.** Anything not captured from running
+  software is marked *concept rendering* or *diagram*, in the caption, at the
+  point of use — not in a footnote. Concept art is replaced with real captures
+  as soon as there is something to capture, and never earlier.
+- **AI authorship is disclosed** on the front page: what an agent wrote, what a
+  human wrote, and who decided the decisions. A reader should not have to infer
+  it from commit trailers.
+- **Every claim is checkable.** If the README says a thing is tested, it names
+  the test. If a component does not exist, it says so in those words. Status
+  tables list what is *not* done as prominently as what is.
+- **No aspirational tense.** "helm does X" means it does X today. Anything else
+  is written as planned, with its milestone.
+
+This is not modesty. An unverifiable claim on a front page devalues the
+verifiable ones next to it.
+
 ## S13 — Preserve instructions in reusable form
 
 An instruction given once is written here, generalised past its immediate

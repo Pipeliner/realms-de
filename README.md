@@ -13,11 +13,14 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="The helm desktop: a 32-pixel bar carrying six runic orbits, a layout indicator, a mode badge and a clock; below it a gapless triptych of five panes — odin, thoth, hermes, horus and urania — separated by one-pixel violet seams; a which-key strip along the bottom." width="100%">
+  <img src="docs/assets/hero.svg" alt="Concept rendering, not a screenshot. The intended helm desktop: a 32-pixel bar carrying six runic orbits, a layout indicator, a mode badge and a clock; below it a gapless triptych of five panes — odin, thoth, hermes, horus and urania — separated by one-pixel violet seams; a which-key strip along the bottom." width="100%">
 </p>
 
-<p align="center"><sub>The reference desktop, drawn to the same measurements the compositor will use.<br>
-Nothing here runs yet — see <a href="#status">Status</a>.</sub></p>
+<p align="center">
+  <sub><strong>Concept rendering — not a screenshot.</strong> No part of this image was produced by running helm;
+  it is hand-drawn SVG to the same measurements the compositor will use.<br>
+  It will be replaced by a real screen capture once there is something to capture. See <a href="#status">Status</a>.</sub>
+</p>
 
 ---
 
@@ -68,6 +71,8 @@ Everything above falls out of a single decision.
   <img src="docs/assets/ledger.svg" alt="A user action edits the ledger, an ordered list of window ids per orbit with an undo history. A pure projection turns the ledger, a layout and the workarea into a vector of placements: exact integer rectangles that tile the workarea with nothing left over. Those are diffed against the last frame, so only the changed region is submitted." width="100%">
 </p>
 
+<p align="center"><sub>A diagram of the model, not of a running system.</sub></p>
+
 A `Ledger` is an ordered `Vec<WinId>` per orbit. Every gesture the user makes —
 summon, banish, swap, focus, change layout — edits that list and nothing else.
 Geometry is produced by
@@ -108,6 +113,7 @@ What exists, honestly:
 | Specs and ADRs | **In progress.** [`docs/specs/`](docs/specs/) · [`docs/adr/`](docs/adr/) |
 | `helm-theme`, `helm-ctl`, `helm-session`, `helm-bar`, `helm-hecate`, `helm-odin`, `helm-compositor` | **Planned.** Not started. |
 | Packaging, session entry, portals | **Planned.** Not started. |
+| Every image in this repository | **Concept art.** Hand-drawn SVG and the design handoff's HTML prototypes. There are no screenshots of helm, because helm does not run yet. |
 
 Crates join the Cargo workspace only when they gain a real implementation, so a
 fresh clone always builds. If a crate is not in
@@ -217,6 +223,27 @@ needing a human's judgement gets the `needs-human` label and a statement of the
 options, not a quiet guess.
 
 Everyone taking part is held to the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## How this repository was built
+
+helm is being built by an AI agent (Claude) working from a human-authored design
+handoff, under human direction and review. That is worth stating plainly rather
+than leaving to be inferred:
+
+- **The design is human.** `design/HANDOFF.md` and the `.dc.html` prototypes were
+  authored by a person. The colours, the copy, the glyph choices and the whole
+  aesthetic are theirs.
+- **The code, specs, ADRs and this README were drafted by an agent**, then
+  reviewed. Architectural decisions with real alternatives were put to a human
+  and decided by one — the choice to be river's window manager rather than ship
+  on niri is the clearest example, and ADR 0002 is kept superseded-but-intact so
+  that reasoning can be audited.
+- **Claims here are meant to be checkable.** Where this README says something is
+  tested, it names the test. Where something does not exist, it says so. If you
+  find a claim that cannot be checked against the repository, that is a bug —
+  please file it.
+- **Nothing here has run on real hardware.** No maintainer has logged into helm,
+  because there is not yet a session to log into.
 
 ## Credits
 

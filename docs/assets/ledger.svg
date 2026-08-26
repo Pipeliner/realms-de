@@ -77,4 +77,10 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <text class="m" x="680" y="348" fill="#f2f5fb">Relayout is skippable.</text>
 <text class="d" x="680" y="366">Same inputs give the same output, so an</text>
 <text class="d" x="680" y="382">unchanged frame is never submitted.</text>
+
+  <g id="concept-label" aria-hidden="true">
+    <text x="988" y="412" text-anchor="end"
+          font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" font-size="9.5"
+          fill="#4a5670" letter-spacing="1">DIAGRAM OF THE MODEL · NOT A RUNNING SYSTEM</text>
+  </g>
 </svg>
