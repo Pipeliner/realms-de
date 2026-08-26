@@ -1,0 +1,59 @@
+# cargo-deb metadata — the alternative .deb path.
+#
+# WHERE THIS GOES: append this block to the ROOT Cargo.toml (or to the manifest
+# of whichever crate becomes the packaged binary once one exists). It is kept
+# here as a fragment because the root Cargo.toml belongs to the workspace owner,
+# not to packaging.
+#
+# WHEN TO USE WHICH:
+#   * debian/ (control + rules) is the path that produces a *source* package,
+#     builds in a clean chroot and could go to a PPA or Debian proper.
+#   * cargo-deb is the path that turns an already-built release binary into a
+#     .deb in one command — right for CI artefacts and for people who just want
+#     a file to install. It does not produce a source package.
+# Keep the two in step: the dependency list below mirrors debian/control, and a
+# change to one is a change to both.
+#
+# PRE-ALPHA: `cargo deb` needs at least one [[bin]] in the packaged crate, so
+# this cannot run until M1-M2 land helm-ctl. The metadata is written now so it
+# is reviewed with everything else rather than invented in a hurry later.
+
+[package.metadata.deb]
+name = "helm"
+maintainer = "helm contributors <helm-maintainers@helm.invalid>"  # NEEDS-HUMAN: see debian/control
+copyright = "2026 the helm contributors"
+license-file = ["LICENSE-MIT", "0"]
+extended-description = """
+helm is a Wayland desktop built around one idea: an ordered ledger of windows is
+the only state that matters, and every layout is a pure projection of it.
+
+PRE-ALPHA. helm's binaries are not written yet; this package installs the
+session contract — the wayland-session entry, the session wrapper, the systemd
+user units and the palette."""
+section = "x11"
+priority = "optional"
+depends = "$auto, helm-river (>= 0.4.0) | river (>= 0.4.0), dbus-user-session, systemd, xdg-desktop-portal, xdg-desktop-portal-gtk | xdg-desktop-portal-wlr | xdg-desktop-portal-gnome, fonts-symbola, foot, fuzzel, btop, zsh"
+recommends = "fonts-ibm-plex, gsettings-desktop-schemas, xwayland, xdg-desktop-portal-wlr"
+suggests = "yazi, starship"
+
+# Paths are relative to the workspace root; the trailing component is the
+# destination. Mirrors packaging/debian/install.
+assets = [
+    ["packaging/session/helm-session", "usr/bin/", "755"],
+    ["packaging/session/helm.desktop", "usr/share/wayland-sessions/", "644"],
+    ["palette.toml", "usr/share/helm/", "644"],
+    ["docs/INSTALL.md", "usr/share/doc/helm/", "644"],
+    # Binaries land here once they exist (M1-M2):
+    # ["target/release/helm", "usr/bin/", "755"],
+    # ["target/release/helm-sessiond", "usr/bin/", "755"],
+    # ["target/release/helm-bar", "usr/bin/", "755"],
+]
+
+# cargo-deb installs these into /usr/lib/systemd/user and generates the enable
+# snippets. `enable = true` is what creates the helm-session.target.wants
+# symlinks; without them, starting the session target starts nothing.
+[package.metadata.deb.systemd-units]
+unit-scripts = "packaging/systemd"
+unit-name = "helm-bar"
+enable = true
+start = false
