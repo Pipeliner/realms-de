@@ -136,6 +136,13 @@ known gaps.
 
 ---
 
+The seams named above — `WmBackend`, the template contract, the bar render
+contract — are sketched with real signatures in
+[docs/INTERFACES.md](INTERFACES.md), so M1 and M2 can proceed in parallel
+without inventing the same types twice.
+
+---
+
 ## 4. What "robust" and "snappy" mean here
 
 Neither word is allowed to stay an adjective. Both are tests.
