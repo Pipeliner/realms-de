@@ -97,7 +97,7 @@ appears. Every entry has an ASCII fallback and is drawn through
 | `Bar` | `✦` logo, `⌗` layout, `⌨` mode badge, `▸` chord echo, `☾` clock, `⚡` battery, `♪` volume, and the six runes `ᚠᚢᚦᚨᚱᚲ` | runes fall back to the digits `1`–`6`, loudly |
 | `WhichKey` | `⊞` modifier, `↵` return | |
 | `Header` | `◈ ─ ✕` controls, and the pantheon marks `ᛟ` odin, `☽` thoth, `⚚` hermes, `◉` horus, `✶` urania | |
-| `Instruments` | `▰` / `▱` meters, the eight-step braille ramp `⡀⣀⣄⣤⣦⣶⣷⣿` | ramp degrades to ` . . : : \| \| #` |
+| `Instruments` | `▰` / `▱` meters, the eight-step braille ramp `⡀⣀⣄⣤⣦⣶⣷⣿` | ramp degrades to space, dot, dot, colon, colon, bar, bar, hash |
 | `Overlay` | `⚷` hecate, `☍` charon, `⇥` tab | |
 | `Prompt` | `𓂃` | falls back to `~`; the handoff singles this one out |
 

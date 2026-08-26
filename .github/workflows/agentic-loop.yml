@@ -77,7 +77,13 @@ jobs:
     # trigger above, so untrusted code has no path to this job's token at all —
     # this condition just makes the intent unmissable and stops a scheduled run
     # firing in someone's fork.
-    if: github.repository == 'pipeliner/realms-de' && github.event.repository.fork != true
+    #
+    # Only the fork flag is tested here, and deliberately so: a job-level `if`
+    # that does not match produces a *skipped* job, which is indistinguishable
+    # from "nobody dispatched it". A boolean cannot be got subtly wrong, so it
+    # is safe to fail silently. Repository identity is checked in the first
+    # step instead, where a mismatch is loud.
+    if: github.event.repository.fork != true
 
     permissions:
       # The loop lands commits (40-loop.md step 6) and closes issues (S2).
@@ -96,6 +102,28 @@ jobs:
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == false && 'false' || 'true' }}
 
     steps:
+      # Guard 1b: repository identity, as a step rather than a job condition so
+      # a mismatch fails visibly instead of skipping into silence.
+      #
+      # The remote is `Pipeliner/realms-de` with a capital P, and
+      # `github.repository` reports the owner's canonical casing. GitHub's
+      # expression `==` compares strings case-insensitively, so a job-level
+      # condition would in fact have matched — but relying on that means a
+      # rename or a typo shows up as a loop that quietly never runs. Here the
+      # comparison is shell, so the casing is normalised explicitly and the
+      # failure is a red X with a message.
+      - name: Refuse to run outside the canonical repository
+        env:
+          EXPECTED: pipeliner/realms-de
+          ACTUAL: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$(printf '%s' "$ACTUAL" | tr '[:upper:]' '[:lower:]')" != "$EXPECTED" ]; then
+            echo "::error::this loop only runs in $EXPECTED, not $ACTUAL. If the repository moved, update this guard."
+            exit 1
+          fi
+          echo "Repository: $ACTUAL."
+
       # Guard 2: the loop pushes to a working branch. Pushing straight to the
       # default branch would make "never push red" unrecoverable rather than
       # merely embarrassing.

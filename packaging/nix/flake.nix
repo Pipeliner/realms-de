@@ -8,7 +8,18 @@
 #    cache.nixos.org (see .claude/memory/20-environment.md). Run
 #    `nix flake lock` once on a machine with nix and commit the result; until
 #    then every evaluation resolves nixos-unstable afresh and is not
-#    reproducible. NOTHING IN THIS FILE HAS BEEN EVALUATED BY A NIX BINARY.
+#    reproducible. `nix flake lock` needs api.github.com, which this container's
+#    egress policy answers with 403 — that is the only reason the lock is
+#    missing.
+#
+#    What *was* verified: a nix 2.24.9 binary was fetched and this file was
+#    evaluated end to end with
+#      nix flake check --no-build \
+#        --override-input nixpkgs tarball+https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz
+#    against nixos-unstable (nixos-26.11pre1060451.56c02bc00adc, 2026-08-23).
+#    packages, devShells, both NixOS module evaluations, the shellcheck check and
+#    the VM test derivation all evaluate. Nothing has been *built*: no rustc, no
+#    VM boot. Evaluation catches typos and dead attribute names, not runtime.
 #
 # 2. A FLAKE CANNOT REFERENCE SOURCES ABOVE ITS OWN DIRECTORY. This file lives
 #    in packaging/nix/ for tidiness, but a flake rooted there cannot see
@@ -308,9 +319,11 @@
             # The glyph contract (ADR 0012). IBM Plex Mono is the design's face;
             # the symbols-only Nerd Font supplies runes and instrument glyphs.
             # Without these the bar is a row of tofu on first boot.
+            # On nixpkgs older than 24.11 this attribute is
+            # `(nerdfonts.override { fonts = [ "NerdFontsSymbolsOnly" ]; })`.
             fonts.packages = [
               pkgs.ibm-plex
-              (pkgs.nerd-fonts.symbols-only or pkgs.nerdfonts)
+              pkgs.nerd-fonts.symbols-only
             ];
 
             # XWayland: old apps should look wrong-ish, not broken.
@@ -440,7 +453,9 @@
       # ── checks ─────────────────────────────────────────────────────────────
       sessionBootTest =
         pkgs:
-        pkgs.nixosTest {
+        # `pkgs.testers.nixosTest`, not the old top-level `nixosTest` alias, which
+        # nixpkgs now refuses.
+        pkgs.testers.nixosTest {
           name = "helm-session-boots";
 
           nodes.machine =
@@ -535,7 +550,10 @@
               rpm
               dpkg
               cargo-deb
-              cargo-generate-rpm
+              # cargo-generate-rpm is not in nixpkgs (checked against
+              # nixos-unstable, 2026-08). packaging/fedora/helm.spec is the
+              # supported rpm path; `cargo install cargo-generate-rpm` if you
+              # want the metadata-driven one.
             ])
             ++ (with pkgs; [
               # The desktop helm assembles itself out of, so `nix develop`

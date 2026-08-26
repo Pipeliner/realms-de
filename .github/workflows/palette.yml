@@ -34,9 +34,14 @@ jobs:
           set -uo pipefail
 
           # ── The allowlist. One place, extend here. ──────────────────────────
-          # Bash pattern match, so `*` crosses `/`: 'docs/*' covers docs/assets/.
-          # These are the places a colour is allowed to appear as a literal:
-          # the source of truth, the design provenance, prose, and CI itself.
+          # These are the places a colour is allowed to appear as a literal: the
+          # source of truth, the design provenance, prose, and CI itself.
+          #
+          # Bash pattern matching, not pathname expansion — so `*` crosses `/`
+          # and one 'docs/*' entry covers every subtree beneath it: docs/adr/,
+          # docs/specs/ (S14), docs/assets/ and anything added later. Prose
+          # quotes palette values to explain them, which is documenting the one
+          # source of truth rather than duplicating it.
           #
           # configs/templates/ is deliberately NOT here. Those land in M1 and are
           # rendered *from* palette.toml, so they hold placeholders, not colours

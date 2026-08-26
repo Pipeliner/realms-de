@@ -10,7 +10,9 @@ The rules live in `SKILL.md`.
 
 `docs/specs/0002-theme-pipeline.md` is Accepted for M1 with an empty `Test`
 column. Each row below is one happy path, one test, written and watched to fail
-before `helm-theme` exists in any working form.
+before `helm-theme` exists in any working form. **None of these test functions
+exists yet** — they are what the criteria should turn into, named here so the
+shape is clear before anyone starts typing.
 
 | # | The criterion | The test it becomes | What "watch it fail" looks like |
 |---|---|---|---|

@@ -92,17 +92,48 @@ jobs:
       # (docs/MVP.md), and a job that fails for eight weeks because its input
       # does not exist yet trains everyone to ignore red. It skips cleanly until
       # the flake lands, then starts gating with no edit to this file.
-      - name: Look for the flake
+      # ADR 0010 makes the flake the reference build, so this job is
+      # load-bearing — but it gates on a flake at the *repository root*, not on
+      # packaging/nix/flake.nix, and that is a Nix constraint rather than a
+      # preference: a flake cannot reference sources above its own directory, so
+      # one rooted in packaging/nix/ cannot see ../../Cargo.toml and throws on
+      # evaluation. The flake's own header says the same thing and asks for
+      # `git mv packaging/nix/flake.nix flake.nix`.
+      #
+      # Until that move happens this job skips and says why. Afterwards it
+      # gates, with no edit here.
+      - name: Locate the flake
         id: flake
         run: |
           set -euo pipefail
-          if [ -f packaging/nix/flake.nix ]; then
+          if [ -f flake.nix ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "packaging/nix/flake.nix found — running the reference build."
+            echo "flake.nix found at the repository root — running the reference build."
+            if [ ! -f flake.lock ]; then
+              # ADR 0010's claim is reproducibility, and an unlocked flake
+              # resolves nixos-unstable afresh on every run. The check still
+              # means something without a lock; it just does not mean *that*.
+              echo "::warning file=flake.nix::no flake.lock committed; this evaluation is not reproducible. Run 'nix flake lock' and commit the result."
+            fi
+          elif [ -f packaging/nix/flake.nix ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::packaging/nix/flake.nix exists but a flake cannot see sources above its own directory. Move it to the repository root to enable this job."
+            {
+              echo "### Nix check skipped"
+              echo
+              echo "\`packaging/nix/flake.nix\` is scaffolded but cannot be"
+              echo "evaluated where it sits: a flake cannot reference sources"
+              echo "above its own directory, so it cannot see \`Cargo.toml\`."
+              echo
+              echo "\`\`\`"
+              echo "git mv packaging/nix/flake.nix flake.nix && nix flake lock"
+              echo "\`\`\`"
+              echo
+              echo "This job starts gating as soon as that lands."
+            } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "packaging/nix/flake.nix not present yet (lands in M3); skipping." \
-              >> "$GITHUB_STEP_SUMMARY"
+            echo "No flake yet (lands in M3); skipping." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - uses: DeterminateSystems/nix-installer-action@main
@@ -118,12 +149,25 @@ jobs:
       - uses: DeterminateSystems/magic-nix-cache-action@main
         if: steps.flake.outputs.present == 'true'
 
-      # A NixOS VM test that boots the session and asserts the bar appears is
-      # the M3 acceptance check (ARCHITECTURE.md §5). It needs KVM, which
-      # GitHub-hosted runners do not have — that will arrive as its own job on a
-      # larger runner, carrying the `needs-human` label until someone picks a
-      # runner tier.
-      - name: nix flake check
+      # The NixOS VM test that boots the session and asserts the bar appears
+      # (ARCHITECTURE.md §5) is a `nixosTest`, which needs /dev/kvm. GitHub's
+      # standard runners do not have it, so a bare `nix flake check` would fail
+      # on a machine limitation rather than on anything about helm — the flake's
+      # own comment says as much. Detect KVM and run what the runner can
+      # actually run; a larger runner picks up the VM test automatically.
+      - name: Run the reference build
         if: steps.flake.outputs.present == 'true'
-        working-directory: packaging/nix
-        run: nix flake check --print-build-logs
+        run: |
+          set -euo pipefail
+          if [ -e /dev/kvm ]; then
+            echo "KVM present — running the full flake check, VM boot test included."
+            nix flake check --print-build-logs
+          else
+            echo "::notice::no /dev/kvm on this runner; the NixOS VM boot test is skipped. Everything else is checked."
+            echo "The VM boot test needs a KVM-capable runner." >> "$GITHUB_STEP_SUMMARY"
+            system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+            nix flake check --print-build-logs --no-build
+            nix build --print-build-logs \
+              ".#checks.$system.shellcheck" \
+              ".#checks.$system.package"
+          fi
