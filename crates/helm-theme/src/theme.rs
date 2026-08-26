@@ -104,6 +104,7 @@ pub fn apply_with(
     let started = Instant::now();
 
     validate_targets(templates)?;
+    reject_symlinked_targets(root, templates)?;
 
     // Lint before rendering, not after writing: a palette that fails its own
     // readability floors must leave the live theme exactly as it was.
@@ -222,6 +223,33 @@ fn validate_targets(templates: &[Template]) -> Result<()> {
                 target: template.target.clone(),
                 reason: "two templates target the same output",
             });
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a pre-existing link anywhere in an output path. This closes the
+/// ordinary user-config symlink escape before staging; descriptor-relative
+/// operations provide the remaining race protection in the writer itself.
+fn reject_symlinked_targets(root: &Path, templates: &[Template]) -> Result<()> {
+    for template in templates {
+        let mut path = root.to_path_buf();
+        for component in template.target.components() {
+            let Component::Normal(component) = component else {
+                unreachable!("validate_targets accepted a non-normal target");
+            };
+            path.push(component);
+            match std::fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(Error::UnsafeTarget {
+                        target: template.target.clone(),
+                        reason: "target traverses a symlink",
+                    });
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error) => return Err(Error::io(&path, error)),
+            }
         }
     }
     Ok(())
@@ -482,6 +510,27 @@ mod tests {
             assert!(tree(root.path()).is_empty());
             assert!(!outside.path().join("escaped.conf").exists());
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_output_parent_is_refused_without_touching_its_destination() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.path().join("linked")).unwrap();
+        let set = [Template {
+            id: "linked",
+            source: "x = {{ accent.violet }}\n",
+            target: PathBuf::from("linked/escaped.conf"),
+            reload: Reload::None,
+        }];
+
+        let err = apply_with(&shipped(), root.path(), &set, &mut Recorder::default())
+            .expect_err("a symlinked output parent must be refused");
+        assert!(err.to_string().contains("symlink"), "{err}");
+        assert!(!outside.path().join("escaped.conf").exists());
     }
 
     #[test]
