@@ -232,6 +232,16 @@ fn validate_targets(templates: &[Template]) -> Result<()> {
 /// ordinary user-config symlink escape before staging; descriptor-relative
 /// operations provide the remaining race protection in the writer itself.
 fn reject_symlinked_targets(root: &Path, templates: &[Template]) -> Result<()> {
+    if std::fs::symlink_metadata(root)
+        .map_err(|error| Error::io(root, error))?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(Error::UnsafeTarget {
+            target: root.to_path_buf(),
+            reason: "configuration root is a symlink",
+        });
+    }
     for template in templates {
         let mut path = root.to_path_buf();
         for component in template.target.components() {
@@ -531,6 +541,28 @@ mod tests {
             .expect_err("a symlinked output parent must be refused");
         assert!(err.to_string().contains("symlink"), "{err}");
         assert!(!outside.path().join("escaped.conf").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_configuration_root_is_refused() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = parent.path().join("config");
+        symlink(outside.path(), &root).unwrap();
+        let set = [Template {
+            id: "root-link",
+            source: "x = {{ accent.violet }}\n",
+            target: PathBuf::from("theme.conf"),
+            reload: Reload::None,
+        }];
+
+        let err = apply_with(&shipped(), &root, &set, &mut Recorder::default())
+            .expect_err("a symlinked configuration root must be refused");
+        assert!(err.to_string().contains("root"), "{err}");
+        assert!(!outside.path().join("theme.conf").exists());
     }
 
     #[test]
