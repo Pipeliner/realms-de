@@ -19,7 +19,7 @@ work — it is simply not allowed to jump the queue.
 | [M2](#m2--session-and-bar) | Session and bar | The ledger drives real pixels, and the bar shows it. | Bar reflects live orbit/focus/mode changes, and the reference triptych geometry is pixel-exact on river | planned |
 | [M3](#m3--daily-drivable) | **Daily-drivable — the MVP** | Someone can use helm as their only desktop for a week. | A fresh NixOS/Ubuntu/Fedora box logs into helm and passes `doctor` | planned |
 | [M4](#m4--native-clients) | Native clients | Retire the stopgaps. | fuzzel, the toolkit file dialog and the terminal-run agent runner are gone | planned |
-| [M5](#m5--the-helm-compositor) | helm compositor | The ledger runs the screen directly. | `NativeBackend` passes the same session tests as `NiriBackend` | planned |
+| [M5](#m5--the-helm-compositor) | helm compositor | The ledger runs the screen directly. | `NativeBackend` passes the same session tests as `RiverBackend`, including the exact-tiling sweep that river's `propose_dimensions` can only approximate | planned |
 | [M6](#m6--polish) | Polish | Hold the budgets on modest hardware; finish the edges. | Frame budgets held on a 2015-era laptop | planned |
 
 ---
@@ -198,7 +198,9 @@ ledger drive the screen directly.
 - `helm-compositor` on Smithay: scene graph, input, output management,
   XWayland.
 - `NativeBackend`: the second implementation of the same `WmBackend` trait
-  `NiriBackend` implements, in-process rather than over IPC.
+  `RiverBackend` implements, in-process rather than over a Wayland protocol. The
+prize is the one row river cannot give us exactly: owning the compositor means
+`propose_dimensions` stops being a proposal a client may quantise.
 - Retiring the vendored river and the dependency on an unstable protocol.
   `river-window-management-v1` is a good bargain, not a permanent one; owning
   the compositor ends both the vendoring burden and the protocol-bump watch.

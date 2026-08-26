@@ -5,6 +5,7 @@ resolver = "2"
 # lives in docs/ARCHITECTURE.md and is tracked by the GitHub milestones.
 members = [
     "crates/helm-core",
+    "crates/helm-theme",
 ]
 
 [workspace.package]

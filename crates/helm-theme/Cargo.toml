@@ -1,0 +1,17 @@
+[package]
+name = "helm-theme"
+description = "Renders every themed file in the desktop from palette.toml and swaps them in atomically."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+helm-core = { workspace = true }
+thiserror = { workspace = true }
+rustix = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
