@@ -75,6 +75,7 @@ impl LintReport {
 /// The copy happens before the read so a user's first edit is to their own
 /// file, not to something inside the helm package.
 pub fn load_palette(root: &Path) -> Result<Palette> {
+    reject_symlinked_palette_path(root)?;
     let path = root.join(USER_PALETTE);
     if !path.exists() {
         if let Some(dir) = path.parent() {
@@ -83,6 +84,42 @@ pub fn load_palette(root: &Path) -> Result<Palette> {
         std::fs::write(&path, SHIPPED_PALETTE).map_err(|e| Error::io(&path, e))?;
     }
     Ok(Palette::load(&path)?)
+}
+
+/// Refuse the palette path when it crosses a pre-existing link. Seeding a
+/// palette is a write just like rendering a template, so it must not turn a
+/// seemingly private configuration root into a write primitive elsewhere.
+fn reject_symlinked_palette_path(root: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(root)
+        .map_err(|error| Error::io(root, error))?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(Error::UnsafeTarget {
+            target: root.to_path_buf(),
+            reason: "configuration root is a symlink",
+        });
+    }
+
+    let mut path = root.to_path_buf();
+    for component in Path::new(USER_PALETTE).components() {
+        let Component::Normal(component) = component else {
+            unreachable!("USER_PALETTE is a normalized relative path");
+        };
+        path.push(component);
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(Error::UnsafeTarget {
+                    target: path,
+                    reason: "palette path traverses a symlink",
+                });
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(Error::io(&path, error)),
+        }
+    }
+    Ok(())
 }
 
 /// Render every shipped template and swap them in as one step.
@@ -652,6 +689,32 @@ mod tests {
         assert!(user.exists(), "{} was not seeded", user.display());
         assert_eq!(std::fs::read_to_string(&user).unwrap(), SHIPPED_PALETTE);
         assert_eq!(loaded, shipped());
+    }
+
+    #[test]
+    fn a_symlinked_palette_path_is_refused_without_touching_its_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let victim = tempfile::tempdir().unwrap();
+        let helm = root.path().join("helm");
+        std::os::unix::fs::symlink(victim.path(), &helm).unwrap();
+
+        let err = load_palette(root.path()).expect_err("a symlinked palette directory must be refused");
+        assert!(err.to_string().contains("symlink"), "{err}");
+        assert!(
+            !victim.path().join("palette.toml").exists(),
+            "first-run seeding wrote through the symlink"
+        );
+
+        std::fs::remove_file(&helm).unwrap();
+        std::fs::create_dir(&helm).unwrap();
+        let palette_link = helm.join("palette.toml");
+        let palette_victim = victim.path().join("palette.toml");
+        std::fs::write(&palette_victim, "not a palette\n").unwrap();
+        std::os::unix::fs::symlink(&palette_victim, &palette_link).unwrap();
+
+        let err = load_palette(root.path()).expect_err("a symlinked palette file must be refused");
+        assert!(err.to_string().contains("symlink"), "{err}");
+        assert_eq!(std::fs::read_to_string(palette_victim).unwrap(), "not a palette\n");
     }
 
     #[test]

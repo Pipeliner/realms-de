@@ -85,7 +85,9 @@ targets are refused before rendering or writing. The configuration root itself
 must not be a symlink. Staging files are created exclusively and without
 following links, so an existing `<target>.helm-tmp` cannot redirect or clobber
 another file. Descriptor-relative operations own the remaining replacement-race
-protection for the final writer.
+protection for the final writer. Palette lookup has the same containment rule:
+the configuration root's `helm` directory and `palette.toml` must be real
+children rather than symlinks before a first-run copy or a read occurs.
 
 ### Reload fan-out
 
@@ -123,6 +125,7 @@ Each row is one happy path and becomes one test.
 | A10 | Given a modified palette, when `helm ctl theme diff` runs, then it prints which outputs would change without writing any | `theme::tests::diff_reports_what_would_change_and_writes_nothing` |
 | A11 | Given an empty, escaping, duplicate, or symlinked output path, when `apply` runs, then it refuses before touching an output outside the configuration root | `theme::tests::unsafe_or_duplicate_targets_abort_before_any_output_is_written`, `theme::tests::a_symlinked_output_parent_is_refused_without_touching_its_destination`, `theme::tests::a_symlinked_configuration_root_is_refused` |
 | A12 | Given an attacker-planted staging symlink, when `apply` runs, then it refuses without modifying that symlink's destination | `theme::tests::a_symlinked_staging_file_is_refused_without_touching_its_destination` |
+| A13 | Given a symlinked `helm` palette directory or `palette.toml`, when palette loading or first-run initialization runs, then it refuses without reading or writing the link destination | `theme::tests::a_symlinked_palette_path_is_refused_without_touching_its_destination` |
 
 A9 and A10 name `helm ctl` subcommands, but the CLI is a separate M1 slice and
 does not exist yet. Both are tested at the library boundary the subcommands will
