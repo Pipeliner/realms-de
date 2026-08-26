@@ -1,0 +1,19 @@
+# The abort path (SPEC 0005 §2 requirement 2).
+#
+# Triggered by OnFailure= on helm-sessiond.service, i.e. once the window manager
+# has exhausted its restart limit. river is still running, so the user is not
+# looking at a blank screen — they are looking at a wallpaper and a cursor, with
+# no way to open anything and no layer shell for helm to draw an explanation on.
+# A returned login is strictly better than that.
+#
+# This unit does not tear the session down itself: it signals the session entry,
+# which owns the single teardown path.
+[Unit]
+Description=helm session abort (window manager did not attach)
+Documentation=https://github.com/pipeliner/realms-de/blob/main/docs/specs/0005-session-startup.md
+# Not PartOf=graphical-session.target: it must be able to run while the session
+# is being torn down.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/helm-session --abort

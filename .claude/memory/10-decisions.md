@@ -62,3 +62,16 @@ what nixpkgs carries at the revision the flake evaluates against, and Ubuntu
 noble has no river, no zig and only wlroots 0.17, so nothing can be borrowed
 from the distro — *revisit if* the distros catch up, which would let the
 vendoring be dropped entirely.
+
+**2026-08-26 — The systemd unit for the window manager is `helm-wm.service`,
+matching the binary** — because three names for one thing (`helm-daemon`,
+`helm-sessiond`, `helm-session`) had already produced a collision once, and a
+unit named after its binary is the one convention nobody has to look up —
+*revisit if* the daemon ever stops being the window manager.
+
+**2026-08-26 — Theme rendering happens in `helmctl`, never in `helm-session`** —
+because rendering is a ~150 ms job and the session sits on river's input path
+where a stall is a session failure, so `Request::ReloadTheme` notifies that files
+are already on disk rather than asking for them to be written — *revisit if*
+rendering ever becomes cheap enough to be non-blocking, which would still not
+make it a good idea.

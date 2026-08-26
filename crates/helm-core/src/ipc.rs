@@ -76,7 +76,13 @@ pub enum Request {
     SetLayout(Layout),
     /// Restore the previous ledger.
     Undo,
-    /// Re-read `palette.toml`, re-render templates, hot-reload clients.
+    /// Tell subscribers a new theme is already on disk, so they re-read it.
+    ///
+    /// Deliberately **not** "render the templates". Rendering is a ~150 ms job
+    /// and `helm-session` sits on river's input path, where a stall is a
+    /// session failure rather than a slow frame (ADR 0013). So `helmctl` does
+    /// the rendering in its own process and sends this only once every file is
+    /// in place; the session's whole job is to fan out the notification.
     ReloadTheme,
     /// Launch a program.
     Spawn(Vec<String>),

@@ -9,19 +9,39 @@
 # also brings graphical-session.target up; anything else on the system that
 # keys off graphical-session.target (an idle daemon, a notification daemon)
 # therefore works under helm without knowing what helm is.
+#
+# There is deliberately no [Install] section. The entry starts this target
+# explicitly; a WantedBy=default.target would start it at boot for a lingering
+# user, with no compositor and no display, and every unit under it would be
+# silently condition-skipped.
+#
+# The .wants symlinks are shipped by each package rather than left to
+# [Install] processing (SPEC 0005 §4): [Install] only takes effect when
+# something runs it, and if the symlinks are missing then starting this target
+# starts *nothing at all* and reports success.
 [Unit]
 Description=helm desktop session
 Documentation=man:systemd.special(7)
 Documentation=https://github.com/pipeliner/realms-de/blob/main/docs/INSTALL.md
 BindsTo=graphical-session.target
+# Before=, not just BindsTo=. BindsTo implies Requires, which pulls
+# graphical-session.target up but is NOT an ordering barrier: without Before=,
+# `After=graphical-session.target` on the client units only works by the
+# accident of an empty target activating quickly. This pair is systemd's
+# documented shape for a session unit (systemd.special(7)).
+Before=graphical-session.target
 Wants=graphical-session-pre.target
 After=graphical-session-pre.target
 
-# NEEDS-HUMAN (idle + lock): docs/PITFALLS.md requires an idle+lock unit as part
-# of the session ("laptop lid closes, session stays unlocked"). No lock screen
-# has been chosen yet. Options: (a) swayidle + swaylock — packaged on Ubuntu
-# 24.04 and Fedora 41, wlr-layer-shell based, and river 0.4 is wlroots-based;
-# (b) gtklock —
-# nicer, more deps; (c) a helm-native locker in M6, which is a security-sensitive
-# thing to write ourselves. Once chosen, ship helm-idle.service with
+# NEEDS-HUMAN (idle + lock) — SPEC 0005 OQ-1, and it is the one that matters
+# most. river 0.4 implements ext-session-lock-v1 and reports session_locked to
+# the window manager, so an ext-session-lock-v1 client is a hard requirement:
+# a locker that draws a layer-shell overlay instead depends on helm serving
+# river-layer-shell-v1, so a crash in *helm* would expose the desktop. Options:
+# (a) gtklock — proper ext-session-lock-v1, GTK, which helm already themes;
+# SPEC 0005 recommends it for M3; (b) waylock — same protocol, minimal, but Zig,
+# a toolchain ADR 0013 otherwise removed; (c) swaylock, only in versions that
+# speak ext-session-lock-v1; (d) helm-ward, ours, not before M6. The idle
+# defaults are a separate, user-visible security decision and must not be
+# guessed. Once chosen, ship helm-idle.service with
 # PartOf=graphical-session.target and WantedBy=helm-session.target.

@@ -6,16 +6,21 @@
 # The dependency direction here is the point. The bar is Wanted, never Required,
 # by helm-session.target, and nothing Binds to it: a crashed bar is restarted on
 # its own and the session survives (docs/PITFALLS.md, "Session dies with a
-# client" — a crashed bar must not black-screen the desktop).
+# client" — a crashed bar must not black-screen the desktop). PartOf= propagates
+# stop downwards; BindsTo= would propagate failure upwards, which is the bug.
+#
+# Under river the bar is a layer-shell client served by helm's own window
+# manager, not by the compositor: if helm-sessiond is not attached, the bar maps
+# nothing however healthy it is. Check helm-sessiond.service first.
 [Unit]
 Description=helm bar
 Documentation=https://github.com/pipeliner/realms-de/blob/main/docs/ARCHITECTURE.md
 PartOf=graphical-session.target
-After=graphical-session.target helm-daemon.service
+After=graphical-session.target helm-sessiond.service
 # Wants, not Requires: the bar reconnects to the control socket on its own, so
 # a daemon that is slow or briefly down — including a window manager restarting
 # under river — must not keep the bar from running.
-Wants=helm-daemon.service
+Wants=helm-sessiond.service
 ConditionEnvironment=WAYLAND_DISPLAY
 StartLimitIntervalSec=30
 StartLimitBurst=5
@@ -25,7 +30,10 @@ Type=exec
 ExecStart=/usr/bin/helm-bar
 Restart=on-failure
 RestartSec=1
-Slice=session.slice
+# app.slice, not session.slice: under memory pressure the bar should be reaped
+# before the window manager, because the bar is restartable and the window
+# manager is the session.
+Slice=app.slice
 TimeoutStopSec=5
 
 [Install]

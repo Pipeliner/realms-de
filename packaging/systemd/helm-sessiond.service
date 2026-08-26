@@ -1,0 +1,60 @@
+# helm's window manager and session daemon (binary: helm-wm).
+#
+# Named for the daemon rather than generically, per SPEC 0005 §4 / OQ-4: five
+# names for three things was a standing hazard for readers.
+#
+# Under river 0.4 this process *is* the window manager (ADR 0013). river does no
+# window management of its own, so while this unit is down windows are not
+# placed, not focused and not resized, and `river-layer-shell-v1` is not served
+# — which means no bar either. It is not a background service; it is half the
+# compositor.
+#
+# PRE-ALPHA (0.1.0): /usr/bin/helm-wm does not exist yet — the crate
+# `helm-session` lands in M2. Until then this unit fails with 203/EXEC, which is
+# exactly the condition the entry turns into FATAL WM-ABORT.
+[Unit]
+Description=helm window manager and session daemon
+Documentation=https://github.com/pipeliner/realms-de/blob/main/docs/specs/0005-session-startup.md
+PartOf=graphical-session.target
+After=graphical-session.target
+# Refuse to start rather than come up displayless. Note what this does NOT do:
+# an unmet condition is a *skip*, not a failure — the unit goes inactive (dead)
+# with ConditionResult=no, nothing appears in `systemctl --user --failed`, and
+# `systemctl start helm-session.target` still exits 0 (SPEC 0005, N1). The
+# session entry therefore checks ActiveState per unit rather than trusting that
+# exit status.
+ConditionEnvironment=WAYLAND_DISPLAY
+# Five failures in thirty seconds is a real bug: it must surface as a dead unit,
+# not a hot laptop.
+StartLimitIntervalSec=30
+StartLimitBurst=5
+# Fires when the unit enters `failed`, which with Restart=always means after the
+# start limit is hit — exactly once, at the right moment. The abort unit signals
+# the session entry, which owns the single teardown path.
+OnFailure=helm-session-abort.service
+
+[Service]
+# Type=exec until the daemon exists. In M2 this becomes Type=notify with
+# sd_notify(READY=1) sent once the window-management global *and* the
+# layer-shell manager global are bound, so that "the target is active" and
+# "windows can be placed" become the same statement (SPEC 0005 OQ-6).
+Type=exec
+ExecStart=/usr/bin/helm-wm
+# always, not on-failure: quit is expressed through river's exit_session, not
+# through this process exiting, so a clean exit on its own is not a normal path
+# and must never leave river unmanaged.
+Restart=always
+# Every second here is a second the user cannot move a window.
+RestartSec=1
+# 69: river answered `unavailable` — another window-management client already
+# holds the global (a leftover daemon, or one started by hand). 78: protocol
+# version mismatch against the pinned river. Restarting cannot help with either,
+# and looping buries the one message that explains it (SPEC 0005, N2).
+RestartPreventExitStatus=69 78
+# The window manager is essential to the session: under memory pressure it must
+# not be the first thing reaped. The bar, which is restartable, is in app.slice.
+Slice=session.slice
+TimeoutStopSec=10
+
+[Install]
+WantedBy=helm-session.target
