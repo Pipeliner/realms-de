@@ -1,0 +1,101 @@
+#!/usr/bin/make -f
+# helm — Debian rules.
+#
+# HOW THIS DIRECTORY IS USED. Debian tooling insists on ./debian at the source
+# root; helm keeps its packaging under packaging/ so the three distro targets
+# sit side by side. Before building:
+#
+#     ln -s packaging/debian debian && dpkg-buildpackage -us -uc -b
+#
+# (a copy works too; the symlink keeps one copy of the truth).
+#
+# PRE-ALPHA (0.1.0): the workspace contains one crate, helm-core, and it is a
+# library. This build therefore produces no helm binaries — override_dh_auto_
+# install installs whichever of them exist, so M1-M2 land with no change here.
+#
+# NEEDS-HUMAN — the vendored river (helm-river) this package depends on is NOT
+# built by these rules, and building it is not a trivial recipe:
+#   * Ubuntu 24.04 ships no river at all, and no zig (both verified against
+#     noble's apt lists on 2026-08-26).
+#   * river 0.4.8 needs zig 0.16 and wlroots 0.20; noble carries only
+#     libwlroots-dev 0.17 (verified). So a vendored river needs a vendored
+#     wlroots too, or a statically linked build.
+# Options, none of which should be guessed at in a Makefile:
+#   (a) build helm-river in a container from the upstream tag
+#       (https://codeberg.org/river/river, verified as the source nixpkgs uses)
+#       with an upstream zig toolchain and a private wlroots 0.20, shipped under
+#       /usr/lib/helm/ with an rpath;
+#   (b) ship river built by upstream/CI as a binary artefact and package that;
+#   (c) require a third-party PPA that already carries river 0.4.x;
+#   (d) raise the minimum Ubuntu to a release carrying river 0.4.x and wlroots
+#       0.20, and drop the vendoring entirely.
+# Whoever owns the build pipeline picks one and writes debian/rules for a
+# separate `helm-river` source package. No zig invocation is invented here
+# because none has been verified.
+
+export DH_VERBOSE = 1
+
+# Keep cargo's downloads and caches inside the build tree.
+export CARGO_HOME = $(CURDIR)/debian/.cargo
+# Debian's own rustc/cargo are dfsg-repacked; helm only needs a compiler new
+# enough for its MSRV.
+export CARGO_TERM_COLOR = never
+
+# Ubuntu 24.04's default cargo is 1.75, below helm's MSRV of 1.82. The
+# versioned toolchain packages install under /usr/lib/rust-<version>/bin, which
+# is the Debian convention for them; the wildcard means a newer versioned
+# toolchain is picked up without editing this file. NOT verified on a live
+# noble box from this container — if the path is wrong the guard below fails
+# loudly with the versions it found rather than building with the wrong rustc.
+RUST_VERSIONED_BIN := $(lastword $(sort $(wildcard /usr/lib/rust-1.[89][0-9]/bin)))
+ifneq ($(RUST_VERSIONED_BIN),)
+export PATH := $(RUST_VERSIONED_BIN):$(PATH)
+endif
+
+%:
+	dh $@
+
+# helm is not autotools; there is nothing to configure.
+override_dh_auto_configure:
+
+override_dh_auto_build:
+	@echo "cargo: $$(cargo --version) / rustc: $$(rustc --version)"
+	@rustc --version | awk '{split($$2,v,"."); if (v[1] < 1 || (v[1] == 1 && v[2] < 82)) { \
+		print "helm: rustc " $$2 " is older than the MSRV 1.82 declared in Cargo.toml."; \
+		print "      Install rustc-1.82/cargo-1.82 (noble-updates) or a newer toolchain."; \
+		exit 1 }}'
+	# --locked: the build must use Cargo.lock, never silently resolve something
+	# else. A Debian archive upload additionally needs `cargo vendor` output and
+	# an offline build; that is part of the hosting decision in debian/control.
+	cargo build --release --locked --workspace
+
+override_dh_auto_test:
+	# helm-core's tests include the palette lint, so a palette that fails its
+	# WCAG floors fails the package build. That is deliberate (ADR 0005).
+	cargo test --release --locked --workspace
+
+override_dh_auto_install:
+	# Install whichever helm binaries this revision actually built. Today that
+	# is none of them; the loop means M1-M2 need no packaging change.
+	set -e; \
+	for bin in helm helm-sessiond helm-bar; do \
+		if [ -x "target/release/$$bin" ]; then \
+			install -Dm755 "target/release/$$bin" "debian/helm/usr/bin/$$bin"; \
+			echo "installed $$bin"; \
+		else \
+			echo "skipping $$bin: not built (expected before M2)"; \
+		fi; \
+	done
+
+override_dh_auto_clean:
+	cargo clean || true
+	rm -rf debian/.cargo
+
+# No hand-written maintainer scripts, on purpose. The only thing that would
+# need one is enabling the systemd user units, and dh_installsystemduser
+# generates those snippets from the units shipped in /usr/lib/systemd/user.
+# Enabling is wanted: it creates the helm-session.target.wants symlinks, without
+# which starting the session target would start nothing. Verify this at the
+# first real build; if debhelper declines to process units installed via
+# debian/install, the fix is `debian/helm.user.service`-style filenames, not a
+# hand-rolled postinst.

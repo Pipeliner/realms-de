@@ -1,0 +1,122 @@
+name: Bug report
+description: Something helm does that it should not, or fails to do that it should
+title: "<component>: <what goes wrong>"
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        helm is **pre-alpha (M0)**. Most of it is not built yet — see
+        [ROADMAP.md](https://github.com/Pipeliner/realms-de/blob/main/docs/ROADMAP.md)
+        for what exists. A report against something that has not landed is not
+        a bug; it is a milestone.
+
+        Please check [PITFALLS.md](https://github.com/Pipeliner/realms-de/blob/main/docs/PITFALLS.md)
+        first. If your symptom is already in the failure register, say which row
+        and tell us the guard did not hold — that is a much more useful report.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and what you expected instead. A short reproducer beats a long description.
+      placeholder: |
+        1. …
+        2. …
+
+        Expected: …
+        Actual: …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which part of helm
+      options:
+        - helm-core (ledger, layout, palette, keys, ipc)
+        - helm-theme / generated theme files
+        - helm-ctl
+        - helm-session
+        - helm-bar / which-key
+        - hecate (launcher)
+        - charon (yazi) / horus (btop) / thoth (shell)
+        - session entry, systemd units, portals
+        - packaging (Nix / deb / rpm)
+        - docs
+        - not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: helm version
+      description: "`helm ctl --version` if you have it, otherwise the commit you built from (`git rev-parse --short HEAD`)."
+      placeholder: "0.1.0 (a1b2c3d), or just a1b2c3d"
+    validations:
+      required: true
+
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution and version
+      description: And how helm was installed — flake, .deb, .rpm, or built from source.
+      placeholder: "Fedora 41, built from source"
+    validations:
+      required: true
+
+  - type: input
+    id: compositor
+    attributes:
+      label: Compositor and version
+      description: "`river --version`, or the compositor you are actually running under if it is not river. Note whether it is the vendored, pinned river that ships with helm."
+      placeholder: "river 0.4.1 (vendored)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: doctor
+    attributes:
+      label: Did `helm ctl doctor` pass?
+      description: If it did not, paste its output below — it usually names the problem outright.
+      options:
+        - "Yes — clean"
+        - "No — it reported something (output below)"
+        - "It is not available in this build"
+        - "I did not run it"
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor-output
+    attributes:
+      label: "`helm ctl doctor` output"
+      description: Paste it verbatim, even if it passed. Leave blank if the command does not exist yet.
+      render: console
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "`journalctl --user -u helm-session -b`, or whatever your session wrote. Trim to the relevant part."
+      render: console
+
+  - type: input
+    id: display
+    attributes:
+      label: Outputs and scaling
+      description: Resolution, refresh rate and fractional scale of each monitor. Odd resolutions and non-integer scales are where geometry bugs live.
+      placeholder: "1x 2560x1440@60 scale 1.25, 1x 1920x1080@60 scale 1"
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before you file
+      options:
+        - label: I checked docs/ROADMAP.md and the thing I am reporting on has actually been built.
+          required: true
+        - label: I checked docs/PITFALLS.md and this is not a known failure mode with a known answer.
+          required: true
+        - label: This is not a security issue. (Those go through a private advisory, never a public issue.)
+          required: true

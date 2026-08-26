@@ -6,9 +6,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Pipeliner/realms-de/actions"><img alt="ci" src="https://img.shields.io/github/actions/workflow/status/Pipeliner/realms-de/ci.yml?branch=main&label=ci&style=flat-square&labelColor=0a0c15&color=7fd4c1"></a>
+  <a href="https://github.com/Pipeliner/realms-de/actions"><img alt="ci" src="https://img.shields.io/github/actions/workflow/status/Pipeliner/realms-de/ci.yml?label=ci&style=flat-square&labelColor=0a0c15&color=7fd4c1"></a>
   <a href="#licence"><img alt="licence: MIT OR Apache-2.0" src="https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-a692ec?style=flat-square&labelColor=0a0c15"></a>
-  <a href="rust-toolchain.toml"><img alt="MSRV 1.82" src="https://img.shields.io/badge/msrv-1.82-d9b06a?style=flat-square&labelColor=0a0c15"></a>
+  <a href="Cargo.toml"><img alt="MSRV 1.85" src="https://img.shields.io/badge/msrv-1.85-d9b06a?style=flat-square&labelColor=0a0c15"></a>
   <a href="docs/ROADMAP.md"><img alt="status: pre-alpha, milestone M0" src="https://img.shields.io/badge/status-pre--alpha%20(M0)-a3bff2?style=flat-square&labelColor=0a0c15"></a>
 </p>
 
@@ -43,8 +43,11 @@ Nothing here runs yet — see <a href="#status">Status</a>.</sub></p>
 - **Proven tools, kept behind seams.** charon is yazi, horus is btop, thoth is
   zsh with starship — themed and rekeyed from the same palette, each sitting
   behind a config or a trait so it can be retired without touching its callers.
-  A rewrite needs a written reason.
-  [ADR 0007](docs/adr/0007-reuse-yazi-btop-starship.md)
+  The compositor is the same bargain: helm is the *window manager* for river
+  0.4, which hands window management to an external process, so the ledger
+  drives real pixels years before `helm-compositor` exists.
+  [ADR 0007](docs/adr/0007-reuse-yazi-btop-starship.md) ·
+  [ADR 0013](docs/adr/0013-river-window-management-backend.md)
 
 - **Three distributions, all first-class.** NixOS, Ubuntu and Fedora are tested
   in CI from the outset. The Nix flake is the reference build; the `.deb` and
@@ -143,10 +146,10 @@ label.
 
 | Question | Why it needs a person | The options, as we see them |
 |---|---|---|
-| **niri's window model does not map cleanly onto the ledger.** niri tiles by scrollable columns; helm tiles by strict per-orbit order. `NiriBackend` is therefore a projection, not a passthrough, and some layouts will not survive the round trip. Which gaps are acceptable for M2–M3? | A trade-off with no correct answer: fidelity to the design against shipping a year earlier. See the mapping table in [ADR 0002](docs/adr/0002-borrow-a-compositor-first.md). | (a) accept the gaps and document them; (b) constrain helm's layouts to niri's expressible subset until M5; (c) bring `helm-compositor` forward and delay the MVP. |
-| **Which lock screen ships?** A desktop that does not lock on lid-close is not daily-drivable, and this is a security decision, not a packaging one. | Choosing a lock screen is choosing a security posture, and the repository should not pick one silently. | (a) `swaylock-effects` themed from `palette.toml`; (b) `gtklock`, for PAM/plugin parity; (c) write `helm-ward` as a layer-shell lock later, and use a stopgap until then. |
-| **Where do distro packages get hosted?** The `.deb` and `.rpm` are generated, but generated artefacts need somewhere to live and something to sign them. | Needs an account, a signing key and someone willing to hold it. Nothing in the repo can decide this. | (a) GitHub Releases only, install by download; (b) a PPA and a Copr; (c) an OBS project covering both. |
-| **Font licensing for the Nerd Font fallback.** helm's glyph inventory (runes, planetary and alchemical symbols) needs a fallback font present at first boot, and the packages must be able to redistribute it. | A licence call. Redistribution terms differ per family, and getting it wrong is a legal problem, not a bug. | (a) depend on distro packages and refuse to vendor; (b) vendor Symbols Nerd Font Mono where its licence permits; (c) ship only ASCII fallbacks and let the user install a symbol font. |
+| **`river-window-management-v1` is an unstable protocol, and no distribution ships a river that speaks it.** river 0.4 is what makes helm's ledger drive real pixels at M2. Ubuntu and Fedora ship river 0.3.x or river-classic. Do we vendor and pin a river 0.4.x in all three packages, and accept a protocol bump as a tracked event? | It is a maintenance commitment, not a technical question: someone has to own a vendored compositor and re-test it on every bump. river's maintainer pledges "we do not break window managers"; the registry still says *unstable*. Both are true. See [ADR 0013](docs/adr/0013-river-window-management-backend.md). | (a) vendor a pinned river 0.4.x in every package and track bumps; (b) wait for distributions to catch up and delay M2; (c) bring `helm-compositor` forward and pay for it with a year. |
+| **Which lock screen ships, and what are the idle defaults?** A desktop that does not lock on lid-close is not daily-drivable, and blank/lock timeouts are user-visible security defaults. | Choosing a lock screen is choosing a security posture, and the repository should not pick one silently. See [ADR 0011](docs/adr/0011-session-integration-contract.md). | (a) `gtklock` — `ext-session-lock-v1` is the property that matters; (b) `swaylock-effects` themed from `palette.toml`; (c) write `helm-ward` later and use a stopgap until then. Timeouts: not to be guessed. |
+| **Where do distro packages live, and who holds the signing key?** The `.deb` and `.rpm` are generated, but generated artefacts need somewhere to live and something to sign them. | Needs an account, a key and a person willing to hold it. Nothing in the repository can decide this. See [ADR 0010](docs/adr/0010-nix-flake-as-reference-build.md). | (a) GitHub Releases only, install by download; (b) a self-hosted apt repo plus a Copr; (c) an OBS project covering both. |
+| **Font licensing for the Nerd Font fallback.** helm's glyph inventory — runes, planetary and alchemical symbols — needs a symbol font present at first boot, and the packages must be able to redistribute it. | A licence call. Redistribution terms differ per family, and getting it wrong is a legal problem, not a bug. See [ADR 0012](docs/adr/0012-font-fallback-is-a-contract.md). | (a) depend on distribution packages and refuse to vendor; (b) vendor Symbols Nerd Font Mono where its licence permits; (c) ship only the ASCII fallbacks and let the user install a symbol font. |
 
 None of these blocks M0 or M1.
 
@@ -172,6 +175,7 @@ realms-de/
 │  ├─ ARCHITECTURE.md   the shape we are building towards, and why
 │  ├─ MVP.md            the cut line — what M3 must do to count
 │  ├─ ROADMAP.md        M0–M6: goals, contents, exit criteria
+│  ├─ INTERFACES.md     the seams, with real signatures, before the crates exist
 │  ├─ PITFALLS.md       the failure register, with the guard for each
 │  ├─ specs/            what each component must do, before it does it
 │  ├─ adr/              decisions, with alternatives and reversal costs
@@ -188,6 +192,7 @@ realms-de/
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | The one idea, the component map, the decision register, the frame budgets, the target platforms. Start here. |
 | [MVP.md](docs/MVP.md) | What is in, what is deliberately out, and the test the MVP has to pass. |
 | [ROADMAP.md](docs/ROADMAP.md) | M0–M6: one-line goal, workstreams, exit criterion and what each milestone unblocks. |
+| [INTERFACES.md](docs/INTERFACES.md) | The seams — `WmBackend`, the template contract, the bar render contract — written with real signatures before the crates that implement them. |
 | [PITFALLS.md](docs/PITFALLS.md) | The ways desktop environments break, what helm does about each, and which test would catch a regression. |
 | [`docs/specs/`](docs/specs/) | What a component must do, written before it does it. Acceptance criteria become the happy-path tests. |
 | [`docs/adr/`](docs/adr/) | Why we chose this over that, and what changing our mind would cost. |
@@ -216,7 +221,9 @@ Everyone taking part is held to the [Code of Conduct](CODE_OF_CONDUCT.md).
 ## Credits
 
 helm reuses good work rather than repeating it, and owes a debt to
-[niri](https://github.com/YaLTeR/niri) and [Smithay](https://smithay.github.io/),
+[river](https://codeberg.org/river/river) — whose 0.4 window-management protocol
+is what lets the ledger drive real pixels this early —
+[Smithay](https://smithay.github.io/),
 [yazi](https://yazi-rs.github.io/), [btop](https://github.com/aristocratos/btop),
 [starship](https://starship.rs/), [fuzzel](https://codeberg.org/dnkl/fuzzel),
 [foot](https://codeberg.org/dnkl/foot), [nucleo](https://github.com/helix-editor/nucleo)

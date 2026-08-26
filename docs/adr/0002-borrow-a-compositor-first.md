@@ -1,8 +1,22 @@
 # ADR 0002 — Borrow a compositor first; write ours later
 
-- **Status:** Accepted (2026-08-26) — provisional; see Reversal
+- **Status:** **Superseded (2026-08-26)** by
+  [ADR 0013](0013-river-window-management-backend.md)
 - **Deciders:** helm maintainers
-- **Supersedes / Superseded by:** —
+- **Supersedes / Superseded by:** **Superseded by
+  [ADR 0013](0013-river-window-management-backend.md)**
+
+> **Superseded, and kept in full.** river 0.4.0 removed window management from
+> the compositor and exposed `river-window-management-v1`, a protocol this ADR
+> did not assess — it evaluated the older, dimensions-only `river-layout-v3` and
+> reasonably rejected it. Under the new protocol `helm-session` *is* the window
+> manager, and every row this ADR marks **Lossy** in the niri mapping table
+> below becomes faithful. See [ADR 0013](0013-river-window-management-backend.md).
+>
+> Nothing here has been rewritten. The niri mapping table is the evidence for
+> why we moved, and the reversal path in ADR 0013 points back to it. The two
+> `needs-human` questions this ADR opened (the triptych approximation and the
+> stow mapping) are **resolved by 0013**, not still open.
 
 ## Context
 

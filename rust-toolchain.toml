@@ -1,3 +1,8 @@
+# Contributors and CI develop on current stable; this file pins the *channel*,
+# not the floor. The floor is `rust-version` in Cargo.toml (1.85), which the
+# `msrv` CI job tests separately by overriding RUSTUP_TOOLCHAIN — a directory
+# toolchain file outranks whatever a CI action installs, so that override is
+# the only thing that makes the MSRV job measure what it claims to.
 [toolchain]
 channel = "stable"
 components = ["rustfmt", "clippy"]

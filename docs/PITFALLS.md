@@ -19,6 +19,16 @@ Legend: **Guard** = the thing that would fail loudly if the mitigation regressed
 | Focus causes relayout | Windows twitch as you move focus | Focus is a flag on a `Placement`, not an input to geometry | `layout::tests::projection_is_pure_and_focus_only_moves_the_flag` |
 | Redraw on a timer | Idle CPU never reaches zero; laptop fans | Event-driven; `HelmState::renders_same_as` drops no-op frames | `state::tests::revision_alone_does_not_force_a_redraw` |
 
+## Being the window manager (river)
+
+| Pitfall | What users see | helm's answer | Guard |
+|---|---|---|---|
+| A client quantises its proposed size | 4px cracks between tiles that the layout tests cannot see, because the projection was correct and the *client* rounded | Propose at or above the tile and clip with `set_content_clip_box`, so the visible rectangle is exact regardless of what the client does | *planned:* M2 pixel-diff test against a deliberately quantising client |
+| `helm-session` stalls | Keys stop responding; river raises `unresponsive`; the session is effectively dead | Nothing on the input path may block — no theme apply, no write to a wedged subscriber. §4 budgets are correctness bounds here | *planned:* M2 watchdog asserting no handler exceeds its budget |
+| `helm-session` dies | Windows unplaced, keybindings gone — a sharper failure than a crashed bar | Supervised restart with ledger recovery from the last snapshot | *planned:* M2 |
+| Layer-shell not served | **The bar never appears**, and it looks like the bar is broken rather than the WM | helm implements `river-layer-shell-v1`; `doctor` checks it is being served | *planned:* M2 |
+| Protocol version drift after a river bump | Session fails to start after a routine upgrade | Pin a tested river; version-check at connect and refuse with a clear message rather than misbehaving | *planned:* M2 |
+
 ## Fonts and glyphs
 
 | Pitfall | What users see | helm's answer | Guard |

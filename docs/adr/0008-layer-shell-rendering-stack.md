@@ -90,6 +90,12 @@ Wayland-facing APIs are not stable across minor releases.
 
 ### Neutral
 
+- [ADR 0013](0013-river-window-management-backend.md) does not change this
+  stack: `helm-bar` and `helm-hecate` remain ordinary `wlr-layer-shell` clients.
+  It does add an obligation on the other side of the socket — under river,
+  `wlr-layer-shell` works only if the window manager implements
+  `river-layer-shell-v1`, so `helm-session` must serve it before the bar can
+  appear at all. That is tracked in 0013, not here.
 - `tiny-skia` has no blur, no shadow and no rounded corners. The design has none
   of those either (the "inset glow" is a static 1px inset border). The
   rasteriser's limits and the design's rules coincide.

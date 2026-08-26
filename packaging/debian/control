@@ -1,0 +1,82 @@
+# helm — Debian/Ubuntu source control.
+#
+# Target: Ubuntu 24.04 LTS and newer (ARCHITECTURE.md §5). Every package name
+# below was checked against noble's own apt lists on 2026-08-26; where something
+# is not in the archive it says so rather than pretending.
+#
+# NEEDS-HUMAN (maintainer identity): the Maintainer field must be a real,
+# reachable address before anything is uploaded anywhere. It currently uses the
+# RFC 2606 reserved `.invalid` domain so it cannot silently deliver to a
+# stranger. Options: a project mailing list, a maintainers@ alias on a domain we
+# own, or a named individual. Same decision blocks debian/changelog.
+#
+# NEEDS-HUMAN (hosting): no repository URL is invented here. Options: a Launchpad
+# PPA (native fit for Ubuntu, needs a Launchpad account and a signing key), a
+# self-hosted apt repo behind reprepro/aptly, or GitHub Releases with .deb
+# artifacts and no apt metadata. Until this is decided, the only supported route
+# is "build it yourself" — see docs/INSTALL.md.
+Source: helm
+Section: x11
+Priority: optional
+Maintainer: helm contributors <helm-maintainers@helm.invalid>
+# Ubuntu 24.04 ships rustc/cargo 1.75, which is below helm's declared MSRV of
+# 1.82 (Cargo.toml). noble-updates carries versioned rustc-1.82/cargo-1.82
+# packages (verified present), so those are named first and debian/rules puts
+# the versioned toolchain on PATH.
+Build-Depends: debhelper-compat (= 13),
+               cargo-1.82 | cargo (>= 1.82),
+               rustc-1.82 | rustc (>= 1.82),
+               pkg-config
+Standards-Version: 4.7.0
+Homepage: https://github.com/pipeliner/realms-de
+Rules-Requires-Root: no
+
+Package: helm
+Architecture: any
+# helm-river is the vendored, pinned river 0.4.x described in debian/rules.
+# Plain `river` is offered as an alternative for distributions that ship 0.4.x
+# themselves; Ubuntu 24.04 ships no river at all (verified), so on noble the
+# vendored package is the only option.
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         helm-river (>= 0.4.0) | river (>= 0.4.0),
+         dbus-user-session,
+         systemd,
+         xdg-desktop-portal,
+         xdg-desktop-portal-gtk | xdg-desktop-portal-wlr | xdg-desktop-portal-gnome,
+         fonts-symbola,
+         foot,
+         fuzzel,
+         btop,
+         zsh
+# fonts-ibm-plex is the design's typeface but lives in multiverse, which is not
+# enabled everywhere; a hard dependency would make helm uninstallable on a
+# main+universe box. The glyph probe (ADR 0012) degrades to the system mono
+# font instead of drawing tofu, so this is a Recommends and the install docs
+# say how to get the real face.
+Recommends: fonts-ibm-plex,
+            gsettings-desktop-schemas,
+            xwayland,
+            xdg-desktop-portal-wlr
+# Neither yazi nor starship is in the Ubuntu 24.04 archive (verified). charon
+# and thoth are therefore degraded, not broken, on a stock noble box:
+# docs/INSTALL.md says how to install them by hand.
+Suggests: yazi,
+          starship
+Description: keyboard-first, gapless-tiling Wayland desktop environment
+ helm is a Wayland desktop built around one idea: an ordered ledger of windows
+ is the only state that matters, and every layout is a pure projection of it.
+ Undo is exact, focus never moves a rectangle, and nothing animates.
+ .
+ It reuses proven tools rather than rewriting them — yazi, btop, zsh with
+ starship, fuzzel and foot — and themes all of them from a single palette file.
+ The compositor is river 0.4, driven by helm's own window manager over
+ river-window-management-v1.
+ .
+ THIS PACKAGE IS PRE-ALPHA (0.1.0) AND DOES NOT INSTALL A WORKING DESKTOP.
+ helm's binaries — the window manager, the bar, the CLI — are not written yet.
+ What it installs today is the session contract: the wayland-session entry, the
+ session wrapper that performs the systemd/D-Bus environment handshake, the
+ systemd user units and the palette. Logging into it gives you river with no
+ window management attached. See /usr/share/doc/helm/README.Debian and
+ docs/INSTALL.md.

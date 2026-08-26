@@ -1,0 +1,4 @@
+# Native format: helm and its packaging live in one repository and there is no
+# separate upstream tarball to track. Revisit if helm is ever uploaded to
+# Debian proper, which expects a non-native package with an orig tarball.
+extend-diff-ignore = "^(target|result)/"

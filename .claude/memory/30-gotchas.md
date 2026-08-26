@@ -31,3 +31,18 @@ planned.
 **Symptom:** `cd` inside a `Bash` tool call silently reverts for the next call.
 **Cause:** each invocation starts from the project root; `cd` does not persist.
 **Fix:** use absolute paths in scripts, or `cd` within the same compound command.
+
+**Symptom:** a river mapping table that looks too good, with every row "exact".
+**Cause:** reading a protocol summary rather than its XML. `place_*` orders the
+*render* list, not layout order; `propose_dimensions` is a proposal a client may
+quantise; and three companion protocols are obligations the summary omits.
+**Fix:** for any protocol helm depends on, read the XML from the source
+repository before writing a mapping table. A second reader who checks the
+primary source is worth more than a careful first reader who does not.
+
+**Symptom:** a dependency described as "unstable" on the strength of a tracking
+issue.
+**Cause:** the issue predated the release that stabilised it.
+**Fix:** check the release announcement and the protocol file itself (a `z`
+prefix, an `unstable/` directory, the interface version) before repeating a
+stability claim. `river-window-management-v1` is declared stable as of 0.4.0.

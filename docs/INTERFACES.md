@@ -84,28 +84,69 @@ backend is a translation rather than an approximation:
 
 | helm concept | river request | Fidelity |
 |---|---|---|
-| Placement rectangle | `river_node_v1::set_position` + `river_window_v1::propose_dimensions` | Exact |
-| Ledger order | `river_node_v1::place_above` / `place_below` / `place_top` / `place_bottom` | Exact |
-| Stow | `river_window_v1::hide` / `show` | Exact |
+| Placement rectangle | `river_node_v1::set_position` + `river_window_v1::propose_dimensions` | **Approximate** — see the quantisation note below |
+| Ledger order | *helm's own*, expressed through the positions it computes | Exact, because helm owns it outright |
+| Stacking (mono occlusion, overlays) | `river_node_v1::place_top` / `place_bottom` / `place_above` / `place_below` | Exact |
+| Stow | `river_window_v1::hide` / `show` — *rendering* state, so the window stays managed and stays in the ledger | Exact, and a closer match to `Orbit::stowed` than we expected |
 | Focus | `river_seat_v1::focus_window` / `clear_focus` | Exact |
 | 1px seams | `set_borders`, drawn by the compositor | Exact |
 | Fullscreen | `fullscreen` / `exit_fullscreen` | Exact |
+| Workarea | `river_layer_shell_output_v1::non_exclusive_area` | Exact — arrives as an event, and is literally `Workarea::new(w, h, top, bottom)` |
 | Atomic relayout | the `manage` → `render` sequence | Exact, and frame-perfect by construction |
+
+`place_*` orders the **render list**, not the ledger. The ledger is *layout*
+order, which helm computes itself and expresses as positions; the `place_*`
+requests exist for mono's occlusion stack and for overlay surfaces. Faithful
+either way, but not for the reason a first reading suggests.
+
+**The one genuinely approximate row.** `propose_dimensions` is a *proposal*: the
+protocol explicitly anticipates clients quantising it, terminals to their cell
+size being the named case. A terminal that rounds 700×580 down to 696×576 puts a
+4×4 hole in a layout whose entire premise is exact tiling, and
+`every_layout_tiles_exactly_for_every_plausible_size` would still pass while the
+screen showed cracks — the test checks the projection, not what the client did
+with it. river offers `set_content_clip_box`, which clips content to a rect and
+draws borders around the intersection, so helm can propose at or above the tile
+and clip to the exact rectangle. That is the plan; it is an M2 experiment with
+its own guard, not a solved problem.
+
+### What helm must implement, not merely call
+
+Under river, a window manager is not only a client of the WM protocol. Three
+companion protocols are obligations, and the first is load-bearing:
+
+| Protocol | What helm owes it | Consequence if unimplemented |
+|---|---|---|
+| `river-layer-shell-v1` | Serve layer-shell on river's behalf | **The bar does not appear at all.** `wlr-layer-shell` works under river only if the window manager implements it |
+| `river-xkb-bindings-v1` | The entire keymap | No keybinding works. `ensure_next_key_eaten` and `ate_unbound_key` are purpose-built for chorded submaps, which is exactly helm's chord model |
+| `river-input-management-v1` | Seats, repeat rate, pointer config | No input configuration |
+
+This is a materially larger phase-1 surface than "write a backend", and M2 is
+scoped accordingly.
 
 Two consequences worth stating plainly, because they cut both ways:
 
 1. **`apply()` maps onto one `manage` sequence.** river applies window-management
    state atomically between `manage_start` and `manage_finish`, which is exactly
    the guarantee the projection wants: a relayout is never observed half-done.
-2. **If `helm-session` dies, river has no window management at all.** Under niri
-   a crashed session daemon left a working, if unmanaged, desktop. Under river it
-   leaves windows unplaced. The session daemon therefore needs a restart policy
-   sharper than "on-failure and hope", and that is a requirement on M2, not a
-   nicety. See ADR 0013.
+2. **`helm-session` is now on the compositor's input path, with a hard liveness
+   requirement.** Under niri, a crashed session daemon left a working if
+   unmanaged desktop. Under river it leaves windows unplaced and keys dead, and
+   the protocol has an `unresponsive` error: `modifiers_update` warns that the
+   compositor's input buffering is finite. **A stall is a session failure, not a
+   slow frame.** Nothing in `helm-session` may block — not a theme apply, not a
+   socket write to a wedged subscriber. This promotes the frame budgets in
+   ARCHITECTURE §4 from performance goals to correctness requirements. See
+   ADR 0013.
 
-The protocol is registry-classified *unstable*, against which river's maintainer
-pledges "we do not break window managers". Both are true. helm pins a tested
-river version and treats a protocol bump as a tracked event.
+On stability: `river-window-management-v1` is **declared stable** as of river
+0.4.0, with a forward-compatibility pledge to 1.0.0 — no `z` prefix, no
+`unstable/` directory, interfaces already at v5. (An earlier draft of this
+document called it registry-classified unstable. That was wrong: the
+work-in-progress language came from a tracking issue that predates the release.)
+The residual risk is not a protocol classification but trust in a single
+maintainer of a pre-1.0 project, which is a different and smaller thing. helm
+pins a tested river and treats a protocol bump as a tracked event.
 
 ADR 0002 records the superseded plan to ship on niri, and the mapping table that
 argued us out of it — worth reading before anyone proposes going back.

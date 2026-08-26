@@ -13,7 +13,8 @@ Documentation=https://github.com/pipeliner/realms-de/blob/main/docs/ARCHITECTURE
 PartOf=graphical-session.target
 After=graphical-session.target helm-daemon.service
 # Wants, not Requires: the bar reconnects to the control socket on its own, so
-# a daemon that is slow or briefly down must not keep the bar from running.
+# a daemon that is slow or briefly down — including a window manager restarting
+# under river — must not keep the bar from running.
 Wants=helm-daemon.service
 ConditionEnvironment=WAYLAND_DISPLAY
 StartLimitIntervalSec=30

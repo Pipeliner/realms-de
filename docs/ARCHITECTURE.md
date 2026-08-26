@@ -65,7 +65,7 @@ counts.
 │   (daemon)     │   NDJSON     │      (CLI)       │─────uses────▶│     (lib)      │
 │                │              └──────────────────┘              │  palette.toml  │
 │  owns HelmState│                                                │   → templates  │
-│  WmBackend ────┼──▶ NiriBackend   (phase 1)                     └───────┬────────┘
+│  WmBackend ────┼──▶ RiverBackend  (phase 1: helm IS the WM)     └───────┬────────┘
 │                │    NativeBackend (phase 3)                             │
 └───────┬────────┘                                                        │ renders
         │ broadcasts HelmState                                            ▼
@@ -139,11 +139,22 @@ could only approximate the triptych and had no equivalent for stow. ADR 0002
 records that reasoning and the mapping table that argued us out of it; ADR 0013
 records where we landed.
 
-The live risk, stated plainly: `river-window-management-v1` is classified
-*unstable* in the protocol registry, against which river's maintainer pledges
-"we do not break window managers". Both are true and neither cancels the other.
-We pin a tested river and treat a protocol bump as a tracked event, not a
-surprise.
+Two things this costs us, stated plainly:
+
+- **helm must *implement* three companion protocols, not merely call them.**
+  `river-layer-shell-v1` (without which the bar never appears at all, since
+  layer-shell under river is the window manager's job), `river-xkb-bindings-v1`
+  (the whole keymap) and `river-input-management-v1`. M2 is scoped accordingly.
+- **`helm-session` joins the input path with a liveness requirement.** The
+  protocol has an `unresponsive` error and finite input buffering, so a stall is
+  a session failure rather than a slow frame. That promotes §4's budgets from
+  performance goals to correctness requirements.
+
+On stability: the protocol is **declared stable** as of river 0.4.0 with a
+forward-compatibility pledge to 1.0.0. The residual risk is trust in a single
+maintainer of a pre-1.0 project — real, but smaller than an unstable
+classification would imply. We pin a tested river and treat a protocol bump as a
+tracked event.
 
 ---
 
@@ -162,7 +173,7 @@ Neither word is allowed to stay an adjective. Both are tests.
 
 | Path | Budget | How it is held |
 |---|---|---|
-| Key press → new geometry submitted | < 4 ms | Projection is pure integer maths; benchmarked in CI |
+| Key press → new geometry submitted | < 4 ms | Projection is pure integer maths; benchmarked in CI. **Under river this is a correctness bound, not a comfort one**: helm is on the input path and a stalled window manager is a dead session |
 | State change → bar redraw | < 8 ms | Damage-tracked; `HelmState::renders_same_as` drops no-op frames |
 | Bar idle CPU | ~0% | Event-driven modules; only the clock ticks, once a second |
 | Cold session start → usable | < 900 ms | No GPU context for the bar, no icon-cache scan, no thumbnailer |

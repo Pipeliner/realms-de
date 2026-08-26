@@ -44,6 +44,13 @@ tell you whether a session starts. Only booting one does.
    workspace manifest is currently 1.85 and moves only with a stated reason.
 6. **Nothing distro-specific may live outside `packaging/`.** No `#[cfg]` on a
    distro, no path that assumes a filesystem layout.
+7. **A pinned river 0.4.x is vendored**, per
+   [ADR 0013](0013-river-window-management-backend.md). The target distros ship
+   0.3.x or river-classic, neither of which speaks
+   `river-window-management-v1`. The flake pins the input and the deb and rpm
+   bundle the same pin, so this follows the rule in point 3 rather than
+   excepting it. It is the one runtime dependency helm ships rather than
+   depends on, and it must be rebuilt on every river security fix.
 
 ## Alternatives considered
 
@@ -79,6 +86,9 @@ tell you whether a session starts. Only booting one does.
   fragments, and those fragments are the parts that will drift.
 - Nix expertise becomes load-bearing for the project. A contributor who cannot
   read the flake cannot fully review a packaging change.
+- Vendoring river (point 7) means a pinned Zig toolchain in the deb and rpm
+  builds, and it makes helm responsible for shipping compositor security fixes
+  promptly. This is a cost ADR 0013 accepted knowingly.
 - The VM test is slow and needs KVM on the runner, which constrains CI choices.
 - Fedora's SELinux policy is asserted to need no custom labels
   (`docs/ARCHITECTURE.md` §5). That is an assumption until the Fedora CI job

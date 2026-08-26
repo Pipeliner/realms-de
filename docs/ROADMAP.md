@@ -16,7 +16,7 @@ work — it is simply not allowed to jump the queue.
 |---|---|---|---|---|
 | [M0](#m0--foundations) | Foundations | Agree the shape and write the contracts down. | `cargo test` green in CI; architecture reviewed | **in progress** |
 | [M1](#m1--theming-pipeline) | Theming pipeline | One palette file retints the whole desktop. | One palette edit visibly retints GTK, terminal, yazi and btop | planned |
-| [M2](#m2--session-and-bar) | Session and bar | Something to look at that reflects live state. | Bar reflects live orbit/focus/mode changes on niri | planned |
+| [M2](#m2--session-and-bar) | Session and bar | The ledger drives real pixels, and the bar shows it. | Bar reflects live orbit/focus/mode changes, and the reference triptych geometry is pixel-exact on river | planned |
 | [M3](#m3--daily-drivable) | **Daily-drivable — the MVP** | Someone can use helm as their only desktop for a week. | A fresh NixOS/Ubuntu/Fedora box logs into helm and passes `doctor` | planned |
 | [M4](#m4--native-clients) | Native clients | Retire the stopgaps. | fuzzel, the toolkit file dialog and the terminal-run agent runner are gone | planned |
 | [M5](#m5--the-helm-compositor) | helm compositor | The ledger runs the screen directly. | `NativeBackend` passes the same session tests as `NiriBackend` | planned |
@@ -36,7 +36,8 @@ depend on, and make the repository something a stranger can understand.
   keymap and mode model; the glyph inventory and its ASCII fallbacks; the NDJSON
   IPC types and `PROTOCOL_VERSION`.
 - The written record: [ARCHITECTURE](ARCHITECTURE.md), [MVP](MVP.md),
-  [PITFALLS](PITFALLS.md), ADRs 0001–0012, the spec process in
+  [PITFALLS](PITFALLS.md), the decision register in [`adr/`](adr/), the seam
+  contracts in [INTERFACES.md](INTERFACES.md), and the spec process in
   [`specs/`](specs/).
 - CI: `fmt`, `clippy -D warnings`, `test`, on every push.
 - Repository furniture: README, CONTRIBUTING, licences, issue and PR templates.
@@ -87,9 +88,15 @@ half-applied theme, and the colour written down twice.
   `$XDG_RUNTIME_DIR/helm/ctl.sock`, broadcasts state to subscribers, and owns
   the lifecycle of its clients so a crashed bar does not take the session with
   it.
-- The `WmBackend` trait and `NiriBackend`, its first implementation, against
-  niri's IPC. Includes the mapping table from
-  [ADR 0002](adr/0002-borrow-a-compositor-first.md) — and its known gaps.
+- The `WmBackend` trait — sketched with real signatures in
+  [INTERFACES.md](INTERFACES.md) — and `RiverBackend`, its first
+  implementation. river 0.4 removed window management from the compositor and
+  defers it to an external process over `river-window-management-v1`, which
+  offers exact positions and dimensions, explicit node ordering, hide/show,
+  focus control and compositor-drawn borders. helm *is* that process. The
+  ledger's rectangles become real ones, not an approximation of them.
+  ([ADR 0013](adr/0013-river-window-management-backend.md), superseding
+  [0002](adr/0002-borrow-a-compositor-first.md))
 - `helm-bar`: layer-shell bar at 32 px — orbit runes, layout indicator, mode
   badge, chord echo, focused title, the right-hand modules and the clock — plus
   the which-key strip and the `?` grimoire sheet.
@@ -99,9 +106,10 @@ half-applied theme, and the colour written down twice.
   [ADR 0008](adr/0008-layer-shell-rendering-stack.md), including real font
   fallback so the glyph probe has something to probe.
 
-**Exit criterion.** Running on niri, changing orbit, focus or mode is reflected
-in the bar — event-driven, with idle CPU at approximately zero and no redraw on
-a timer.
+**Exit criterion.** Running on river, changing orbit, focus or mode is
+reflected in the bar — event-driven, with idle CPU at approximately zero and no
+redraw on a timer — and the triptych geometry on screen is pixel-exact against
+the reference measurements, not merely close.
 
 **Unblocks.** M3, which is mostly integration work on top of a session that
 already runs. Also the first honest measurement against the frame budgets in
@@ -132,6 +140,11 @@ on a machine that is not the author's.
 - Packaging: the Nix flake as the reference build with `nixosModules.helm` and
   `homeManagerModules.helm`, plus the `.deb` and `.rpm` generated from the same
   metadata. A NixOS VM test that boots the session and asserts the bar appears.
+- A **vendored, pinned river 0.4.x** in every package. Ubuntu and Fedora ship
+  river 0.3.x or river-classic, neither of which speaks the window-management
+  protocol. Vendoring puts Zig in the packaging pipeline only, never in helm's
+  own workspace — and it is an
+  [open `needs-human` question](../README.md#needs-a-human).
 - `helm ctl doctor`: checks the environment handshake, the portal backend, the
   cursor theme, the font stack and the socket, and says what is wrong in plain
   words before the user has to file a bug.
@@ -186,18 +199,18 @@ ledger drive the screen directly.
   XWayland.
 - `NativeBackend`: the second implementation of the same `WmBackend` trait
   `NiriBackend` implements, in-process rather than over IPC.
-- Closing the mapping gaps recorded in
-  [ADR 0002](adr/0002-borrow-a-compositor-first.md) — the layouts niri could
-  not express become expressible.
+- Retiring the vendored river and the dependency on an unstable protocol.
+  `river-window-management-v1` is a good bargain, not a permanent one; owning
+  the compositor ends both the vendoring burden and the protocol-bump watch.
 - Screen capture and clipboard, now that helm owns the surfaces.
 
 **Exit criterion.** `NativeBackend` passes the same session-level tests as
-`NiriBackend`, and the ledger's projection reaches the screen with no
-translation layer in between.
+`RiverBackend`, and the ledger's projection reaches the screen in-process, with
+no protocol between the projection and the pixels.
 
-**Unblocks.** The exact-tiling guarantees stop being aspirational at the
-compositor boundary. Also removes niri from the dependency set for users who
-want that.
+**Unblocks.** The exact-tiling guarantees hold end to end rather than up to the
+protocol boundary, and helm stops shipping someone else's compositor in its own
+packages.
 
 ---
 
@@ -237,8 +250,9 @@ order from being a suggestion:
 1. **Contracts before implementations** — `helm-core` types land before the
    crate that consumes them.
 2. **Stopgaps must be swappable** — every stopgap sits behind a config or a
-   trait, never a hardcoded call. This is the only reason M4 and M5 are
-   affordable.
+   trait, never a hardcoded call. The name `river` may not appear outside
+   `crates/helm-session/src/backend/`, `packaging/` and `docs/`. This
+   confinement is the only reason M4 and M5 are affordable.
 3. **Nothing merges without a test** — layout maths gets unit tests, live
    sockets get integration tests, anything touching a distribution gets a CI job
    on that distribution.

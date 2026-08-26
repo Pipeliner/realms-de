@@ -1,0 +1,110 @@
+name: Propose an architectural decision (ADR)
+description: A choice between real alternatives — a protocol, a dependency, a contract, the shape of a crate
+title: "ADR: <the decision, as a statement>"
+labels: ["adr", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An **ADR** answers *why this and not that?* A
+        [**spec**](https://github.com/Pipeliner/realms-de/blob/main/docs/specs/README.md)
+        answers *what must this do?* If you find yourself specifying behaviour
+        here, open a spec instead and link it. If you find yourself arguing a
+        decision in a spec, open this.
+
+        The record lives in
+        [`docs/adr/`](https://github.com/Pipeliner/realms-de/tree/main/docs/adr);
+        [`template.md`](https://github.com/Pipeliner/realms-de/blob/main/docs/adr/template.md)
+        is the shape the merged file must take. This issue is where the argument
+        happens before it is written down.
+
+        The architecture is **provisional on purpose**. Superseding an existing
+        ADR is normal and healthy; quietly editing one is not.
+
+  - type: input
+    id: decision
+    attributes:
+      label: The decision, in one sentence
+      description: Written as something we would do, not as a question.
+      placeholder: "Render the bar with tiny-skia rather than taking a GPU context."
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What forces make this a decision rather than an obvious step? What is true today that makes it necessary now?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        At least two, each argued fairly — including the one you are rejecting, put in its best light. "We did nothing else" is a sign the decision is not yet understood. Include *doing nothing* if it is genuinely an option.
+      value: |
+        **Option A — <name>**
+        - For:
+        - Against:
+
+        **Option B — <name>**
+        - For:
+        - Against:
+
+        **Doing nothing**
+        - What happens if we simply do not decide this yet:
+    validations:
+      required: true
+
+  - type: textarea
+    id: consequences
+    attributes:
+      label: Consequences
+      description: What becomes easy, what becomes hard, and what this forecloses. Be honest about the parts that are worse.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: reversal
+    attributes:
+      label: Reversal cost
+      description: The honest cost of changing our mind later. Every ADR states this.
+      options:
+        - "Low — one module, or an additive change"
+        - "Medium — a client rewrite, or a packaging change across all three distributions"
+        - "Structural — the rest of the DE assumes it"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reversal-detail
+    attributes:
+      label: What reversing it would actually involve
+      description: Which files, which contracts, and whether anyone's config or data would break.
+    validations:
+      required: true
+
+  - type: input
+    id: guard
+    attributes:
+      label: Guard
+      description: The test, lint or CI job that fails if this decision silently stops being true. A decision with no guard is a preference.
+      placeholder: "ci/palette.yml — greps for colour literals outside palette.toml"
+    validations:
+      required: true
+
+  - type: input
+    id: supersedes
+    attributes:
+      label: Supersedes
+      description: If this replaces an existing decision, name it. Leave blank otherwise.
+      placeholder: "ADR 0002"
+
+  - type: textarea
+    id: needs-human
+    attributes:
+      label: Does this need a person to decide?
+      description: |
+        Hardware you do not have, a licence call, a security posture, a trade-off with no obviously right answer. If so, say plainly *what decision is needed and what the options are*, and this issue gets the `needs-human` label and a place on the README's front page rather than a guess.

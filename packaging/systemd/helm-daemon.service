@@ -1,11 +1,17 @@
-# The helm session daemon: owns HelmState, drives the WmBackend, serves the
-# NDJSON control socket at $XDG_RUNTIME_DIR/helm/ctl.sock (helm-core::ipc).
+# The helm session daemon: owns HelmState, serves the NDJSON control socket at
+# $XDG_RUNTIME_DIR/helm/ctl.sock (helm-core::ipc), and — under river 0.4 — *is*
+# river's window manager, driving it over river-window-management-v1 (ADR 0013).
+#
+# That second role changes what a failure here means. river 0.4 has no window
+# management of its own: while this unit is down, windows are not placed, not
+# focused and not resized. It is not a background service; it is half the
+# compositor.
 #
 # PRE-ALPHA (0.1.0): /usr/bin/helm-sessiond does not exist yet — the crate
 # `helm-session` lands in M2. Until then this unit is installed but starting it
 # fails with status 203/EXEC, which is why nothing Requires= it.
 [Unit]
-Description=helm session daemon
+Description=helm session daemon and river window manager
 Documentation=https://github.com/pipeliner/realms-de/blob/main/docs/ARCHITECTURE.md
 PartOf=graphical-session.target
 After=graphical-session.target
@@ -13,17 +19,30 @@ After=graphical-session.target
 # environment handshake is the failure this whole session contract exists to
 # prevent (docs/PITFALLS.md, "WAYLAND_DISPLAY never reaches D-Bus").
 ConditionEnvironment=WAYLAND_DISPLAY
-# Do not let a crash loop spin the CPU; five failures in 30 s is a real bug and
-# should surface as a dead unit, not as a hot laptop.
+# Do not let a crash loop spin the CPU. Five failures in 30 s is a real bug and
+# should surface as a dead unit — with a compositor the user can still log out
+# of — rather than as a hot laptop.
 StartLimitIntervalSec=30
 StartLimitBurst=5
 
 [Service]
 # Type=exec, not notify: the daemon does not implement sd_notify yet. Switch to
-# Type=notify (and sd_notify READY=1 after the control socket is bound) in M2 so
-# helm-bar.service can order itself after a socket that actually accepts.
+# Type=notify (sd_notify READY=1 once the control socket is bound *and* the
+# river window-management object is bound) in M2, so helm-bar.service can order
+# itself after a session that actually answers.
 Type=exec
 ExecStart=/usr/bin/helm-sessiond
+# on-failure, not always, and the distinction is deliberate: a clean exit(0) is
+# the user asking helm to stop (`helm ctl quit`), and restarting through that
+# would make quitting impossible. A crash, which leaves river unmanaged, comes
+# straight back — RestartSec=1 because every second here is a second the user
+# cannot move a window.
+#
+# NEEDS-HUMAN (revisit in M2, once the daemon exists and its exit codes are
+# real): if it turns out helm-sessiond can exit 0 for reasons other than a
+# deliberate quit, this becomes Restart=always plus an explicit
+# SuccessExitStatus for the quit path. Options and the trade-off are exactly
+# that; the decision needs a daemon to observe.
 Restart=on-failure
 RestartSec=1
 Slice=session.slice

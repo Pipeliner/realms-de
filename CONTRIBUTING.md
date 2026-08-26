@@ -25,10 +25,13 @@ first.
 $ cargo fmt --all && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-The toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain.toml); the
-MSRV is 1.82 and is set by the oldest glibc we support, not by taste. Crates
-join the workspace in [`Cargo.toml`](Cargo.toml) only when they gain a real
-implementation, so a fresh clone always builds.
+The MSRV is **1.85** (edition 2024), declared in [`Cargo.toml`](Cargo.toml) and
+checked by its own CI job. It is not a matter of taste: Ubuntu 24.04's glibc
+sets the floor for what we can link against, and the dependency set pins it
+harder still. Raising it is a decision, not a convenience — say so in the PR.
+
+Crates join the workspace only when they gain a real implementation, so a fresh
+clone always builds. If a crate is not in `Cargo.toml`, it does not exist yet.
 
 ---
 

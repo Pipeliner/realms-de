@@ -1,0 +1,88 @@
+name: Propose a spec
+description: Write down what a component or feature must do, before it does it
+title: "spec: <component or feature>"
+labels: ["spec", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Standing order S14: **specs and ADRs outrank code.** Nothing non-trivial
+        is implemented before its behaviour is written down in
+        [`docs/specs/`](https://github.com/Pipeliner/realms-de/tree/main/docs/specs),
+        and the happy-path tests come from the acceptance criteria below before
+        the implementation does.
+
+        A **spec** answers *what must this do?* An
+        [**ADR**](https://github.com/Pipeliner/realms-de/blob/main/docs/adr/)
+        answers *why this and not that?* If a decision with real alternatives is
+        buried in here, hand it to an ADR and link it.
+
+        A spec at **Draft** may not be implemented against — Draft means the
+        open questions are still open, and code written against it would encode
+        a guess.
+
+  - type: input
+    id: purpose
+    attributes:
+      label: Purpose, in one sentence
+      description: What this component or feature is for. If you cannot say it in one sentence, the scope is probably wrong.
+      placeholder: "Render every themed file from palette.toml and reload the clients that read them, atomically."
+    validations:
+      required: true
+
+  - type: textarea
+    id: in-scope
+    attributes:
+      label: In scope
+      description: What this spec is responsible for. One behaviour per line.
+      value: |
+        - 
+        - 
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: What it deliberately does not do, and where that lives instead. This half is what stops a spec sprawling.
+      value: |
+        - … — belongs to <other spec / milestone>
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: |
+        Each one is a single happy path, written as something that can be observed to be true. These become the tests — one test per criterion, written first and watched to fail. Minimal means minimal: the intended path, not an edge-case matrix.
+
+        (Layout geometry and colour maths are the standing exception and get invariant tests instead. Say so here if that applies.)
+      value: |
+        - [ ] Given …, when …, then …
+        - [ ] Given …, when …, then …
+    validations:
+      required: true
+
+  - type: textarea
+    id: interfaces
+    attributes:
+      label: Types and interfaces it touches
+      description: Which `helm-core` contracts, which seams in docs/INTERFACES.md. If it needs a new shared type, say so — contracts land before the crates that consume them.
+
+  - type: input
+    id: milestone
+    attributes:
+      label: Milestone
+      description: See docs/ROADMAP.md.
+      placeholder: "M2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions
+      description: |
+        Anything unresolved. While any of these are open the spec stays at **Draft** and may not be implemented against. If a question needs a person's judgement rather than more thought, say what decision is needed and what the options are, and it gets the `needs-human` label.

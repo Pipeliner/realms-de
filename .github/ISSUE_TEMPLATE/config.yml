@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Read the architecture first
+    url: https://github.com/Pipeliner/realms-de/blob/main/docs/ARCHITECTURE.md
+    about: The one idea, the component map, the decision register and the frame budgets. Most "why is it like that" questions are answered here.
+  - name: What helm can and cannot do yet
+    url: https://github.com/Pipeliner/realms-de/blob/main/docs/ROADMAP.md
+    about: helm is pre-alpha at milestone M0. Before filing a bug, check whether the thing you are using has been built yet.
+  - name: Report a security issue privately
+    url: https://github.com/Pipeliner/realms-de/security/advisories/new
+    about: Do not open a public issue for a vulnerability. Use a private advisory instead.
+  - name: Ask a question
+    url: https://github.com/Pipeliner/realms-de/discussions
+    about: Open-ended questions, ideas that are not yet a proposal, and anything you would rather talk through first.

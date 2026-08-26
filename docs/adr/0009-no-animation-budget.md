@@ -105,9 +105,12 @@ taste judgement.
 
 ### Neutral
 
-- niri, the M2 backend, animates by default. The shipped niri config disables
-  it. That configuration is itself a thing that can regress, and it is listed as
-  a consequence in ADR 0002.
+- Under [ADR 0013](0013-river-window-management-backend.md) this rule stops
+  depending on anyone else's configuration. helm is the window manager, so
+  window positions come from `layout::project` on every render sequence and
+  there is no compositor-side motion to disable. ADR 0002's niri backend needed
+  a shipped config turning animations off, and that config was itself a thing
+  that could regress; the obligation is gone rather than merely satisfied.
 
 ## Reversal
 
@@ -133,5 +136,6 @@ active rune, a momentary orbit name in the bar — before reaching for motion.
   structural reason nothing needs animating on focus.
 - *Planned (M1–M2):* the five benchmarks in the table above, each failing the
   build on regression past its threshold.
-- *Planned (M2):* a config test asserting the shipped niri configuration sets
-  every animation to off.
+- *Planned (M2):* an integration assertion that a ledger mutation produces
+  exactly one render sequence and one frame, with no intermediate geometry —
+  the structural form of "no animation" now that helm sets positions itself.

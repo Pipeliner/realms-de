@@ -8,13 +8,25 @@
 # reorder something here, you are re-opening a bug that this file exists to
 # close.
 #
-# PRE-ALPHA (0.1.0): helm's own binaries — helm-sessiond (the session daemon),
-# helm-bar, helm — do not exist yet; they land in M1–M2. This script therefore
-# treats them as optional: it logs their absence and still hands you a working
-# compositor. Set HELM_STRICT=1 to make a missing helm binary fatal instead.
+# THE COMPOSITOR IS river 0.4.x, AND IT IS INERT ON ITS OWN (ADR 0013).
+# river 0.4 moved window management out of the compositor: an external window
+# manager drives it over river-window-management-v1, and for helm that window
+# manager is helm-sessiond. So this script starts two halves of one desktop —
+# river, then helm's window manager as a river client — and the ordering that
+# already mattered for portals now also decides whether any window can be
+# placed at all. Until helm-sessiond attaches, river runs with no window
+# management whatsoever.
+#
+# PRE-ALPHA (0.1.0): helm's own binaries — helm-sessiond (the session daemon
+# and river window manager), helm-bar, helm — do not exist yet; they land in
+# M1–M2. This script therefore treats them as optional: it logs their absence
+# and still starts river. Be clear-eyed about what that gives you today: a
+# compositor with no window manager attached, which is a black screen with a
+# cursor. Set HELM_STRICT=1 to make a missing helm binary fatal instead.
 #
 # Knobs (all optional, all environment):
-#   HELM_COMPOSITOR       command to run as the compositor      (default: niri)
+#   HELM_COMPOSITOR       command to run as the compositor      (default: river)
+#   HELM_WM               window manager to attach to river     (default: helm-sessiond)
 #   HELM_COMPOSITOR_ARGS  extra args, split on whitespace       (default: none)
 #   HELM_CURSOR_THEME     cursor theme name                     (default: Adwaita)
 #   HELM_CURSOR_SIZE      cursor size in logical px             (default: 24)
@@ -28,7 +40,8 @@ set -euo pipefail
 readonly HELM_VERSION='0.1.0'
 readonly PROGNAME="${0##*/}"
 
-HELM_COMPOSITOR="${HELM_COMPOSITOR:-niri}"
+HELM_COMPOSITOR="${HELM_COMPOSITOR:-river}"
+HELM_WM="${HELM_WM:-helm-sessiond}"
 HELM_COMPOSITOR_ARGS="${HELM_COMPOSITOR_ARGS:-}"
 HELM_CURSOR_THEME="${HELM_CURSOR_THEME:-Adwaita}"
 HELM_CURSOR_SIZE="${HELM_CURSOR_SIZE:-24}"
@@ -155,6 +168,11 @@ start_compositor() {
 	local -a args=()
 	[[ -n "$HELM_COMPOSITOR_ARGS" ]] && read -r -a args <<<"$HELM_COMPOSITOR_ARGS"
 
+	# river is started with no arguments on purpose. river 0.3 had `river -c
+	# <command>` to run a startup script; whether 0.4 keeps it is not verified
+	# here, and the whole point of the ordering below is that *we* decide when
+	# the window manager attaches — after the environment handshake, not
+	# before it.
 	log "starting compositor: $HELM_COMPOSITOR ${args[*]:-}"
 	"$HELM_COMPOSITOR" "${args[@]}" &
 	compositor_pid=$!
@@ -270,9 +288,11 @@ spawn_optional() {
 # Step 5. Only now start anything that talks to the display.
 start_session_units() {
 	if ((have_systemd_user)); then
-		# helm-session.target pulls in helm-daemon.service and
-		# helm-bar.service; both are Restart=on-failure, so a crashed bar
-		# is restarted instead of taking the session down.
+		# helm-session.target pulls in helm-daemon.service — the window
+		# manager river is waiting for — and helm-bar.service. Both are
+		# Restart=on-failure, so a crashed bar is restarted instead of
+		# taking the session down, and a crashed window manager is
+		# restarted instead of leaving river permanently unmanaged.
 		if systemctl --user start helm-session.target; then
 			log "started helm-session.target"
 			return 0
@@ -283,7 +303,7 @@ start_session_units() {
 	# Fallback path for systems without a user manager. Deliberately dumb:
 	# no restart supervision, which is exactly why the systemd path is
 	# preferred.
-	spawn_optional helm-sessiond
+	spawn_optional "$HELM_WM"
 	spawn_optional helm-bar
 }
 
@@ -332,6 +352,8 @@ preflight() {
 	fi
 	printf 'helm-session %s — preflight\n\n' "$HELM_VERSION"
 	printf '  compositor        %s %s\n' "$HELM_COMPOSITOR" "$note"
+	printf '  window manager    %s %s\n' "$HELM_WM" \
+		"$(have "$HELM_WM" && echo '(found)' || echo '(not installed — river will have no window management)')"
 	printf '  systemd --user    %s\n' "$(systemctl --user show-environment >/dev/null 2>&1 && echo 'reachable' || echo 'NOT reachable')"
 	printf '  dbus activation   %s\n' "$(have dbus-update-activation-environment && echo 'dbus-update-activation-environment found' || echo 'MISSING — portals will hang')"
 	printf '  portal backend    %s\n' "$(compgen -G '/usr/share/xdg-desktop-portal/portals/*.portal' >/dev/null 2>&1 && echo 'at least one .portal file installed' || echo 'none found in /usr/share/xdg-desktop-portal/portals')"
@@ -339,7 +361,7 @@ preflight() {
 	printf '  cursor theme      %s @ %s\n' "$HELM_CURSOR_THEME" "$HELM_CURSOR_SIZE"
 	printf '\n  helm binaries (pre-alpha — absence here is expected today):\n'
 	local bin
-	for bin in helm helm-sessiond helm-bar; do
+	for bin in helm "$HELM_WM" helm-bar; do
 		printf '    %-14s %s\n' "$bin" "$(have "$bin" && echo 'found' || echo 'not installed')"
 	done
 	return "$missing"

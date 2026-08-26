@@ -18,7 +18,7 @@ Copy [`template.md`](template.md) to start a new one.
 | # | Title | Status | In one line | Reversal |
 |---|---|---|---|---|
 | [0001](0001-ledger-as-single-source-of-truth.md) | The ledger is the single source of truth | Accepted | Ordered `Vec<WinId>` per orbit; layouts are pure projections; undo restores an older ledger | **Structural** — the whole DE assumes it |
-| [0002](0002-borrow-a-compositor-first.md) | Borrow a compositor first; write ours later | Accepted | Ship on niri behind a `WmBackend` trait; `helm-compositor` lands at M5 | Low — one module under `helm-session` |
+| [0002](0002-borrow-a-compositor-first.md) | Borrow a compositor first; write ours later | ~~Superseded~~ by [0013](0013-river-window-management-backend.md) | Ship on niri behind a `WmBackend` trait. Kept in full: its mapping table is the evidence for the move | — |
 | [0003](0003-session-daemon-owns-state.md) | A session daemon owns the state | Accepted | `helm-session` holds `HelmState`; clients subscribe and hold nothing | Low |
 | [0004](0004-ndjson-control-socket.md) | Newline-delimited JSON over a unix socket | Accepted | One JSON value per line at `$XDG_RUNTIME_DIR/helm/ctl.sock`, with a version handshake | Low — a D-Bus surface would be additive |
 | [0005](0005-palette-toml-single-source.md) | One `palette.toml`, everything generated | Accepted | No colour is written down twice; atomic rename then one reload fan-out | Low per target |
@@ -29,10 +29,12 @@ Copy [`template.md`](template.md) to start a new one.
 | [0010](0010-nix-flake-as-reference-build.md) | The Nix flake is the reference build | Accepted | deb and rpm generated from the same metadata; a NixOS VM test boots the session | **Medium** |
 | [0011](0011-session-integration-contract.md) | The session entry owns the environment handshake | Accepted | Import into systemd **and** D-Bus before starting anything, or portals hang | Low — the requirement is not reversible |
 | [0012](0012-font-fallback-is-a-contract.md) | Font fallback is a contract | Accepted | Glyph inventory, a startup probe, and an ASCII fallback for all 37 glyphs | Low |
+| [0013](0013-river-window-management-backend.md) | helm **is** the window manager, on river's protocol | Accepted — supersedes [0002](0002-borrow-a-compositor-first.md) | river 0.4 moved window management out of the compositor; every row 0002 marked lossy becomes faithful | **Medium** — back to niri is an architecture change, not a module swap |
 
-All twelve are **provisional**, as `docs/ARCHITECTURE.md` says of the
-architecture as a whole. "Accepted" means we are building on it, not that it is
-settled forever.
+All are **provisional**, as `docs/ARCHITECTURE.md` says of the architecture as a
+whole. "Accepted" means we are building on it, not that it is settled forever —
+0002 is the worked example, superseded within a day of being written and kept
+intact because the trail is the point.
 
 ## Open questions marked `needs-human`
 
@@ -41,11 +43,18 @@ named, with its options and a recommendation, rather than guessed at.
 
 | ADR | Question | Recommendation |
 |---|---|---|
-| [0002](0002-borrow-a-compositor-first.md) | niri's scrollable-tiling model cannot express triptych, even or stow. Ship the approximation, restrict the niri-backed layouts, or reopen river? | Ship the approximation for M2 and say so plainly; restrict layouts if it reads as broken |
-| [0002](0002-borrow-a-compositor-first.md) | Does stow map to a hidden niri workspace, or does `NiriBackend` refuse `mod+s`? | Hidden workspace, with `doctor` reporting it as an approximation |
+| [0013](0013-river-window-management-backend.md) | `river-window-management-v1` is declared stable with a compatibility pledge, but river is pre-1.0 and its last release cycle was extremely breaking. What do we do if the pledge does not hold? | Pin and follow, with an accelerated `helm-compositor` as the standing mitigation |
+| [0013](0013-river-window-management-backend.md) | Confirm that Ubuntu 24.04 and Fedora 41 ship river 0.3.x or river-classic. The decision to vendor a pinned 0.4.x rests on this, and it is recorded as an assumption | Verify in packaging CI before packaging work starts |
 | [0010](0010-nix-flake-as-reference-build.md) | Where do the `.deb` and `.rpm` actually live: GitHub Releases, a self-hosted apt repo plus Copr, or official distro repositories? Who holds the signing key? | Releases for M3; a repo and Copr once there are users to upgrade |
 | [0011](0011-session-integration-contract.md) | Which lock screen ships: swaylock, gtklock, waylock, or our own? | gtklock for M3 — `ext-session-lock-v1` is the property that matters |
 | [0011](0011-session-integration-contract.md) | Idle policy defaults: blank timeout, lock timeout, and whether lid-close locks unconditionally | Not to be guessed; these are user-visible security defaults |
+
+### Resolved
+
+| ADR | Question | Resolution |
+|---|---|---|
+| ~~[0002](0002-borrow-a-compositor-first.md)~~ | niri cannot express triptych, even or stow — ship the approximation, restrict layouts, or reopen river? | **Resolved by [0013](0013-river-window-management-backend.md).** river was reopened for a stronger reason than the one 0002 considered; no approximation is needed |
+| ~~[0002](0002-borrow-a-compositor-first.md)~~ | Does stow map to a hidden niri workspace, or refuse `mod+s`? | **Resolved by [0013](0013-river-window-management-backend.md).** `river_window_v1::hide`/`show` maps stow exactly, and with matching semantics |
 
 ## Guards at a glance
 
@@ -62,5 +71,7 @@ decision silently stopped being true:
 | 0009 | `palette::tests::out_of_range_values_are_rejected_at_parse_time` (enforces `metrics.radius == 0`) |
 | 0012 | `glyphs::tests::a_bare_ascii_font_degrades_instead_of_drawing_tofu` |
 
-ADRs 0002, 0007, 0008, 0010 and 0011 depend on guards that land with their
-milestones; each names them as *planned* with the milestone attached.
+ADRs 0007, 0008, 0010, 0011 and 0013 depend on guards that land with their
+milestones; each names them as *planned* with the milestone attached. 0013's
+seam guard supersedes 0002's: `river` must appear nowhere outside the backend
+module, packaging and docs, and `niri` nowhere outside docs.

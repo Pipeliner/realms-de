@@ -1,0 +1,63 @@
+name: Feature or change request
+description: Something helm should do that it does not
+title: "<component>: <what it should do>"
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The cut line is
+        [MVP.md](https://github.com/Pipeliner/realms-de/blob/main/docs/MVP.md):
+        *one person can log into helm and use it as their only desktop for a
+        week without reaching for another DE.* Anything that does not serve
+        that waits — however good it would look in a screenshot. Saying which
+        milestone your request belongs to is not a formality; it is most of the
+        triage.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you unable to do today? Describe the situation, not the solution you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like helm to do
+      description: Be concrete. If it has a visible surface, describe what appears on screen and which keys reach it.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Which milestone does this belong to
+      description: See docs/ROADMAP.md. "M3 or earlier" means you believe helm is not daily-drivable without it.
+      options:
+        - M3 or earlier — the MVP is incomplete without this
+        - M4 — a native client, replacing a stopgap
+        - M5 — needs the helm compositor
+        - M6 — polish
+        - I do not know
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What else would solve the problem
+      description: Including doing nothing, or solving it outside helm with an existing tool. If a proven tool already does this, say so — helm prefers reusing one behind a seam to writing another.
+
+  - type: checkboxes
+    id: houserules
+    attributes:
+      label: Against the house rules
+      description: These are the constraints a proposal has to survive. Tick what applies; an unticked box is not a rejection, it is a conversation.
+      options:
+        - label: This needs no animation or transition. (v1 is motionless by design — ADR 0009.)
+        - label: This introduces no colour outside `palette.toml`. (ADR 0005.)
+        - label: This stores no window position. (The ledger is the truth; geometry is projected — ADR 0001.)
+        - label: I have considered which frame budget this touches (ARCHITECTURE §4) and believe it holds.
+        - label: This needs a decision with real alternatives, so it probably wants an ADR rather than this issue.

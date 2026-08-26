@@ -1,0 +1,13 @@
+helm (0.1.0) UNRELEASED; urgency=medium
+
+  * Initial packaging skeleton. Ships the session contract only: the
+    wayland-session entry, the session wrapper implementing the ADR 0011
+    environment handshake, the systemd user units and palette.toml.
+  * No helm binaries are packaged: helm-sessiond, helm-bar and helm do not
+    exist yet (M1-M2). debian/rules installs them automatically once they do.
+  * Depends on a vendored river 0.4.x (helm-river); river 0.4 is the compositor
+    helm drives over river-window-management-v1.
+  * NEEDS-HUMAN: the maintainer address below uses the reserved .invalid domain
+    and must be replaced before any upload. See debian/control.
+
+ -- helm contributors <helm-maintainers@helm.invalid>  Wed, 26 Aug 2026 00:00:00 +0000
