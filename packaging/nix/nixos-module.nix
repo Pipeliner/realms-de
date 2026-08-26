@@ -93,14 +93,20 @@ in
       cfg.package
       cfg.compositor
       sessionPackage
-    ] ++ support.reusedTools pkgs;
+    ]
+    ++ [ pkgs.slurp ] # xdg-desktop-portal-wlr's default output chooser
+    ++ support.reusedTools pkgs;
 
     # Registers helm in the display manager's session list. river's own package
     # also provides a "river" session entry; both will be offered, and only the
     # helm one applies helm's environment contract.
     services.displayManager.sessionPackages = [ sessionPackage ];
 
-    # Picks up lib/systemd/user/*.{target,service} from the package.
+    # Picks up lib/systemd/user/*.{target,service} from the package, and the
+    # helm-session.target.wants/ symlinks with them — [Install] alone would not
+    # create those, and without them starting the session target starts nothing
+    # and reports success (SPEC 0005 §4). checks.session-boots asserts the
+    # symlink exists on the built system rather than trusting this.
     systemd.packages = [ cfg.package ];
 
     environment.etc."helm/palette.toml".source = cfg.paletteFile;
@@ -124,19 +130,30 @@ in
     hardware.graphics.enable = lib.mkDefault true;
 
     # Portals: a browser with no portal backend has a silently broken "Open
-    # File" (docs/PITFALLS.md). gtk is the pragmatic default — it implements
-    # FileChooser and Settings.
+    # File" (docs/PITFALLS.md). A backend is named per interface rather than
+    # left to whatever is installed, which is the same policy the deb and the
+    # rpm get from configs/portal/helm-portals.conf — keep the two in step.
     #
-    # NEEDS-HUMAN (screencast): the gtk backend does not implement ScreenCast
-    # for wlroots-based compositors. Options: (a) add
-    # xdg-desktop-portal-wlr and route ScreenCast to it — river 0.4 is
-    # wlroots 0.20 based, so this is the likely answer, untested here; (b) wait
-    # for a river-aware backend. Until this is decided and tested on hardware,
-    # screen sharing under helm is unverified.
+    # gtk implements FileChooser and Settings but NOT ScreenCast on
+    # wlroots-based compositors, so screen sharing is routed to wlr explicitly;
+    # left to the default it offers no sources and reports no error.
+    #
+    # UNVERIFIED (SPEC 0005 OQ-2): whether river 0.4.8 still exports
+    # wlr-screencopy-unstable-v1, and whether xdg-desktop-portal-wlr works when
+    # window management lives outside the compositor. Screen sharing under helm
+    # stays marked unverified in docs/INSTALL.md until that is tested on
+    # hardware. slurp is xdpw's default output chooser.
     xdg.portal = {
       enable = true;
-      extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
-      config.helm.default = [ "gtk" ];
+      extraPortals = [
+        pkgs.xdg-desktop-portal-gtk
+        pkgs.xdg-desktop-portal-wlr
+      ];
+      config.helm = {
+        default = [ "gtk" ];
+        "org.freedesktop.impl.portal.ScreenCast" = [ "wlr" ];
+        "org.freedesktop.impl.portal.Screenshot" = [ "wlr" ];
+      };
       xdgOpenUsePortal = true;
     };
 

@@ -47,12 +47,20 @@ Depends: ${shlibs:Depends},
          dbus-user-session,
          systemd,
          xdg-desktop-portal,
-         xdg-desktop-portal-gtk | xdg-desktop-portal-wlr | xdg-desktop-portal-gnome,
+         xdg-desktop-portal-gtk,
+         xdg-desktop-portal-wlr,
          fonts-symbola,
          foot,
          fuzzel,
          btop,
          zsh
+# The portal backends are named, not offered as a disjunction: a solver may
+# satisfy `gtk | wlr | gnome` with a backend that implements no ScreenCast, and
+# the user meets that as screen sharing that silently produces nothing
+# (SPEC 0005 §5). gtk answers FileChooser and Settings; wlr answers ScreenCast
+# and Screenshot, which is what configs/portal/helm-portals.conf routes to it.
+# slurp is xdg-desktop-portal-wlr's default output chooser, hence the Recommends.
+#
 # fonts-ibm-plex is the design's typeface but lives in multiverse, which is not
 # enabled everywhere; a hard dependency would make helm uninstallable on a
 # main+universe box. The glyph probe (ADR 0012) degrades to the system mono
@@ -61,7 +69,7 @@ Depends: ${shlibs:Depends},
 Recommends: fonts-ibm-plex,
             gsettings-desktop-schemas,
             xwayland,
-            xdg-desktop-portal-wlr
+            slurp
 # Neither yazi nor starship is in the Ubuntu 24.04 archive (verified). charon
 # and thoth are therefore degraded, not broken, on a stock noble box:
 # docs/INSTALL.md says how to install them by hand.

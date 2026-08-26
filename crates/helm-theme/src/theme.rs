@@ -467,7 +467,14 @@ mod tests {
     fn lint_report_is_clean_for_the_shipped_palette_and_lists_hue_separations() {
         let report = lint(&shipped());
         assert!(report.is_clean(), "{:?}", report.findings);
-        assert_eq!(report.separations.len(), 10, "five accents make ten pairs");
+        // Derived rather than hardcoded: adding an accent to palette.toml
+        // should not require editing this number, only satisfying it.
+        let n = shipped().accent.named().len();
+        assert_eq!(
+            report.separations.len(),
+            n * (n - 1) / 2,
+            "every accent pair is reported"
+        );
         for s in &report.separations {
             assert!(
                 s.degrees >= helm_core::palette::MIN_ACCENT_HUE_SEPARATION,

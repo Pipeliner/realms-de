@@ -37,6 +37,11 @@ starlight = "#a3bff2"  # info: urania, cpu, mode badge
 gold      = "#d9b06a"  # warn: horus, battery, `:` prompt
 teal      = "#7fd4c1"  # ok: thoth, marks
 cyan      = "#7fc9e8"  # hermes
+# Added for terminals, not for chrome. A 16-colour ANSI scheme needs a red, and
+# without one "error" and "warning" render in the same hue -- which is exactly
+# the distinction a person scanning build output is relying on. 62 degrees from
+# gold, so it keeps the palette's hue discipline.
+red       = "#e06c75"  # error, ANSI 1/9
 
 [border]
 # Alpha is carried separately so templates that cannot express rgba()

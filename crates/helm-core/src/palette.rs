@@ -71,6 +71,8 @@ pub struct Accents {
     pub teal: Rgb,
     /// hermes.
     pub cyan: Rgb,
+    /// Error, and ANSI colour 1/9. Not used in helm's own chrome.
+    pub red: Rgb,
 }
 
 impl Accents {
@@ -82,18 +84,20 @@ impl Accents {
             "gold" => self.gold,
             "teal" => self.teal,
             "cyan" => self.cyan,
+            "red" => self.red,
             _ => return None,
         })
     }
 
     /// All accents paired with their names.
-    pub fn named(&self) -> [(&'static str, Rgb); 5] {
+    pub fn named(&self) -> [(&'static str, Rgb); 6] {
         [
             ("violet", self.violet),
             ("starlight", self.starlight),
             ("gold", self.gold),
             ("teal", self.teal),
             ("cyan", self.cyan),
+            ("red", self.red),
         ]
     }
 }
@@ -312,6 +316,7 @@ impl Palette {
             gold: apply_contrast(self.accent.gold, pane, f),
             teal: apply_contrast(self.accent.teal, pane, f),
             cyan: apply_contrast(self.accent.cyan, pane, f),
+            red: apply_contrast(self.accent.red, pane, f),
         };
         p.contrast = 1.0;
         p

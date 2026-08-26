@@ -17,7 +17,8 @@ Legend: **Guard** = the thing that would fail loudly if the mitigation regressed
 | Off-by-one on odd resolutions | The rightmost window is 1px narrow | Same partition; tested at 1281×801 on purpose | same |
 | Fractional scaling blur | Everything is soft on a 150% display | Integer geometry; buffers allocated at the output's real scale | *planned:* M2 scale test |
 | Focus causes relayout | Windows twitch as you move focus | Focus is a flag on a `Placement`, not an input to geometry | `layout::tests::projection_is_pure_and_focus_only_moves_the_flag` |
-| Redraw on a timer | Idle CPU never reaches zero; laptop fans | Event-driven; `HelmState::renders_same_as` drops no-op frames | `state::tests::revision_alone_does_not_force_a_redraw` |
+| Redraw on a timer | Idle CPU never reaches zero; laptop fans | The bar owns no timer; `HelmState::renders_same_as` drops no-op frames. The one sampler that must exist lives in `helm-session`, off the input path, and its output still goes through the same equality gate | `state::tests::revision_alone_does_not_force_a_redraw` |
+| A laptop with no tap-to-click | The touchpad taps do nothing and there is no setting anywhere to fix it | Under river 0.4 there is no input config file: helm must serve `river-libinput-config-v1` and `river-xkb-config-v1` | *planned:* M2 |
 
 ## Being the window manager (river)
 

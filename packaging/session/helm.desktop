@@ -5,11 +5,13 @@
 # Exec must be an absolute path: display managers do not run it through a login
 # shell, so /usr/local/bin is not necessarily on PATH.
 #
-# PRE-ALPHA (0.1.0): selecting this entry today gives you river 0.4 with helm's
-# session environment contract applied — and nothing else. Under river 0.4 the
-# compositor does no window management of its own; helm-sessiond is the window
-# manager, and it lands in M2 together with the bar and the launcher. Until
-# then this session is a compositor with nothing driving it. See
+# PRE-ALPHA (0.1.0): selecting this entry today applies helm's session
+# environment contract to river 0.4 and then ABORTS BACK TO THE DISPLAY MANAGER
+# with FATAL WM-ABORT, because helm-wm — the window manager river 0.4 needs, as
+# it does no window management of its own — does not exist until M2. That abort
+# is deliberate (SPEC 0005 §2): with no window manager there is no layer shell,
+# so a session that stayed up could not draw its own error and would look like a
+# crash. HELM_ALLOW_NO_WM=1 keeps river running without one. See
 # docs/INSTALL.md, "what this actually installs today".
 #
 # The Nix module rewrites Exec/TryExec to the store path of the wrapper.

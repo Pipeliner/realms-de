@@ -32,8 +32,8 @@ session contract — the wayland-session entry, the session wrapper, the systemd
 user units and the palette."""
 section = "x11"
 priority = "optional"
-depends = "$auto, helm-river (>= 0.4.0) | river (>= 0.4.0), dbus-user-session, systemd, xdg-desktop-portal, xdg-desktop-portal-gtk | xdg-desktop-portal-wlr | xdg-desktop-portal-gnome, fonts-symbola, foot, fuzzel, btop, zsh"
-recommends = "fonts-ibm-plex, gsettings-desktop-schemas, xwayland, xdg-desktop-portal-wlr"
+depends = "$auto, helm-river (>= 0.4.0) | river (>= 0.4.0), dbus-user-session, systemd, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, fonts-symbola, foot, fuzzel, btop, zsh"
+recommends = "fonts-ibm-plex, gsettings-desktop-schemas, xwayland, slurp"
 suggests = "yazi, starship"
 
 # Paths are relative to the workspace root; the trailing component is the
@@ -42,16 +42,24 @@ assets = [
     ["packaging/session/helm-session", "usr/bin/", "755"],
     ["packaging/session/helm.desktop", "usr/share/wayland-sessions/", "644"],
     ["palette.toml", "usr/share/helm/", "644"],
+    ["configs/portal/helm-portals.conf", "usr/share/xdg-desktop-portal/", "644"],
     ["docs/INSTALL.md", "usr/share/doc/helm/", "644"],
-    # Binaries land here once they exist (M1-M2):
-    # ["target/release/helm", "usr/bin/", "755"],
-    # ["target/release/helm-sessiond", "usr/bin/", "755"],
+    # Binaries land here once they exist (M1-M2), under the settled names:
+    # ["target/release/helmctl", "usr/bin/", "755"],
+    # ["target/release/helm-wm", "usr/bin/", "755"],
     # ["target/release/helm-bar", "usr/bin/", "755"],
 ]
 
 # cargo-deb installs these into /usr/lib/systemd/user and generates the enable
 # snippets. `enable = true` is what creates the helm-session.target.wants
-# symlinks; without them, starting the session target starts nothing.
+# symlinks; without them, starting the session target starts nothing at all and
+# reports success (SPEC 0005 §4).
+#
+# UNVERIFIED, and it matters: cargo-deb's systemd-units handling is
+# single-unit-oriented and its behaviour for a *target* with two wanted services
+# has not been exercised here (cargo deb cannot run until a crate has a [[bin]]).
+# If it turns out not to create both symlinks, add them as assets pointing at a
+# checked-in symlink tree, the way packaging/debian/rules does explicitly.
 [package.metadata.deb.systemd-units]
 unit-scripts = "packaging/systemd"
 unit-name = "helm-bar"

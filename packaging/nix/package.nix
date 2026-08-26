@@ -49,6 +49,23 @@
     for unit in ${src + "/packaging/systemd"}/*; do
       install -Dm644 "$unit" $out/lib/systemd/user/"$(basename "$unit")"
     done
+
+    # The .wants symlinks, shipped rather than left to [Install] processing.
+    # Without them `systemctl --user start helm-session.target` starts nothing
+    # at all and exits 0 (SPEC 0005 §4). NixOS's systemd.packages handling
+    # propagates a package's *.wants directories; the VM test asserts the
+    # resulting symlink exists rather than trusting that.
+    mkdir -p $out/lib/systemd/user/helm-session.target.wants
+    ln -s ../helm-sessiond.service \
+      $out/lib/systemd/user/helm-session.target.wants/helm-sessiond.service
+    ln -s ../helm-bar.service \
+      $out/lib/systemd/user/helm-session.target.wants/helm-bar.service
+
+    # The portal backend policy. On NixOS the module's xdg.portal.config says
+    # the same thing; this copy is what makes the package correct on
+    # nix-on-non-NixOS, where /usr/share is not ours to write.
+    install -Dm644 ${src + "/configs/portal/helm-portals.conf"} \
+      $out/share/xdg-desktop-portal/helm-portals.conf
     # The units name /usr/bin paths that do not exist on NixOS. Rewritten here
     # rather than in the unit files so the deb and the rpm keep working
     # unchanged.

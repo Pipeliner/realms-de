@@ -141,10 +141,14 @@ records where we landed.
 
 Two things this costs us, stated plainly:
 
-- **helm must *implement* three companion protocols, not merely call them.**
+- **helm must *implement* five companion protocols, not merely call them.**
   `river-layer-shell-v1` (without which the bar never appears at all, since
   layer-shell under river is the window manager's job), `river-xkb-bindings-v1`
-  (the whole keymap) and `river-input-management-v1`. M2 is scoped accordingly.
+  (the whole keymap), `river-input-management-v1`, `river-xkb-config-v1`
+  (keyboard layouts, otherwise frozen at whatever river started with) and
+  `river-libinput-config-v1` (without which a laptop has no tap-to-click and no
+  way to get one — under river 0.4 the window manager *is* the input
+  configuration). M2 is scoped accordingly.
 - **`helm-session` joins the input path with a liveness requirement.** The
   protocol has an `unresponsive` error and finite input buffering, so a stall is
   a session failure rather than a slow frame. That promotes §4's budgets from
@@ -175,7 +179,8 @@ Neither word is allowed to stay an adjective. Both are tests.
 |---|---|---|
 | Key press → new geometry submitted | < 4 ms | Projection is pure integer maths; benchmarked in CI. **Under river this is a correctness bound, not a comfort one**: helm is on the input path and a stalled window manager is a dead session |
 | State change → bar redraw | < 8 ms | Damage-tracked; `HelmState::renders_same_as` drops no-op frames |
-| Bar idle CPU | ~0% | Event-driven modules; only the clock ticks, once a second |
+| Bar idle CPU | ~0% | The bar owns no timer and redraws only on a state change |
+| Sampler wakeups | 1 Hz, one thread, in `helm-session` | cpu, mem, gpu and net throughput are rates over counters with no kernel event behind them. One shared sampler off the input path is the single documented exception to the no-timers rule; the clock ticks to the next minute boundary, not every second |
 | Cold session start → usable | < 900 ms | No GPU context for the bar, no icon-cache scan, no thumbnailer |
 | `helm ctl theme apply` | < 150 ms | Templates rendered in parallel, written atomically |
 

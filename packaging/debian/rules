@@ -76,10 +76,23 @@ override_dh_auto_test:
 	cargo test --release --locked --workspace
 
 override_dh_auto_install:
+	# The .wants symlinks, shipped rather than left to [Install] processing.
+	# dh_installsystemduser does generate enable snippets for these units, but
+	# SPEC 0005 §4 requires the symlinks to exist in the package on all three
+	# distros: [Install] only takes effect when something runs it, and if the
+	# symlinks are missing then `systemctl --user start helm-session.target`
+	# starts *nothing at all* and exits 0.
+	install -d debian/helm/usr/lib/systemd/user/helm-session.target.wants
+	ln -sf ../helm-sessiond.service \
+		debian/helm/usr/lib/systemd/user/helm-session.target.wants/helm-sessiond.service
+	ln -sf ../helm-bar.service \
+		debian/helm/usr/lib/systemd/user/helm-session.target.wants/helm-bar.service
 	# Install whichever helm binaries this revision actually built. Today that
-	# is none of them; the loop means M1-M2 need no packaging change.
+	# is none of them; the loop means M1-M2 need no packaging change. The names
+	# are the settled ones: helm-wm (the window manager and session daemon) and
+	# helmctl (the CLI, so it cannot collide with Kubernetes helm).
 	set -e; \
-	for bin in helm helm-sessiond helm-bar; do \
+	for bin in helmctl helm-wm helm-bar; do \
 		if [ -x "target/release/$$bin" ]; then \
 			install -Dm755 "target/release/$$bin" "debian/helm/usr/bin/$$bin"; \
 			echo "installed $$bin"; \

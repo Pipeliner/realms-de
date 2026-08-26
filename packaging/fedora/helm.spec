@@ -7,14 +7,13 @@
 # handshake, the systemd user units and the palette. %install picks up
 # helm-sessiond, helm-bar and helm automatically once M1-M2 build them.
 #
-# NEEDS-HUMAN (package name): Fedora ships a `helm` package for the Kubernetes
-# package manager, which owns %%{_bindir}/helm. helm's CLI is spelled
-# `helm ctl doctor`, which wants that same path. This has NOT been verified
-# against a live Fedora repo from the build container. Options, in rough order
-# of preference: (a) ship the CLI as %%{_bindir}/helm-ctl and provide `helm ctl`
-# only through the session's own PATH; (b) name the package helm-de and the
-# binary helm-de-ctl; (c) confirm the collision is not real and keep `helm`.
-# Whoever owns distro submission decides — do not let a conflicting file land.
+# BINARY NAMES ARE SETTLED (ARCHITECTURE.md, commit 4ddcc26). Fedora ships
+# Kubernetes Helm as %%{_bindir}/helm, and two packages owning one path cannot
+# coexist — rpm refuses the install rather than warning. So helm's CLI installs
+# as `helmctl`, and the window manager and session daemon installs as `helm-wm`
+# (the crate is helm-session, but that name already belongs to the session entry
+# script the display manager runs). The %%files glob below is scoped so it can
+# never claim %%{_bindir}/helm.
 #
 # NEEDS-HUMAN (Source0 / hosting): no download URL is invented here. Options:
 # a GitHub release tarball once tags exist, a Fedora COPR building from git, or
@@ -69,8 +68,17 @@ Requires:       dbus-common
 Requires:       systemd
 # A portal backend, or "Open File" silently does nothing in Firefox
 # (docs/PITFALLS.md, "No portal backend installed").
+# Named backends, not a disjunction: a solver may satisfy `gtk or wlr or gnome`
+# with a backend that implements no ScreenCast, and the user meets that as screen
+# sharing that silently produces nothing (SPEC 0005 §5). gtk answers FileChooser
+# and Settings; wlr answers ScreenCast and Screenshot, which is what
+# configs/portal/helm-portals.conf routes to it.
 Requires:       xdg-desktop-portal
-Requires:       (xdg-desktop-portal-gtk or xdg-desktop-portal-wlr or xdg-desktop-portal-gnome)
+Requires:       xdg-desktop-portal-gtk
+Requires:       xdg-desktop-portal-wlr
+# xdg-desktop-portal-wlr's default `simple` chooser shells out to slurp for
+# output selection.
+Recommends:     slurp
 # The tools helm reuses rather than rewrites (ADR 0007).
 Requires:       foot
 Requires:       fuzzel
@@ -116,13 +124,26 @@ cargo build --release --locked --workspace
 install -Dpm0755 packaging/session/helm-session %{buildroot}%{_bindir}/helm-session
 install -Dpm0644 packaging/session/helm.desktop %{buildroot}%{_datadir}/wayland-sessions/helm.desktop
 install -Dpm0644 packaging/systemd/helm-session.target %{buildroot}%{_userunitdir}/helm-session.target
-install -Dpm0644 packaging/systemd/helm-daemon.service %{buildroot}%{_userunitdir}/helm-daemon.service
+install -Dpm0644 packaging/systemd/helm-sessiond.service %{buildroot}%{_userunitdir}/helm-sessiond.service
 install -Dpm0644 packaging/systemd/helm-bar.service %{buildroot}%{_userunitdir}/helm-bar.service
+install -Dpm0644 packaging/systemd/helm-session-abort.service %{buildroot}%{_userunitdir}/helm-session-abort.service
 install -Dpm0644 palette.toml %{buildroot}%{_datadir}/helm/palette.toml
+# The portal backend policy (SPEC 0005 §5).
+install -Dpm0644 configs/portal/helm-portals.conf %{buildroot}%{_datadir}/xdg-desktop-portal/helm-portals.conf
+
+# The .wants symlinks, shipped rather than left to [Install] processing.
+# [Install] only takes effect when something runs it — `systemctl --user
+# enable`, dh_installsystemduser, or an rpm preset — and rpm has no preset
+# mechanism for *user* units that fires for a session target. Without these
+# symlinks, `systemctl --user start helm-session.target` starts nothing at all
+# and exits 0, which is the hardest kind of failure to diagnose (SPEC 0005 §4).
+install -dm0755 %{buildroot}%{_userunitdir}/helm-session.target.wants
+ln -sf ../helm-sessiond.service %{buildroot}%{_userunitdir}/helm-session.target.wants/helm-sessiond.service
+ln -sf ../helm-bar.service %{buildroot}%{_userunitdir}/helm-session.target.wants/helm-bar.service
 
 # Install whichever helm binaries this revision actually built. Today that is
 # none of them; the loop means M1-M2 need no spec change.
-for bin in helm helm-sessiond helm-bar; do
+for bin in helmctl helm-wm helm-bar; do
     if [ -x "target/release/${bin}" ]; then
         install -Dpm0755 "target/release/${bin}" "%{buildroot}%{_bindir}/${bin}"
     fi
@@ -133,23 +154,35 @@ done
 # floors fails the package build. That is deliberate (ADR 0005).
 cargo test --release --locked --workspace
 
-# The user units are wanted by helm-session.target, which the session wrapper
-# starts; there is nothing to enable at the system level and no service to
-# restart on upgrade. %%systemd_user_post/%%systemd_user_preun are therefore
-# deliberately absent — add them only if a unit ever gains
-# WantedBy=default.target.
+# No %%systemd_user_post/%%systemd_user_preun. Those macros enable units named
+# in %%{_userunitdir} for *new* user sessions via presets, and helm's units must
+# not be preset-enabled: helm-session.target has no [Install] section on purpose
+# (enabling it would start it at boot for a lingering user, with no display, and
+# every unit under it would be silently condition-skipped). The .wants symlinks
+# shipped in %%install are what make the target start anything, and they need no
+# scriptlet.
 
 %files
 %license LICENSE-MIT LICENSE-APACHE
 %doc docs/INSTALL.md docs/PITFALLS.md
-# One glob, not a list: it covers helm-session today and picks up helm,
-# helm-sessiond and helm-bar the moment M1-M2 build them. Listing both the glob
-# and the explicit path would make rpmbuild fail with "file listed twice".
-%{_bindir}/helm*
+# Explicit paths, not a bare %%{_bindir}/helm* glob: that glob would claim
+# %%{_bindir}/helm itself the day anything created it, and on Fedora that path
+# belongs to Kubernetes Helm. helmctl and helm-wm do not exist yet, so they are
+# globbed narrowly and %%files tolerates their absence.
+%{_bindir}/helm-session
+%{_bindir}/helm-wm*
+%{_bindir}/helmctl*
+%{_bindir}/helm-bar*
 %{_datadir}/wayland-sessions/helm.desktop
 %{_userunitdir}/helm-session.target
-%{_userunitdir}/helm-daemon.service
+%{_userunitdir}/helm-sessiond.service
 %{_userunitdir}/helm-bar.service
+%{_userunitdir}/helm-session-abort.service
+%dir %{_userunitdir}/helm-session.target.wants
+%{_userunitdir}/helm-session.target.wants/helm-sessiond.service
+%{_userunitdir}/helm-session.target.wants/helm-bar.service
+%dir %{_datadir}/xdg-desktop-portal
+%{_datadir}/xdg-desktop-portal/helm-portals.conf
 %dir %{_datadir}/helm
 %{_datadir}/helm/palette.toml
 # ── SELinux ───────────────────────────────────────────────────────────────────
@@ -184,6 +217,8 @@ cargo test --release --locked --workspace
 
 %changelog
 * Wed Aug 26 2026 helm contributors <helm-maintainers@helm.invalid> - 0.1.0-1
-- Initial packaging skeleton: session entry, session wrapper, systemd user
-  units and palette. No helm binaries yet (M1-M2).
+- Initial packaging skeleton: session entry, systemd user units, portal policy
+  and palette. No helm binaries yet (M1-M2).
 - Depends on a vendored river 0.4.x; helm is river's window manager.
+- Ships the helm-session.target.wants symlinks explicitly: [Install] alone does
+  not create them for user units on rpm (SPEC 0005 section 4).

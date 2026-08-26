@@ -128,14 +128,18 @@ its own guard, not a solved problem.
 
 ### What helm must implement, not merely call
 
-Under river, a window manager is not only a client of the WM protocol. Three
-companion protocols are obligations, and the first is load-bearing:
+Under river, a window manager is not only a client of the WM protocol. river's
+`protocol/` directory holds **six** protocols, and five of them are obligations
+helm must serve. The first is load-bearing and the last two are the difference
+between a desktop and a demo on a laptop:
 
 | Protocol | What helm owes it | Consequence if unimplemented |
 |---|---|---|
 | `river-layer-shell-v1` | Serve layer-shell on river's behalf | **The bar does not appear at all.** `wlr-layer-shell` works under river only if the window manager implements it |
 | `river-xkb-bindings-v1` | The entire keymap, **and key repeat for bound keys** | No keybinding works. `ensure_next_key_eaten` and `ate_unbound_key` (on `river_xkb_bindings_seat_v1`, reached via `get_seat`) are purpose-built for chorded submaps, which is exactly helm's chord model. `stop_repeat` establishes that repeat for bound keys is the window manager's job, so helm owns a second timer — armed only between `pressed` and `released`, which is the justification ADR 0009's no-timers rule requires |
 | `river-input-management-v1` | Seats, repeat rate, pointer config | No input configuration |
+| `river-xkb-config-v1` | Keymap selection (`set_layout_by_name`), the `layout` event, caps and num lock | Layouts are frozen at whatever `XKB_DEFAULT_LAYOUT` was when river started, with no way to switch |
+| `river-libinput-config-v1` | Tap-to-click, drag, natural scroll, accel profile and speed, click and scroll method, calibration | **A laptop has no tap-to-click and no way to get one.** Under river 0.4 there is no input config file — the window manager *is* the input configuration |
 
 This is a materially larger phase-1 surface than "write a backend", and M2 is
 scoped accordingly.
@@ -247,8 +251,16 @@ pub struct Damage(Option<Rect>);
 
 Rules, enforced by review and by the budgets in ARCHITECTURE.md §4:
 
-1. **No timers except the clock.** Every other module is push-driven. A module
-   that can only be polled must justify itself in its PR.
+1. **The bar owns no timer at all.** Every value it draws arrives in
+   `HelmState`. Four of the mockup's modules — cpu, mem, gpu temperature and the
+   `↑ 18k ↓ 1.2M` throughput half of net — are *rates over counters*, and the
+   kernel exposes no event for those; no bar on any platform gets them without
+   sampling. So the sampling lives in **one shared sampler in `helm-session`**,
+   off the window-management event loop, and is the single documented exception
+   to ADR 0009's no-timers rule. The bar stays a pure function of state, which
+   is the property that actually mattered.
+   The clock ticks to the next **minute** boundary, not every second: the design
+   shows `14:32`, so 59 of every 60 wakeups would redraw nothing.
 2. **No redraw when nothing changed.** `HelmState::renders_same_as` gates the
    frame before any drawing happens.
 3. **Every glyph goes through `Probe::resolve`.** Drawing a raw `char` from the

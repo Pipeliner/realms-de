@@ -88,9 +88,9 @@ rec {
   wrapperRuntime =
     pkgs:
     (with pkgs; [
-      coreutils # date, sleep, mkdir
+      coreutils # date, sleep, mkdir, timeout
       systemd # systemctl --user
-      dbus # dbus-update-activation-environment
+      dbus # dbus-update-activation-environment, dbus-run-session
       glib # gsettings
     ])
     ++ [ (riverFor pkgs) ];
