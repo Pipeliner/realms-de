@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+body { margin:0; background:#04050a; }
+a { color:#9db8e8; } a:hover { color:#9a86e0; }
+</style>
+</helmet>
+<div style="position:relative; width:1920px; height:1080px; overflow:hidden; font-family:'IBM Plex Mono',monospace; color:#a8b2c6; background:#06070d; display:flex; flex-direction:column;">
+
+  <!-- top bar -->
+  <div style="display:flex; align-items:stretch; height:32px; background:radial-gradient(1px 1px at 18% 40%, rgba(200,215,255,.5) 50%, transparent 51%), radial-gradient(1px 1px at 43% 70%, rgba(200,215,255,.35) 50%, transparent 51%), radial-gradient(1px 1px at 67% 30%, rgba(200,215,255,.4) 50%, transparent 51%), radial-gradient(1px 1px at 88% 60%, rgba(200,215,255,.3) 50%, transparent 51%), linear-gradient(180deg, #090b13, #070810); border-bottom:1px solid rgba(154,134,224,.28); font-size:12.5px;">
+    <div style="display:flex; align-items:center; padding:0 14px; color:#9a86e0; border-right:1px solid rgba(154,134,224,.25); letter-spacing:1px;">✦ helm</div>
+    <div style="display:flex; align-items:center; padding:0 6px;">
+      <div style="display:flex; align-items:center; justify-content:center; width:28px; height:100%; color:#e8edf6; border-bottom:2px solid #9a86e0; background:rgba(154,134,224,.10); text-shadow:0 0 8px rgba(154,134,224,.8);">ᚠ</div>
+      <div style="display:flex; align-items:center; justify-content:center; width:28px; height:100%; color:#7d89a0;">ᚢ</div>
+      <div style="display:flex; align-items:center; justify-content:center; width:28px; height:100%; color:#7d89a0;">ᚦ</div>
+      <div style="display:flex; align-items:center; justify-content:center; width:28px; height:100%; color:#3a4356;">ᚨ</div>
+      <div style="display:flex; align-items:center; justify-content:center; width:28px; height:100%; color:#3a4356;">ᚱ</div>
+      <div style="display:flex; align-items:center; justify-content:center; width:28px; height:100%; color:#3a4356;">ᚲ</div>
+    </div>
+    <div style="display:flex; align-items:center; padding:0 12px; color:#48546a; border-left:1px solid rgba(72,84,106,.3);">⌗ triptych</div>
+    <div style="flex:1; display:flex; align-items:center; justify-content:center; color:#8b97ad; letter-spacing:.5px;">coven — agent harness · nav@caldera</div>
+    <div style="display:flex; align-items:center; gap:16px; padding:0 16px; color:#7d89a0;">
+      <span>↑ 18k ↓ 1.2M</span>
+      <span style="color:#9db8e8;">cpu 31%</span>
+      <span>mem 9.8G</span>
+      <span>gpu 44°</span>
+      <span>♪ 64%</span>
+      <span style="color:#cba35f;">⚡ 87%</span>
+      <span style="color:#e8edf6;">26·08·2026 ☾ 14:32</span>
+    </div>
+  </div>
+
+  <!-- gapless tiles -->
+  <div style="flex:1; display:grid; grid-template-columns:640px 1fr 580px; grid-template-rows:592px 1fr; gap:1px; background:rgba(154,134,224,.20); min-height:0;">
+
+    <!-- agent harness (active) -->
+    <div style="grid-row:1 / 3; display:flex; flex-direction:column; background:#0a0c15; box-shadow:inset 0 0 0 1px rgba(154,134,224,.45), inset 0 0 80px rgba(154,134,224,.04); min-height:0;">
+      <div style="display:flex; align-items:center; height:26px; padding:0 12px; border-bottom:1px solid rgba(154,134,224,.30); font-size:11.5px;">
+        <span style="color:#9a86e0; text-shadow:0 0 8px rgba(154,134,224,.7);">⟡ coven — agent harness</span>
+        <span style="margin-left:auto; color:#48546a; letter-spacing:2px;">◈ ─ ✕</span>
+      </div>
+      <div style="padding:14px 16px 10px; display:flex; flex-direction:column; gap:3px; font-size:12.5px; border-bottom:1px solid rgba(72,84,106,.28);">
+        <div style="display:grid; grid-template-columns:26px 1fr 110px 96px 70px; gap:8px; color:#48546a; font-size:11px; padding-bottom:4px;"><span></span><span>agent</span><span>role</span><span>state</span><span>tok/s</span></div>
+        <div style="display:grid; grid-template-columns:26px 1fr 110px 96px 70px; gap:8px; align-items:center; background:rgba(154,134,224,.10); border-left:2px solid #9a86e0; padding:3px 0 3px 6px; color:#e8edf6;"><span style="color:#9a86e0;">✶</span><span>planner-prime</span><span style="color:#8b97ad;">orchestrate</span><span style="color:#9a86e0;">weaving ◌</span><span>412</span></div>
+        <div style="display:grid; grid-template-columns:26px 1fr 110px 96px 70px; gap:8px; align-items:center; padding:3px 0 3px 8px;"><span style="color:#9db8e8;">✧</span><span>scryer</span><span style="color:#586580;">research</span><span style="color:#9db8e8;">weaving ◌</span><span>388</span></div>
+        <div style="display:grid; grid-template-columns:26px 1fr 110px 96px 70px; gap:8px; align-items:center; padding:3px 0 3px 8px;"><span style="color:#9db8e8;">✧</span><span>forge-1</span><span style="color:#586580;">codegen</span><span style="color:#9db8e8;">weaving ◌</span><span>301</span></div>
+        <div style="display:grid; grid-template-columns:26px 1fr 110px 96px 70px; gap:8px; align-items:center; padding:3px 0 3px 8px; color:#7d89a0;"><span style="color:#48546a;">✧</span><span>forge-2</span><span style="color:#48546a;">codegen</span><span style="color:#cba35f;">awaiting ◔</span><span>—</span></div>
+        <div style="display:grid; grid-template-columns:26px 1fr 110px 96px 70px; gap:8px; align-items:center; padding:3px 0 3px 8px; color:#7d89a0;"><span style="color:#48546a;">✧</span><span>warden</span><span style="color:#48546a;">verify</span><span style="color:#48546a;">idle ○</span><span>—</span></div>
+        <div style="display:grid; grid-template-columns:26px 1fr 110px 96px 70px; gap:8px; align-items:center; padding:3px 0 3px 8px; color:#7d89a0;"><span style="color:#48546a;">✧</span><span>herald</span><span style="color:#48546a;">report</span><span style="color:#48546a;">idle ○</span><span>—</span></div>
+      </div>
+      <div style="flex:1; padding:12px 16px; font-size:12px; line-height:1.65; display:flex; flex-direction:column; gap:1px; color:#7d89a0; overflow:hidden; min-height:0;">
+        <div><span style="color:#48546a;">14:31:02</span> <span style="color:#9a86e0;">planner</span> decomposed task → 4 threads, dag depth 3</div>
+        <div><span style="color:#48546a;">14:31:04</span> <span style="color:#9db8e8;">scryer&nbsp;</span> fetched 12 sources · pruned to 4 (relevance ≥ .82)</div>
+        <div><span style="color:#48546a;">14:31:09</span> <span style="color:#9db8e8;">forge-1</span> patch drafted: compositor.rs +64 −12</div>
+        <div><span style="color:#48546a;">14:31:11</span> <span style="color:#cba35f;">warden&nbsp;</span> ⚠ test drift in stage::relayout — reroll requested</div>
+        <div><span style="color:#48546a;">14:31:15</span> <span style="color:#9db8e8;">forge-1</span> reroll #2 accepted · 41/41 tests pass</div>
+        <div><span style="color:#48546a;">14:31:20</span> <span style="color:#9a86e0;">planner</span> merged thread-2 into trunk plan</div>
+        <div><span style="color:#48546a;">14:31:26</span> <span style="color:#9db8e8;">scryer&nbsp;</span> cache warm · embedding 240 chunks</div>
+        <div><span style="color:#48546a;">14:31:33</span> <span style="color:#9a86e0;">planner</span> spawning forge-2 for parallel refactor…</div>
+        <div style="color:#e8edf6;"><span style="color:#48546a;">14:31:38</span> <span style="color:#9a86e0;">planner</span> ▍</div>
+      </div>
+      <div style="display:flex; gap:18px; padding:5px 16px; font-size:11px; color:#48546a; border-top:1px solid rgba(72,84,106,.28);"><span>run 7f3a · 6m12s</span><span>ctx 41%</span><span>spend 0.84◈</span><span style="margin-left:auto; color:#9a86e0;">3 weaving · 1 awaiting</span></div>
+    </div>
+
+    <!-- terminal -->
+    <div style="display:flex; flex-direction:column; background:#090b13; min-height:0;">
+      <div style="display:flex; align-items:center; height:26px; padding:0 12px; border-bottom:1px solid rgba(72,84,106,.3); font-size:11.5px; color:#7d89a0;"><span>⌬ vessel — zsh</span><span style="margin-left:auto; color:#3a4356; letter-spacing:2px;">◈ ─ ✕</span></div>
+      <div style="flex:1; padding:12px 16px; font-size:12.5px; line-height:1.6; display:flex; flex-direction:column; gap:2px; overflow:hidden;">
+        <div><span style="color:#9db8e8;">nav@caldera</span> <span style="color:#48546a;">::</span> <span style="color:#cba35f;">~%</span> helm ctl orbit --list</div>
+        <div style="color:#7d89a0;">&nbsp;ᚠ triptych&nbsp;&nbsp;3 vessels&nbsp;&nbsp;focus: coven</div>
+        <div style="color:#7d89a0;">&nbsp;ᚢ scriptorium&nbsp;&nbsp;2 vessels</div>
+        <div style="color:#7d89a0;">&nbsp;ᚦ observatory&nbsp;&nbsp;1 vessel</div>
+        <div><span style="color:#9db8e8;">nav@caldera</span> <span style="color:#48546a;">::</span> <span style="color:#cba35f;">~%</span> coven run refactor-stage --agents 6</div>
+        <div style="color:#7d89a0;">⟡ run 7f3a summoned · attaching stream…</div>
+        <div><span style="color:#9db8e8;">nav@caldera</span> <span style="color:#48546a;">::</span> <span style="color:#cba35f;">~%</span> <span style="background:#9db8e8; color:#06070d;">&nbsp;</span></div>
+      </div>
+    </div>
+
+    <!-- browser -->
+    <div style="display:flex; flex-direction:column; background:#090b13; min-height:0;">
+      <div style="display:flex; align-items:center; height:26px; padding:0 12px; border-bottom:1px solid rgba(72,84,106,.3); font-size:11.5px; color:#7d89a0;"><span>◍ lodestar — browser</span><span style="margin-left:auto; color:#3a4356; letter-spacing:2px;">◈ ─ ✕</span></div>
+      <div style="display:flex; align-items:center; gap:10px; padding:5px 12px; border-bottom:1px solid rgba(72,84,106,.25); font-size:11.5px;">
+        <span style="color:#48546a;">‹ ›</span>
+        <div style="flex:1; display:flex; align-items:center; gap:8px; background:#0d1019; border:1px solid rgba(72,84,106,.35); padding:2px 10px; color:#8b97ad;"><span style="color:#9db8e8;">☍</span>docs.helm.sh/ledger/anatomy</div>
+        <span style="color:#48546a;">✚ ☰</span>
+      </div>
+      <div style="flex:1; padding:20px 26px; display:flex; flex-direction:column; gap:10px; overflow:hidden; background:#0b0e17;">
+        <div style="font-size:11px; color:#48546a; letter-spacing:2px;">HELM MANUAL · CH. 4</div>
+        <div style="font-size:20px; color:#e8edf6;">Anatomy of the ledger</div>
+        <div style="font-size:12.5px; line-height:1.7; color:#8b97ad; text-wrap:pretty;">Every vessel the compositor maps is entered into the ledger — a strict ordering of windows per orbit. Layouts never move windows; they project the ledger onto the output's workarea.</div>
+        <div style="font-size:12.5px; line-height:1.7; color:#8b97ad; text-wrap:pretty;">Because the projection is pure, undo is trivial: restoring an earlier ledger restores the exact screen, gaps and all.</div>
+        <div style="display:flex; flex-direction:column; gap:4px; background:#0d1019; border:1px solid rgba(72,84,106,.3); padding:10px 14px; font-size:12px; color:#9db8e8;">
+          <div>$ helm ctl ledger show ᚠ</div>
+          <div style="color:#586580;">0 coven&nbsp;&nbsp;&nbsp;1 vessel&nbsp;&nbsp;&nbsp;2 lodestar</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- monitoring -->
+    <div style="display:flex; flex-direction:column; background:#090b13; min-height:0;">
+      <div style="display:flex; align-items:center; height:26px; padding:0 12px; border-bottom:1px solid rgba(72,84,106,.3); font-size:11.5px; color:#7d89a0;"><span>⌖ vigil — monitor</span><span style="margin-left:auto; color:#3a4356; letter-spacing:2px;">◈ ─ ✕</span></div>
+      <div style="flex:1; padding:14px 16px; font-size:12px; line-height:1.6; display:flex; flex-direction:column; gap:10px; overflow:hidden;">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:2px 22px; color:#7d89a0;">
+          <div>cpu0 <span style="color:#9db8e8;">▰▰▰▰▱▱▱▱▱▱</span> 41%</div>
+          <div>cpu1 <span style="color:#9db8e8;">▰▰▱▱▱▱▱▱▱▱</span> 18%</div>
+          <div>cpu2 <span style="color:#9db8e8;">▰▰▰▰▰▰▱▱▱▱</span> 63%</div>
+          <div>cpu3 <span style="color:#9db8e8;">▰▱▱▱▱▱▱▱▱▱</span> 09%</div>
+          <div>cpu4 <span style="color:#9db8e8;">▰▰▰▱▱▱▱▱▱▱</span> 32%</div>
+          <div>cpu5 <span style="color:#9a86e0;">▰▰▰▰▰▰▰▰▱▱</span> 84%</div>
+        </div>
+        <div style="color:#7d89a0;">mem <span style="color:#cba35f;">▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱</span> 9.8G / 32G</div>
+        <div style="display:flex; flex-direction:column; gap:2px;">
+          <div style="font-size:11px; color:#48546a;">net · eth0</div>
+          <div style="color:#9db8e8; letter-spacing:-1px;">⡀⡄⣀⣠⣤⣶⣧⣆⡀⣀⣤⣄⡀⢀⣠⣶⣿⣷⣦⣄⡀⡀⣀⣄⣤⣦⣄⣀⡀⢀⣤⣶⣄⡀</div>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:2px;">
+          <div style="font-size:11px; color:#48546a;">disk io · nvme0</div>
+          <div style="color:#cba35f; letter-spacing:-1px;">⡀⢀⣀⡀⣠⣀⡀⡀⣄⣤⣀⡀⢀⡀⣀⣶⣤⡀⡀⣀⡀⢀⣠⣄⡀⡀⣀⣀⡀⢀⣄⡀⡀⣀</div>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:2px 22px; color:#7d89a0;">
+          <div>gpu&nbsp; <span style="color:#9db8e8;">▰▰▰▰▰▱▱▱▱▱</span> 52%</div>
+          <div>vram <span style="color:#9db8e8;">▰▰▰▱▱▱▱▱▱▱</span> 3.1G</div>
+          <div>nvme <span style="color:#9db8e8;">▰▰▰▰▰▰▰▱▱▱</span> 68%</div>
+          <div>swap <span style="color:#48546a;">▱▱▱▱▱▱▱▱▱▱</span> 0G</div>
+        </div>
+        <div style="border-top:1px solid rgba(72,84,106,.25); padding-top:8px; display:flex; flex-direction:column; gap:2px; font-size:11.5px; color:#7d89a0;">
+          <div style="color:#48546a;">&nbsp;pid&nbsp;&nbsp;&nbsp;&nbsp;cpu%&nbsp;&nbsp;mem&nbsp;&nbsp;&nbsp;&nbsp;command</div>
+          <div><span style="color:#9db8e8;">&nbsp;1204</span>&nbsp;&nbsp;12.3&nbsp;&nbsp;1.1G&nbsp;&nbsp;&nbsp;helm-compositor</div>
+          <div>&nbsp;6021&nbsp;&nbsp;11.8&nbsp;&nbsp;2.4G&nbsp;&nbsp;&nbsp;coven-harness</div>
+          <div>&nbsp;2381&nbsp;&nbsp;&nbsp;8.7&nbsp;&nbsp;840M&nbsp;&nbsp;lodestar</div>
+          <div>&nbsp;4127&nbsp;&nbsp;&nbsp;1.9&nbsp;&nbsp;96M&nbsp;&nbsp;&nbsp;&nbsp;mpd</div>
+        </div>
+        <div style="margin-top:auto; display:flex; gap:20px; color:#48546a; font-size:11px;"><span>Δt cpu 41° · nvme 38°</span><span>up 6d 4h</span><span>psi 0.02</span></div>
+      </div>
+    </div>
+
+    <!-- instrument panel -->
+    <div style="display:flex; flex-direction:column; background:#090b13; min-height:0;">
+      <div style="display:flex; align-items:center; height:26px; padding:0 12px; border-bottom:1px solid rgba(72,84,106,.3); font-size:11.5px; color:#7d89a0;"><span>☉ astrolabe — instruments</span><span style="margin-left:auto; color:#3a4356; letter-spacing:2px;">◈ ─ ✕</span></div>
+      <div style="flex:1; display:flex; flex-direction:column; padding:14px 18px; gap:14px; overflow:hidden;">
+        <div style="display:flex; justify-content:space-around;">
+          <div style="display:flex; flex-direction:column; align-items:center; gap:6px;">
+            <div style="width:92px; height:92px; border-radius:50%; background:conic-gradient(#9db8e8 0deg 112deg, rgba(72,84,106,.25) 112deg 360deg); display:flex; align-items:center; justify-content:center;"><div style="width:74px; height:74px; border-radius:50%; background:#090b13; display:flex; flex-direction:column; align-items:center; justify-content:center;"><span style="color:#e8edf6; font-size:16px;">31%</span><span style="color:#48546a; font-size:10px;">load</span></div></div>
+          </div>
+          <div style="display:flex; flex-direction:column; align-items:center; gap:6px;">
+            <div style="width:92px; height:92px; border-radius:50%; background:conic-gradient(#9a86e0 0deg 158deg, rgba(72,84,106,.25) 158deg 360deg); display:flex; align-items:center; justify-content:center;"><div style="width:74px; height:74px; border-radius:50%; background:#090b13; display:flex; flex-direction:column; align-items:center; justify-content:center;"><span style="color:#e8edf6; font-size:16px;">44°</span><span style="color:#48546a; font-size:10px;">gpu</span></div></div>
+          </div>
+          <div style="display:flex; flex-direction:column; align-items:center; gap:6px;">
+            <div style="width:92px; height:92px; border-radius:50%; background:conic-gradient(#cba35f 0deg 313deg, rgba(72,84,106,.25) 313deg 360deg); display:flex; align-items:center; justify-content:center;"><div style="width:74px; height:74px; border-radius:50%; background:#090b13; display:flex; flex-direction:column; align-items:center; justify-content:center;"><span style="color:#e8edf6; font-size:16px;">87%</span><span style="color:#48546a; font-size:10px;">cell</span></div></div>
+          </div>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 20px; font-size:11.5px; color:#7d89a0; border-top:1px solid rgba(72,84,106,.25); padding-top:12px;">
+          <div>☾ waning gibbous · 84%</div>
+          <div>☉ sets 20:14</div>
+          <div>ping 11ms · vpn ◉ warded</div>
+          <div>tz UTC+2 · sidereal 21:07</div>
+          <div>entropy pool 3968b</div>
+          <div>kernel 6.12.4-helm</div>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:3px; font-size:11.5px; border-top:1px solid rgba(72,84,106,.25); padding-top:10px;">
+          <div style="font-size:11px; color:#48546a;">almanac · next transits</div>
+          <div style="display:flex; gap:12px; color:#7d89a0;"><span style="color:#9db8e8;">15:00</span><span>coven run 7f3a est. completion</span></div>
+          <div style="display:flex; gap:12px; color:#7d89a0;"><span style="color:#9db8e8;">18:30</span><span>backup rite → vault.caldera</span></div>
+          <div style="display:flex; gap:12px; color:#7d89a0;"><span style="color:#9db8e8;">20:14</span><span>☉ sunset · night palette engages</span></div>
+        </div>
+        <div style="margin-top:auto; display:flex; gap:16px; font-size:11px; color:#48546a;"><span>journal ✓ clean</span><span>updates 3 held</span><span style="margin-left:auto; color:#9a86e0;">⟡ all wards holding</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- launcher overlay -->
+  <sc-if value="{{ showLauncher }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute; inset:0; background:rgba(4,5,10,.55); display:flex; align-items:flex-start; justify-content:center; padding-top:220px;">
+      <div style="width:640px; background:rgba(9,11,19,.98); border:1px solid rgba(154,134,224,.55); box-shadow:0 0 40px rgba(154,134,224,.18); font-size:14px;">
+        <div style="display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid rgba(154,134,224,.3); color:#e8edf6;">
+          <span style="color:#9a86e0;">⟡</span><span>lode</span><span style="background:#9a86e0; width:8px; height:18px;"></span>
+        </div>
+        <div style="display:flex; flex-direction:column; padding:6px 0;">
+          <div style="display:flex; gap:14px; padding:8px 18px; background:rgba(154,134,224,.10); color:#e8edf6;"><span style="color:#9db8e8;">◍</span>lodestar <span style="margin-left:auto; color:#48546a; font-size:12px;">run</span></div>
+          <div style="display:flex; gap:14px; padding:8px 18px; color:#7d89a0;"><span style="color:#48546a;">⌗</span>ledger show <span style="margin-left:auto; color:#3a4356; font-size:12px;">cmd</span></div>
+          <div style="display:flex; gap:14px; padding:8px 18px; color:#7d89a0;"><span style="color:#48546a;">✧</span>lode · rune: mark this vessel <span style="margin-left:auto; color:#3a4356; font-size:12px;">spell</span></div>
+        </div>
+        <div style="display:flex; justify-content:space-between; padding:6px 18px; font-size:11px; color:#48546a; border-top:1px solid rgba(72,84,106,.3);"><span>3 results</span><span>↵ invoke · esc dismiss</span></div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1920, &quot;height&quot;: 1080}, &quot;showLauncher&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Overlays&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    return { showLauncher: this.props.showLauncher ?? false };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+# Crates are added to the workspace as they gain a real implementation, so a
+# fresh clone always builds. The full planned set and the order it lands in
+# lives in docs/ARCHITECTURE.md and is tracked by the GitHub milestones.
+members = [
+    "crates/helm-core",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pipeliner/realms-de"
+homepage = "https://github.com/pipeliner/realms-de"
+authors = ["helm contributors"]
+
+[workspace.dependencies]
+helm-core = { path = "crates/helm-core", version = "0.1.0" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+clap = { version = "4", features = ["derive", "wrap_help"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rustix = { version = "1", features = ["fs", "process", "net"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+# Fast, snappy dev builds; the DE must be testable on a laptop.
+[profile.dev]
+opt-level = 1
+debug = 1
+
+[profile.dev.package."*"]
+opt-level = 2

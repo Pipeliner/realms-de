@@ -1,0 +1,103 @@
+# helm — canonical palette. Single source of truth for every themed surface.
+#
+# `helm ctl theme apply` reads this file, renders every template in
+# `configs/templates/`, and hot-reloads live clients. Nothing downstream may
+# hardcode a colour: if a value is missing here, add it here.
+#
+# Hue discipline: keep saturated accents >25 deg apart. `helm ctl theme lint`
+# enforces this, plus WCAG contrast floors for text-on-background pairs.
+
+name = "helm-void"
+variant = "dark"
+
+# Contrast is a *derivation* setting, not a filter. Values in [0.85, 1.40];
+# 1.00 emits the palette verbatim, higher values push foregrounds away from
+# the background in perceptual (OKLab) space.
+contrast = 1.08
+
+[background]
+void    = "#05060c"  # root / wallpaper-less desktop
+pane    = "#0a0c14"  # unfocused window body
+focused = "#0b0d16"  # focused window body
+raised  = "#0e111b"  # inset blocks, code previews, result rows
+bar_top = "#0a0c15"  # bar gradient start
+bar_bot = "#080911"  # bar gradient end
+
+[text]
+bright = "#f2f5fb"  # active workspace, clock, primary values
+normal = "#c2cbde"  # body copy
+mid    = "#93a1ba"  # which-key labels, occupied workspaces
+soft   = "#aab6cc"  # secondary body
+dim    = "#66748e"  # meta
+faint  = "#4a5670"  # micro, epithets, empty workspaces, chord echo
+
+[accent]
+violet    = "#a692ec"  # arcane: focus, odin, hecate
+starlight = "#a3bff2"  # info: urania, cpu, mode badge
+gold      = "#d9b06a"  # warn: horus, battery, `:` prompt
+teal      = "#7fd4c1"  # ok: thoth, marks
+cyan      = "#7fc9e8"  # hermes
+
+[border]
+# Alpha is carried separately so templates that cannot express rgba()
+# (ANSI, Kvantum) can flatten against the pane background.
+focused        = "#a692ec"
+focused_alpha  = 0.60
+seam           = "#a692ec"
+seam_alpha     = 0.30
+neutral        = "#66748e"
+neutral_alpha  = 0.30
+bar_bottom     = "#a692ec"
+bar_bottom_alpha = 0.40
+pantheon_alpha = 0.30  # window-header accent underline
+
+# Per-tool accent. `pantheon` drives the header underline of each pane.
+[pantheon]
+odin   = "violet"
+thoth  = "teal"
+hermes = "cyan"
+horus  = "gold"
+urania = "starlight"
+hecate = "violet"
+charon = "violet"
+
+[typography]
+family = "IBM Plex Mono"
+# Fallbacks are tried in order. helm-core::glyphs::probe() verifies every
+# glyph the DE renders is covered before the bar draws a single frame.
+fallback = [
+    "IBM Plex Mono",
+    "Symbols Nerd Font Mono",
+    "Noto Sans Symbols 2",
+    "Noto Sans Egyptian Hieroglyphs",
+    "Symbola",
+    "DejaVu Sans Mono",
+]
+weight_regular = 400
+weight_medium  = 500
+weight_bold    = 600
+size_body   = 12.5
+size_meta   = 11.0
+size_micro  = 10.5
+size_title  = 20.0
+line_height = 1.62
+
+[metrics]
+bar_height       = 32
+header_height    = 26
+whichkey_height  = 26
+border_width     = 1
+radius           = 0     # never anything else
+launcher_width   = 640
+portal_width     = 720
+
+[glyphs]
+runes    = ["ᚠ", "ᚢ", "ᚦ", "ᚨ", "ᚱ", "ᚲ"]
+controls = ["◈", "─", "✕"]
+meter_full  = "▰"
+meter_empty = "▱"
+spark = ["⡀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣷", "⣿"]
+# Verified at startup; `prompt_sigil` degrades to "~" when the Egyptian
+# hieroglyph block is unavailable in the resolved font stack.
+prompt_sigil = "𓂃"
+prompt_sigil_fallback = "~"

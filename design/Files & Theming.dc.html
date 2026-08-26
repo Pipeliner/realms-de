@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+body { margin:0; background:#04050a; }
+a { color:#a3bff2; } a:hover { color:#a692ec; }
+</style>
+</helmet>
+<section style="display:flex; gap:48px; align-items:flex-start; padding:48px; font-family:'IBM Plex Mono',monospace; flex-wrap:wrap;">
+
+  <!-- 1a · file manager -->
+  <div id="1a" style="display:flex; flex-direction:column; gap:10px;">
+    <div style="display:flex; align-items:center; gap:10px;"><span style="background:#a692ec; color:#05060c; font-size:12px; padding:1px 8px;">1a</span><span style="color:#66748e; font-size:12px;">charon — file manager (miller columns, no thumbnails, shell built in)</span></div>
+    <div style="width:1400px; height:900px; display:flex; flex-direction:column; background:#0b0d16; border:1px solid rgba(166,146,236,.6); color:#c2cbde; font-size:12.5px;">
+      <div style="display:flex; align-items:center; gap:8px; height:26px; padding:0 12px; border-bottom:1px solid rgba(166,146,236,.4); font-size:11.5px;"><span style="color:#a692ec;">☍ charon — ferryman</span><span style="color:#4a5670; font-size:10.5px;">· carries files across</span><span style="color:#93a1ba; margin-left:14px;">~/src/helm</span><span style="margin-left:auto; color:#66748e;">hidden: off · preview: on (mod+p) · thumbnails: never</span></div>
+      <div style="flex:1; display:grid; grid-template-columns:240px 1fr 460px; min-height:0;">
+        <div style="border-right:1px solid rgba(102,116,142,.3); padding:10px 0; display:flex; flex-direction:column; gap:1px; color:#66748e;">
+          <div style="padding:2px 14px;">dotfiles/</div>
+          <div style="padding:2px 14px; background:rgba(166,146,236,.10); color:#c2cbde; border-left:2px solid #a692ec;">helm/</div>
+          <div style="padding:2px 14px;">orrery/</div>
+          <div style="padding:2px 14px;">scraps/</div>
+          <div style="padding:2px 14px;">vault → /mnt/vault</div>
+        </div>
+        <div style="border-right:1px solid rgba(102,116,142,.3); padding:10px 0; display:flex; flex-direction:column; gap:1px; min-height:0;">
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:0 14px 6px; color:#66748e; font-size:11px;"><span></span><span>name</span><span>size</span><span>mode</span><span>modified</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px; color:#a3bff2;"><span></span><span>assets/</span><span>—</span><span>drwx</span><span>aug 22</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px; color:#a3bff2;"><span></span><span>layouts/</span><span>—</span><span>drwx</span><span>aug 25</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span style="color:#d9b06a;">⚑</span><span>Cargo.toml</span><span>2.1K</span><span>rw-</span><span>aug 25</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px; background:rgba(166,146,236,.14); border-left:2px solid #a692ec; color:#f2f5fb;"><span style="color:#7fd4c1;">✓</span><span>compositor.rs <span style="color:#7fd4c1; font-size:11px;">±M</span></span><span>18.4K</span><span>rw-</span><span>14:31</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span style="color:#7fd4c1;">✓</span><span>ledger.rs</span><span>9.8K</span><span>rw-</span><span>aug 24</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span style="color:#7fd4c1;">✓</span><span>stage.rs <span style="color:#d9b06a; font-size:11px;">±M</span></span><span>11.2K</span><span>rw-</span><span>13:58</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>orbit.rs</span><span>6.3K</span><span>rw-</span><span>aug 21</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>rune.rs</span><span>4.7K</span><span>rw-</span><span>aug 19</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px; color:#93a1ba;"><span></span><span>summon.sh</span><span>812</span><span>rwx</span><span>aug 12</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>input.rs</span><span>7.1K</span><span>rw-</span><span>aug 18</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>output.rs</span><span>5.5K</span><span>rw-</span><span>aug 18</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>ward.rs</span><span>3.9K</span><span>rw-</span><span>aug 17</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>almanac.rs</span><span>2.8K</span><span>rw-</span><span>aug 16</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>portal.rs</span><span>4.4K</span><span>rw-</span><span>aug 15</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>sigil.rs</span><span>1.9K</span><span>rw-</span><span>aug 14</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>theme.rs</span><span>6.6K</span><span>rw-</span><span>aug 14</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>vault.rs</span><span>3.2K</span><span>rw-</span><span>aug 13</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>chord.rs</span><span>5.0K</span><span>rw-</span><span>aug 13</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>grimoire.rs</span><span>8.2K</span><span>rw-</span><span>aug 12</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px; color:#93a1ba;"><span></span><span>summon.sh</span><span>812</span><span>rwx</span><span>aug 12</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px; color:#93a1ba;"><span></span><span>banish.sh</span><span>604</span><span>rwx</span><span>aug 11</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px; color:#93a1ba;"><span></span><span>rite-backup.sh</span><span>1.1K</span><span>rwx</span><span>aug 11</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>Cargo.lock</span><span>44.7K</span><span>rw-</span><span>aug 25</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>README.md</span><span>3.4K</span><span>rw-</span><span>aug 10</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px;"><span></span><span>LICENSE</span><span>1.0K</span><span>rw-</span><span>jul 30</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px; color:#66748e;"><span></span><span>.helmrc</span><span>1.4K</span><span>rw-</span><span>aug 10</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px; color:#66748e;"><span></span><span>.gitignore</span><span>212</span><span>rw-</span><span>jul 28</span></div>
+          <div style="display:grid; grid-template-columns:24px 1fr 90px 70px 110px; gap:10px; padding:2px 14px; color:#66748e;"><span></span><span>.envrc</span><span>96</span><span>rw-</span><span>jul 28</span></div>
+          <div style="margin-top:auto; padding:8px 14px 0; border-top:1px solid rgba(102,116,142,.3); display:flex; gap:16px; font-size:11px; color:#66748e;"><span>41 items</span><span style="color:#7fd4c1;">3 marked · 30.4K</span><span>sort: mtime ▾</span><span style="margin-left:auto;">git: main +2 ~2</span></div>
+        </div>
+        <div style="display:flex; flex-direction:column; min-height:0;">
+          <div style="display:flex; align-items:center; gap:8px; padding:8px 14px 6px; font-size:11px; color:#66748e; border-bottom:1px solid rgba(102,116,142,.25);"><span style="color:#a3bff2;">◫ preview</span><span>compositor.rs · rust · 412 lines</span><span style="margin-left:auto;">head ▾</span></div>
+          <div style="flex:1; padding:10px 14px; font-size:12px; line-height:1.6; color:#93a1ba; overflow:hidden;">
+            <div><span style="color:#a692ec;">impl</span> <span style="color:#d9b06a;">Stage</span> {</div>
+            <div>&nbsp;&nbsp;<span style="color:#a692ec;">pub fn</span> <span style="color:#a3bff2;">summon</span>(&amp;<span style="color:#a692ec;">mut</span> self, sigil: Rune) {</div>
+            <div>&nbsp;&nbsp;&nbsp;&nbsp;self.ledger.push(sigil.bind());</div>
+            <div>&nbsp;&nbsp;&nbsp;&nbsp;self.relayout(Gaps::<span style="color:#d9b06a;">Tight</span>);</div>
+            <div>&nbsp;&nbsp;}</div>
+            <div>}</div>
+            <div>&nbsp;</div>
+            <div><span style="color:#a692ec;">impl</span> <span style="color:#d9b06a;">Stage</span> {</div>
+            <div>&nbsp;&nbsp;<span style="color:#a692ec;">pub fn</span> <span style="color:#a3bff2;">banish</span>(&amp;<span style="color:#a692ec;">mut</span> self, id: WinId) {</div>
+            <div>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#a692ec;">if let</span> <span style="color:#d9b06a;">Some</span>(w) = self.ledger.take(id) {</div>
+            <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;w.unmap(&amp;self.conn);</div>
+            <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.focus_next();</div>
+            <div>&nbsp;&nbsp;&nbsp;&nbsp;}</div>
+            <div>&nbsp;&nbsp;&nbsp;&nbsp;self.relayout(Gaps::<span style="color:#d9b06a;">Tight</span>);</div>
+            <div>&nbsp;&nbsp;}</div>
+            <div>&nbsp;</div>
+            <div>&nbsp;&nbsp;<span style="color:#4a5670;">/// Re-tile after the ledger changes.</span></div>
+            <div>&nbsp;&nbsp;<span style="color:#a692ec;">fn</span> <span style="color:#a3bff2;">relayout</span>(&amp;<span style="color:#a692ec;">mut</span> self, gaps: Gaps) {</div>
+            <div>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#a692ec;">let</span> geo = self.output.workarea(gaps);</div>
+            <div>&nbsp;&nbsp;&nbsp;&nbsp;self.layout.arrange(&amp;<span style="color:#a692ec;">mut</span> self.ledger, geo);</div>
+            <div>&nbsp;&nbsp;}</div>
+            <div>}</div>
+            <div style="margin-top:14px; color:#4a5670; font-size:11px;">stat · 18.4K · rw-r--r-- · nav:nav · inode 5520381<br>xattrs: user.ward=sealed · blake3 ✓</div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px; padding:5px 14px; border-top:1px solid rgba(166,146,236,.35); font-size:12px;"><span style="color:#d9b06a;">:</span><span style="color:#f2f5fb;">rename --bulk '*.rs' 's/stage/deck/'</span><span style="background:#a692ec; width:7px; height:15px;"></span><span style="margin-left:auto; color:#4a5670; font-size:11px;">shell inherits cwd · ↑ history · ⇥ complete</span></div>
+      <div style="display:flex; flex-wrap:nowrap; white-space:nowrap; overflow:hidden; gap:16px; padding:4px 14px 5px; font-size:11px; color:#93a1ba; background:#080911; border-top:1px solid rgba(102,116,142,.3);"><span><span style="color:#f2f5fb;">j/k</span> move</span><span><span style="color:#f2f5fb;">h/l</span> dir</span><span><span style="color:#f2f5fb;">␣</span> mark</span><span><span style="color:#f2f5fb;">p</span> preview</span><span><span style="color:#f2f5fb;">y/d</span> yank/cut</span><span><span style="color:#f2f5fb;">:</span> shell</span><span><span style="color:#f2f5fb;">/</span> seek</span><span><span style="color:#f2f5fb;">'</span> marks</span><span style="margin-left:auto; color:#66748e;"><span style="color:#d9b06a;">?</span> grimoire</span></div>
+    </div>
+  </div>
+
+  <!-- 1b · open dialog -->
+  <div id="1b" style="display:flex; flex-direction:column; gap:10px;">
+    <div style="display:flex; align-items:center; gap:10px;"><span style="background:#a692ec; color:#05060c; font-size:12px; padding:1px 8px;">1b</span><span style="color:#66748e; font-size:12px;">charon portal — file open dialog (same engine, xdg-desktop-portal backend)</span></div>
+    <div style="position:relative; width:1100px; height:760px; background:#07080f; border:1px solid rgba(102,116,142,.4); overflow:hidden; color:#c2cbde;">
+      <div style="position:absolute; inset:0; opacity:.35; display:flex; flex-direction:column;">
+        <div style="height:26px; border-bottom:1px solid rgba(102,116,142,.3); display:flex; align-items:center; padding:0 12px; font-size:11.5px; color:#93a1ba;">⌖ hx — editor requesting file…</div>
+        <div style="flex:1; padding:20px; font-size:12px; color:#66748e; line-height:1.7;">42&nbsp;&nbsp;impl Stage {<br>43&nbsp;&nbsp;&nbsp;&nbsp;pub fn summon(&amp;mut self, sigil: Rune) {</div>
+      </div>
+      <div style="position:absolute; inset:0; background:rgba(4,5,10,.45); display:flex; align-items:flex-start; justify-content:center; padding-top:110px;">
+        <div style="width:720px; background:rgba(10,12,20,.98); border:1px solid rgba(166,146,236,.65); box-shadow:0 0 40px rgba(166,146,236,.2); font-size:13px;">
+          <div style="display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid rgba(166,146,236,.4);"><span style="color:#a692ec;">☍</span><span style="color:#66748e; font-size:11px; letter-spacing:1px;">CHARON · OPEN</span><span style="color:#f2f5fb;">~/src/helm/comp</span><span style="background:#a692ec; width:7px; height:16px;"></span><span style="margin-left:auto; color:#4a5670; font-size:11px;">fuzzy · fd-backed</span></div>
+          <div style="display:grid; grid-template-columns:180px 1fr; min-height:340px;">
+            <div style="border-right:1px solid rgba(102,116,142,.3); padding:10px 0; font-size:12px; color:#93a1ba; display:flex; flex-direction:column; gap:1px;">
+              <div style="padding:2px 14px; color:#66748e; font-size:10.5px; letter-spacing:1px;">HARBORS</div>
+              <div style="padding:2px 14px;">⚓ ~/src</div>
+              <div style="padding:2px 14px;">⚓ vault</div>
+              <div style="padding:2px 14px;">⚓ /etc/helm</div>
+              <div style="padding:6px 14px 2px; color:#66748e; font-size:10.5px; letter-spacing:1px;">RECENT</div>
+              <div style="padding:2px 14px;">stage.rs</div>
+              <div style="padding:2px 14px;">.helmrc</div>
+            </div>
+            <div style="padding:8px 0; display:flex; flex-direction:column; gap:1px; font-size:12.5px;">
+              <div style="display:flex; gap:12px; padding:5px 16px; background:rgba(166,146,236,.14); border-left:2px solid #a692ec; color:#f2f5fb;"><span style="color:#a3bff2;">▸</span><span><span style="color:#a692ec;">comp</span>ositor.rs</span><span style="margin-left:auto; color:#66748e; font-size:11px;">~/src/helm · 18.4K</span></div>
+              <div style="display:flex; gap:12px; padding:5px 16px; color:#93a1ba;"><span style="color:#4a5670;">·</span><span><span style="color:#a692ec;">comp</span>ose.yaml</span><span style="margin-left:auto; color:#4a5670; font-size:11px;">~/src/orrery · 1.2K</span></div>
+              <div style="display:flex; gap:12px; padding:5px 16px; color:#93a1ba;"><span style="color:#4a5670;">·</span><span><span style="color:#a692ec;">comp</span>at/shim.rs</span><span style="margin-left:auto; color:#4a5670; font-size:11px;">~/src/helm · 3.3K</span></div>
+              <div style="display:flex; gap:12px; padding:5px 16px; color:#66748e;"><span style="color:#4a5670;">·</span><span>tests/<span style="color:#a692ec;">comp</span>ositor_test.rs</span><span style="margin-left:auto; color:#4a5670; font-size:11px;">~/src/helm · 7.9K</span></div>
+              <div style="margin-top:auto; padding:8px 16px 2px; border-top:1px solid rgba(102,116,142,.25); font-size:11px; color:#66748e;">preview off (mod+p) · 4 of 218 · scope: ~/src (mod+↑ widen)</div>
+            </div>
+          </div>
+          <div style="display:flex; gap:18px; padding:6px 18px; font-size:11px; color:#93a1ba; border-top:1px solid rgba(102,116,142,.35);"><span><span style="color:#f2f5fb;">↵</span> open</span><span><span style="color:#f2f5fb;">⇥</span> complete</span><span><span style="color:#f2f5fb;">mod+h</span> hidden</span><span><span style="color:#f2f5fb;">mod+s</span> shell here</span><span style="margin-left:auto; color:#66748e;">esc dismiss</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 1c · theming existing apps -->
+  <div id="1c" style="display:flex; flex-direction:column; gap:10px;">
+    <div style="display:flex; align-items:center; gap:10px;"><span style="background:#a692ec; color:#05060c; font-size:12px; padding:1px 8px;">1c</span><span style="color:#66748e; font-size:12px;">theming existing gtk/qt apps — realistic reach</span></div>
+    <div style="display:flex; gap:24px; align-items:flex-start;">
+      <div style="width:860px; height:640px; display:flex; flex-direction:column; background:#0a0c14; border:1px solid rgba(102,116,142,.5); color:#c2cbde; font-size:13px;">
+        <div style="display:flex; align-items:center; gap:12px; height:34px; padding:0 14px; background:#0e111b; border-bottom:1px solid rgba(102,116,142,.4);"><span style="color:#93a1ba; font-size:12px;">◧ meridian — settings (gtk4 app, helm theme)</span><span style="margin-left:auto; color:#66748e; letter-spacing:2px; font-size:11px;">◈ ─ ✕</span></div>
+        <div style="flex:1; display:grid; grid-template-columns:220px 1fr; min-height:0;">
+          <div style="border-right:1px solid rgba(102,116,142,.3); padding:12px 0; display:flex; flex-direction:column; gap:1px; font-size:12.5px; color:#93a1ba;">
+            <div style="padding:6px 16px;">◍ network</div>
+            <div style="padding:6px 16px; background:rgba(166,146,236,.12); border-left:2px solid #a692ec; color:#f2f5fb;">◑ displays</div>
+            <div style="padding:6px 16px;">♪ sound</div>
+            <div style="padding:6px 16px;">⚿ privacy</div>
+            <div style="padding:6px 16px;">⚙ power</div>
+          </div>
+          <div style="padding:20px 24px; display:flex; flex-direction:column; gap:14px; overflow:hidden;">
+            <div style="font-size:15px; color:#f2f5fb;">Displays</div>
+            <div style="display:flex; justify-content:space-between; align-items:center; border:1px solid rgba(102,116,142,.35); padding:10px 14px;"><span>Night palette after sunset</span><span style="width:36px; height:18px; background:#a692ec; display:flex; align-items:center; justify-content:flex-end; padding:0 2px;"><span style="width:14px; height:14px; background:#f2f5fb;"></span></span></div>
+            <div style="display:flex; justify-content:space-between; align-items:center; border:1px solid rgba(102,116,142,.35); padding:10px 14px;"><span>Fractional scaling</span><span style="width:36px; height:18px; background:#2a3142; display:flex; align-items:center; padding:0 2px;"><span style="width:14px; height:14px; background:#66748e;"></span></span></div>
+            <div style="display:flex; flex-direction:column; gap:8px; border:1px solid rgba(102,116,142,.35); padding:10px 14px;"><div style="display:flex; justify-content:space-between;"><span>Brightness</span><span style="color:#66748e;">72%</span></div><div style="height:4px; background:#2a3142;"><div style="width:72%; height:4px; background:#a3bff2;"></div></div></div>
+            <div style="display:flex; gap:10px; margin-top:auto;"><span style="border:1px solid rgba(166,146,236,.6); color:#a692ec; padding:6px 16px; font-size:12px;">Apply</span><span style="border:1px solid rgba(102,116,142,.4); color:#93a1ba; padding:6px 16px; font-size:12px;">Revert</span></div>
+          </div>
+        </div>
+      </div>
+      <div style="width:400px; display:flex; flex-direction:column; gap:12px; font-size:12px; color:#93a1ba;">
+        <div style="border:1px solid rgba(127,212,193,.4); padding:12px 16px; display:flex; flex-direction:column; gap:6px;">
+          <div style="color:#7fd4c1; font-size:11px; letter-spacing:1px;">WHAT THE THEME REACHES</div>
+          <div>· gtk3/4 — one generated <span style="color:#f2f5fb;">gtk.css</span>: colors, borders, square corners, flat headerbars, font → IBM Plex Mono</div>
+          <div>· qt5/6 — <span style="color:#f2f5fb;">qt6ct + Kvantum</span> svg theme fed from the same palette file</div>
+          <div>· libadwaita — named colors via <span style="color:#f2f5fb;">~/.config/gtk-4.0/gtk.css</span> (accent, window, view bg)</div>
+          <div>· terminals & TUIs — 16-color ANSI scheme, the native citizens</div>
+          <div>· electron/chromium — force dark + injected palette where supported</div>
+          <div>· cursor, icons — single mono-line icon set, no full-color mimetypes</div>
+        </div>
+        <div style="border:1px solid rgba(217,176,106,.4); padding:12px 16px; display:flex; flex-direction:column; gap:6px;">
+          <div style="color:#d9b06a; font-size:11px; letter-spacing:1px;">HONEST LIMITS</div>
+          <div>· apps with hardcoded colors or bundled themes keep them</div>
+          <div>· libadwaita widget shapes (pills, big paddings) can't be fully squared — colors yes, geometry mostly no</div>
+          <div>· CSD headerbars stay client-drawn; helm just recolors them and adds its 1px border</div>
+          <div>· flatpak needs the theme granted per-app (<span style="color:#f2f5fb;">--filesystem=xdg-config/gtk-4.0</span>)</div>
+        </div>
+        <div style="border:1px solid rgba(102,116,142,.35); padding:12px 16px; display:flex; flex-direction:column; gap:6px;">
+          <div style="color:#a3bff2; font-size:11px; letter-spacing:1px;">MECHANISM</div>
+          <div>one palette file <span style="color:#f2f5fb;">~/.config/helm/palette.toml</span> → templates render gtk.css, kvantum svg, ANSI scheme, hx/nvim themes · <span style="color:#f2f5fb;">helm ctl theme apply</span> hot-reloads all of it</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+</x-dc>
+</body>
+</html>

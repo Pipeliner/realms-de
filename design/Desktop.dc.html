@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+body { margin:0; background:#04050a; }
+a { color:#5fd7d7; } a:hover { color:#c9a35f; }
+</style>
+</helmet>
+<div style="position:relative; width:1920px; height:1080px; overflow:hidden; font-family:'IBM Plex Mono',monospace; color:#aab4c4; background:radial-gradient(1px 1px at 12% 22%, rgba(200,220,255,.5) 50%, transparent 51%), radial-gradient(1px 1px at 31% 68%, rgba(200,220,255,.35) 50%, transparent 51%), radial-gradient(1px 1px at 47% 12%, rgba(200,220,255,.4) 50%, transparent 51%), radial-gradient(1.5px 1.5px at 63% 81%, rgba(160,200,255,.45) 50%, transparent 51%), radial-gradient(1px 1px at 72% 34%, rgba(200,220,255,.3) 50%, transparent 51%), radial-gradient(1px 1px at 86% 58%, rgba(200,220,255,.45) 50%, transparent 51%), radial-gradient(1.5px 1.5px at 91% 15%, rgba(160,200,255,.35) 50%, transparent 51%), radial-gradient(1px 1px at 8% 88%, rgba(200,220,255,.3) 50%, transparent 51%), radial-gradient(1px 1px at 55% 47%, rgba(200,220,255,.25) 50%, transparent 51%), radial-gradient(ellipse 900px 600px at 70% 110%, rgba(80,60,120,.14), transparent 70%), linear-gradient(180deg, #05060c 0%, #07080f 100%);">
+
+  <!-- top bar -->
+  <div style="display:flex; align-items:stretch; height:30px; background:rgba(9,11,18,.94); border-bottom:1px solid rgba(95,215,215,.18); font-size:12px;">
+    <div style="display:flex; align-items:center; padding:0 12px; color:#c9a35f; border-right:1px solid rgba(201,163,95,.25); letter-spacing:1px;">✦ helm</div>
+    <div style="display:flex; align-items:center; gap:2px; padding:0 8px;">
+      <div style="display:flex; align-items:center; justify-content:center; width:26px; height:100%; color:#5fd7d7; border-bottom:2px solid #5fd7d7; background:rgba(95,215,215,.08);">ᚠ</div>
+      <div style="display:flex; align-items:center; justify-content:center; width:26px; height:100%; color:#7c889c;">ᚢ</div>
+      <div style="display:flex; align-items:center; justify-content:center; width:26px; height:100%; color:#7c889c;">ᚦ</div>
+      <div style="display:flex; align-items:center; justify-content:center; width:26px; height:100%; color:#3c4658;">ᚨ</div>
+      <div style="display:flex; align-items:center; justify-content:center; width:26px; height:100%; color:#3c4658;">ᚱ</div>
+      <div style="display:flex; align-items:center; justify-content:center; width:26px; height:100%; color:#3c4658;">ᚲ</div>
+    </div>
+    <div style="display:flex; align-items:center; padding:0 12px; color:#4e5a6e; border-left:1px solid rgba(78,90,110,.25);">[master] ⌁</div>
+    <div style="flex:1; display:flex; align-items:center; justify-content:center; color:#8d99ad; letter-spacing:.5px;">tty — nav@caldera : ~/src/helm/compositor.rs</div>
+    <div style="display:flex; align-items:center; gap:14px; padding:0 14px; color:#7c889c;">
+      <span>↑ 12k ↓ 340k</span>
+      <span style="color:#5fd7d7;">cpu 23% ▰▰▱▱▱▱▱▱</span>
+      <span>mem 6.2G</span>
+      <span>♪ 64%</span>
+      <span style="color:#c9a35f;">⚡ 87%</span>
+      <span style="color:#d3dbe8;">26·08·2026 ✶ 14:32</span>
+    </div>
+  </div>
+
+  <!-- tiled windows -->
+  <div style="position:absolute; top:30px; left:0; right:0; bottom:0; display:grid; grid-template-columns:1.45fr 1fr; grid-template-rows:1.15fr 1fr; gap:10px; padding:10px;">
+
+    <!-- terminal / sysmon (master, active) -->
+    <div style="grid-row:1 / 3; position:relative; display:flex; flex-direction:column; background:rgba(8,10,17,.96); border:1px solid rgba(95,215,215,.55); box-shadow:0 0 22px rgba(95,215,215,.10), inset 0 0 60px rgba(95,215,215,.03);">
+      <div style="position:absolute; top:-1px; left:14px; padding:0 8px; background:#0a0d15; border:1px solid rgba(95,215,215,.55); border-bottom:none; font-size:11px; color:#5fd7d7; line-height:16px; transform:translateY(-8px);">⌬ vessel — zsh</div>
+      <div style="position:absolute; top:2px; right:6px; font-size:10px; color:#c9a35f; letter-spacing:2px;">◈ ─ ✕</div>
+      <div style="flex:1; padding:24px 20px 16px; font-size:13px; line-height:1.55; display:flex; flex-direction:column; gap:12px;">
+        <div style="color:#5fd7d7;">nav@caldera <span style="color:#4e5a6e;">::</span> <span style="color:#c9a35f;">~%</span> btop</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 24px; color:#8d99ad;">
+          <div>cpu0 <span style="color:#5fd7d7;">▰▰▰▰▱▱▱▱▱▱</span> 41%</div>
+          <div>cpu1 <span style="color:#5fd7d7;">▰▰▱▱▱▱▱▱▱▱</span> 18%</div>
+          <div>cpu2 <span style="color:#5fd7d7;">▰▰▰▰▰▰▱▱▱▱</span> 63%</div>
+          <div>cpu3 <span style="color:#5fd7d7;">▰▱▱▱▱▱▱▱▱▱</span> 09%</div>
+          <div>cpu4 <span style="color:#5fd7d7;">▰▰▰▱▱▱▱▱▱▱</span> 32%</div>
+          <div>cpu5 <span style="color:#5fd7d7;">▰▰▱▱▱▱▱▱▱▱</span> 21%</div>
+          <div>cpu6 <span style="color:#8d7bd8;">▰▰▰▰▰▰▰▰▱▱</span> 84%</div>
+          <div>cpu7 <span style="color:#5fd7d7;">▰▱▱▱▱▱▱▱▱▱</span> 07%</div>
+        </div>
+        <div style="color:#8d99ad;">mem <span style="color:#c9a35f;">▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱</span> 6.2G / 32G &nbsp;&nbsp; swp <span style="color:#4e5a6e;">▱▱▱▱▱▱▱▱</span> 0G</div>
+        <div style="border-top:1px solid rgba(78,90,110,.3); padding-top:10px; display:flex; flex-direction:column; gap:2px; color:#7c889c;">
+          <div style="color:#4e5a6e;">&nbsp;&nbsp;pid&nbsp;&nbsp;&nbsp;user&nbsp;&nbsp;&nbsp;cpu%&nbsp;&nbsp;mem&nbsp;&nbsp;&nbsp;&nbsp;command</div>
+          <div><span style="color:#5fd7d7;">&nbsp;1204</span>&nbsp;&nbsp;nav&nbsp;&nbsp;&nbsp;&nbsp;12.3&nbsp;&nbsp;1.1G&nbsp;&nbsp;&nbsp;helm-compositor</div>
+          <div>&nbsp;2381&nbsp;&nbsp;nav&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;8.7&nbsp;&nbsp;840M&nbsp;&nbsp;firefox</div>
+          <div>&nbsp;3990&nbsp;&nbsp;nav&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;4.2&nbsp;&nbsp;312M&nbsp;&nbsp;hx compositor.rs</div>
+          <div>&nbsp;4127&nbsp;&nbsp;nav&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;1.9&nbsp;&nbsp;96M&nbsp;&nbsp;&nbsp;&nbsp;mpd</div>
+          <div>&nbsp;5518&nbsp;&nbsp;root&nbsp;&nbsp;&nbsp;0.4&nbsp;&nbsp;28M&nbsp;&nbsp;&nbsp;&nbsp;wireplumber</div>
+        </div>
+        <div style="margin-top:auto; color:#5fd7d7;">nav@caldera <span style="color:#4e5a6e;">::</span> <span style="color:#c9a35f;">~%</span> <span style="background:#5fd7d7; color:#07080d;">&nbsp;</span></div>
+      </div>
+    </div>
+
+    <!-- editor -->
+    <div style="position:relative; display:flex; flex-direction:column; background:rgba(8,10,17,.92); border:1px solid rgba(78,90,110,.45);">
+      <div style="position:absolute; top:-1px; left:14px; padding:0 8px; background:#0a0d15; border:1px solid rgba(78,90,110,.45); border-bottom:none; font-size:11px; color:#7c889c; line-height:16px; transform:translateY(-8px);">⌖ hx — compositor.rs</div>
+      <div style="flex:1; padding:22px 18px 12px; font-size:12.5px; line-height:1.6; display:flex; flex-direction:column; gap:0;">
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">42</span><span><span style="color:#8d7bd8;">impl</span> <span style="color:#c9a35f;">Stage</span> {</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">43</span><span>&nbsp;&nbsp;<span style="color:#8d7bd8;">pub fn</span> <span style="color:#5fd7d7;">summon</span>(&amp;<span style="color:#8d7bd8;">mut</span> self, sigil: Rune) {</span></div>
+        <div style="display:flex; gap:14px; background:rgba(95,215,215,.06);"><span style="color:#5fd7d7;">44</span><span>&nbsp;&nbsp;&nbsp;&nbsp;self.ledger.push(sigil.bind());</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">45</span><span>&nbsp;&nbsp;&nbsp;&nbsp;self.relayout(Gaps::<span style="color:#c9a35f;">Tight</span>);</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">46</span><span>&nbsp;&nbsp;}</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">47</span><span>&nbsp;</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">48</span><span>&nbsp;&nbsp;<span style="color:#8d7bd8;">pub fn</span> <span style="color:#5fd7d7;">banish</span>(&amp;<span style="color:#8d7bd8;">mut</span> self, id: WinId) {</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">49</span><span>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#8d7bd8;">if let</span> <span style="color:#c9a35f;">Some</span>(w) = self.ledger.take(id) {</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">50</span><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;w.unmap(&amp;self.conn);</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">51</span><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.focus_next();</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">52</span><span>&nbsp;&nbsp;&nbsp;&nbsp;}</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">53</span><span>&nbsp;&nbsp;&nbsp;&nbsp;self.relayout(Gaps::<span style="color:#c9a35f;">Tight</span>);</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">54</span><span>&nbsp;&nbsp;}</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">55</span><span>&nbsp;</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">56</span><span>&nbsp;&nbsp;<span style="color:#4e5a6e;">/// Re-tile the stage after the ledger changes.</span></span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">57</span><span>&nbsp;&nbsp;<span style="color:#8d7bd8;">fn</span> <span style="color:#5fd7d7;">relayout</span>(&amp;<span style="color:#8d7bd8;">mut</span> self, gaps: Gaps) {</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">58</span><span>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#8d7bd8;">let</span> geo = self.output.workarea(gaps);</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">59</span><span>&nbsp;&nbsp;&nbsp;&nbsp;self.layout.arrange(&amp;<span style="color:#8d7bd8;">mut</span> self.ledger, geo);</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">60</span><span>&nbsp;&nbsp;}</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">61</span><span>}</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">~</span></div>
+        <div style="display:flex; gap:14px;"><span style="color:#3c4658;">~</span></div>
+      </div>
+      <div style="display:flex; justify-content:space-between; padding:3px 12px; font-size:11px; color:#4e5a6e; border-top:1px solid rgba(78,90,110,.3);"><span><span style="color:#c9a35f;">NOR</span> · main +2 ~1</span><span>rust · utf-8 · 44:23</span></div>
+    </div>
+
+    <!-- music -->
+    <div style="position:relative; display:flex; flex-direction:column; background:rgba(8,10,17,.92); border:1px solid rgba(78,90,110,.45);">
+      <div style="position:absolute; top:-1px; left:14px; padding:0 8px; background:#0a0d15; border:1px solid rgba(78,90,110,.45); border-bottom:none; font-size:11px; color:#7c889c; line-height:16px; transform:translateY(-8px);">♪ orrery — mpd</div>
+      <div style="flex:1; padding:24px 20px 14px; font-size:12.5px; line-height:1.6; display:flex; flex-direction:column; gap:10px;">
+        <div style="display:flex; flex-direction:column; gap:1px; color:#7c889c;">
+          <div>&nbsp;&nbsp;Solar Fields — Sol</div>
+          <div style="color:#d3dbe8; background:rgba(201,163,95,.08); border-left:2px solid #c9a35f; padding-left:8px;">▸ Stellardrone — Eternity</div>
+          <div>&nbsp;&nbsp;Carbon Based Lifeforms — Photosynthesis</div>
+          <div>&nbsp;&nbsp;Perturbator — Neo Tokyo</div>
+          <div>&nbsp;&nbsp;Boards of Canada — Dayvan Cowboy</div>
+          <div>&nbsp;&nbsp;HOME — Resonance</div>
+        </div>
+        <div style="display:flex; align-items:flex-end; gap:3px; height:44px; margin-top:4px;">
+          <div style="width:8px; height:30%; background:rgba(95,215,215,.5);"></div>
+          <div style="width:8px; height:55%; background:rgba(95,215,215,.6);"></div>
+          <div style="width:8px; height:80%; background:rgba(95,215,215,.7);"></div>
+          <div style="width:8px; height:62%; background:rgba(95,215,215,.6);"></div>
+          <div style="width:8px; height:90%; background:rgba(141,123,216,.7);"></div>
+          <div style="width:8px; height:48%; background:rgba(95,215,215,.55);"></div>
+          <div style="width:8px; height:70%; background:rgba(95,215,215,.65);"></div>
+          <div style="width:8px; height:35%; background:rgba(95,215,215,.5);"></div>
+          <div style="width:8px; height:58%; background:rgba(95,215,215,.6);"></div>
+          <div style="width:8px; height:82%; background:rgba(201,163,95,.6);"></div>
+          <div style="width:8px; height:44%; background:rgba(95,215,215,.55);"></div>
+          <div style="width:8px; height:66%; background:rgba(95,215,215,.6);"></div>
+          <div style="width:8px; height:28%; background:rgba(95,215,215,.45);"></div>
+          <div style="width:8px; height:52%; background:rgba(95,215,215,.55);"></div>
+          <div style="width:8px; height:74%; background:rgba(95,215,215,.65);"></div>
+          <div style="width:8px; height:40%; background:rgba(95,215,215,.5);"></div>
+        </div>
+        <div style="display:flex; gap:16px; font-size:11px; color:#4e5a6e;"><span>flac · 44.1kHz</span><span>vol ▰▰▰▰▰▰▱▱▱▱ 64%</span><span>queue 6 · 41:07</span></div>
+        <div style="margin-top:auto; display:flex; flex-direction:column; gap:6px;">
+          <div style="color:#5fd7d7;">▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ <span style="color:#4e5a6e;">3:41 / 8:22</span></div>
+          <div style="display:flex; gap:18px; color:#8d99ad;"><span>⏮</span><span style="color:#c9a35f;">⏸</span><span>⏭</span><span style="margin-left:auto; color:#4e5a6e;">[r] repeat · [z] random</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- launcher overlay -->
+  <sc-if value="{{ showLauncher }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute; inset:0; background:rgba(4,5,10,.55); display:flex; align-items:flex-start; justify-content:center; padding-top:220px;">
+      <div style="width:640px; background:rgba(9,11,18,.98); border:1px solid rgba(141,123,216,.55); box-shadow:0 0 40px rgba(141,123,216,.15); font-size:14px;">
+        <div style="display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid rgba(141,123,216,.3); color:#d3dbe8;">
+          <span style="color:#8d7bd8;">⟡</span><span>fire</span><span style="background:#8d7bd8; width:8px; height:18px;"></span>
+        </div>
+        <div style="display:flex; flex-direction:column; padding:6px 0;">
+          <div style="display:flex; gap:14px; padding:8px 18px; background:rgba(141,123,216,.10); color:#d3dbe8;"><span style="color:#c9a35f;">⌁</span>firefox <span style="margin-left:auto; color:#4e5a6e; font-size:12px;">run</span></div>
+          <div style="display:flex; gap:14px; padding:8px 18px; color:#7c889c;"><span style="color:#4e5a6e;">⌁</span>firewall-config <span style="margin-left:auto; color:#3c4658; font-size:12px;">run</span></div>
+          <div style="display:flex; gap:14px; padding:8px 18px; color:#7c889c;"><span style="color:#4e5a6e;">✧</span>fire · rune: ignite session <span style="margin-left:auto; color:#3c4658; font-size:12px;">spell</span></div>
+        </div>
+        <div style="display:flex; justify-content:space-between; padding:6px 18px; font-size:11px; color:#4e5a6e; border-top:1px solid rgba(78,90,110,.3);"><span>3 results</span><span>↵ invoke · esc dismiss</span></div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- scanlines -->
+  <sc-if value="{{ scanlines }}" hint-placeholder-val="{{ true }}">
+    <div style="position:absolute; inset:0; pointer-events:none; background:repeating-linear-gradient(0deg, rgba(0,0,0,.14) 0px, rgba(0,0,0,.14) 1px, transparent 1px, transparent 3px); opacity:.35;"></div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1920, &quot;height&quot;: 1080}, &quot;showLauncher&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Overlays&quot;}, &quot;scanlines&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Overlays&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      showLauncher: this.props.showLauncher ?? false,
+      scanlines: this.props.scanlines ?? true,
+    };
+  }
+}
+</script>
+</body>
+</html>
