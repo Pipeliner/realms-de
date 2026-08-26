@@ -698,7 +698,8 @@ mod tests {
         let helm = root.path().join("helm");
         std::os::unix::fs::symlink(victim.path(), &helm).unwrap();
 
-        let err = load_palette(root.path()).expect_err("a symlinked palette directory must be refused");
+        let err =
+            load_palette(root.path()).expect_err("a symlinked palette directory must be refused");
         assert!(err.to_string().contains("symlink"), "{err}");
         assert!(
             !victim.path().join("palette.toml").exists(),
@@ -714,7 +715,10 @@ mod tests {
 
         let err = load_palette(root.path()).expect_err("a symlinked palette file must be refused");
         assert!(err.to_string().contains("symlink"), "{err}");
-        assert_eq!(std::fs::read_to_string(palette_victim).unwrap(), "not a palette\n");
+        assert_eq!(
+            std::fs::read_to_string(palette_victim).unwrap(),
+            "not a palette\n"
+        );
     }
 
     #[test]
