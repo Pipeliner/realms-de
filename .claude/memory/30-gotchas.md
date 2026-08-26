@@ -58,3 +58,13 @@ manage/render cycle.
 **Fix:** sizes between `manage_start` and `manage_finish`; positions after
 `render_start`. Never assume a protocol's two phases split along the same line
 your own abstraction does.
+
+**Symptom:** a protocol claim that sounds authoritative and cites an error code.
+**Cause:** reading a per-request sentence in isolation when it cross-references
+a looser rule in the interface description. river's `set_position` says "may
+only be made as part of a render sequence, see the river_window_manager_v1
+description" — and that description permits rendering state during *either*
+sequence.
+**Fix:** when a request's text defers to an interface description, the
+description wins. Read both before naming an error condition; a right conclusion
+reached for a wrong reason is still a wrong document.

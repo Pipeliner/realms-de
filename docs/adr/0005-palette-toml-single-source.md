@@ -62,6 +62,7 @@ with the implementation: the limits are documented, not fought.
 | libadwaita geometry | Adwaita exposes named colours but not shapes; corner radii and paddings are compiled in | Take the colours, accept the shapes |
 | CSD headerbars | Client-side decorations are drawn by the application | Recolour plus a 1px border. No shape changes |
 | Flatpak applications | Sandboxed applications cannot read `~/.config` or `~/.themes` by default | Document the per-app `--filesystem` grant in the install docs, and have `helm ctl doctor` report Flatpak apps without it |
+| The lock screen *(provisional)* | Depends on which locker ships; still `needs-human` in [ADR 0011](0011-session-integration-contract.md) | If `waylock` is chosen, theming reaches four `0xRRGGBB` values and nothing else: no type, no clock, no layout. That is a deliberate trade of fidelity for attack surface on the one security-critical surface, and it belongs on this list rather than being quietly absorbed |
 
 ## Alternatives considered
 

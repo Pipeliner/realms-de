@@ -46,7 +46,7 @@ named, with its options and a recommendation, rather than guessed at.
 | [0013](0013-river-window-management-backend.md) | `river-window-management-v1` is declared stable with a compatibility pledge, but river is pre-1.0 and its last release cycle was extremely breaking. What do we do if the pledge does not hold? | Pin and follow, with an accelerated `helm-compositor` as the standing mitigation |
 | [0013](0013-river-window-management-backend.md) | Confirm that Ubuntu 24.04 and Fedora 41 ship river 0.3.x or river-classic. The decision to vendor a pinned 0.4.x rests on this, and it is recorded as an assumption | Verify in packaging CI before packaging work starts |
 | [0010](0010-nix-flake-as-reference-build.md) | Where do the `.deb` and `.rpm` actually live: GitHub Releases, a self-hosted apt repo plus Copr, or official distro repositories? Who holds the signing key? | Releases for M3; a repo and Copr once there are users to upgrade |
-| [0011](0011-session-integration-contract.md) | Which lock screen ships: swaylock, gtklock, waylock, or our own? | gtklock for M3 — `ext-session-lock-v1` is the property that matters |
+| [0011](0011-session-integration-contract.md) | Which lock screen ships? `ext-session-lock-v1` is now a hard requirement, so the real choice is waylock (small attack surface, colour-only theming) versus gtklock (looks like helm, drags GTK into the lock path). SPEC 0005 and `docs/integration/session-services.md` disagree | waylock, with the fidelity loss recorded in ADR 0005's limits table |
 | [0011](0011-session-integration-contract.md) | Idle policy defaults: blank timeout, lock timeout, and whether lid-close locks unconditionally | Not to be guessed; these are user-visible security defaults |
 
 ### Resolved

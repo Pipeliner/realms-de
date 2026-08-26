@@ -105,10 +105,22 @@ backend is a translation rather than an approximation:
 **A placement spans both phases.** `propose_dimensions` is window-management
 state; `set_position` is *rendering* state. So a single `apply()` is not one
 manage sequence: sizes go between `manage_start` and `manage_finish`, then
-positions go after `render_start`. Submitting a position in the management phase
-raises `error::sequence_order` and kills the connection — this is a protocol
-error, not a style preference, and it is the single easiest way to get river
-integration wrong.
+positions go after `render_start`.
+
+The reason is a **data dependency**, not a prohibition. `propose_dimensions` is
+manage-only; the resulting `dimensions` events arrive before `render_start`; and
+a position cannot be finalised until then, because a window may not take the
+size it was offered — the same quantisation problem flagged above. So helm keeps
+positions in the render phase because that is where it first knows enough to
+compute them.
+
+(An earlier draft of this document asserted that a position submitted during the
+manage phase raises `error::sequence_order`. The XML does not support that: the
+`river_window_manager_v1` description permits rendering state to be modified
+during *either* sequence and errors only outside both, and `set_position`'s own
+text defers to that description by explicit cross-reference. The protocol is
+arguably self-contradictory here; helm's behaviour is correct under either
+reading, which is why the conclusion survived the correction.)
 
 `place_*` orders the **render list**, not the ledger. The ledger is *layout*
 order, which helm computes itself and expresses as positions; the `place_*`

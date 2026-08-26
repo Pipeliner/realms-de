@@ -59,6 +59,10 @@ in
     xdg.configFile =
       {
         "helm/palette.toml".source = cfg.paletteFile;
+        # A user-level portal policy overrides the system one, and on
+        # nix-on-non-NixOS it may be the only one that exists (SPEC 0005 §5).
+        "xdg-desktop-portal/helm-portals.conf".source =
+          "${cfg.package}/share/xdg-desktop-portal/helm-portals.conf";
       }
       # M1 replaces these static links with helm-theme's generated output; the
       # destination paths do not change.
@@ -80,25 +84,44 @@ in
       };
     };
 
-    systemd.user.services.helm-daemon = {
+    systemd.user.services.helm-sessiond = {
       Unit = {
-        Description = "helm session daemon and river window manager";
+        Description = "helm window manager and session daemon";
         PartOf = [ "graphical-session.target" ];
         After = [ "graphical-session.target" ];
         ConditionEnvironment = "WAYLAND_DISPLAY";
+        StartLimitIntervalSec = 30;
+        StartLimitBurst = 5;
+        OnFailure = [ "helm-session-abort.service" ];
       };
       Service = {
         # PRE-ALPHA: this binary does not exist yet (M2). The unit is here so
         # the session shape is complete and testable.
-        ExecStart = "${cfg.package}/bin/helm-sessiond";
-        # Under river 0.4 this process *is* the window manager: while it is
-        # down, river manages nothing. Restart fast — see the comment in
-        # packaging/systemd/helm-daemon.service for why this is on-failure and
-        # not always.
-        Restart = "on-failure";
+        ExecStart = "${cfg.package}/bin/helm-wm";
+        # always, not on-failure: under river 0.4 this process *is* the window
+        # manager, and quit goes through river's exit_session rather than
+        # through this exiting — so a clean exit is not a normal path and must
+        # never leave river unmanaged. 69 = river answered `unavailable`
+        # (another window manager holds the global), 78 = protocol mismatch;
+        # restarting cannot help with either and looping buries the message.
+        Restart = "always";
         RestartSec = 1;
+        RestartPreventExitStatus = "69 78";
+        Slice = "session.slice";
+        TimeoutStopSec = 10;
       };
       Install.WantedBy = [ "helm-session.target" ];
+    };
+
+    # The abort path: fires once the window manager has exhausted its restart
+    # limit, and signals the session entry to return the user to the display
+    # manager rather than leaving them on an inert compositor (SPEC 0005 §2).
+    systemd.user.services.helm-session-abort = {
+      Unit.Description = "helm session abort (window manager did not attach)";
+      Service = {
+        Type = "oneshot";
+        ExecStart = "${cfg.package}/bin/helm-session --abort";
+      };
     };
 
     systemd.user.services.helm-bar = {
@@ -107,18 +130,24 @@ in
         PartOf = [ "graphical-session.target" ];
         After = [
           "graphical-session.target"
-          "helm-daemon.service"
+          "helm-sessiond.service"
         ];
-        Wants = [ "helm-daemon.service" ];
+        Wants = [ "helm-sessiond.service" ];
         ConditionEnvironment = "WAYLAND_DISPLAY";
+        StartLimitIntervalSec = 30;
+        StartLimitBurst = 5;
       };
       Service = {
         # PRE-ALPHA: lands in M2, like helm-sessiond above.
         ExecStart = "${cfg.package}/bin/helm-bar";
         # A crashed bar restarts itself and never takes the session with it
-        # (docs/PITFALLS.md).
+        # (docs/PITFALLS.md). app.slice, not session.slice: under memory
+        # pressure the restartable thing should be reaped before the window
+        # manager.
         Restart = "on-failure";
         RestartSec = 1;
+        Slice = "app.slice";
+        TimeoutStopSec = 5;
       };
       Install.WantedBy = lib.optionals cfg.startBar [ "helm-session.target" ];
     };

@@ -113,5 +113,7 @@ override_dh_auto_clean:
 #
 # Verified, not assumed: `dpkg-buildpackage -us -uc -b -d` on debhelper 13.14
 # produced postinst/postrm snippets calling `deb-systemd-helper --user enable`
-# for helm-bar.service and helm-daemon.service, from units installed via
-# debian/install.
+# for the units installed via debian/install. Those snippets are belt to the
+# braces of the shipped .wants symlinks above: debhelper's enable writes into
+# /etc/systemd/user, the shipped symlinks live beside the units in
+# /usr/lib/systemd/user, and either one alone makes the target start something.

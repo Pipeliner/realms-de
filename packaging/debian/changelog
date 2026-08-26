@@ -1,10 +1,11 @@
 helm (0.1.0) UNRELEASED; urgency=medium
 
   * Initial packaging skeleton. Ships the session contract only: the
-    wayland-session entry, the session wrapper implementing the ADR 0011
-    environment handshake, the systemd user units and palette.toml.
-  * No helm binaries are packaged: helm-sessiond, helm-bar and helm do not
-    exist yet (M1-M2). debian/rules installs them automatically once they do.
+    wayland-session entry, the session entry script implementing the ADR 0011 /
+    SPEC 0005 environment handshake, the systemd user units with their
+    helm-session.target.wants symlinks, the portal policy and palette.toml.
+  * No helm binaries are packaged: helm-wm, helm-bar and helmctl do not exist
+    yet (M1-M2). debian/rules installs them automatically once they do.
   * Depends on a vendored river 0.4.x (helm-river); river 0.4 is the compositor
     helm drives over river-window-management-v1.
   * NEEDS-HUMAN: the maintainer address below uses the reserved .invalid domain

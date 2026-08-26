@@ -110,6 +110,12 @@ An idle daemon and a lock screen, started as part of the session, wired to
 lid-close and to `loginctl lock-session`. A laptop that closes its lid and stays
 unlocked is a security failure, not a missing feature.
 
+The locker **must** be an `ext-session-lock-v1` client, never a layer-shell
+overlay: under [ADR 0013](0013-river-window-management-backend.md) an overlay
+locker would depend on `helm-session` serving layer shell, so a crash in helm
+would expose the desktop. Which client we ship is still open; see *Needs a
+human*. The idle daemon may be any `ext-idle-notify-v1` client.
+
 **9. `helm ctl doctor` verifies every one of the above.**
 
 Not a subset. The doctor is what turns this contract from documentation into
@@ -182,28 +188,89 @@ is not reversible: it is imposed by how D-Bus activation works.
 
 ## Needs a human
 
-**Which lock screen does helm ship?** This is a security decision and it is not
-one the repository can make on its own.
+**Which lock screen does helm ship?** This is a security default and remains a
+human's call. What follows corrects two premises this section originally got
+wrong, so that the choice is at least between accurate options.
 
-1. **`swaylock` (or `swaylock-effects`).** Ubiquitous, packaged everywhere,
-   well understood. It is not a Wayland session-lock protocol client in older
-   versions, which means on some compositors a crash can leave the session
-   unlocked. It also cannot be themed from `palette.toml` beyond colours.
-2. **`gtklock`.** Uses `ext-session-lock-v1` properly, so a crash leaves the
-   session locked rather than exposed. GTK-based, so it drags GTK into the lock
-   path but is themable through the same `gtk.css` we already generate.
-3. **`waylock`.** Minimal, `ext-session-lock-v1`, very small attack surface.
-   Zig, a toolchain we otherwise do not have (see ADR 0002).
-4. **Write `helm-ward`.** Consistent with the design, but getting a lock screen
-   wrong is the worst class of bug in a desktop. Not before M6, if ever.
+### What is settled
 
-**Recommendation: `gtklock` for M3.** `ext-session-lock-v1` is the property that
-matters — the compositor keeps the session locked even if the locker crashes —
-and GTK is already a theming target so it costs us nothing new. `waylock` is the
-better answer on minimalism grounds if the Zig dependency is acceptable.
+`ext-session-lock-v1` is a **hard requirement**, not a preference. river 0.4
+implements it (`river/LockManager.zig`, `river/LockSurface.zig`) and reports
+`session_locked` / `session_unlocked` to the window manager. The argument, from
+SPEC 0005, is decisive: a locker drawn as a layer-shell overlay would depend on
+`helm-session` serving `river-layer-shell-v1` (ADR 0013), so a crash in **helm**
+would expose the desktop. Under `ext-session-lock-v1` the compositor keeps the
+session locked even if the locker dies. Any overlay-based locker is therefore
+out.
 
-A human must also confirm the **idle policy defaults**: how long until the
-screen blanks, how long until lock, and whether lid-close locks unconditionally.
-These are user-visible security defaults and should not be guessed.
+That argument rules options in and out; it does not choose between the two
+remaining candidates, because **both are true `ext-session-lock-v1` clients** —
+waylock directly, gtklock via the `gtk-session-lock-0` library.
+
+### Two corrections
+
+- **swaylock was excluded on a stale premise.** It does speak
+  `ext-session-lock-v1` — its `meson.build` pulls in
+  `staging/ext-session-lock/ext-session-lock-v1.xml` — reportedly since 1.7.
+  Describing it as an X11-era holdover is no longer accurate. It remains a
+  weaker fit than the two below on theming, not on safety.
+- **The objection to waylock is void.** It was rejected here for being "Zig, a
+  toolchain we otherwise do not have". [ADR 0013](0013-river-window-management-backend.md)
+  vendors a pinned Zig river in every package, so we already pay that cost. The
+  objection died with ADR 0002 and this section simply had not caught up.
+
+### The two candidates
+
+| | `waylock` | `gtklock` |
+|---|---|---|
+| Lock protocol | `ext-session-lock-v1` directly | `ext-session-lock-v1` via `gtk-session-lock-0` |
+| Maintainer | Isaac Freund — same as river, so it tracks the compositor we ship | Independent |
+| Attack surface | Very small: seven source files and a PAM path | GTK, its theme machinery, and a plugin system |
+| Theming | Four flags, `-init-color`, `-input-color`, `-input-alt-color`, `-fail-color`, all `0xRRGGBB` — which `Rgb::hex_bare()` already emits, so it themes from `palette.toml` with no patch and no template | Themed by the `gtk.css` we already generate (ADR 0005), including type and layout, at no extra cost |
+| Visual fidelity | Colour only. No clock, no text, no type. The lock screen will not look like helm | The lock screen can genuinely look like helm |
+| Packaging | One more Zig build, on a toolchain we now carry anyway | An extra library, `gtk-session-lock-0`, on three distros |
+
+Writing our own (`helm-ward`) stays out of scope: getting a lock screen wrong is
+the worst class of bug in a desktop. Not before M6, if ever.
+
+### The disagreement, and where I come down
+
+`docs/specs/0005-session-startup.md` recommends **gtklock**;
+`docs/integration/session-services.md` recommends **waylock**. Both are working
+from correct facts about the lock protocol, so the split is a genuine trade
+rather than a mistake by either.
+
+**I find the waylock argument stronger, but not for the reason it gives.**
+Removing the Zig objection does not make waylock right; it only removes the
+reason this ADR had rejected it. The real trade is attack surface against
+visual fidelity, on the one surface in the desktop that stands between a locked
+laptop and its contents. On that surface I would spend fidelity to buy a smaller
+attack surface, and I would put the locker on ADR 0005's published list of
+things theming does not reach — a list that already exists and already tells
+users the truth about libadwaita geometry and CSD shapes.
+
+The strongest case against my own position, and it is not weak: `docs/MVP.md`
+defines success as using helm as your only desktop for a week, and a user locks
+their screen many times a day. A solid-colour locker with no clock is a visible,
+repeated regression, whereas a smaller attack surface is never *felt*. Someone
+who weights the daily experience over the tail risk should choose gtklock, and
+that is a defensible reading of the same facts.
+
+**Recommendation: `waylock`, with the fidelity loss documented in ADR 0005's
+limits table.** A human should confirm they accept that trade.
+
+### Idle policy
+
+A human must set the **idle defaults**: how long until the screen blanks, how
+long until lock, and whether lid-close locks unconditionally. These are
+user-visible security defaults and should not be guessed.
+
+The dependency SPEC 0005 could not confirm is now **resolved**: river does
+implement `ext-idle-notify-v1`. `river/InputManager.zig` creates a
+`wlr.IdleNotifierV1`, which is wlroots' implementation of that protocol, and
+`river/Server.zig` lists `input_manager.idle_notifier.global` among the globals
+it gates for security contexts. So an `ext-idle-notify-v1` client such as
+`swayidle` will work. *(Verified against branch `main`, not against tag 0.4.8
+specifically; packaging should confirm on the exact pinned revision.)*
 
 Tracked as a `needs-human` issue (standing order S3).

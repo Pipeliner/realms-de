@@ -38,8 +38,7 @@ on, not code in our workspace.
    window manager side of it directly, behind the existing `WmBackend` seam.
 2. `NiriBackend` is dropped. `NativeBackend` against `helm-compositor` (M5) is
    unchanged as the long-term destination.
-3. **Three companion protocols are obligations, not options.** The brief that
-   prompted this ADR listed only the window-management protocol; verification
+3. **Three companion protocols are obligations, not options.** Verification
    against river's `protocol/` directory found that a usable helm needs all of:
 
    | Protocol | Why helm cannot ship without it |
@@ -71,18 +70,22 @@ the description helm was working from.
 | Triptych, Even | `set_position` + `propose_dimensions` in absolute logical coordinates | **Faithful**, subject to the quantisation caveat below |
 | Mono | Every tile the same rect; `place_top` on the focused window | **Faithful.** `Placement::occluded` becomes a real compositor property |
 | Stow | `river_window_v1::hide` / `show` | **Faithful, natively.** And the semantics match exactly: `hide` is *rendering* state, so a stowed window stays managed and stays in the ledger, which is precisely what `Orbit::stowed` means |
-| Fullscreen (`mod+f`) | `fullscreen(output)` plus `inform_fullscreen`. Shell surfaces above the fullscreen window still render, so bar visibility over fullscreen is our choice of node order | **Faithful** |
+| Fullscreen (`mod+f`) | `fullscreen(output)` plus `inform_fullscreen` | **Faithful for the window.** Bar visibility over fullscreen is *not* ours to order — see the correction below |
 | Workarea | `river_layer_shell_output_v1::non_exclusive_area` → `Workarea::tiles`; `river_output_v1::position`/`dimensions` → `Workarea::output` | **Faithful, and direct.** This is `Workarea::new(w, h, top, bottom)` arriving as an event |
 | 1px seams | `set_borders(edges, width, r, g, b, a)`, drawn by the compositor, premultiplied RGBA | **Faithful, and better than niri.** The design's seams become real borders. ADR 0005's decision to store alpha beside each colour pays off directly here |
 | Undo | Restore a ledger snapshot, re-project, apply in one render sequence | **Faithful.** This was "lossy by construction" on niri, needing a visible replay. It is now one atomic frame |
 | Chords (`mod` prefix, submaps) | `ensure_next_key_eaten` + `ate_unbound_key` | **Faithful, and purpose-built.** The protocol's own rationale names chorded bindings and submap exit as the reason this request exists |
 | Mode badge, chord echo | `modifiers_watch` + `modifiers_update(old, new)` | **Faithful** |
 | Keymap | `river_xkb_bindings_v1::get_xkb_binding(seat, keysym, modifiers)`, `enable`/`disable` per binding | **Faithful.** Per-mode keymaps are enable/disable sets |
-| `WinId` | `river_window_v1::identifier` — up to 32 printable ASCII bytes, unique, never reused | **Faithful.** Non-reuse is what makes it safe in `helm ctl ledger show` (ADR 0004) |
-| Launcher focus | `river_layer_shell_seat_v1::focus_exclusive` / `focus_non_exclusive` / `focus_none` | **Faithful** |
+| `WinId` | `river_window_v1::identifier` — up to 32 printable ASCII bytes | **Not a direct mapping.** `WinId(pub u64)` and an ASCII string are different types; `helm-session` holds a bijection, allocating `WinId`s from a monotonic counter keyed on river's identifier. Never-reuse survives, but as a property of helm's counter, not by inheriting river's |
+| Launcher focus | `river_layer_shell_seat_v1::focus_exclusive` / `focus_non_exclusive` / `focus_none` — **events, not requests** | **Faithful, but inverted.** helm is *told* that a layer surface has taken exclusive focus; it does not grant it. While exclusive focus is held, all window-manager focus requests are ignored, so `helm-session` must suspend its own focus logic until `focus_non_exclusive` or `focus_none` arrives |
 | **Exact tiling** | `propose_dimensions` is a *proposal*. A window may take different dimensions and reports them back via `dimensions` | **Approximate — the one real gap that remains.** See below |
 
-### Three corrections to the description this decision was made on
+### Corrections to earlier readings of this protocol
+
+Recorded because each one was believed at some point during this decision, and
+a future reader will otherwise repeat them. All were checked against the XML on
+branch `main` — note that `master` 404s, the repository's default branch changed.
 
 1. **`place_*` orders the render list, not the ledger.** The ledger's order is
    *layout* order, which helm computes and expresses through positions and
@@ -92,6 +95,62 @@ the description helm was working from.
 2. **`hide`/`show` are rendering state, not window-management state.** This is
    better for us, not worse, and is why stow maps exactly.
 3. **The protocol is declared stable**, not unstable. See *Needs a human*.
+4. **The layer-shell focus signals are events, not requests.** Corrected in the
+   table above.
+5. **`river-layer-shell-v1` exposes no node and no ordering request at all** —
+   its whole surface is `get_output`, `get_seat`, `set_default`, plus the
+   `non_exclusive_area` and focus events. The fullscreen description's promise
+   that "all `river_shell_surface_v1` objects above the top fullscreen window
+   will continue to be rendered" is about `river_shell_surface_v1`, which helm
+   creates itself and which *does* have `get_node`. helm's bar is a separate
+   `wlr-layer-shell` client (ADR 0008), so it is not a `river_shell_surface_v1`
+   and helm cannot order it. **The only lever over bar-versus-fullscreen is the
+   layer the bar itself requests.**
+6. **`WinId` is not river's identifier.** Corrected in the table above.
+
+### `apply()` straddles both phases
+
+A single ledger-to-screen application cannot live in one phase.
+`propose_dimensions` is window-management state and may only be sent during a
+manage sequence. The dimensions a window actually takes come back as
+`dimensions` events before `render_start`. Since a window may not take what was
+proposed, positions cannot be finalised until those events have arrived.
+
+So the sequence is: mutate the ledger, project, send `propose_dimensions` in the
+manage phase, `manage_finish`, read the `dimensions` events, then finalise
+`set_position`, `place_*`, `set_borders`, `hide`/`show` in the render phase and
+`render_finish`. helm keeps all positioning in the render phase.
+
+**A caveat worth writing down, because the protocol contradicts itself here.**
+The `river_window_manager_v1` description — the only place that states the error
+condition — says rendering state "may be modified during a manage sequence *or*
+a render sequence", and that it is "a protocol error to modify rendering state
+*outside of* a manage or render sequence". The per-request boilerplate on
+`set_position` and its siblings says instead "may only be made as part of a
+render sequence, see the `river_window_manager_v1` description", deferring to
+the looser rule by explicit cross-reference. On the plain reading of the
+normative sentence, `set_position` during a manage sequence is **permitted**,
+not a `sequence_order` error. helm keeps positions in the render phase anyway,
+which is correct under either reading — but the reason `apply()` straddles both
+phases is the data dependency above, not a prohibition.
+
+### Key repeat is the window manager's job
+
+`river_xkb_binding_v1` sends `pressed`, `released` and `stop_repeat`. The
+existence of `stop_repeat` establishes that if a bound key should repeat an
+action, **helm** repeats it; river does not. That is a second timer in
+`helm-session` and a real exception to ADR 0009's no-timers rule, so it is
+scoped as narrowly as it can be:
+
+- Armed only on `pressed`, for bindings explicitly marked repeatable.
+- Disarmed on `released` **or** on `stop_repeat`, whichever comes first.
+  `stop_repeat` generally means another key was pressed before release.
+- Never armed otherwise, so an idle session still has exactly one timer, the
+  clock, and idle CPU stays at roughly zero.
+
+Note that `released` fires on the *main* key only: releasing the modifiers
+without releasing the bound key does not end the binding. A repeat loop keyed on
+modifier state would therefore run forever.
 
 ### The remaining gap: dimension quantisation
 
@@ -104,12 +163,11 @@ terminal that rounds down leaves the void showing, which is the first pitfall in
 `docs/PITFALLS.md`.
 
 This is not a river problem; it is true of every compositor, and niri had it
-too. river gives us a tool for it that niri did not:
-`set_content_clip_box` clips window content to a box, and borders are drawn
-around the intersection of the content and that box. So helm can propose a size
-at or above the tile and clip to the exact projected rect, keeping the seams
-where the projection put them. Whether that reads acceptably for a terminal
-whose last row is clipped is an empirical question for M2.
+too. river gives us a tool niri did not: `set_content_clip_box` clips content to
+a box, with borders drawn around the intersection. So helm can propose at or
+above the tile and clip to the exact projected rect, keeping the seams where the
+projection put them. Whether a terminal with a clipped last row reads acceptably
+is an empirical question for M2.
 
 ## Alternatives considered
 
@@ -204,6 +262,9 @@ gapless tiling.
   wedged, guarding the `unresponsive` failure above.
 - *Planned (M2):* a quantisation test tiling a cell-quantising terminal and
   asserting exact coverage with clipping applied.
+- *Planned (M2):* a key-repeat test asserting the repeat timer is disarmed by
+  `stop_repeat` as well as by `released`, and that no timer is armed in an idle
+  session — the guard for the ADR 0009 exception above.
 - `layout::tests::every_layout_tiles_exactly_for_every_plausible_size` and
   `layout::tests::projection_is_pure_and_focus_only_moves_the_flag` remain the
   definition of correct geometry, unchanged by the backend.
