@@ -91,11 +91,13 @@ override_dh_auto_clean:
 	cargo clean || true
 	rm -rf debian/.cargo
 
-# No hand-written maintainer scripts, on purpose. The only thing that would
-# need one is enabling the systemd user units, and dh_installsystemduser
-# generates those snippets from the units shipped in /usr/lib/systemd/user.
-# Enabling is wanted: it creates the helm-session.target.wants symlinks, without
-# which starting the session target would start nothing. Verify this at the
-# first real build; if debhelper declines to process units installed via
-# debian/install, the fix is `debian/helm.user.service`-style filenames, not a
-# hand-rolled postinst.
+# No hand-written maintainer scripts, on purpose. The only thing that would need
+# one is enabling the systemd user units, and dh_installsystemduser generates
+# those snippets itself from the units shipped into /usr/lib/systemd/user.
+# Enabling is what creates the helm-session.target.wants symlinks, without which
+# starting the session target would start nothing.
+#
+# Verified, not assumed: `dpkg-buildpackage -us -uc -b -d` on debhelper 13.14
+# produced postinst/postrm snippets calling `deb-systemd-helper --user enable`
+# for helm-bar.service and helm-daemon.service, from units installed via
+# debian/install.

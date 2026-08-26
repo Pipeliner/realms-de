@@ -13,6 +13,13 @@
 # docs/INSTALL.md, "what this actually installs today".
 #
 # The Nix module rewrites Exec/TryExec to the store path of the wrapper.
+#
+# `desktop-file-validate` warns that DesktopNames "should start with X-". Ignore
+# it: that tool validates *application* entries, while DesktopNames is the key
+# display managers read from a *session* entry to set XDG_CURRENT_DESKTOP — it
+# is what every shipped session file (gnome.desktop, sway.desktop) uses. helm
+# sets the same value in the wrapper, so a display manager that ignores this key
+# still gets a correct session.
 [Desktop Entry]
 Name=helm
 Comment=Keyboard-first, gapless-tiling Wayland desktop

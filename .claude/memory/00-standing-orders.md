@@ -9,6 +9,9 @@ qualifications win; nothing here is deleted, only struck through and dated.
 ## S1 — Build the DE described in the handoff
 
 `design/HANDOFF.md` plus the four `design/*.dc.html` prototypes are the brief.
+They were authored by Claude Design under human direction, not by a human
+designer — so they carry design *authority*, but a detail that looks arbitrary
+may simply be arbitrary. Check the ADRs before paying to preserve one.
 `Desktop v3.dc.html` is canonical; v1/v2 are provenance only. The prototypes are
 **design references, not production code** — recreate them in the real stack.
 Fidelity is high: colours, spacing, type and copy are final unless an ADR
@@ -118,7 +121,9 @@ The repository must never imply capability it does not have.
   as soon as there is something to capture, and never earlier.
 - **AI authorship is disclosed** on the front page: what an agent wrote, what a
   human wrote, and who decided the decisions. A reader should not have to infer
-  it from commit trailers.
+  it from commit trailers. Note that the *design* is agent-authored as well as
+  the code — there is no human original underneath that the code transcribes,
+  and implying otherwise would be the most flattering error available.
 - **Every claim is checkable.** If the README says a thing is tested, it names
   the test. If a component does not exist, it says so in those words. Status
   tables list what is *not* done as prominently as what is.

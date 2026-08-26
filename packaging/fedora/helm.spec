@@ -8,10 +8,10 @@
 # helm-sessiond, helm-bar and helm automatically once M1-M2 build them.
 #
 # NEEDS-HUMAN (package name): Fedora ships a `helm` package for the Kubernetes
-# package manager, which owns %{_bindir}/helm. helm's CLI is spelled
+# package manager, which owns %%{_bindir}/helm. helm's CLI is spelled
 # `helm ctl doctor`, which wants that same path. This has NOT been verified
 # against a live Fedora repo from the build container. Options, in rough order
-# of preference: (a) ship the CLI as %{_bindir}/helm-ctl and provide `helm ctl`
+# of preference: (a) ship the CLI as %%{_bindir}/helm-ctl and provide `helm ctl`
 # only through the session's own PATH; (b) name the package helm-de and the
 # binary helm-de-ctl; (c) confirm the collision is not real and keep `helm`.
 # Whoever owns distro submission decides — do not let a conflicting file land.
@@ -140,25 +140,23 @@ cargo test --release --locked --workspace
 %files
 %license LICENSE-MIT LICENSE-APACHE
 %doc docs/INSTALL.md docs/PITFALLS.md
-%{_bindir}/helm-session
+# One glob, not a list: it covers helm-session today and picks up helm,
+# helm-sessiond and helm-bar the moment M1-M2 build them. Listing both the glob
+# and the explicit path would make rpmbuild fail with "file listed twice".
+%{_bindir}/helm*
 %{_datadir}/wayland-sessions/helm.desktop
 %{_userunitdir}/helm-session.target
 %{_userunitdir}/helm-daemon.service
 %{_userunitdir}/helm-bar.service
 %dir %{_datadir}/helm
 %{_datadir}/helm/palette.toml
-# Binaries land here once they exist (M1-M2). Listed as globs so the spec does
-# not need editing, and %%files does not fail while they are absent:
-%{_bindir}/helm*
-# (the glob above covers helm-session too; it is listed explicitly for clarity)
-
 # ── SELinux ───────────────────────────────────────────────────────────────────
 # helm must be SELinux-clean and require no custom labels. Why that claim is
 # plausible, stated so it can be argued with rather than trusted:
 #
 #   * Every file this package installs lands in a standard location whose
-#     default label is already correct in the targeted policy: %{_bindir} is
-#     bin_t, %{_userunitdir} is systemd_unit_file_t, %{_datadir} is usr_t. No
+#     default label is already correct in the targeted policy: %%{_bindir} is
+#     bin_t, %%{_userunitdir} is systemd_unit_file_t, %%{_datadir} is usr_t. No
 #     restorecon rule, no semanage fcontext, no policy module.
 #   * Everything helm runs, runs in the user's own session domain (unconfined_t
 #     on a default Fedora desktop, or user_t under a confined login). A

@@ -226,18 +226,25 @@ Everyone taking part is held to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## How this repository was built
 
-helm is being built by an AI agent (Claude) working from a human-authored design
-handoff, under human direction and review. That is worth stating plainly rather
-than leaving to be inferred:
+helm is designed and built by AI agents (Claude), under human direction and
+review. That is worth stating plainly rather than leaving to be inferred:
 
-- **The design is human.** `design/HANDOFF.md` and the `.dc.html` prototypes were
-  authored by a person. The colours, the copy, the glyph choices and the whole
-  aesthetic are theirs.
+- **The design is AI-authored too.** `design/HANDOFF.md` and the `.dc.html`
+  prototypes came out of Claude Design, not a human designer. The colours, the
+  copy, the glyph choices and the whole aesthetic are an agent's, directed by a
+  human. There is no human-authored artefact underneath this that the code is
+  merely transcribing.
 - **The code, specs, ADRs and this README were drafted by an agent**, then
   reviewed. Architectural decisions with real alternatives were put to a human
   and decided by one — the choice to be river's window manager rather than ship
   on niri is the clearest example, and ADR 0002 is kept superseded-but-intact so
   that reasoning can be audited.
+- **Agents check each other.** Several claims in this repository were wrong when
+  first written and were caught by a second agent reading the primary source
+  rather than the first agent's summary: a declared MSRV that could not build, a
+  river protocol mapping that overstated what the protocol offered, and a
+  stability claim taken from a tracking issue that predated the release. The
+  corrections are in the git history rather than smoothed over.
 - **Claims here are meant to be checkable.** Where this README says something is
   tested, it names the test. Where something does not exist, it says so. If you
   find a claim that cannot be checked against the repository, that is a bug —

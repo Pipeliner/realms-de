@@ -3,9 +3,16 @@
 The source material helm is built from. **None of this is production code, and
 none of it is a screenshot of running software.**
 
+These artefacts were produced by Claude Design (the `.dc` in `.dc.html` is its
+design-canvas format), directed and reviewed by a human. They are the design
+authority for helm's appearance, but they are not a human designer's originals —
+worth knowing when weighing how much a given detail was deliberate versus
+incidental. Where a detail looks arbitrary, it may well be; check the ADRs before
+preserving it at cost.
+
 | File | What it is |
 |---|---|
-| `HANDOFF.md` | The brief: target stack, screens, interactions, design tokens. Human-authored. |
+| `HANDOFF.md` | The brief: target stack, screens, interactions, design tokens. |
 | `Desktop v3.dc.html` | **Canonical.** Hi-fi HTML prototype of the desktop — bar, tiles, which-key, hecate launcher, all five panes. |
 | `Files & Theming.dc.html` | charon file manager, charon portal open dialog, and the GTK theming reference with its reach-and-limits notes. |
 | `Desktop v2.dc.html`, `Desktop.dc.html` | Earlier iterations, kept for provenance. v3 supersedes both; v1 carries a deprecated cyberpunk direction that was abandoned. |

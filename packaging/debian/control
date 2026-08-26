@@ -31,6 +31,9 @@ Standards-Version: 4.7.0
 Homepage: https://github.com/pipeliner/realms-de
 Rules-Requires-Root: no
 
+# ${shlibs:Depends} resolves to nothing until a compiled binary is packaged, and
+# dpkg-gencontrol warns that it is undefined. That warning is expected before M2
+# and disappears with the first ELF file.
 Package: helm
 Architecture: any
 # helm-river is the vendored, pinned river 0.4.x described in debian/rules.
@@ -78,5 +81,4 @@ Description: keyboard-first, gapless-tiling Wayland desktop environment
  What it installs today is the session contract: the wayland-session entry, the
  session wrapper that performs the systemd/D-Bus environment handshake, the
  systemd user units and the palette. Logging into it gives you river with no
- window management attached. See /usr/share/doc/helm/README.Debian and
- docs/INSTALL.md.
+ window management attached. See /usr/share/doc/helm/INSTALL.md.gz.
