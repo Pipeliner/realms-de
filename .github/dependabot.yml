@@ -1,0 +1,54 @@
+# helm's dependency surface is small and deliberately chosen (see
+# .claude/memory/20-environment.md), so the goal here is not volume — it is that
+# nobody has to remember to look. Weekly, grouped, and capped, so a stale
+# dependency is visible without the loop (S9) spending its iterations on churn.
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      # Monday morning: the PRs are waiting at the start of a week rather than
+      # arriving in the middle of one.
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - rust
+    commit-message:
+      prefix: deps
+      include: scope
+    groups:
+      # One PR for the whole batch: semver-compatible bumps either pass the
+      # trio together or the batch is reverted together. Reviewing them
+      # individually costs more attention than it buys.
+      cargo-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+    # Majors stay ungrouped and arrive one at a time — those are the ones that
+    # move an MSRV or change an API, and each needs its own read.
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: ci
+    groups:
+      actions-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch

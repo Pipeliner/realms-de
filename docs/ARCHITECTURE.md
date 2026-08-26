@@ -179,7 +179,7 @@ Supported from day one, tested in CI:
 | Platform | Delivery | Notes |
 |---|---|---|
 | **NixOS / Nix** | Flake: packages, `nixosModules.helm`, `homeManagerModules.helm` | Reference build. A NixOS VM test boots the session and asserts the bar appears |
-| **Ubuntu** 24.04 LTS + | `.deb` via `cargo-deb`, plus a PPA-shaped repo layout | Oldest supported glibc pins the MSRV story |
+| **Ubuntu** 24.04 LTS + | `.deb` via `cargo-deb`, plus a PPA-shaped repo layout | Oldest supported glibc. Note the MSRV is pinned harder by the dependency set (1.85, edition 2024) than by glibc |
 | **Fedora** 41 + | `.rpm` via `cargo-generate-rpm` and a `.spec` | SELinux-clean; no custom labels required |
 
 Anything else is best-effort. The flake is the definition; the distro packages

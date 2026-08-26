@@ -10,7 +10,10 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+# 1.85 is a hard floor, not a preference: toml 0.9 pulls in serde_spanned,
+# toml_parser and hashbrown at edition 2024, which cargo cannot even parse
+# before 1.85. Lowering this only moves the failure to a different crate.
+rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/pipeliner/realms-de"
 homepage = "https://github.com/pipeliner/realms-de"

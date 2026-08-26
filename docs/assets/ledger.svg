@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 420" width="1000" height="420" role="img" aria-label="The ledger is the only stored state. A pure projection turns it into exact integer rectangles, which are diffed against the last frame so only what changed is redrawn. Undo restores an older ledger.">
+<title>helm — ledger, projection, placements</title>
+<defs>
+<marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor"/></marker>
+<g id="rf" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2,0 L2,14 M2,4.5 L8,1 M2,8.5 L8,5"/></g>
+<g id="ru" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2,14 L2,0.5 L8,3.5 L8,14"/></g>
+</defs>
+<style>
+text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospace,monospace}
+.t{font-size:14px;fill:#f2f5fb}.b{font-size:12px;fill:#c2cbde}.m{font-size:11px;fill:#93a1ba}.d{font-size:10.5px;fill:#4a5670}
+</style>
+
+<rect width="1000" height="420" fill="#05060c"/>
+
+<text class="m" x="165" y="34" text-anchor="middle" fill="#66748e">user action</text>
+<g color="#66748e" stroke="#66748e"><path d="M165,44 L165,84" marker-end="url(#ah)"/></g>
+
+<!-- the ledger -->
+<rect x="40.5" y="90.5" width="249" height="169" fill="#0b0d16" stroke="#a692ec" stroke-opacity=".6"/>
+<text class="t" x="60" y="116">Ledger</text>
+<text class="d" x="60" y="133">the only state that is stored</text>
+<g color="#93a1ba"><use href="#rf" x="60" y="146"/><use href="#ru" x="60" y="172"/></g>
+<text class="b" x="78" y="157">0 odin   1 thoth   2 hermes</text>
+<text class="b" x="78" y="183" fill="#66748e">0 charon  1 horus</text>
+<text class="d" x="60" y="209" fill="#66748e">history</text>
+<g color="#a692ec" stroke="#a692ec"><path d="M186,216 L128,216" marker-end="url(#ah)"/></g>
+<text class="d" x="192" y="220" fill="#a692ec">undo</text>
+<g fill="#66748e" fill-opacity=".35"><rect x="120" y="223" width="11" height="15"/><rect x="136" y="223" width="11" height="15"/><rect x="152" y="223" width="11" height="15"/><rect x="168" y="223" width="11" height="15"/></g>
+<rect x="184" y="223" width="11" height="15" fill="#a692ec" fill-opacity=".7"/>
+<text class="d" x="60" y="235">now ▸</text>
+
+<!-- projection -->
+<g color="#a3bff2" stroke="#a3bff2"><path d="M292,175 L368,175" marker-end="url(#ah)"/></g>
+<text class="m" x="330" y="164" text-anchor="middle" fill="#a3bff2">pure projection</text>
+<text class="d" x="330" y="192" text-anchor="middle">fn(&amp;Ledger, Layout, Workarea)</text>
+
+<!-- placements -->
+<rect x="372.5" y="90.5" width="249" height="169" fill="#0a0c14" stroke="#66748e" stroke-opacity=".3"/>
+<text class="t" x="392" y="116">Vec&lt;Placement&gt;</text>
+<text class="d" x="392" y="133">exact integer rects · no gaps · no overlap</text>
+<rect x="392" y="144" width="202" height="94" fill="#a692ec" fill-opacity=".3"/>
+<rect x="392" y="144" width="88" height="94" fill="#0e111b"/>
+<rect x="481" y="144" width="113" height="47" fill="#0e111b"/>
+<rect x="481" y="192" width="113" height="46" fill="#0e111b"/>
+<g class="d" fill="#66748e"><text x="400" y="160">0</text><text x="489" y="160">1</text><text x="489" y="208">2</text></g>
+<text class="d" x="392" y="252">88 + 1 + 113 = 202 · nothing left over</text>
+
+<!-- diff -->
+<g color="#66748e" stroke="#66748e"><path d="M624,175 L700,175" marker-end="url(#ah)"/></g>
+<text class="m" x="662" y="164" text-anchor="middle" fill="#66748e">diff</text>
+<text class="d" x="662" y="192" text-anchor="middle">against last frame</text>
+
+<!-- the screen -->
+<rect x="704.5" y="90.5" width="255" height="169" fill="#0a0c14" stroke="#66748e" stroke-opacity=".3"/>
+<text class="t" x="724" y="116">the screen</text>
+<text class="d" x="724" y="133">only what changed is submitted</text>
+<rect x="724" y="144" width="202" height="94" fill="#a692ec" fill-opacity=".3"/>
+<rect x="724" y="144" width="88" height="94" fill="#0e111b"/>
+<rect x="813" y="144" width="113" height="47" fill="#0b0d16"/>
+<rect x="813.5" y="144.5" width="112" height="46" fill="none" stroke="#a692ec" stroke-opacity=".6"/>
+<rect x="813" y="192" width="113" height="46" fill="#0e111b"/>
+<g class="d" fill="#66748e"><text x="732" y="160">0</text><text x="890" y="160" fill="#a692ec">1 ✦</text><text x="821" y="208">2</text></g>
+<text class="d" x="724" y="252" fill="#a692ec">1 damaged region · 2 buffers reused</text>
+
+<rect x="40" y="316" width="920" height="1" fill="#66748e" opacity=".3"/>
+
+<g>
+<text class="m" x="40" y="346" fill="#f2f5fb">Undo is exact.</text>
+<text class="d" x="40" y="364">Restore an older ledger and the screen is</text>
+<text class="d" x="40" y="380">bit-identical to what it was.</text>
+
+<text class="m" x="360" y="346" fill="#f2f5fb">Focus is free.</text>
+<text class="d" x="360" y="364">Focus is a flag on a placement, never an</text>
+<text class="d" x="360" y="380">input to geometry. Windows do not twitch.</text>
+
+<text class="m" x="680" y="346" fill="#f2f5fb">Relayout is skippable.</text>
+<text class="d" x="680" y="364">Same inputs give the same output, so an</text>
+<text class="d" x="680" y="380">unchanged frame is never submitted.</text>
+</g>
+</svg>

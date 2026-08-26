@@ -1,0 +1,26 @@
+# The anchor unit for a helm session.
+#
+# helm-session (the wrapper script) starts this target once — and only once —
+# WAYLAND_DISPLAY exists and has been imported into the systemd user manager
+# and the D-Bus activation environment. Everything that needs a display hangs
+# off this target, so nothing can start before that handshake is done.
+#
+# BindsTo=graphical-session.target implies Requires, so starting this target
+# also brings graphical-session.target up; anything else on the system that
+# keys off graphical-session.target (an idle daemon, a notification daemon)
+# therefore works under helm without knowing what helm is.
+[Unit]
+Description=helm desktop session
+Documentation=man:systemd.special(7)
+Documentation=https://github.com/pipeliner/realms-de/blob/main/docs/INSTALL.md
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target
+
+# NEEDS-HUMAN (idle + lock): docs/PITFALLS.md requires an idle+lock unit as part
+# of the session ("laptop lid closes, session stays unlocked"). No lock screen
+# has been chosen yet. Options: (a) swayidle + swaylock — packaged on Ubuntu
+# 24.04 and Fedora 41, wlr-layer-shell based, works under niri; (b) gtklock —
+# nicer, more deps; (c) a helm-native locker in M6, which is a security-sensitive
+# thing to write ourselves. Once chosen, ship helm-idle.service with
+# PartOf=graphical-session.target and WantedBy=helm-session.target.

@@ -72,7 +72,7 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <text class="h" x="30" y="49" fill="#a692ec">odin — harness</text>
 <text class="e" x="135" y="49" fill="#4a5670">· allfather orchestrates, ravens report</text>
 <text class="h" x="628" y="49" fill="#66748e" text-anchor="end" letter-spacing="2">◈ ─ ✕</text>
-<text class="m" x="20" y="84" fill="#66748e">      familiar          role               state       tok/s</text>
+<g class="m" fill="#66748e"><text x="48" y="84">familiar</text><text x="210" y="84">role</text><text x="340" y="84">state</text><text x="560" y="84" text-anchor="end">tok/s</text></g>
 <rect x="14" y="92" width="612" height="24" fill="#a692ec" opacity=".14"/>
 <rect x="14" y="92" width="2" height="24" fill="#a692ec"/>
 <g class="s">
@@ -94,20 +94,26 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <rect x="16" y="404" width="608" height="1" fill="#66748e" opacity=".3"/>
 <text class="m" x="16" y="426" fill="#66748e">stream · run 7f3a</text>
 <g class="s" fill="#93a1ba">
-<text x="16" y="460"><tspan fill="#66748e">14:30:31</tspan> <tspan fill="#a692ec">odin    </tspan> merged thread-1 into trunk plan</text>
-<text x="16" y="482"><tspan fill="#66748e">14:30:38</tspan> <tspan fill="#a3bff2">muninn  </tspan> memoised 4 projections · 1.2M ctx retired</text>
-<text x="16" y="504"><tspan fill="#66748e">14:30:46</tspan> <tspan fill="#a3bff2">freki   </tspan> forge idle · awaiting thread-3 handoff</text>
-<text x="16" y="526"><tspan fill="#66748e">14:30:55</tspan> <tspan fill="#a3bff2">huginn  </tspan> cross-checked ADR 0001 · no contradiction</text>
-<text x="16" y="548"><tspan fill="#66748e">14:31:02</tspan> <tspan fill="#a692ec">odin    </tspan> decomposed thread-3 → 2 subthreads</text>
-<text x="16" y="570"><tspan fill="#66748e">14:31:09</tspan> <tspan fill="#a3bff2">geri    </tspan> patch applied · cargo fmt clean</text>
-<text x="16" y="592"><tspan fill="#66748e">14:31:11</tspan> <tspan fill="#d9b06a">valkyrja</tspan> clippy --all-targets -D warnings · clean</text>
-<text x="16" y="614"><tspan fill="#66748e">14:31:15</tspan> <tspan fill="#d9b06a">valkyrja</tspan> 54/54 tests pass · 0.00s</text>
-<text x="16" y="636"><tspan fill="#66748e">14:31:20</tspan> <tspan fill="#a692ec">odin    </tspan> merged thread-2 into trunk plan</text>
-<text x="16" y="658"><tspan fill="#66748e">14:31:28</tspan> <tspan fill="#a3bff2">muninn  </tspan> ctx 41% · pruning oldest 12 turns</text>
-<text x="16" y="680"><tspan fill="#66748e">14:31:33</tspan> <tspan fill="#a692ec">odin    </tspan> loosing freki for parallel refactor…</text>
-<text x="16" y="702" fill="#f2f5fb"><tspan fill="#66748e">14:31:38</tspan> <tspan fill="#a692ec">odin    </tspan> </text>
+<text x="16" y="460"><tspan fill="#66748e">14:29:41</tspan> <tspan fill="#a692ec">odin    </tspan> run 7f3a summoned · 6 familiars bound</text>
+<text x="16" y="482"><tspan fill="#66748e">14:29:48</tspan> <tspan fill="#a3bff2">huginn  </tspan> scrying helm-core::layout · 411 lines</text>
+<text x="16" y="504"><tspan fill="#66748e">14:30:02</tspan> <tspan fill="#a3bff2">muninn  </tspan> cache warm · embedding 240 chunks</text>
+<text x="16" y="526"><tspan fill="#66748e">14:30:09</tspan> <tspan fill="#a3bff2">geri    </tspan> drafting stage::relayout · 3 candidate diffs</text>
+<text x="16" y="548"><tspan fill="#66748e">14:30:17</tspan> <tspan fill="#d9b06a">valkyrja</tspan> test drift in stage::relayout — reroll requested</text>
+<text x="16" y="570"><tspan fill="#66748e">14:30:24</tspan> <tspan fill="#a3bff2">geri    </tspan> reroll #2 accepted · 54/54 tests pass</text>
+<text x="16" y="592"><tspan fill="#66748e">14:30:31</tspan> <tspan fill="#a692ec">odin    </tspan> merged thread-1 into trunk plan</text>
+<text x="16" y="614"><tspan fill="#66748e">14:30:38</tspan> <tspan fill="#a3bff2">muninn  </tspan> memoised 4 projections · 1.2M ctx retired</text>
+<text x="16" y="636"><tspan fill="#66748e">14:30:46</tspan> <tspan fill="#a3bff2">freki   </tspan> forge idle · awaiting thread-3 handoff</text>
+<text x="16" y="658"><tspan fill="#66748e">14:30:55</tspan> <tspan fill="#a3bff2">huginn  </tspan> cross-checked ADR 0001 · no contradiction</text>
+<text x="16" y="680"><tspan fill="#66748e">14:31:02</tspan> <tspan fill="#a692ec">odin    </tspan> decomposed thread-3 → 2 subthreads</text>
+<text x="16" y="702"><tspan fill="#66748e">14:31:09</tspan> <tspan fill="#a3bff2">geri    </tspan> patch applied · cargo fmt clean</text>
+<text x="16" y="724"><tspan fill="#66748e">14:31:11</tspan> <tspan fill="#d9b06a">valkyrja</tspan> clippy --all-targets -D warnings · clean</text>
+<text x="16" y="746"><tspan fill="#66748e">14:31:15</tspan> <tspan fill="#d9b06a">valkyrja</tspan> 54/54 tests pass · 0.00s</text>
+<text x="16" y="768"><tspan fill="#66748e">14:31:20</tspan> <tspan fill="#a692ec">odin    </tspan> merged thread-2 into trunk plan</text>
+<text x="16" y="790"><tspan fill="#66748e">14:31:28</tspan> <tspan fill="#a3bff2">muninn  </tspan> ctx 41% · pruning oldest 12 turns</text>
+<text x="16" y="812"><tspan fill="#66748e">14:31:33</tspan> <tspan fill="#a692ec">odin    </tspan> loosing freki for parallel refactor…</text>
+<text x="16" y="834" fill="#f2f5fb"><tspan fill="#66748e">14:31:38</tspan> <tspan fill="#a692ec">odin    </tspan> </text>
 </g>
-<rect x="152" y="692" width="7" height="13" fill="#a692ec"/>
+<rect x="152" y="824" width="7" height="13" fill="#a692ec"/>
 <rect x="16" y="1016" width="608" height="1" fill="#66748e" opacity=".35"/>
 <g class="m" fill="#66748e">
 <text x="16" y="1040">run 7f3a · 6m12s</text><text x="132" y="1040">ctx 41%</text><text x="200" y="1040">spend 0.84◈</text>

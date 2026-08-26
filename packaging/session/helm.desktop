@@ -1,0 +1,20 @@
+# helm — wayland session entry.
+#
+# Installed to /usr/share/wayland-sessions/helm.desktop, where every display
+# manager (GDM, SDDM, greetd/tuigreet, LightDM) looks for wayland sessions.
+# Exec must be an absolute path: display managers do not run it through a login
+# shell, so /usr/local/bin is not necessarily on PATH.
+#
+# PRE-ALPHA (0.1.0): selecting this entry today gives you the configured
+# compositor (niri by default) with helm's session environment contract applied.
+# The bar, the session daemon and the launcher land in M2 — see docs/INSTALL.md.
+#
+# The Nix module rewrites Exec/TryExec to the store path of the wrapper.
+[Desktop Entry]
+Name=helm
+Comment=Keyboard-first, gapless-tiling Wayland desktop
+Exec=/usr/bin/helm-session
+TryExec=/usr/bin/helm-session
+Type=Application
+DesktopNames=helm
+Keywords=tiling;wayland;keyboard;

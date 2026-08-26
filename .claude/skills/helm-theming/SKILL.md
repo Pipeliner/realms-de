@@ -8,6 +8,12 @@ description: Use when anything about helm's colour or generated theme files is i
 One palette file, many generated files, applied atomically. Two rules carry the
 whole design and both are easy to break by accident.
 
+**Start in the spec** (S14). `docs/specs/0002-theme-pipeline.md` is the M1
+contract for `helm-theme` and is *Accepted with an empty Test column* — the
+happy-path tests for A1–A10 are the next thing to be written, watched to fail,
+and implemented against. The palette format itself is SPEC 0001; the decisions
+are ADR 0005 (one palette file) and ADR 0006 (derive, do not filter).
+
 ## Rule 1 — no colour is written outside `palette.toml`
 
 `palette.toml` at the repo root is the single source of truth (ADR 0005). A

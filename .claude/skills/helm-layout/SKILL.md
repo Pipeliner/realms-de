@@ -11,6 +11,12 @@ that one property, so the invariants below are not stylistic — break one and
 three features break silently. ADR 0001 (`docs/adr/0001-ledger-as-single-source-of-truth.md`)
 is the long form.
 
+**Behaviour changes start in the spec, not in the code** (standing order S14).
+The governing spec is `docs/specs/0001-helm-core-contracts.md`, whose acceptance
+criteria A1–A8 are the ledger and layout guarantees and already name the tests
+that hold them. Change the spec row first, then the test, then the code — and if
+implementing proves the spec wrong, correct it in the same commit.
+
 ## The four invariants
 
 1. **Positions are never stored.** `Ledger` holds `Vec<WinId>` per orbit plus
