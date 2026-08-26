@@ -87,8 +87,8 @@ counts.
 |---|---|---|---|
 | `helm-core` | lib | Ledger, layout projection, palette, keymap, IPC types, glyph inventory | **M0 — done** |
 | `helm-theme` | lib | `palette.toml` → every themed file. Template engine, atomic writes, reload signalling | M1 |
-| `helm-ctl` | bin | `helm ctl theme/orbit/ledger/doctor/run`. The scriptable surface | M1–M2 |
-| `helm-session` | bin | Holds `HelmState`, drives a `WmBackend`, serves the control socket, launches clients | M2 |
+| `helm-ctl` | bin (`helmctl`) | `helmctl theme/orbit/ledger/doctor/run`. The scriptable surface | M1–M2 |
+| `helm-session` | bin (`helm-wm`) | Holds `HelmState`, drives a `WmBackend`, serves the control socket, launches clients. Under river it *is* the window manager, hence the binary name | M2 |
 | `helm-bar` | bin | Layer-shell bar, which-key strip, mode badge, chord echo | M2 |
 | `helm-hecate` | bin | Layer-shell fuzzy launcher (`nucleo`) | M4 |
 | `helm-odin` | bin | `ratatui` agent-harness TUI | M4 |
@@ -209,6 +209,22 @@ Anything else is best-effort. The flake is the definition; the distro packages
 are generated from the same metadata rather than maintained in parallel.
 
 ---
+
+### Binary names
+
+Crate names and installed binary names deliberately differ in two places, both
+to avoid a collision that would otherwise be found by a user rather than by us:
+
+| Crate | Binary | Why |
+|---|---|---|
+| `helm-session` | `helm-wm` | `helm-session` is already the session *wrapper* script the display manager runs. Two different things called `helm-session` in one `ps` output is a support burden, and under river the daemon genuinely is the window manager |
+| `helm-ctl` | `helmctl` | Fedora ships Kubernetes Helm as `/usr/bin/helm`. Two packages owning that path cannot coexist, and rpm refuses the install rather than warning |
+
+The design handoff writes the CLI as `helm ctl orbit --list`. That copy is
+otherwise final, and this is a deliberate departure with a reason, per the
+precedence rule in `design/README.md`. Whether to also ship a `helm` alias where
+the name is free is **`needs-human`**: it is a branding call, not a technical
+one.
 
 ## 6. Repository layout
 

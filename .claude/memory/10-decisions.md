@@ -50,3 +50,15 @@ protocol moves to a binary encoding.
 default to the reference desktop's proportions** — because the mockup is 1920×1080
 and the same shape has to survive 2560×1440 and 3840×2160 — *revisit if* users
 want per-output pixel pinning.
+
+**2026-08-26 — Binaries are `helm-wm` and `helmctl`, not `helm-session` and
+`helm`** — because the session wrapper is already called `helm-session`, and
+because Fedora ships Kubernetes Helm at `/usr/bin/helm`, where two owners of one
+path make rpm refuse the install outright — *revisit if* the branding question
+(shipping a `helm` alias where the name is free) is answered differently.
+
+**2026-08-26 — Packaging vendors river 0.4.8 specifically** — because that is
+what nixpkgs carries at the revision the flake evaluates against, and Ubuntu
+noble has no river, no zig and only wlroots 0.17, so nothing can be borrowed
+from the distro — *revisit if* the distros catch up, which would let the
+vendoring be dropped entirely.
