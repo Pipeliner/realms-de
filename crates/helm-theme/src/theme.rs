@@ -1,6 +1,7 @@
 //! Apply, diff and lint: the three things `helm ctl theme` does.
 
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use helm_core::palette::Finding;
@@ -102,6 +103,8 @@ pub fn apply_with(
 ) -> Result<Applied> {
     let started = Instant::now();
 
+    validate_targets(templates)?;
+
     // Lint before rendering, not after writing: a palette that fails its own
     // readability floors must leave the live theme exactly as it was.
     let findings = palette.lint();
@@ -171,9 +174,11 @@ pub fn apply_with(
 
 /// Report what an apply would change, writing nothing.
 pub fn diff(palette: &Palette, root: &Path) -> Result<Vec<Change>> {
+    let templates = templates();
+    validate_targets(&templates)?;
     let derived = palette.derived();
     let mut out = Vec::new();
-    for t in templates() {
+    for t in templates {
         let target = root.join(&t.target);
         let text = render_derived(&derived, t.id, t.source)?;
         let changed = !std::fs::read(&target).is_ok_and(|old| old == text.as_bytes());
@@ -184,6 +189,42 @@ pub fn diff(palette: &Palette, root: &Path) -> Result<Vec<Change>> {
         });
     }
     Ok(out)
+}
+
+/// Reject targets which cannot be represented as one unambiguous path below
+/// the caller's configuration root. This validation is deliberately before
+/// rendering or staging so one malicious template cannot partly apply a set.
+fn validate_targets(templates: &[Template]) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for template in templates {
+        if template.target.as_os_str().is_empty() {
+            return Err(Error::UnsafeTarget {
+                target: template.target.clone(),
+                reason: "target is empty",
+            });
+        }
+        if template.target.components().any(|component| {
+            matches!(
+                component,
+                Component::Prefix(_)
+                    | Component::RootDir
+                    | Component::CurDir
+                    | Component::ParentDir
+            )
+        }) {
+            return Err(Error::UnsafeTarget {
+                target: template.target.clone(),
+                reason: "target must be a normalized relative path",
+            });
+        }
+        if !seen.insert(template.target.clone()) {
+            return Err(Error::UnsafeTarget {
+                target: template.target.clone(),
+                reason: "two templates target the same output",
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Lint a palette and measure its accent hue separations.
@@ -405,6 +446,42 @@ mod tests {
             "a failed apply left files behind: {:?}",
             tree(root.path()).keys().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn unsafe_or_duplicate_targets_abort_before_any_output_is_written() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let unsafe_sets = [
+            vec![Template {
+                id: "absolute",
+                source: "x = {{ accent.violet }}\n",
+                target: outside.path().join("escaped.conf"),
+                reload: Reload::None,
+            }],
+            vec![
+                Template {
+                    id: "first",
+                    source: "x = {{ accent.violet }}\n",
+                    target: PathBuf::from("same.conf"),
+                    reload: Reload::None,
+                },
+                Template {
+                    id: "second",
+                    source: "x = {{ accent.teal }}\n",
+                    target: PathBuf::from("same.conf"),
+                    reload: Reload::None,
+                },
+            ],
+        ];
+
+        for set in unsafe_sets {
+            let err = apply_with(&shipped(), root.path(), &set, &mut Recorder::default())
+                .expect_err("unsafe targets must be rejected");
+            assert!(err.to_string().contains("target"), "{err}");
+            assert!(tree(root.path()).is_empty());
+            assert!(!outside.path().join("escaped.conf").exists());
+        }
     }
 
     #[test]

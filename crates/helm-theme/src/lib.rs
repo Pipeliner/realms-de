@@ -75,6 +75,14 @@ pub enum Error {
     /// A reload mechanism ran and failed.
     #[error("reload failed: {0}")]
     Reload(String),
+    /// A template target could escape or collide within the configuration root.
+    #[error("unsafe template target {target}: {reason}")]
+    UnsafeTarget {
+        /// Target supplied by the template.
+        target: PathBuf,
+        /// Why it is unsafe.
+        reason: &'static str,
+    },
     /// The palette itself did not parse or validate.
     #[error(transparent)]
     Core(#[from] helm_core::Error),
