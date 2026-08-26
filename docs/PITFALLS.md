@@ -28,6 +28,7 @@ Legend: **Guard** = the thing that would fail loudly if the mitigation regressed
 | `helm-session` dies | Windows unplaced, keybindings gone — a sharper failure than a crashed bar | Supervised restart with ledger recovery from the last snapshot | *planned:* M2 |
 | Layer-shell not served | **The bar never appears**, and it looks like the bar is broken rather than the WM | helm implements `river-layer-shell-v1`; `doctor` checks it is being served | *planned:* M2 |
 | Position submitted during the management phase | Session dies at startup with a protocol error | `set_position` is rendering state and `propose_dimensions` is management state; the backend respects the phase boundary | *planned:* M2 test asserting no `error::sequence_order` across a scripted mutation sweep |
+| A stale window manager holds river's global | The supervised `helm-wm` never starts, and a naive restart policy loops forever, burying the message | river answers `unavailable` to a second window-management client; exit 69 plus `RestartPreventExitStatus` stops the loop, and `doctor` names the process holding it | *planned:* M3 |
 | Protocol version drift after a river bump | Session fails to start after a routine upgrade | Pin a tested river; version-check at connect and refuse with a clear message rather than misbehaving | *planned:* M2 |
 
 ## Fonts and glyphs
@@ -54,6 +55,8 @@ Legend: **Guard** = the thing that would fail loudly if the mitigation regressed
 | `WAYLAND_DISPLAY` never reaches D-Bus | File dialogs hang for 25 s, then fail | Session entry imports the environment into systemd *and* D-Bus before starting anything | *planned:* M3 `doctor` check |
 | `XDG_CURRENT_DESKTOP` unset | Portals pick the wrong backend, screen share silently fails | Set explicitly to `helm` and exported both ways | *planned:* M3 |
 | No portal backend installed | "Open File" does nothing in Firefox | Packages depend on a backend; `doctor` verifies one answers on D-Bus | *planned:* M3 |
+| A unit is *skipped* rather than failed | Nothing starts, and `systemctl start` still exits 0 with nothing in `--failed` | An unmet `ConditionEnvironment=` leaves a unit `inactive (dead)` with `ConditionResult=no`. The session entry and `doctor` check each unit's `ActiveState` instead of trusting the exit code | *planned:* M3 |
+| The user manager outlives the session | The next login inherits a `WAYLAND_DISPLAY` pointing at a dead socket — symptoms identical to never importing it at all | `systemd --user` and the session bus persist across logout, always when lingering. Teardown clears both after stopping the target, and the entry treats an inherited value as stale | *planned:* M3 |
 | Session dies with a client | Bar crashes → black screen | Clients are restartable; the session daemon owns the lifecycle | *planned:* M2 |
 | No lock/idle handling | Laptop lid closes, session stays unlocked | Ship an idle+lock unit as part of the session | *planned:* M3 |
 | XWayland apps unstyled or scaled wrong | Old apps look broken | XWayland enabled with explicit scaling policy; theming via `Xresources` from the same palette | *planned:* M3 |

@@ -35,7 +35,7 @@ rec {
   # (0.3.17 in nixpkgs) keep window management *inside* the compositor and do
   # not implement river-window-management-v1, so helm-session has nothing to
   # drive and the desktop is inert. 0.5 is excluded because the protocol is
-  # registry-classified unstable — a minor bump is exactly where it may move,
+  # declared stable as of 0.4.0, but pre-1.0 and single-maintainer, so a minor
   # and helm should refuse to build rather than fail at runtime.
   #
   # NEEDS-HUMAN — how river is pinned. Two options:
@@ -65,7 +65,7 @@ rec {
       ''
     else
       lib.warnIf (v != riverTested)
-        "helm: river ${v} differs from the tested ${riverTested}; river-window-management-v1 is classified unstable, so re-test the window-manager mapping."
+        "helm: river ${v} differs from the tested ${riverTested}; re-verify the window-manager mapping before shipping this combination."
         pkgs.river;
 
   # ── the desktop helm assembles itself out of ──────────────────────────────

@@ -33,20 +33,13 @@ Two consequences you will meet immediately:
   helm session is a compositor with nothing driving it: a background, a cursor,
   and no way to open a window. That is the expected state of 0.1.0, not a bug
   to report.
-- **`river-window-management-v1` is classified *unstable* in the Wayland
-  registry.** river's maintainer states that window managers will not be broken,
-  but the classification is what it is. That is why helm pins a tested river
-  (0.4.8) rather than accepting whatever a distribution ships, and why the Nix
-  build refuses a river outside 0.4.x instead of failing at runtime.
+- **`river-window-management-v1` is declared *stable* as of river 0.4.0**, with
+  a forward-compatibility pledge to 1.0.0. The residual risk is not a protocol
+  classification but trust in a single maintainer of a pre-1.0 project. helm
+  pins a tested river and treats a version bump as an event to re-verify, not a
+  surprise to absorb.
 
-Distributions have not caught up: Ubuntu 24.04 ships no river at all, and
-Fedora 41-era river is likely 0.3.x or river-classic, neither of which
-implements the protocol. So helm packages a pinned river alongside itself. On
-Nix that pin is the `nixpkgs` input; on Ubuntu and Fedora it is a `helm-river`
-package that **has not been built yet** — see the `NEEDS-HUMAN` blocks in
-`packaging/debian/rules` and `packaging/fedora/helm.spec`.
 
----
 
 ## NixOS and Nix
 
