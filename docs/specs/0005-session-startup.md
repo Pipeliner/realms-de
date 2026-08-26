@@ -1,6 +1,7 @@
 # SPEC 0005 — Session startup and desktop integration
 
-- **Status:** Draft — open questions below are unresolved (`needs-human`)
+- **Status:** Draft — NixOS session-discovery contract accepted; open questions
+  below remain unresolved (`needs-human`)
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
   [ADR 0013](../adr/0013-river-window-management-backend.md),
@@ -55,7 +56,24 @@ paths; session teardown; the log-line contract; and the list of checks
 - Theme generation and the palette — [SPEC 0002](0002-theme-pipeline.md). This
   spec only requires that the cursor theme name reaches three places.
 - Distribution packaging mechanics (deb/rpm/flake layout) — `packaging/`,
-  `docs/INSTALL.md`. This spec constrains what those must install and enable.
+  `docs/INSTALL.md`. This spec constrains what those must install and enable,
+  except for the NixOS session-discovery contract below.
+
+### NixOS session discovery contract
+
+On NixOS, helm supplies its session entry through
+`services.displayManager.sessionPackages`. Helm neither enables nor selects a
+display manager. A display manager is responsible for materialising the
+registered session entry in its session-data directory and presenting it to a
+user.
+
+`/run/current-system/sw/share/wayland-sessions/helm.desktop` is **not** a helm
+contract: the NixOS system profile does not normally link that directory.
+Tests must enable a concrete supported display-manager integration, discover
+the session through NixOS display-manager session data, and assert both the
+`helm.desktop` identity and its rewritten `Exec` target. A test that uses no
+display manager may test package contents directly, but must not claim to test
+NixOS session discovery.
 - Choosing the lock screen and the idle defaults — see **Open questions**.
 
 ## Behaviour
