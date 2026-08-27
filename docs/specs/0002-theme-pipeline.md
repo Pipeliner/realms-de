@@ -164,14 +164,31 @@ From [PITFALLS.md](../PITFALLS.md), this component owns: "half-applied theme",
 "unreadable palette after a tweak". It contributes to "Flatpak apps ignore the
 theme", which is documented as a limit rather than fought.
 
+## Generated-file ownership and activation
+
+Helm owns **only** `$XDG_CONFIG_HOME/helm/generated/**`. Every file that
+`theme apply` may replace, remove, or compare lives below that subtree. A
+template for a program with a user-owned configuration file renders to a
+tool-specific file below that subtree; it never writes into the program's
+ordinary configuration directory.
+
+For an activation file that the program reads by default (for example GTK's
+`gtk.css`), `theme apply` may create the user-side file *only when it is
+absent*. That first-run file contains only the documented Helm import and is
+thereafter user-owned. If the activation file already exists, Helm must not
+modify, replace, append to, or delete it. `helmctl doctor` reports the exact
+import line and target file when the existing configuration does not activate
+the generated theme.
+
+This rule keeps the writer's atomicity boundary wholly inside an owned
+subtree. It does not grant Helm ownership of a configuration merely because
+that configuration currently imports Helm, and it does not change #22's
+multi-file-publication boundary.
+
 ## Open questions
 
 - **Kvantum SVG generation.** Generating a Kvantum theme means emitting SVG, not
   just a colour list. Worth it in M1, or is a qt6ct colour scheme enough until
   M6? *Recommendation: qt6ct only in M1.*
-- **Where generated files live.** Writing directly into `~/.config/gtk-4.0/`
-  risks clobbering a user's own file. An `@import` shim from their file into a
-  helm-owned one is safer but needs one manual step on first run.
-  **`needs-human`.**
 - **Reload for Qt.** No reliable hot-reload path for running Qt apps was found.
   Accepting "applies on next start" for M1 unless someone knows better.
