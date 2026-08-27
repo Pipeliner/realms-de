@@ -16,8 +16,9 @@
 //!    bug the whole design exists to prevent, so [`render()`] names the offending
 //!    placeholder and aborts the apply before anything is written.
 //! 3. **Application is atomic.** Everything is rendered to memory, written to
-//!    `<target>.helm-tmp`, `fsync`ed, `rename(2)`d into place, and only then are
-//!    reloads fanned out — once each.
+//!    a unique no-follow `.<final>.helm-tmp.<pid>.<sequence>` staging sibling,
+//!    `fsync`ed, `rename(2)`d into place, and only then are reloads fanned out —
+//!    once each.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

@@ -102,7 +102,8 @@ impl LintReport {
 /// The copy happens before the read so a user's first edit is to their own
 /// file, not to something inside the helm package.
 pub fn load_palette(root: &Path) -> Result<Palette> {
-    reject_symlinked_palette_path(root)?;
+    let root = normalized_root_spelling(root);
+    reject_symlinked_palette_path(&root)?;
     let path = root.join(USER_PALETTE);
     if !path.exists() {
         if let Some(dir) = path.parent() {
@@ -165,36 +166,7 @@ pub fn apply_with(
     templates: &[Template],
     reloader: &mut dyn Reloader,
 ) -> Result<Applied> {
-    #[cfg(test)]
-    {
-        apply_with_inner(palette, root, templates, reloader, None)
-    }
-    #[cfg(not(test))]
-    {
-        apply_with_inner(palette, root, templates, reloader)
-    }
-}
-
-/// Test-only entry point that runs a deterministic pathname-replacement race
-/// after preflight has checked the target and before the legacy writer stages.
-#[cfg(test)]
-fn apply_with_after_preflight<F>(
-    palette: &Palette,
-    root: &Path,
-    templates: &[Template],
-    reloader: &mut dyn Reloader,
-    mut after_preflight: F,
-) -> Result<Applied>
-where
-    F: FnMut(),
-{
-    apply_with_inner(
-        palette,
-        root,
-        templates,
-        reloader,
-        Some(&mut after_preflight),
-    )
+    apply_with_inner(palette, root, templates, reloader)
 }
 
 fn apply_with_inner(
@@ -202,18 +174,12 @@ fn apply_with_inner(
     root: &Path,
     templates: &[Template],
     reloader: &mut dyn Reloader,
-    #[cfg(test)] after_preflight: Option<&mut dyn FnMut()>,
 ) -> Result<Applied> {
     let started = Instant::now();
-    let root = root_without_trailing_separators(root);
+    let root = normalized_root_spelling(root);
 
     validate_targets(templates)?;
     reject_symlinked_targets(&root, templates)?;
-
-    #[cfg(test)]
-    if let Some(after_preflight) = after_preflight {
-        after_preflight();
-    }
 
     // Lint before rendering, not after writing: a palette that fails its own
     // readability floors must leave the live theme exactly as it was.
@@ -298,21 +264,45 @@ fn apply_with_inner(
     })
 }
 
-/// Remove only terminal separators so `NOFOLLOW` sees the root's basename.
+/// Remove equivalent terminal separators and `.` components so `NOFOLLOW`
+/// sees the root's basename.
 ///
 /// An all-separator root (including `/`) and `.` are returned unchanged; this
 /// is a lexical spelling adjustment and never resolves any path component.
-fn root_without_trailing_separators(root: &Path) -> PathBuf {
+fn normalized_root_spelling(root: &Path) -> PathBuf {
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
     let bytes = root.as_os_str().as_bytes();
-    let Some(last_component_byte) = bytes.iter().rposition(|byte| *byte != b'/') else {
-        return root.to_path_buf();
-    };
-    if last_component_byte + 1 == bytes.len() {
+    if bytes.is_empty() || bytes == b"." || bytes.iter().all(|byte| *byte == b'/') {
         return root.to_path_buf();
     }
-    PathBuf::from(OsString::from_vec(bytes[..=last_component_byte].to_vec()))
+
+    let mut end = bytes.len();
+    loop {
+        while end > 0 && bytes[end - 1] == b'/' {
+            if bytes[..end].iter().all(|byte| *byte == b'/') {
+                break;
+            }
+            end -= 1;
+        }
+
+        if end == 1 && bytes[0] == b'.' {
+            break;
+        }
+        let component_start = bytes[..end]
+            .iter()
+            .rposition(|byte| *byte == b'/')
+            .map_or(0, |separator| separator + 1);
+        if bytes[component_start..end] != *b"." {
+            break;
+        }
+        end = component_start;
+    }
+
+    if end == bytes.len() {
+        return root.to_path_buf();
+    }
+    PathBuf::from(OsString::from_vec(bytes[..end].to_vec()))
 }
 
 /// Report what an apply would change, writing nothing.
@@ -593,23 +583,6 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    /// Keep the originally checked directory reachable after its pathname is
-    /// replaced. The test uses this to make the parent replacement race
-    /// deterministic; the legacy writer below incorrectly returns to paths.
-    #[cfg(unix)]
-    fn hold_directory(path: &Path) -> std::fs::File {
-        use rustix::fs::{openat, Mode, OFlags, CWD};
-
-        let fd = openat(
-            CWD,
-            path,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .unwrap_or_else(|error| panic!("could not hold {}: {error}", path.display()));
-        std::fs::File::from(fd)
-    }
-
     fn shipped() -> Palette {
         Palette::from_toml(SHIPPED_PALETTE).expect("shipped palette must parse")
     }
@@ -885,6 +858,63 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_symlinked_configuration_root_with_terminal_dot_is_refused() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let victim = tempfile::tempdir().unwrap();
+        let root = parent.path().join("config");
+        symlink(victim.path(), &root).unwrap();
+        let mut root_with_terminal_dot = root.as_os_str().to_owned();
+        root_with_terminal_dot.push("/.");
+        let set = [Template {
+            id: "root-link-with-terminal-dot",
+            source: "x = {{ accent.violet }}\n",
+            target: PathBuf::from("theme.conf"),
+            reload: Reload::None,
+        }];
+
+        let applied = apply_with(
+            &shipped(),
+            Path::new(&root_with_terminal_dot),
+            &set,
+            &mut Recorder::default(),
+        );
+
+        assert!(
+            applied.is_err(),
+            "a terminal dot let apply follow the root symlink: {applied:?}"
+        );
+        assert!(
+            !victim.path().join("theme.conf").exists(),
+            "the symlinked configuration root redirected the write"
+        );
+    }
+
+    #[test]
+    fn root_normalization_is_lexical_and_preserves_dot_and_slash_roots() {
+        for (spelling, normalized) in [
+            ("config/.", "config"),
+            ("config/.//", "config"),
+            ("config/./.", "config"),
+            ("config/./child", "config/./child"),
+            ("config/..", "config/.."),
+            (".", "."),
+            ("./", "."),
+            ("/", "/"),
+            ("///", "///"),
+            ("/./", "/"),
+        ] {
+            assert_eq!(
+                normalized_root_spelling(Path::new(spelling)).as_os_str(),
+                OsStr::new(normalized),
+                "unexpected normalization for {spelling:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_symlinked_staging_file_is_not_touched() {
         use std::os::unix::fs::symlink;
 
@@ -935,36 +965,48 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let live = root.path().join("live");
         std::fs::create_dir(&live).unwrap();
-        let held = hold_directory(&live);
+        let output_root = OutputRoot::open(root.path()).unwrap();
+        let (commit_parent, final_name) = output_root
+            .open_parent(Path::new("live/theme.conf"))
+            .unwrap();
+        let cleanup_parent = commit_parent.try_clone().unwrap();
         let original_parent = root.path().join("held");
         let victim = tempfile::tempdir().unwrap();
 
-        let set = [Template {
-            id: "replaced-parent",
-            source: "x = {{ accent.violet }}\n",
-            target: PathBuf::from("live/theme.conf"),
-            reload: Reload::None,
-        }];
-        let applied = apply_with_after_preflight(
-            &shipped(),
-            root.path(),
-            &set,
-            &mut Recorder::default(),
-            || {
-                std::fs::rename(&live, &original_parent).unwrap();
-                symlink(victim.path(), &live).unwrap();
-            },
-        );
+        std::fs::rename(&live, &original_parent).unwrap();
+        symlink(victim.path(), &live).unwrap();
+
+        let committed = stage(commit_parent, final_name, "committed\n").unwrap();
+        commit(&committed).unwrap();
+        let discarded = stage(
+            cleanup_parent,
+            OsString::from("discarded.conf"),
+            "discarded\n",
+        )
+        .unwrap();
+        cleanup(&discarded).unwrap();
 
         assert!(
-            applied.is_err(),
-            "the replacement symlink let apply succeed and write victim/theme.conf: {applied:?}"
+            tree(victim.path()).is_empty(),
+            "descriptor-owned operations reached the replacement symlink destination"
+        );
+        assert_eq!(
+            std::fs::read_to_string(original_parent.join("theme.conf")).unwrap(),
+            "committed\n"
+        );
+        assert!(!original_parent.join("discarded.conf").exists());
+        assert_eq!(
+            tree(&original_parent).keys().cloned().collect::<Vec<_>>(),
+            vec![PathBuf::from("theme.conf")],
+            "staging cleanup left an unexpected entry"
         );
         assert!(
-            !victim.path().join("theme.conf").exists(),
-            "the replacement symlink redirected the write to the victim"
+            std::fs::symlink_metadata(&live)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the replacement pathname stopped naming the victim symlink"
         );
-        drop(held);
     }
 
     #[test]
@@ -1050,6 +1092,60 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(palette_victim).unwrap(),
             "not a palette\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_palette_root_with_a_trailing_separator_is_refused_without_initializing_its_destination(
+    ) {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let victim = tempfile::tempdir().unwrap();
+        let root = parent.path().join("config");
+        symlink(victim.path(), &root).unwrap();
+        let mut root_with_separator = root.as_os_str().to_owned();
+        root_with_separator.push("/");
+
+        let loaded = load_palette(Path::new(&root_with_separator));
+
+        assert!(
+            !victim.path().join(USER_PALETTE).exists(),
+            "first-run palette initialization wrote through the root symlink"
+        );
+        assert!(
+            loaded.is_err(),
+            "a trailing separator let palette initialization follow the root symlink"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_palette_root_with_terminal_dot_is_refused_without_reading_its_destination() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let victim = tempfile::tempdir().unwrap();
+        let victim_palette = victim.path().join(USER_PALETTE);
+        std::fs::create_dir(victim_palette.parent().unwrap()).unwrap();
+        std::fs::write(&victim_palette, SHIPPED_PALETTE).unwrap();
+        let before = tree(victim.path());
+        let root = parent.path().join("config");
+        symlink(victim.path(), &root).unwrap();
+        let mut root_with_terminal_dot = root.as_os_str().to_owned();
+        root_with_terminal_dot.push("/.");
+
+        let loaded = load_palette(Path::new(&root_with_terminal_dot));
+
+        assert!(
+            loaded.is_err(),
+            "a terminal dot let palette loading follow the root symlink"
+        );
+        assert_eq!(
+            tree(victim.path()),
+            before,
+            "palette loading mutated the root symlink destination"
         );
     }
 
