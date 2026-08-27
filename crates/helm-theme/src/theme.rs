@@ -170,8 +170,14 @@ pub fn apply(palette: &Palette, root: &Path) -> Result<Applied> {
 /// Describe every shipped user-side activation file without reading or writing
 /// the filesystem.
 ///
-/// A caller such as `helmctl doctor` can use this to report the exact import
-/// needed when a user-owned file does not activate Helm's generated output.
+/// This is the stable #23 (`helmctl doctor`) handoff contract. Each result is
+/// a `(user_path, import, generated_target)` triple, with both paths relative
+/// to `$XDG_CONFIG_HOME`; `import` includes its terminal newline and must be
+/// printed verbatim. Doctor must not infer activation from raw user-owned CSS:
+/// for every existing `user_path`, it prints: `{user_path} is user-owned;
+/// ensure it activates Helm's generated theme with exactly: {import}`. Doctor
+/// must use these values rather than reconstructing paths or imports, and must
+/// not modify the user-owned file.
 pub fn activation_diagnostics() -> Vec<ActivationDiagnostic> {
     templates()
         .into_iter()
