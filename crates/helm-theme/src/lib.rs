@@ -30,10 +30,10 @@ pub mod theme;
 
 pub use reload::{Reloader, SystemReloader};
 pub use render::render;
-pub use template::{templates, Reload, Template};
+pub use template::{templates, Activation, Reload, Template};
 pub use theme::{
-    apply, apply_with, diff, lint, load_palette, Applied, Change, HueSeparation, LintReport,
-    SHIPPED_PALETTE, USER_PALETTE,
+    activation_diagnostics, apply, apply_with, diff, lint, load_palette, ActivationDiagnostic,
+    Applied, Change, HueSeparation, LintReport, SHIPPED_PALETTE, USER_PALETTE,
 };
 
 use std::path::PathBuf;

@@ -70,6 +70,18 @@ pub struct Change {
     pub changed: bool,
 }
 
+/// The information `helmctl doctor` needs to tell a user how to activate a
+/// generated theme without modifying their existing configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivationDiagnostic {
+    /// User-owned activation file, relative to `$XDG_CONFIG_HOME`.
+    pub user_path: PathBuf,
+    /// The exact import line needed in that file.
+    pub import: &'static str,
+    /// Helm-owned generated file selected by the import.
+    pub generated_target: PathBuf,
+}
+
 /// Hue distance between two accents, in OKLab degrees.
 #[derive(Debug)]
 pub struct HueSeparation {
@@ -153,6 +165,24 @@ fn reject_symlinked_palette_path(root: &Path) -> Result<()> {
 /// Render every shipped template and swap them in as one step.
 pub fn apply(palette: &Palette, root: &Path) -> Result<Applied> {
     apply_with(palette, root, &templates(), &mut SystemReloader)
+}
+
+/// Describe every shipped user-side activation file without reading or writing
+/// the filesystem.
+///
+/// A caller such as `helmctl doctor` can use this to report the exact import
+/// needed when a user-owned file does not activate Helm's generated output.
+pub fn activation_diagnostics() -> Vec<ActivationDiagnostic> {
+    templates()
+        .into_iter()
+        .filter_map(|template| {
+            template.activation.map(|activation| ActivationDiagnostic {
+                user_path: activation.user_path,
+                import: activation.import,
+                generated_target: template.target,
+            })
+        })
+        .collect()
 }
 
 /// [`apply`], with the template set and the reload fan-out injected.
@@ -579,7 +609,7 @@ fn discard(staged: &[(&Template, StagedOutput)]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{templates, Reload, Template};
+    use crate::{activation_diagnostics, templates, Reload, Template};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -641,6 +671,98 @@ mod tests {
     }
 
     #[test]
+    fn every_shipped_template_target_is_helm_owned() {
+        for template in templates() {
+            assert!(
+                template.target.starts_with("helm/generated/"),
+                "{} targets {}, outside Helm's owned subtree",
+                template.id,
+                template.target.display()
+            );
+        }
+    }
+
+    #[test]
+    fn missing_gtk_activation_files_get_exactly_one_helm_import() {
+        let root = tempfile::tempdir().unwrap();
+        let set = templates();
+        apply_with(&shipped(), root.path(), &set, &mut Recorder::default()).unwrap();
+
+        for (activation_path, import) in [
+            (
+                "gtk-3.0/gtk.css",
+                "@import url(\"../helm/generated/gtk-3.0/helm.css\");\n",
+            ),
+            (
+                "gtk-4.0/gtk.css",
+                "@import url(\"../helm/generated/gtk-4.0/helm.css\");\n",
+            ),
+        ] {
+            let path = root.path().join(activation_path);
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap_or_else(|error| {
+                    panic!("{} was not created: {error}", path.display())
+                }),
+                import,
+                "{} must contain only its Helm import",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn existing_gtk_activation_files_remain_byte_identical() {
+        let root = tempfile::tempdir().unwrap();
+        let existing = [
+            (
+                "gtk-3.0/gtk.css",
+                b"/* user GTK 3 overrides */\n".as_slice(),
+            ),
+            (
+                "gtk-4.0/gtk.css",
+                b"/* user GTK 4 overrides */\n".as_slice(),
+            ),
+        ];
+        for (activation_path, contents) in &existing {
+            let path = root.path().join(activation_path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+
+        apply_with(
+            &shipped(),
+            root.path(),
+            &templates(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
+
+        for (activation_path, contents) in existing {
+            assert_eq!(
+                std::fs::read(root.path().join(activation_path)).unwrap(),
+                contents
+            );
+        }
+    }
+
+    #[test]
+    fn gtk_activation_diagnostics_expose_the_exact_import_and_generated_target() {
+        let diagnostics = activation_diagnostics();
+
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics.contains(&ActivationDiagnostic {
+            user_path: PathBuf::from("gtk-3.0/gtk.css"),
+            import: "@import url(\"../helm/generated/gtk-3.0/helm.css\");\n",
+            generated_target: PathBuf::from("helm/generated/gtk-3.0/helm.css"),
+        }));
+        assert!(diagnostics.contains(&ActivationDiagnostic {
+            user_path: PathBuf::from("gtk-4.0/gtk.css"),
+            import: "@import url(\"../helm/generated/gtk-4.0/helm.css\");\n",
+            generated_target: PathBuf::from("helm/generated/gtk-4.0/helm.css"),
+        }));
+    }
+
+    #[test]
     fn a_second_apply_changes_nothing_and_reloads_nothing() {
         let root = tempfile::tempdir().unwrap();
         let set = templates();
@@ -668,12 +790,14 @@ mod tests {
                 id: "violet-user",
                 source: "focus = {{ accent.violet }}\n",
                 target: PathBuf::from("violet.conf"),
+                activation: None,
                 reload: Reload::None,
             },
             Template {
                 id: "teal-user",
                 source: "ok = {{ accent.teal }}\n",
                 target: PathBuf::from("teal.conf"),
+                activation: None,
                 reload: Reload::None,
             },
         ];
@@ -727,6 +851,7 @@ mod tests {
             id: "invented",
             source: "colour = {{ accent.mauve }}\n",
             target: PathBuf::from("invented.conf"),
+            activation: None,
             reload: Reload::None,
         });
 
@@ -751,6 +876,7 @@ mod tests {
                 id: "absolute",
                 source: "x = {{ accent.violet }}\n",
                 target: outside.path().join("escaped.conf"),
+                activation: None,
                 reload: Reload::None,
             }],
             vec![
@@ -758,12 +884,14 @@ mod tests {
                     id: "first",
                     source: "x = {{ accent.violet }}\n",
                     target: PathBuf::from("same.conf"),
+                    activation: None,
                     reload: Reload::None,
                 },
                 Template {
                     id: "second",
                     source: "x = {{ accent.teal }}\n",
                     target: PathBuf::from("same.conf"),
+                    activation: None,
                     reload: Reload::None,
                 },
             ],
@@ -790,6 +918,7 @@ mod tests {
             id: "linked",
             source: "x = {{ accent.violet }}\n",
             target: PathBuf::from("linked/escaped.conf"),
+            activation: None,
             reload: Reload::None,
         }];
 
@@ -812,6 +941,7 @@ mod tests {
             id: "root-link",
             source: "x = {{ accent.violet }}\n",
             target: PathBuf::from("theme.conf"),
+            activation: None,
             reload: Reload::None,
         }];
 
@@ -836,6 +966,7 @@ mod tests {
             id: "root-link-with-separator",
             source: "x = {{ accent.violet }}\n",
             target: PathBuf::from("theme.conf"),
+            activation: None,
             reload: Reload::None,
         }];
 
@@ -871,6 +1002,7 @@ mod tests {
             id: "root-link-with-terminal-dot",
             source: "x = {{ accent.violet }}\n",
             target: PathBuf::from("theme.conf"),
+            activation: None,
             reload: Reload::None,
         }];
 
@@ -927,6 +1059,7 @@ mod tests {
             id: "staging-link",
             source: "x = {{ accent.violet }}\n",
             target: PathBuf::from("theme.conf"),
+            activation: None,
             reload: Reload::None,
         }];
 

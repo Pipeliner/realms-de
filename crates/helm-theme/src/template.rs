@@ -13,8 +13,22 @@ pub struct Template {
     pub source: &'static str,
     /// Where the rendered file lands, relative to `$XDG_CONFIG_HOME`.
     pub target: PathBuf,
+    /// User-owned file that activates this template, when the program needs one.
+    pub activation: Option<Activation>,
     /// How live consumers are told to re-read it.
     pub reload: Reload,
+}
+
+/// The user-owned file and exact import that activate a generated template.
+///
+/// This is metadata only. Applying it is intentionally a separate concern so
+/// the owned-output writer never gains authority over an existing user file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Activation {
+    /// Path to the user-owned activation file, relative to `$XDG_CONFIG_HOME`.
+    pub user_path: PathBuf,
+    /// The complete import line a user file needs, including its newline.
+    pub import: &'static str,
 }
 
 /// How a themed program is told the theme changed.
@@ -58,30 +72,36 @@ fn gtk_restyle() -> Reload {
 
 /// The templates helm ships.
 ///
-/// Targets are relative to `$XDG_CONFIG_HOME`. Where helm owns the file
-/// outright it writes the file the program actually reads; where a user is
-/// likely to have their own, helm writes a file of its own next to it and the
-/// user imports it. Which of those the GTK stylesheets should be is SPEC 0002's
-/// open `needs-human` question, and until it is answered this takes the
-/// non-destructive side of it.
+/// Targets are relative to `$XDG_CONFIG_HOME`. GTK's user-owned stylesheet is
+/// declared as activation metadata; the writer handles that metadata separately
+/// from the Helm-owned generated output.
 pub fn templates() -> Vec<Template> {
     vec![
         Template {
             id: "gtk4",
             source: include_str!("../../../configs/templates/gtk4.css"),
             target: PathBuf::from("gtk-4.0/helm.css"),
+            activation: Some(Activation {
+                user_path: PathBuf::from("gtk-4.0/gtk.css"),
+                import: "@import url(\"../helm/generated/gtk-4.0/helm.css\");\n",
+            }),
             reload: gtk_restyle(),
         },
         Template {
             id: "gtk3",
             source: include_str!("../../../configs/templates/gtk3.css"),
             target: PathBuf::from("gtk-3.0/helm.css"),
+            activation: Some(Activation {
+                user_path: PathBuf::from("gtk-3.0/gtk.css"),
+                import: "@import url(\"../helm/generated/gtk-3.0/helm.css\");\n",
+            }),
             reload: gtk_restyle(),
         },
         Template {
             id: "foot",
             source: include_str!("../../../configs/templates/foot.ini"),
             target: PathBuf::from("foot/foot.ini"),
+            activation: None,
             reload: Reload::Signal {
                 process: "foot",
                 signal: SIGUSR1,
@@ -91,30 +111,35 @@ pub fn templates() -> Vec<Template> {
             id: "yazi",
             source: include_str!("../../../configs/templates/yazi-theme.toml"),
             target: PathBuf::from("yazi/theme.toml"),
+            activation: None,
             reload: Reload::None,
         },
         Template {
             id: "btop",
             source: include_str!("../../../configs/templates/btop.theme"),
             target: PathBuf::from("btop/themes/helm.theme"),
+            activation: None,
             reload: Reload::None,
         },
         Template {
             id: "starship",
             source: include_str!("../../../configs/templates/starship.toml"),
             target: PathBuf::from("starship.toml"),
+            activation: None,
             reload: Reload::None,
         },
         Template {
             id: "fuzzel",
             source: include_str!("../../../configs/templates/fuzzel.ini"),
             target: PathBuf::from("fuzzel/fuzzel.ini"),
+            activation: None,
             reload: Reload::None,
         },
         Template {
             id: "qt6ct",
             source: include_str!("../../../configs/templates/qt6ct-colors.conf"),
             target: PathBuf::from("qt6ct/colors/helm.conf"),
+            activation: None,
             reload: Reload::None,
         },
     ]
