@@ -1,11 +1,17 @@
 //! Apply, diff and lint: the three things `helm ctl theme` does.
 
 use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
+use std::io::{Read, Write};
+use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use helm_core::palette::Finding;
 use helm_core::Palette;
+use rustix::fs::{fsync, mkdirat, openat, renameat, unlinkat, AtFlags, Mode, OFlags, CWD};
+use rustix::io::Errno;
 
 use crate::render::render_derived;
 use crate::{templates, Error, Reload, Reloader, Result, SystemReloader, Template};
@@ -18,6 +24,27 @@ pub const USER_PALETTE: &str = "helm/palette.toml";
 
 /// Suffix of the file each output is staged in before it is renamed into place.
 const STAGING_SUFFIX: &str = ".helm-tmp";
+
+/// Bound stale-name retries without making one collision an availability bug.
+const MAX_STAGING_ATTEMPTS: usize = 64;
+
+/// Makes staging basenames unique within this process.
+static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// The opened configuration root and its reporting-only pathname.
+#[derive(Debug)]
+struct OutputRoot {
+    fd: OwnedFd,
+    display: PathBuf,
+}
+
+/// A staged output whose remaining operations are relative to its parent.
+#[derive(Debug)]
+struct StagedOutput {
+    parent_fd: OwnedFd,
+    temporary: OsString,
+    final_name: OsString,
+}
 
 /// What one apply did.
 #[derive(Debug)]
@@ -75,7 +102,8 @@ impl LintReport {
 /// The copy happens before the read so a user's first edit is to their own
 /// file, not to something inside the helm package.
 pub fn load_palette(root: &Path) -> Result<Palette> {
-    reject_symlinked_palette_path(root)?;
+    let root = normalized_root_spelling(root);
+    reject_symlinked_palette_path(&root)?;
     let path = root.join(USER_PALETTE);
     if !path.exists() {
         if let Some(dir) = path.parent() {
@@ -138,10 +166,20 @@ pub fn apply_with(
     templates: &[Template],
     reloader: &mut dyn Reloader,
 ) -> Result<Applied> {
+    apply_with_inner(palette, root, templates, reloader)
+}
+
+fn apply_with_inner(
+    palette: &Palette,
+    root: &Path,
+    templates: &[Template],
+    reloader: &mut dyn Reloader,
+) -> Result<Applied> {
     let started = Instant::now();
+    let root = normalized_root_spelling(root);
 
     validate_targets(templates)?;
-    reject_symlinked_targets(root, templates)?;
+    reject_symlinked_targets(&root, templates)?;
 
     // Lint before rendering, not after writing: a palette that fails its own
     // readability floors must leave the live theme exactly as it was.
@@ -158,21 +196,37 @@ pub fn apply_with(
     let mut rendered = Vec::with_capacity(templates.len());
     for t in templates {
         let text = render_derived(&derived, t.id, t.source)?;
-        rendered.push((t, root.join(&t.target), text));
+        rendered.push((t, text));
     }
+
+    let output_root = OutputRoot::open(&root)?;
 
     // Phase 2: stage the ones that differ.
     let mut unchanged = Vec::new();
-    let mut staged: Vec<(&Template, PathBuf, PathBuf)> = Vec::new();
-    for (t, target, text) in &rendered {
-        if std::fs::read(target).is_ok_and(|old| old == text.as_bytes()) {
-            unchanged.push(target.clone());
-            continue;
-        }
-        match stage(target, text) {
-            Ok(tmp) => staged.push((t, tmp, target.clone())),
+    let mut staged: Vec<(&Template, StagedOutput)> = Vec::new();
+    for (t, text) in rendered {
+        let (parent_fd, final_name) = match output_root.open_parent(&t.target) {
+            Ok(destination) => destination,
             Err(e) => {
-                discard(&staged);
+                discard(&staged)?;
+                return Err(e);
+            }
+        };
+        match contents_match(&parent_fd, &final_name, text.as_bytes()) {
+            Ok(true) => {
+                unchanged.push(output_root.display.join(&t.target));
+                continue;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                discard(&staged)?;
+                return Err(e);
+            }
+        }
+        match stage(parent_fd, final_name, &text) {
+            Ok(output) => staged.push((t, output)),
+            Err(e) => {
+                discard(&staged)?;
                 return Err(e);
             }
         }
@@ -180,12 +234,12 @@ pub fn apply_with(
 
     // Phase 3: rename, which is atomic per file on the same filesystem.
     let mut written = Vec::with_capacity(staged.len());
-    for (i, (_, tmp, target)) in staged.iter().enumerate() {
-        if let Err(e) = std::fs::rename(tmp, target) {
-            discard(&staged[i..]);
-            return Err(Error::io(target, e));
+    for (i, (template, output)) in staged.iter().enumerate() {
+        if let Err(e) = commit(output) {
+            discard(&staged[i..])?;
+            return Err(e);
         }
-        written.push(target.clone());
+        written.push(output_root.display.join(&template.target));
     }
 
     // Phase 4: and only now, one reload per distinct mechanism. Reloading per
@@ -193,7 +247,7 @@ pub fn apply_with(
     // reason for the three phases above.
     let mut fired: Vec<&Reload> = Vec::new();
     let mut reloaded = Vec::new();
-    for (t, _, _) in &staged {
+    for (t, _) in &staged {
         if t.reload == Reload::None || fired.contains(&&t.reload) {
             continue;
         }
@@ -208,6 +262,47 @@ pub fn apply_with(
         reloaded,
         elapsed: started.elapsed(),
     })
+}
+
+/// Remove equivalent terminal separators and `.` components so `NOFOLLOW`
+/// sees the root's basename.
+///
+/// An all-separator root (including `/`) and `.` are returned unchanged; this
+/// is a lexical spelling adjustment and never resolves any path component.
+fn normalized_root_spelling(root: &Path) -> PathBuf {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let bytes = root.as_os_str().as_bytes();
+    if bytes.is_empty() || bytes == b"." || bytes.iter().all(|byte| *byte == b'/') {
+        return root.to_path_buf();
+    }
+
+    let mut end = bytes.len();
+    loop {
+        while end > 0 && bytes[end - 1] == b'/' {
+            if bytes[..end].iter().all(|byte| *byte == b'/') {
+                break;
+            }
+            end -= 1;
+        }
+
+        if end == 1 && bytes[0] == b'.' {
+            break;
+        }
+        let component_start = bytes[..end]
+            .iter()
+            .rposition(|byte| *byte == b'/')
+            .map_or(0, |separator| separator + 1);
+        if bytes[component_start..end] != *b"." {
+            break;
+        }
+        end = component_start;
+    }
+
+    if end == bytes.len() {
+        return root.to_path_buf();
+    }
+    PathBuf::from(OsString::from_vec(bytes[..end].to_vec()))
 }
 
 /// Report what an apply would change, writing nothing.
@@ -328,42 +423,156 @@ pub fn lint(palette: &Palette) -> LintReport {
     }
 }
 
-/// Write `text` beside `target` and flush it to the disk.
-///
-/// The `fsync` is what makes the rename meaningful: without it the directory
-/// entry can land before the bytes do, and a power cut mid-apply leaves a
-/// correctly named empty stylesheet.
-fn stage(target: &Path, text: &str) -> Result<PathBuf> {
-    use rustix::fs::{openat, Mode, OFlags, CWD};
-    use std::io::Write;
-
-    if let Some(dir) = target.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+impl OutputRoot {
+    /// Open the configuration root once so later operations cannot be
+    /// redirected by replacing its pathname.
+    fn open(root: &Path) -> Result<Self> {
+        let fd = openat(
+            CWD,
+            root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| Error::io(root, error.into()))?;
+        Ok(Self {
+            fd,
+            display: root.to_path_buf(),
+        })
     }
-    let mut tmp = target.as_os_str().to_owned();
-    tmp.push(STAGING_SUFFIX);
-    let tmp = PathBuf::from(tmp);
 
-    // `CREATE | EXCL | NOFOLLOW` makes a leftover or attacker-provided staging
-    // name fail closed instead of following it and clobbering its destination.
-    let fd = openat(
-        CWD,
-        &tmp,
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW,
-        Mode::RUSR | Mode::WUSR,
-    )
-    .map_err(|e| Error::io(&tmp, e.into()))?;
-    let mut f = std::fs::File::from(fd);
-    f.write_all(text.as_bytes())
-        .map_err(|e| Error::io(&tmp, e))?;
-    f.sync_all().map_err(|e| Error::io(&tmp, e))?;
-    Ok(tmp)
+    /// Open or create `target`'s parents without leaving the held descriptor
+    /// chain, returning that parent and the normalized final basename.
+    fn open_parent(&self, target: &Path) -> Result<(OwnedFd, OsString)> {
+        let final_name = target
+            .file_name()
+            .expect("validate_targets accepted a target without a basename")
+            .to_owned();
+        let mut parent_fd = self
+            .fd
+            .try_clone()
+            .map_err(|error| Error::io(target, error))?;
+        let directory_flags =
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+
+        for component in target
+            .parent()
+            .expect("a normalized target always has a parent")
+            .components()
+        {
+            let Component::Normal(component) = component else {
+                unreachable!("validate_targets accepted a non-normal target parent");
+            };
+            let child_fd = match openat(&parent_fd, component, directory_flags, Mode::empty()) {
+                Ok(fd) => fd,
+                Err(Errno::NOENT) => {
+                    match mkdirat(&parent_fd, component, Mode::RWXU) {
+                        Ok(()) | Err(Errno::EXIST) => {}
+                        Err(error) => return Err(Error::io(target, error.into())),
+                    }
+                    openat(&parent_fd, component, directory_flags, Mode::empty())
+                        .map_err(|error| Error::io(target, error.into()))?
+                }
+                Err(error) => return Err(Error::io(target, error.into())),
+            };
+            parent_fd = child_fd;
+        }
+
+        Ok((parent_fd, final_name))
+    }
 }
 
-/// Remove staged files after a failure, so a retry does not trip over them.
-fn discard(staged: &[(&Template, PathBuf, PathBuf)]) {
-    for (_, tmp, _) in staged {
-        let _ = std::fs::remove_file(tmp);
+/// Compare the final file through its already-opened parent descriptor.
+fn contents_match(parent_fd: &OwnedFd, final_name: &OsStr, expected: &[u8]) -> Result<bool> {
+    let fd = match openat(
+        parent_fd,
+        final_name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(Errno::NOENT) => return Ok(false),
+        Err(error) => return Err(Error::io(final_name, error.into())),
+    };
+    let mut file = std::fs::File::from(fd);
+    let mut old = Vec::new();
+    file.read_to_end(&mut old)
+        .map_err(|error| Error::io(final_name, error))?;
+    Ok(old == expected)
+}
+
+/// Write `text` to a unique sibling through the held parent and flush it.
+fn stage(parent_fd: OwnedFd, final_name: OsString, text: &str) -> Result<StagedOutput> {
+    for attempt in 0..MAX_STAGING_ATTEMPTS {
+        let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let mut temporary = OsString::from(".");
+        temporary.push(&final_name);
+        temporary.push(format!(
+            "{STAGING_SUFFIX}.{}.{}",
+            std::process::id(),
+            sequence
+        ));
+
+        let fd = match openat(
+            &parent_fd,
+            &temporary,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        ) {
+            Ok(fd) => fd,
+            Err(Errno::EXIST) if attempt + 1 < MAX_STAGING_ATTEMPTS => continue,
+            Err(error) => return Err(Error::io(&temporary, error.into())),
+        };
+
+        let output = StagedOutput {
+            parent_fd,
+            temporary,
+            final_name,
+        };
+        let mut file = std::fs::File::from(fd);
+        let write_result = file
+            .write_all(text.as_bytes())
+            .and_then(|()| fsync(&file).map_err(std::io::Error::from));
+        if let Err(error) = write_result {
+            cleanup(&output)?;
+            return Err(Error::io(&output.temporary, error));
+        }
+        return Ok(output);
+    }
+
+    unreachable!("the bounded staging loop always returns")
+}
+
+/// Atomically publish one staged file and make its directory entry durable.
+fn commit(output: &StagedOutput) -> Result<()> {
+    renameat(
+        &output.parent_fd,
+        &output.temporary,
+        &output.parent_fd,
+        &output.final_name,
+    )
+    .map_err(|error| Error::io(&output.final_name, error.into()))?;
+    fsync(&output.parent_fd).map_err(|error| Error::io(&output.final_name, error.into()))
+}
+
+/// Remove one staging basename through its held parent descriptor.
+fn cleanup(output: &StagedOutput) -> Result<()> {
+    match unlinkat(&output.parent_fd, &output.temporary, AtFlags::empty()) {
+        Ok(()) | Err(Errno::NOENT) => Ok(()),
+        Err(error) => Err(Error::io(&output.temporary, error.into())),
+    }
+}
+
+/// Remove every still-staged file, ignoring only names already absent.
+fn discard(staged: &[(&Template, StagedOutput)]) -> Result<()> {
+    let mut first_error = None;
+    for (_, output) in staged {
+        if let Err(error) = cleanup(output) {
+            first_error.get_or_insert(error);
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
     }
 }
 
@@ -614,7 +823,99 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_symlinked_staging_file_is_refused_without_touching_its_destination() {
+    fn a_symlinked_configuration_root_with_a_trailing_separator_is_refused() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let victim = tempfile::tempdir().unwrap();
+        let root = parent.path().join("config");
+        symlink(victim.path(), &root).unwrap();
+        let mut root_with_separator = root.as_os_str().to_owned();
+        root_with_separator.push("/");
+        let set = [Template {
+            id: "root-link-with-separator",
+            source: "x = {{ accent.violet }}\n",
+            target: PathBuf::from("theme.conf"),
+            reload: Reload::None,
+        }];
+
+        let applied = apply_with(
+            &shipped(),
+            Path::new(&root_with_separator),
+            &set,
+            &mut Recorder::default(),
+        );
+
+        assert!(
+            applied.is_err(),
+            "a trailing separator let apply follow the root symlink: {applied:?}"
+        );
+        assert!(
+            !victim.path().join("theme.conf").exists(),
+            "the symlinked configuration root redirected the write"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_configuration_root_with_terminal_dot_is_refused() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let victim = tempfile::tempdir().unwrap();
+        let root = parent.path().join("config");
+        symlink(victim.path(), &root).unwrap();
+        let mut root_with_terminal_dot = root.as_os_str().to_owned();
+        root_with_terminal_dot.push("/.");
+        let set = [Template {
+            id: "root-link-with-terminal-dot",
+            source: "x = {{ accent.violet }}\n",
+            target: PathBuf::from("theme.conf"),
+            reload: Reload::None,
+        }];
+
+        let applied = apply_with(
+            &shipped(),
+            Path::new(&root_with_terminal_dot),
+            &set,
+            &mut Recorder::default(),
+        );
+
+        assert!(
+            applied.is_err(),
+            "a terminal dot let apply follow the root symlink: {applied:?}"
+        );
+        assert!(
+            !victim.path().join("theme.conf").exists(),
+            "the symlinked configuration root redirected the write"
+        );
+    }
+
+    #[test]
+    fn root_normalization_is_lexical_and_preserves_dot_and_slash_roots() {
+        for (spelling, normalized) in [
+            ("config/.", "config"),
+            ("config/.//", "config"),
+            ("config/./.", "config"),
+            ("config/./child", "config/./child"),
+            ("config/..", "config/.."),
+            (".", "."),
+            ("./", "."),
+            ("/", "/"),
+            ("///", "///"),
+            ("/./", "/"),
+        ] {
+            assert_eq!(
+                normalized_root_spelling(Path::new(spelling)).as_os_str(),
+                OsStr::new(normalized),
+                "unexpected normalization for {spelling:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_staging_file_is_not_touched() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
@@ -629,10 +930,83 @@ mod tests {
             reload: Reload::None,
         }];
 
-        let err = apply_with(&shipped(), root.path(), &set, &mut Recorder::default())
-            .expect_err("a symlinked staging file must be refused");
-        assert!(err.to_string().contains("helm-tmp"), "{err}");
-        assert_eq!(std::fs::read_to_string(victim).unwrap(), "do not overwrite");
+        let mut palette = shipped();
+        palette.contrast = 1.0;
+        let applied = apply_with(&palette, root.path(), &set, &mut Recorder::default())
+            .expect("a staging symlink must not block a safe unique staging file");
+
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "do not overwrite"
+        );
+        assert!(
+            std::fs::symlink_metadata(root.path().join("theme.conf.helm-tmp"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the planted staging symlink must remain in place"
+        );
+        assert_eq!(
+            std::fs::read_link(root.path().join("theme.conf.helm-tmp")).unwrap(),
+            victim
+        );
+        assert_eq!(applied.written, vec![root.path().join("theme.conf")]);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("theme.conf")).unwrap(),
+            "x = #a692ec\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replaced_output_parent_cannot_redirect_descriptor_relative_writes() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let live = root.path().join("live");
+        std::fs::create_dir(&live).unwrap();
+        let output_root = OutputRoot::open(root.path()).unwrap();
+        let (commit_parent, final_name) = output_root
+            .open_parent(Path::new("live/theme.conf"))
+            .unwrap();
+        let cleanup_parent = commit_parent.try_clone().unwrap();
+        let original_parent = root.path().join("held");
+        let victim = tempfile::tempdir().unwrap();
+
+        std::fs::rename(&live, &original_parent).unwrap();
+        symlink(victim.path(), &live).unwrap();
+
+        let committed = stage(commit_parent, final_name, "committed\n").unwrap();
+        commit(&committed).unwrap();
+        let discarded = stage(
+            cleanup_parent,
+            OsString::from("discarded.conf"),
+            "discarded\n",
+        )
+        .unwrap();
+        cleanup(&discarded).unwrap();
+
+        assert!(
+            tree(victim.path()).is_empty(),
+            "descriptor-owned operations reached the replacement symlink destination"
+        );
+        assert_eq!(
+            std::fs::read_to_string(original_parent.join("theme.conf")).unwrap(),
+            "committed\n"
+        );
+        assert!(!original_parent.join("discarded.conf").exists());
+        assert_eq!(
+            tree(&original_parent).keys().cloned().collect::<Vec<_>>(),
+            vec![PathBuf::from("theme.conf")],
+            "staging cleanup left an unexpected entry"
+        );
+        assert!(
+            std::fs::symlink_metadata(&live)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the replacement pathname stopped naming the victim symlink"
+        );
     }
 
     #[test]
@@ -718,6 +1092,60 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(palette_victim).unwrap(),
             "not a palette\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_palette_root_with_a_trailing_separator_is_refused_without_initializing_its_destination(
+    ) {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let victim = tempfile::tempdir().unwrap();
+        let root = parent.path().join("config");
+        symlink(victim.path(), &root).unwrap();
+        let mut root_with_separator = root.as_os_str().to_owned();
+        root_with_separator.push("/");
+
+        let loaded = load_palette(Path::new(&root_with_separator));
+
+        assert!(
+            !victim.path().join(USER_PALETTE).exists(),
+            "first-run palette initialization wrote through the root symlink"
+        );
+        assert!(
+            loaded.is_err(),
+            "a trailing separator let palette initialization follow the root symlink"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_palette_root_with_terminal_dot_is_refused_without_reading_its_destination() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let victim = tempfile::tempdir().unwrap();
+        let victim_palette = victim.path().join(USER_PALETTE);
+        std::fs::create_dir(victim_palette.parent().unwrap()).unwrap();
+        std::fs::write(&victim_palette, SHIPPED_PALETTE).unwrap();
+        let before = tree(victim.path());
+        let root = parent.path().join("config");
+        symlink(victim.path(), &root).unwrap();
+        let mut root_with_terminal_dot = root.as_os_str().to_owned();
+        root_with_terminal_dot.push("/.");
+
+        let loaded = load_palette(Path::new(&root_with_terminal_dot));
+
+        assert!(
+            loaded.is_err(),
+            "a terminal dot let palette loading follow the root symlink"
+        );
+        assert_eq!(
+            tree(victim.path()),
+            before,
+            "palette loading mutated the root symlink destination"
         );
     }
 
