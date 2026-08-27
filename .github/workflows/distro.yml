@@ -149,12 +149,9 @@ jobs:
       - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
         if: steps.flake.outputs.present == 'true'
 
-      # The NixOS VM test that boots the session and asserts the bar appears
-      # (ARCHITECTURE.md §5) is a `nixosTest`, which needs /dev/kvm. GitHub's
-      # standard runners do not have it, so a bare `nix flake check` would fail
-      # on a machine limitation rather than on anything about helm — the flake's
-      # own comment says as much. Detect KVM and run what the runner can
-      # actually run; a larger runner picks up the VM test automatically.
+      # KVM availability is detected, not assumed. A KVM-capable runner executes
+      # the NixOS VM; a runner without KVM still evaluates the flake and builds the
+      # independent ShellCheck and package checks.
       - name: Run the reference build
         if: steps.flake.outputs.present == 'true'
         run: |
