@@ -108,6 +108,8 @@ in
     # and reports success (SPEC 0005 §4). checks.session-boots asserts the
     # symlink exists on the built system rather than trusting this.
     systemd.packages = [ cfg.package ];
+    systemd.user.services.helm-wm.wantedBy = [ "helm-session.target" ];
+    systemd.user.services.helm-bar.wantedBy = [ "helm-session.target" ];
 
     environment.etc."helm/palette.toml".source = cfg.paletteFile;
 
