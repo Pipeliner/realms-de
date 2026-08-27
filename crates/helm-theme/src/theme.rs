@@ -57,10 +57,12 @@ struct StagedOutput {
 pub struct Applied {
     /// Files whose contents changed and were renamed into place.
     pub written: Vec<PathBuf>,
-    /// Byte-identical files: not rewritten, not reloaded.
+    /// Byte-identical files: not rewritten; reloaded only for a new shim.
     pub unchanged: Vec<PathBuf>,
     /// Reload mechanisms that fired, named by the first template owning each.
     pub reloaded: Vec<&'static str>,
+    /// Exact remedies for consumers without a safe automatic activation shim.
+    pub manual_activations: Vec<ActivationDiagnostic>,
     /// Wall time for the whole apply. Budget: < 150 ms (ARCHITECTURE.md §4).
     pub elapsed: Duration,
 }
@@ -76,8 +78,8 @@ pub struct Change {
     pub changed: bool,
 }
 
-/// The information `helmctl doctor` needs to tell a user how to activate a
-/// generated theme without modifying their existing configuration.
+/// The information `apply` and `helmctl doctor` use to tell a user how to
+/// activate a generated theme without modifying their existing configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivationDiagnostic {
     /// Stable shipped-template identifier.
@@ -87,7 +89,7 @@ pub struct ActivationDiagnostic {
     pub user_path: Option<PathBuf>,
     /// Exact shim contents or target-specific manual activation instruction.
     pub remedy: String,
-    /// Helm-owned generated file selected by the import.
+    /// Helm-owned generated file selected by the shim or manual remedy.
     pub generated_target: PathBuf,
 }
 
@@ -179,10 +181,11 @@ pub fn apply(palette: &Palette, root: &Path) -> Result<Applied> {
 /// Describe every shipped target's activation without reading or writing the
 /// filesystem.
 ///
-/// This is the stable #23 (`helmctl doctor`) handoff contract. Both the exact
-/// shim contents and manual remedies are derived from `root`, so all paths
-/// visible to the user are absolute. Doctor must use these values rather than
-/// reconstructing paths or remedies, and must not modify a user-owned file.
+/// This is the stable #23 (`helmctl doctor`) handoff contract. Root-dependent
+/// shim contents and manual remedies use absolute generated-output paths;
+/// literal GTK imports remain relative to their `gtk.css` sibling. Doctor must
+/// use these values rather than reconstructing paths or remedies, and must not
+/// modify a user-owned file.
 pub fn activation_diagnostics(root: &Path) -> Vec<ActivationDiagnostic> {
     let root = absolute_root(root);
     templates()
@@ -191,14 +194,35 @@ pub fn activation_diagnostics(root: &Path) -> Vec<ActivationDiagnostic> {
             template
                 .activation
                 .as_ref()
-                .map(|activation| ActivationDiagnostic {
-                    template_id: template.id,
-                    user_path: activation_user_path(activation),
-                    remedy: activation_remedy(&root, &template.target, activation),
-                    generated_target: template.target,
-                })
+                .map(|activation| activation_diagnostic(&root, &template, activation))
         })
         .collect()
+}
+
+fn manual_activation_diagnostics(root: &Path, templates: &[Template]) -> Vec<ActivationDiagnostic> {
+    let root = absolute_root(root);
+    templates
+        .iter()
+        .filter_map(|template| {
+            let activation @ Activation::Manual(_) = template.activation.as_ref()? else {
+                return None;
+            };
+            Some(activation_diagnostic(&root, template, activation))
+        })
+        .collect()
+}
+
+fn activation_diagnostic(
+    root: &Path,
+    template: &Template,
+    activation: &Activation,
+) -> ActivationDiagnostic {
+    ActivationDiagnostic {
+        template_id: template.id,
+        user_path: activation_user_path(activation),
+        remedy: activation_remedy(root, &template.target, activation),
+        generated_target: template.target.clone(),
+    }
 }
 
 /// Return a deterministic absolute spelling without resolving a component.
@@ -338,16 +362,20 @@ fn apply_with_inner(
     }
 
     // Activation files are deliberately outside the owned-output transaction.
-    // Create them only after every generated output has committed, and use
-    // CREATE|EXCL so an existing user file wins every race unchanged.
-    create_missing_activations(&output_root, templates)?;
+    // Create them only after every generated output has committed. A
+    // no-replace publish lets an existing or racing user file win unchanged.
+    let activated = create_missing_activations(&output_root, templates)?;
 
     // Phase 4: and only now, one reload per distinct mechanism. Reloading per
     // file would show the desktop a half-applied theme, which is the whole
     // reason for the three phases above.
     let mut fired: Vec<&Reload> = Vec::new();
     let mut reloaded = Vec::new();
-    for (t, _) in &staged {
+    for t in staged
+        .iter()
+        .map(|(template, _)| *template)
+        .chain(activated.iter().copied())
+    {
         if t.reload == Reload::None || fired.contains(&&t.reload) {
             continue;
         }
@@ -360,6 +388,7 @@ fn apply_with_inner(
         written,
         unchanged,
         reloaded,
+        manual_activations: manual_activation_diagnostics(&output_root.display, templates),
         elapsed: started.elapsed(),
     })
 }
@@ -623,7 +652,11 @@ fn contents_match(parent_fd: &OwnedFd, final_name: &OsStr, expected: &[u8]) -> R
 }
 
 /// Publish complete first-run shims without ever replacing a user file.
-fn create_missing_activations(output_root: &OutputRoot, templates: &[Template]) -> Result<()> {
+fn create_missing_activations<'a>(
+    output_root: &OutputRoot,
+    templates: &'a [Template],
+) -> Result<Vec<&'a Template>> {
+    let mut activated = Vec::new();
     for template in templates {
         let Some(activation) = &template.activation else {
             continue;
@@ -631,9 +664,11 @@ fn create_missing_activations(output_root: &OutputRoot, templates: &[Template]) 
         let Some(staged) = stage_activation_shim(output_root, template, activation)? else {
             continue;
         };
-        let _ = publish_activation_shim(&staged)?;
+        if publish_activation_shim(&staged)? {
+            activated.push(template);
+        }
     }
-    Ok(())
+    Ok(activated)
 }
 
 /// Stage a complete shim without making its user-facing pathname visible.
@@ -1138,6 +1173,126 @@ mod tests {
             ),
             generated_target: PathBuf::from("helm/generated/qt6ct/colors/helm.conf"),
         }));
+    }
+
+    #[test]
+    fn apply_reports_every_manual_activation_remedy() {
+        let root = tempfile::tempdir().unwrap();
+
+        let applied = apply_with(
+            &shipped(),
+            root.path(),
+            &templates(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            applied.manual_activations,
+            vec![
+                ActivationDiagnostic {
+                    template_id: "yazi",
+                    user_path: None,
+                    remedy: format!(
+                        "YAZI_CONFIG_HOME={} yazi",
+                        root.path().join("helm/generated/yazi").display()
+                    ),
+                    generated_target: PathBuf::from("helm/generated/yazi/theme.toml"),
+                },
+                ActivationDiagnostic {
+                    template_id: "btop",
+                    user_path: None,
+                    remedy: format!(
+                        "btop --themes-dir {} ; set color_theme = \"helm\" in btop.conf",
+                        root.path().join("helm/generated/btop/themes").display()
+                    ),
+                    generated_target: PathBuf::from(
+                        "helm/generated/btop/themes/helm.theme",
+                    ),
+                },
+                ActivationDiagnostic {
+                    template_id: "starship",
+                    user_path: None,
+                    remedy: format!(
+                        "STARSHIP_CONFIG={} starship",
+                        root.path()
+                            .join("helm/generated/starship/starship.toml")
+                            .display()
+                    ),
+                    generated_target: PathBuf::from(
+                        "helm/generated/starship/starship.toml",
+                    ),
+                },
+                ActivationDiagnostic {
+                    template_id: "fuzzel",
+                    user_path: None,
+                    remedy: format!(
+                        "fuzzel --config={}",
+                        root.path()
+                            .join("helm/generated/fuzzel/fuzzel.ini")
+                            .display()
+                    ),
+                    generated_target: PathBuf::from("helm/generated/fuzzel/fuzzel.ini"),
+                },
+                ActivationDiagnostic {
+                    template_id: "qt6ct",
+                    user_path: None,
+                    remedy: format!(
+                        "QT_QPA_PLATFORMTHEME=qt6ct; set custom_palette=true and color_scheme_path={} in qt6ct.conf",
+                        root.path()
+                            .join("helm/generated/qt6ct/colors/helm.conf")
+                            .display()
+                    ),
+                    generated_target: PathBuf::from(
+                        "helm/generated/qt6ct/colors/helm.conf",
+                    ),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn new_activation_shims_reload_unchanged_outputs_once() {
+        let root = tempfile::tempdir().unwrap();
+        let set = templates();
+        let palette = shipped();
+        apply_with(&palette, root.path(), &set, &mut Recorder::default()).unwrap();
+        std::fs::remove_file(root.path().join("gtk-3.0/gtk.css")).unwrap();
+        std::fs::remove_file(root.path().join("gtk-4.0/gtk.css")).unwrap();
+        std::fs::remove_file(root.path().join("foot/foot.ini")).unwrap();
+
+        let mut recovery_reloads = Recorder::default();
+        let recovered = apply_with(&palette, root.path(), &set, &mut recovery_reloads).unwrap();
+
+        assert!(recovered.written.is_empty(), "{:?}", recovered.written);
+        assert_eq!(recovered.unchanged.len(), set.len());
+        assert_eq!(recovered.reloaded, vec!["gtk4", "foot"]);
+        assert_eq!(
+            recovery_reloads.0,
+            vec![
+                Reload::Command(
+                    [
+                        "gsettings",
+                        "set",
+                        "org.gnome.desktop.interface",
+                        "gtk-theme",
+                        "Adwaita-dark",
+                    ]
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect()
+                ),
+                Reload::Signal {
+                    process: "foot",
+                    signal: rustix::process::Signal::USR1.as_raw(),
+                },
+            ]
+        );
+
+        let mut no_op_reloads = Recorder::default();
+        let no_op = apply_with(&palette, root.path(), &set, &mut no_op_reloads).unwrap();
+        assert!(no_op.reloaded.is_empty());
+        assert!(no_op_reloads.0.is_empty());
     }
 
     #[test]

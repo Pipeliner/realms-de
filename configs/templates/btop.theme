@@ -2,7 +2,9 @@
 # overwrites this file. btop (horus, the monitor) reads its theme at start and
 # has no reload signal, so a running instance keeps the old colours.
 #
-# Select it with `color_theme = "helm"` in btop.conf.
+# Launch with `btop --themes-dir ~/.config/helm/generated/btop/themes` and set
+# `color_theme = "helm"` in btop.conf. With a non-default XDG_CONFIG_HOME, use
+# that root in place of `~/.config`.
 #
 # The three-stop gradients run cool to warn — starlight, then teal, then gold —
 # so a meter's colour says how loaded it is without a legend. Gold is the

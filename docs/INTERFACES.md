@@ -198,8 +198,30 @@ pub struct Template {
     pub source: &'static str,
     /// Where the rendered file lands, relative to $XDG_CONFIG_HOME.
     pub target: PathBuf,
+    /// How the Helm-owned output reaches its consumer.
+    pub activation: Option<Activation>,
     /// How live consumers are told to re-read it.
     pub reload: Reload,
+}
+
+pub enum Activation {
+    /// Atomically publish a complete shim only when the user path is absent.
+    Shim { user_path: PathBuf, contents: ShimContents },
+    /// Apply reports the exact launch/config remedy; it creates no user file.
+    Manual(ManualActivation),
+}
+
+pub enum ShimContents {
+    Literal(&'static str),
+    FootInclude,
+}
+
+pub enum ManualActivation {
+    Yazi,
+    Btop,
+    Starship,
+    Fuzzel,
+    Qt6ct,
 }
 
 /// How a themed program is told the theme changed.
@@ -216,19 +238,35 @@ pub enum Reload {
 
 /// Render every template and swap them in as one step.
 ///
-/// Contract: each file is written to `<target>.helm-tmp` and `rename(2)`d into
-/// place, then reloads are fanned out once, after every file is in place. A
-/// half-applied theme — new terminal colours against an old GTK stylesheet —
-/// must never be observable, even if the process is killed mid-apply.
+/// Contract: each changed output is written to a unique no-follow staging
+/// sibling and `rename(2)`d into place. Missing activation shims are then
+/// published without replacement, and reloads are fanned out once for changed
+/// outputs and newly published shims together. A half-applied theme — new
+/// terminal colours against an old GTK stylesheet — must never be observable.
 pub fn apply(palette: &Palette, root: &Path) -> Result<Applied>;
+
+pub struct ActivationDiagnostic {
+    pub template_id: &'static str,
+    pub user_path: Option<PathBuf>,
+    pub remedy: String,
+    pub generated_target: PathBuf,
+}
+
+pub fn activation_diagnostics(root: &Path) -> Vec<ActivationDiagnostic>;
 
 pub struct Applied {
     pub written: Vec<PathBuf>,
-    pub unchanged: Vec<PathBuf>,   // byte-identical; not rewritten, not reloaded
+    pub unchanged: Vec<PathBuf>,   // byte-identical; not rewritten
     pub reloaded: Vec<&'static str>,
+    pub manual_activations: Vec<ActivationDiagnostic>,
     pub elapsed: Duration,         // budget: < 150 ms (ARCHITECTURE.md §4)
 }
 ```
+
+Every successful apply reports one root-aware `manual_activations` entry for
+each `Activation::Manual` template. Shim-backed targets are omitted from this
+collection: absent shims are created automatically, while existing user-owned
+files are diagnosed conservatively through `activation_diagnostics(root)`.
 
 **Placeholder vocabulary.** Templates address the *derived* palette, so
 `contrast` is already folded in and no template ever applies it itself:

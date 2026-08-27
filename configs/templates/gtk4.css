@@ -1,7 +1,7 @@
 /* helm — generated from palette.toml. Do not edit; `helm ctl theme apply`
  * overwrites this file. Pull it in from your own ~/.config/gtk-4.0/gtk.css:
  *
- *     @import url("helm.css");
+ *     @import url("../helm/generated/gtk-4.0/helm.css");
  *
  * libadwaita reads these named colours at startup and honours a live change to
  * gtk.css, so recolouring is the reach. Geometry is not: pills, paddings and

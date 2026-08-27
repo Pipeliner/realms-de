@@ -1,9 +1,10 @@
 # SPEC 0002 — Theme pipeline
 
-- **Status:** Accepted; implemented through A18, A20 and A21 (2026-08-27), including A11's
-  equivalent-spelling configuration-root correction, A13's matching palette
-  containment rule, and #110's A12/A14 descriptor-relative writer
-  protections. Multi-file all-or-nothing publication remains #22's boundary.
+- **Status:** Accepted; implemented through A18 and A20–A23 (2026-08-27),
+  including A11's equivalent-spelling configuration-root correction, A13's
+  matching palette containment rule, and #110's A12/A14 descriptor-relative
+  writer protections. Multi-file all-or-nothing publication remains #22's
+  boundary.
 - **Milestone:** M1
 - **Decisions:** [ADR 0005](../adr/0005-palette-toml-single-source.md),
   [ADR 0006](../adr/0006-oklab-contrast-not-filters.md)
@@ -74,11 +75,15 @@ palette against an old GTK stylesheet — is both ugly and hard to diagnose:
    no-follow staging sibling named from `<target>.helm-tmp`, and `fsync` it.
 3. `rename(2)` every temp file into place. (Same filesystem, so the rename is
    atomic per file.)
-4. Only then, fan out reloads — once each, deduplicated.
+4. Publish any absent-only activation shims without replacing a user file.
+5. Only then, fan out reloads — once each, deduplicated — for changed generated
+   outputs and newly published activation shims together.
 
 If any step before 3 fails, nothing is renamed and the desktop is untouched.
-Outputs that are byte-identical are neither rewritten nor reloaded, so a
-no-op apply costs nothing and does not flash the desktop.
+Outputs that are byte-identical are neither rewritten nor reloaded unless the
+same apply publishes their previously absent activation shim. A true no-op —
+no changed output and no new shim — costs nothing and does not flash the
+desktop.
 
 ### Output containment
 
@@ -117,6 +122,12 @@ all-or-nothing publication, which remains #22's boundary.
 Where a target genuinely cannot hot-reload, `apply` says so in its report rather
 than pretending. Users should never wonder whether it worked.
 
+Publishing an activation shim changes what a consumer can reach even when its
+generated output is byte-identical. That template therefore participates in the
+same deduplicated fan-out as a changed output. A recovered GTK or foot
+activation must take effect immediately rather than waiting for a third apply or
+a restart.
+
 ### First-run
 
 If no user palette exists, `apply` copies the shipped one to
@@ -149,6 +160,8 @@ Each row is one happy path and becomes one test.
 | A19 *(planned, #23)* | Given a user-owned GTK activation file, including one that reproduces the exact import only in a CSS comment or string, when `helmctl doctor` inspects it, then it prints the conservative activation remediation and never claims that the theme is active | `ctl::tests::user_owned_gtk_activation_files_are_reported_conservatively` |
 | A20 | Given an empty configuration root, when `apply` activates foot, then it atomically creates the exact absolute-path include shim; given an existing `foot.ini`, it remains byte-identical | `theme::tests::foot_activation_shim_is_exact_and_preserves_an_existing_file` |
 | A21 | Given a first-run GTK or foot activation shim, when it is staged before publication, then the final user path is absent; when publication completes, it appears with the full exact contents and never replaces a pre-existing file | `theme::tests::activation_shims_are_staged_then_published_without_replacing_user_files` |
+| A22 | Given the shipped template set, when `apply` succeeds, then `Applied.manual_activations` contains the exact root-aware remedy for yazi, btop, starship, fuzzel and qt6ct, and no shim-backed target | `theme::tests::apply_reports_every_manual_activation_remedy` |
+| A23 | Given byte-identical generated outputs and absent GTK and foot activation shims, when `apply` publishes those shims, then it reloads GTK and foot exactly once each; a following true no-op reloads nothing | `theme::tests::new_activation_shims_reload_unchanged_outputs_once` |
 
 A9 and A10 name `helm ctl` subcommands, but the CLI is a separate M1 slice and
 does not exist yet. Both are tested at the library boundary the subcommands will
@@ -201,7 +214,18 @@ partially written final shim or replace a file created by the user meanwhile.
 The non-shim rows are intentionally not treated as active merely because the
 generated file exists. This keeps Helm from silently replacing a whole
 application configuration when that application does not offer an import-like
-selection boundary.
+selection boundary. This is the binding #33 decision for consumers without a
+safe single-file shim: manual setup is accepted only when the successful
+`apply` result exposes the exact remedy immediately. Deferring those remedies
+to the future doctor command is not sufficient.
+
+`Applied.manual_activations` contains one `ActivationDiagnostic` for every
+`Activation::Manual` template, in shipped-template order, on every successful
+apply. The diagnostic is root-aware and uses the same stable fields as doctor.
+Shim-backed targets never appear in this collection because an existing shim
+has a different, conservative doctor-only diagnostic and an absent shim is
+created automatically. CLI consumers must print every manual remedy; they must
+not claim that writing the generated output activated the program.
 
 ### Doctor activation diagnostic contract
 
