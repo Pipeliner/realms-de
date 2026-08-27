@@ -205,9 +205,10 @@ fn apply_with_inner(
     #[cfg(test)] after_preflight: Option<&mut dyn FnMut()>,
 ) -> Result<Applied> {
     let started = Instant::now();
+    let root = root_without_trailing_separators(root);
 
     validate_targets(templates)?;
-    reject_symlinked_targets(root, templates)?;
+    reject_symlinked_targets(&root, templates)?;
 
     #[cfg(test)]
     if let Some(after_preflight) = after_preflight {
@@ -232,7 +233,7 @@ fn apply_with_inner(
         rendered.push((t, text));
     }
 
-    let output_root = OutputRoot::open(root)?;
+    let output_root = OutputRoot::open(&root)?;
 
     // Phase 2: stage the ones that differ.
     let mut unchanged = Vec::new();
@@ -303,6 +304,23 @@ fn apply_with_inner(
         reloaded,
         elapsed: started.elapsed(),
     })
+}
+
+/// Remove only terminal separators so `NOFOLLOW` sees the root's basename.
+///
+/// An all-separator root (including `/`) and `.` are returned unchanged; this
+/// is a lexical spelling adjustment and never resolves any path component.
+fn root_without_trailing_separators(root: &Path) -> PathBuf {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let bytes = root.as_os_str().as_bytes();
+    let Some(last_component_byte) = bytes.iter().rposition(|byte| *byte != b'/') else {
+        return root.to_path_buf();
+    };
+    if last_component_byte + 1 == bytes.len() {
+        return root.to_path_buf();
+    }
+    PathBuf::from(OsString::from_vec(bytes[..=last_component_byte].to_vec()))
 }
 
 /// Report what an apply would change, writing nothing.
@@ -836,6 +854,41 @@ mod tests {
             .expect_err("a symlinked configuration root must be refused");
         assert!(err.to_string().contains("root"), "{err}");
         assert!(!outside.path().join("theme.conf").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_configuration_root_with_a_trailing_separator_is_refused() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let victim = tempfile::tempdir().unwrap();
+        let root = parent.path().join("config");
+        symlink(victim.path(), &root).unwrap();
+        let mut root_with_separator = root.as_os_str().to_owned();
+        root_with_separator.push("/");
+        let set = [Template {
+            id: "root-link-with-separator",
+            source: "x = {{ accent.violet }}\n",
+            target: PathBuf::from("theme.conf"),
+            reload: Reload::None,
+        }];
+
+        let applied = apply_with(
+            &shipped(),
+            Path::new(&root_with_separator),
+            &set,
+            &mut Recorder::default(),
+        );
+
+        assert!(
+            applied.is_err(),
+            "a trailing separator let apply follow the root symlink: {applied:?}"
+        );
+        assert!(
+            !victim.path().join("theme.conf").exists(),
+            "the symlinked configuration root redirected the write"
+        );
     }
 
     #[cfg(unix)]
