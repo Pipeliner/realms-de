@@ -1,11 +1,17 @@
 //! Apply, diff and lint: the three things `helm ctl theme` does.
 
 use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
+use std::io::{Read, Write};
+use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use helm_core::palette::Finding;
 use helm_core::Palette;
+use rustix::fs::{fsync, mkdirat, openat, renameat, unlinkat, AtFlags, Mode, OFlags, CWD};
+use rustix::io::Errno;
 
 use crate::render::render_derived;
 use crate::{templates, Error, Reload, Reloader, Result, SystemReloader, Template};
@@ -18,6 +24,27 @@ pub const USER_PALETTE: &str = "helm/palette.toml";
 
 /// Suffix of the file each output is staged in before it is renamed into place.
 const STAGING_SUFFIX: &str = ".helm-tmp";
+
+/// Bound stale-name retries without making one collision an availability bug.
+const MAX_STAGING_ATTEMPTS: usize = 64;
+
+/// Makes staging basenames unique within this process.
+static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// The opened configuration root and its reporting-only pathname.
+#[derive(Debug)]
+struct OutputRoot {
+    fd: OwnedFd,
+    display: PathBuf,
+}
+
+/// A staged output whose remaining operations are relative to its parent.
+#[derive(Debug)]
+struct StagedOutput {
+    parent_fd: OwnedFd,
+    temporary: OsString,
+    final_name: OsString,
+}
 
 /// What one apply did.
 #[derive(Debug)]
@@ -202,21 +229,43 @@ fn apply_with_inner(
     let mut rendered = Vec::with_capacity(templates.len());
     for t in templates {
         let text = render_derived(&derived, t.id, t.source)?;
-        rendered.push((t, root.join(&t.target), text));
+        rendered.push((t, text));
     }
+
+    let output_root = OutputRoot::open(root)?;
 
     // Phase 2: stage the ones that differ.
     let mut unchanged = Vec::new();
-    let mut staged: Vec<(&Template, PathBuf, PathBuf)> = Vec::new();
-    for (t, target, text) in &rendered {
-        if std::fs::read(target).is_ok_and(|old| old == text.as_bytes()) {
-            unchanged.push(target.clone());
-            continue;
-        }
-        match stage(target, text) {
-            Ok(tmp) => staged.push((t, tmp, target.clone())),
+    let mut staged: Vec<(&Template, StagedOutput)> = Vec::new();
+    for (t, text) in rendered {
+        let (parent_fd, final_name) = match output_root.open_parent(&t.target) {
+            Ok(destination) => destination,
             Err(e) => {
-                discard(&staged);
+                if let Err(cleanup_error) = discard(&staged) {
+                    return Err(cleanup_error);
+                }
+                return Err(e);
+            }
+        };
+        match contents_match(&parent_fd, &final_name, text.as_bytes()) {
+            Ok(true) => {
+                unchanged.push(output_root.display.join(&t.target));
+                continue;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                if let Err(cleanup_error) = discard(&staged) {
+                    return Err(cleanup_error);
+                }
+                return Err(e);
+            }
+        }
+        match stage(parent_fd, final_name, &text) {
+            Ok(output) => staged.push((t, output)),
+            Err(e) => {
+                if let Err(cleanup_error) = discard(&staged) {
+                    return Err(cleanup_error);
+                }
                 return Err(e);
             }
         }
@@ -224,12 +273,14 @@ fn apply_with_inner(
 
     // Phase 3: rename, which is atomic per file on the same filesystem.
     let mut written = Vec::with_capacity(staged.len());
-    for (i, (_, tmp, target)) in staged.iter().enumerate() {
-        if let Err(e) = std::fs::rename(tmp, target) {
-            discard(&staged[i..]);
-            return Err(Error::io(target, e));
+    for (i, (template, output)) in staged.iter().enumerate() {
+        if let Err(e) = commit(output) {
+            if let Err(cleanup_error) = discard(&staged[i..]) {
+                return Err(cleanup_error);
+            }
+            return Err(e);
         }
-        written.push(target.clone());
+        written.push(output_root.display.join(&template.target));
     }
 
     // Phase 4: and only now, one reload per distinct mechanism. Reloading per
@@ -237,7 +288,7 @@ fn apply_with_inner(
     // reason for the three phases above.
     let mut fired: Vec<&Reload> = Vec::new();
     let mut reloaded = Vec::new();
-    for (t, _, _) in &staged {
+    for (t, _) in &staged {
         if t.reload == Reload::None || fired.contains(&&t.reload) {
             continue;
         }
@@ -372,42 +423,156 @@ pub fn lint(palette: &Palette) -> LintReport {
     }
 }
 
-/// Write `text` beside `target` and flush it to the disk.
-///
-/// The `fsync` is what makes the rename meaningful: without it the directory
-/// entry can land before the bytes do, and a power cut mid-apply leaves a
-/// correctly named empty stylesheet.
-fn stage(target: &Path, text: &str) -> Result<PathBuf> {
-    use rustix::fs::{openat, Mode, OFlags, CWD};
-    use std::io::Write;
-
-    if let Some(dir) = target.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+impl OutputRoot {
+    /// Open the configuration root once so later operations cannot be
+    /// redirected by replacing its pathname.
+    fn open(root: &Path) -> Result<Self> {
+        let fd = openat(
+            CWD,
+            root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| Error::io(root, error.into()))?;
+        Ok(Self {
+            fd,
+            display: root.to_path_buf(),
+        })
     }
-    let mut tmp = target.as_os_str().to_owned();
-    tmp.push(STAGING_SUFFIX);
-    let tmp = PathBuf::from(tmp);
 
-    // `CREATE | EXCL | NOFOLLOW` makes a leftover or attacker-provided staging
-    // name fail closed instead of following it and clobbering its destination.
-    let fd = openat(
-        CWD,
-        &tmp,
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW,
-        Mode::RUSR | Mode::WUSR,
-    )
-    .map_err(|e| Error::io(&tmp, e.into()))?;
-    let mut f = std::fs::File::from(fd);
-    f.write_all(text.as_bytes())
-        .map_err(|e| Error::io(&tmp, e))?;
-    f.sync_all().map_err(|e| Error::io(&tmp, e))?;
-    Ok(tmp)
+    /// Open or create `target`'s parents without leaving the held descriptor
+    /// chain, returning that parent and the normalized final basename.
+    fn open_parent(&self, target: &Path) -> Result<(OwnedFd, OsString)> {
+        let final_name = target
+            .file_name()
+            .expect("validate_targets accepted a target without a basename")
+            .to_owned();
+        let mut parent_fd = self
+            .fd
+            .try_clone()
+            .map_err(|error| Error::io(target, error))?;
+        let directory_flags =
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+
+        for component in target
+            .parent()
+            .expect("a normalized target always has a parent")
+            .components()
+        {
+            let Component::Normal(component) = component else {
+                unreachable!("validate_targets accepted a non-normal target parent");
+            };
+            let child_fd = match openat(&parent_fd, component, directory_flags, Mode::empty()) {
+                Ok(fd) => fd,
+                Err(Errno::NOENT) => {
+                    match mkdirat(&parent_fd, component, Mode::RWXU) {
+                        Ok(()) | Err(Errno::EXIST) => {}
+                        Err(error) => return Err(Error::io(target, error.into())),
+                    }
+                    openat(&parent_fd, component, directory_flags, Mode::empty())
+                        .map_err(|error| Error::io(target, error.into()))?
+                }
+                Err(error) => return Err(Error::io(target, error.into())),
+            };
+            parent_fd = child_fd;
+        }
+
+        Ok((parent_fd, final_name))
+    }
 }
 
-/// Remove staged files after a failure, so a retry does not trip over them.
-fn discard(staged: &[(&Template, PathBuf, PathBuf)]) {
-    for (_, tmp, _) in staged {
-        let _ = std::fs::remove_file(tmp);
+/// Compare the final file through its already-opened parent descriptor.
+fn contents_match(parent_fd: &OwnedFd, final_name: &OsStr, expected: &[u8]) -> Result<bool> {
+    let fd = match openat(
+        parent_fd,
+        final_name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(Errno::NOENT) => return Ok(false),
+        Err(error) => return Err(Error::io(final_name, error.into())),
+    };
+    let mut file = std::fs::File::from(fd);
+    let mut old = Vec::new();
+    file.read_to_end(&mut old)
+        .map_err(|error| Error::io(final_name, error))?;
+    Ok(old == expected)
+}
+
+/// Write `text` to a unique sibling through the held parent and flush it.
+fn stage(parent_fd: OwnedFd, final_name: OsString, text: &str) -> Result<StagedOutput> {
+    for attempt in 0..MAX_STAGING_ATTEMPTS {
+        let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let mut temporary = OsString::from(".");
+        temporary.push(&final_name);
+        temporary.push(format!(
+            "{STAGING_SUFFIX}.{}.{}",
+            std::process::id(),
+            sequence
+        ));
+
+        let fd = match openat(
+            &parent_fd,
+            &temporary,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        ) {
+            Ok(fd) => fd,
+            Err(Errno::EXIST) if attempt + 1 < MAX_STAGING_ATTEMPTS => continue,
+            Err(error) => return Err(Error::io(&temporary, error.into())),
+        };
+
+        let output = StagedOutput {
+            parent_fd,
+            temporary,
+            final_name,
+        };
+        let mut file = std::fs::File::from(fd);
+        let write_result = file
+            .write_all(text.as_bytes())
+            .and_then(|()| fsync(&file).map_err(std::io::Error::from));
+        if let Err(error) = write_result {
+            cleanup(&output)?;
+            return Err(Error::io(&output.temporary, error));
+        }
+        return Ok(output);
+    }
+
+    unreachable!("the bounded staging loop always returns")
+}
+
+/// Atomically publish one staged file and make its directory entry durable.
+fn commit(output: &StagedOutput) -> Result<()> {
+    renameat(
+        &output.parent_fd,
+        &output.temporary,
+        &output.parent_fd,
+        &output.final_name,
+    )
+    .map_err(|error| Error::io(&output.final_name, error.into()))?;
+    fsync(&output.parent_fd).map_err(|error| Error::io(&output.final_name, error.into()))
+}
+
+/// Remove one staging basename through its held parent descriptor.
+fn cleanup(output: &StagedOutput) -> Result<()> {
+    match unlinkat(&output.parent_fd, &output.temporary, AtFlags::empty()) {
+        Ok(()) | Err(Errno::NOENT) => Ok(()),
+        Err(error) => Err(Error::io(&output.temporary, error.into())),
+    }
+}
+
+/// Remove every still-staged file, ignoring only names already absent.
+fn discard(staged: &[(&Template, StagedOutput)]) -> Result<()> {
+    let mut first_error = None;
+    for (_, output) in staged {
+        if let Err(error) = cleanup(output) {
+            first_error.get_or_insert(error);
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
     }
 }
 
