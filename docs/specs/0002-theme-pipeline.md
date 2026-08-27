@@ -1,7 +1,9 @@
 # SPEC 0002 — Theme pipeline
 
-- **Status:** Accepted; implemented through A13 (2026-08-26). A12 and A14 are
-  pending the descriptor-relative writer tracked by #110.
+- **Status:** Accepted; implemented through A14 (2026-08-27), including A11's
+  trailing-separator configuration-root correction and #110's A12/A14
+  descriptor-relative writer protections. Multi-file all-or-nothing
+  publication remains #22's boundary.
 - **Milestone:** M1
 - **Decisions:** [ADR 0005](../adr/0005-palette-toml-single-source.md),
   [ADR 0006](../adr/0006-oklab-contrast-not-filters.md)
