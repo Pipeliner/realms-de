@@ -242,9 +242,7 @@ fn apply_with_inner(
         let (parent_fd, final_name) = match output_root.open_parent(&t.target) {
             Ok(destination) => destination,
             Err(e) => {
-                if let Err(cleanup_error) = discard(&staged) {
-                    return Err(cleanup_error);
-                }
+                discard(&staged)?;
                 return Err(e);
             }
         };
@@ -255,18 +253,14 @@ fn apply_with_inner(
             }
             Ok(false) => {}
             Err(e) => {
-                if let Err(cleanup_error) = discard(&staged) {
-                    return Err(cleanup_error);
-                }
+                discard(&staged)?;
                 return Err(e);
             }
         }
         match stage(parent_fd, final_name, &text) {
             Ok(output) => staged.push((t, output)),
             Err(e) => {
-                if let Err(cleanup_error) = discard(&staged) {
-                    return Err(cleanup_error);
-                }
+                discard(&staged)?;
                 return Err(e);
             }
         }
@@ -276,9 +270,7 @@ fn apply_with_inner(
     let mut written = Vec::with_capacity(staged.len());
     for (i, (template, output)) in staged.iter().enumerate() {
         if let Err(e) = commit(output) {
-            if let Err(cleanup_error) = discard(&staged[i..]) {
-                return Err(cleanup_error);
-            }
+            discard(&staged[i..])?;
             return Err(e);
         }
         written.push(output_root.display.join(&template.target));
