@@ -138,10 +138,54 @@ pub fn apply_with(
     templates: &[Template],
     reloader: &mut dyn Reloader,
 ) -> Result<Applied> {
+    #[cfg(test)]
+    {
+        apply_with_inner(palette, root, templates, reloader, None)
+    }
+    #[cfg(not(test))]
+    {
+        apply_with_inner(palette, root, templates, reloader)
+    }
+}
+
+/// Test-only entry point that runs a deterministic pathname-replacement race
+/// after preflight has checked the target and before the legacy writer stages.
+#[cfg(test)]
+fn apply_with_after_preflight<F>(
+    palette: &Palette,
+    root: &Path,
+    templates: &[Template],
+    reloader: &mut dyn Reloader,
+    mut after_preflight: F,
+) -> Result<Applied>
+where
+    F: FnMut(),
+{
+    apply_with_inner(
+        palette,
+        root,
+        templates,
+        reloader,
+        Some(&mut after_preflight),
+    )
+}
+
+fn apply_with_inner(
+    palette: &Palette,
+    root: &Path,
+    templates: &[Template],
+    reloader: &mut dyn Reloader,
+    #[cfg(test)] after_preflight: Option<&mut dyn FnMut()>,
+) -> Result<Applied> {
     let started = Instant::now();
 
     validate_targets(templates)?;
     reject_symlinked_targets(root, templates)?;
+
+    #[cfg(test)]
+    if let Some(after_preflight) = after_preflight {
+        after_preflight();
+    }
 
     // Lint before rendering, not after writing: a palette that fails its own
     // readability floors must leave the live theme exactly as it was.
@@ -373,6 +417,23 @@ mod tests {
     use crate::{templates, Reload, Template};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+
+    /// Keep the originally checked directory reachable after its pathname is
+    /// replaced. The test uses this to make the parent replacement race
+    /// deterministic; the legacy writer below incorrectly returns to paths.
+    #[cfg(unix)]
+    fn hold_directory(path: &Path) -> std::fs::File {
+        use rustix::fs::{openat, Mode, OFlags, CWD};
+
+        let fd = openat(
+            CWD,
+            path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap_or_else(|error| panic!("could not hold {}: {error}", path.display()));
+        std::fs::File::from(fd)
+    }
 
     fn shipped() -> Palette {
         Palette::from_toml(SHIPPED_PALETTE).expect("shipped palette must parse")
@@ -614,7 +675,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_symlinked_staging_file_is_refused_without_touching_its_destination() {
+    fn a_symlinked_staging_file_is_not_touched() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
@@ -629,10 +690,71 @@ mod tests {
             reload: Reload::None,
         }];
 
-        let err = apply_with(&shipped(), root.path(), &set, &mut Recorder::default())
-            .expect_err("a symlinked staging file must be refused");
-        assert!(err.to_string().contains("helm-tmp"), "{err}");
-        assert_eq!(std::fs::read_to_string(victim).unwrap(), "do not overwrite");
+        let mut palette = shipped();
+        palette.contrast = 1.0;
+        let applied = apply_with(&palette, root.path(), &set, &mut Recorder::default())
+            .expect("a staging symlink must not block a safe unique staging file");
+
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "do not overwrite"
+        );
+        assert!(
+            std::fs::symlink_metadata(root.path().join("theme.conf.helm-tmp"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the planted staging symlink must remain in place"
+        );
+        assert_eq!(
+            std::fs::read_link(root.path().join("theme.conf.helm-tmp")).unwrap(),
+            victim
+        );
+        assert_eq!(applied.written, vec![root.path().join("theme.conf")]);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("theme.conf")).unwrap(),
+            "x = #a692ec\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replaced_output_parent_cannot_redirect_descriptor_relative_writes() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let live = root.path().join("live");
+        std::fs::create_dir(&live).unwrap();
+        let held = hold_directory(&live);
+        let original_parent = root.path().join("held");
+        let victim = tempfile::tempdir().unwrap();
+
+        let set = [Template {
+            id: "replaced-parent",
+            source: "x = {{ accent.violet }}\n",
+            target: PathBuf::from("live/theme.conf"),
+            reload: Reload::None,
+        }];
+        let applied = apply_with_after_preflight(
+            &shipped(),
+            root.path(),
+            &set,
+            &mut Recorder::default(),
+            || {
+                std::fs::rename(&live, &original_parent).unwrap();
+                symlink(victim.path(), &live).unwrap();
+            },
+        );
+
+        assert!(
+            applied.is_err(),
+            "the replacement symlink let apply succeed and write victim/theme.conf: {applied:?}"
+        );
+        assert!(
+            !victim.path().join("theme.conf").exists(),
+            "the replacement symlink redirected the write to the victim"
+        );
+        drop(held);
     }
 
     #[test]
