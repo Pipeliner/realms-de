@@ -10,11 +10,17 @@ use std::time::{Duration, Instant};
 
 use helm_core::palette::Finding;
 use helm_core::Palette;
-use rustix::fs::{fsync, mkdirat, openat, renameat, unlinkat, AtFlags, Mode, OFlags, CWD};
+use rustix::fs::{
+    fsync, mkdirat, openat, renameat, renameat_with, unlinkat, AtFlags, Mode, OFlags, RenameFlags,
+    CWD,
+};
 use rustix::io::Errno;
 
 use crate::render::render_derived;
-use crate::{templates, Error, Reload, Reloader, Result, SystemReloader, Template};
+use crate::{
+    templates, Activation, Error, ManualActivation, Reload, Reloader, Result, ShimContents,
+    SystemReloader, Template,
+};
 
 /// The palette helm ships, embedded so a first run has something to copy.
 pub const SHIPPED_PALETTE: &str = include_str!("../../../palette.toml");
@@ -74,10 +80,13 @@ pub struct Change {
 /// generated theme without modifying their existing configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivationDiagnostic {
-    /// User-owned activation file, relative to `$XDG_CONFIG_HOME`.
-    pub user_path: PathBuf,
-    /// The exact import line needed in that file.
-    pub import: &'static str,
+    /// Stable shipped-template identifier.
+    pub template_id: &'static str,
+    /// User-owned activation file, relative to `$XDG_CONFIG_HOME`, when Helm
+    /// can safely create an immutable first-run shim.
+    pub user_path: Option<PathBuf>,
+    /// Exact shim contents or target-specific manual activation instruction.
+    pub remedy: String,
     /// Helm-owned generated file selected by the import.
     pub generated_target: PathBuf,
 }
@@ -167,28 +176,78 @@ pub fn apply(palette: &Palette, root: &Path) -> Result<Applied> {
     apply_with(palette, root, &templates(), &mut SystemReloader)
 }
 
-/// Describe every shipped user-side activation file without reading or writing
-/// the filesystem.
+/// Describe every shipped target's activation without reading or writing the
+/// filesystem.
 ///
-/// This is the stable #23 (`helmctl doctor`) handoff contract. Each result is
-/// a `(user_path, import, generated_target)` triple, with both paths relative
-/// to `$XDG_CONFIG_HOME`; `import` includes its terminal newline and must be
-/// printed verbatim. Doctor must not infer activation from raw user-owned CSS:
-/// for every existing `user_path`, it prints: `{user_path} is user-owned;
-/// ensure it activates Helm's generated theme with exactly: {import}`. Doctor
-/// must use these values rather than reconstructing paths or imports, and must
-/// not modify the user-owned file.
-pub fn activation_diagnostics() -> Vec<ActivationDiagnostic> {
+/// This is the stable #23 (`helmctl doctor`) handoff contract. Both the exact
+/// shim contents and manual remedies are derived from `root`, so all paths
+/// visible to the user are absolute. Doctor must use these values rather than
+/// reconstructing paths or remedies, and must not modify a user-owned file.
+pub fn activation_diagnostics(root: &Path) -> Vec<ActivationDiagnostic> {
+    let root = absolute_root(root);
     templates()
         .into_iter()
         .filter_map(|template| {
-            template.activation.map(|activation| ActivationDiagnostic {
-                user_path: activation.user_path,
-                import: activation.import,
-                generated_target: template.target,
-            })
+            template
+                .activation
+                .as_ref()
+                .map(|activation| ActivationDiagnostic {
+                    template_id: template.id,
+                    user_path: activation_user_path(activation),
+                    remedy: activation_remedy(&root, &template.target, activation),
+                    generated_target: template.target,
+                })
         })
         .collect()
+}
+
+/// Return a deterministic absolute spelling without resolving a component.
+fn absolute_root(root: &Path) -> PathBuf {
+    if root.is_absolute() {
+        root.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .expect("the current directory must be available")
+            .join(root)
+    }
+}
+
+fn activation_user_path(activation: &Activation) -> Option<PathBuf> {
+    match activation {
+        Activation::Shim { user_path, .. } => Some(user_path.clone()),
+        Activation::Manual(_) => None,
+    }
+}
+
+fn activation_remedy(root: &Path, target: &Path, activation: &Activation) -> String {
+    let output = root.join(target);
+    match activation {
+        Activation::Shim { contents, .. } => shim_contents(contents, &output),
+        Activation::Manual(ManualActivation::Yazi) => {
+            format!("YAZI_CONFIG_HOME={} yazi", output.parent().unwrap().display())
+        }
+        Activation::Manual(ManualActivation::Btop) => format!(
+            "btop --themes-dir {} ; set color_theme = \"helm\" in btop.conf",
+            output.parent().unwrap().display()
+        ),
+        Activation::Manual(ManualActivation::Starship) => {
+            format!("STARSHIP_CONFIG={} starship", output.display())
+        }
+        Activation::Manual(ManualActivation::Fuzzel) => {
+            format!("fuzzel --config={}", output.display())
+        }
+        Activation::Manual(ManualActivation::Qt6ct) => format!(
+            "QT_QPA_PLATFORMTHEME=qt6ct; set custom_palette=true and color_scheme_path={} in qt6ct.conf",
+            output.display()
+        ),
+    }
+}
+
+fn shim_contents(contents: &ShimContents, generated_output: &Path) -> String {
+    match contents {
+        ShimContents::Literal(contents) => (*contents).to_owned(),
+        ShimContents::FootInclude => format!("include={}\n", generated_output.display()),
+    }
 }
 
 /// [`apply`], with the template set and the reload fan-out injected.
@@ -397,14 +456,14 @@ fn validate_targets(templates: &[Template]) -> Result<()> {
                 reason: "two templates target the same output",
             });
         }
-        if let Some(activation) = &template.activation {
-            if activation.user_path.as_os_str().is_empty() {
+        if let Some(Activation::Shim { user_path, .. }) = &template.activation {
+            if user_path.as_os_str().is_empty() {
                 return Err(Error::UnsafeTarget {
-                    target: activation.user_path.clone(),
+                    target: user_path.clone(),
                     reason: "activation path is empty",
                 });
             }
-            if activation.user_path.components().any(|component| {
+            if user_path.components().any(|component| {
                 matches!(
                     component,
                     Component::Prefix(_)
@@ -414,7 +473,7 @@ fn validate_targets(templates: &[Template]) -> Result<()> {
                 )
             }) {
                 return Err(Error::UnsafeTarget {
-                    target: activation.user_path.clone(),
+                    target: user_path.clone(),
                     reason: "activation path must be a normalized relative path",
                 });
             }
@@ -563,39 +622,77 @@ fn contents_match(parent_fd: &OwnedFd, final_name: &OsStr, expected: &[u8]) -> R
     Ok(old == expected)
 }
 
-/// Create first-run activation files without ever opening an existing file for
-/// writing. These files become user-owned as soon as they are created and are
-/// intentionally omitted from [`Applied::written`].
+/// Publish complete first-run shims without ever replacing a user file.
 fn create_missing_activations(output_root: &OutputRoot, templates: &[Template]) -> Result<()> {
     for template in templates {
         let Some(activation) = &template.activation else {
             continue;
         };
-        let (parent_fd, final_name) = output_root.open_parent(&activation.user_path)?;
-        let fd = match openat(
-            &parent_fd,
-            &final_name,
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::RUSR | Mode::WUSR,
-        ) {
-            Ok(fd) => fd,
-            Err(Errno::EXIST) => continue,
-            Err(error) => return Err(Error::io(&activation.user_path, error.into())),
+        let Some(staged) = stage_activation_shim(output_root, template, activation)? else {
+            continue;
         };
-
-        let mut file = std::fs::File::from(fd);
-        if let Err(error) = file
-            .write_all(activation.import.as_bytes())
-            .and_then(|()| fsync(&file).map_err(std::io::Error::from))
-        {
-            // The pathname became user-owned at the successful exclusive
-            // create. Never unlink it on an error: another process could have
-            // replaced the directory entry while this descriptor stayed open.
-            return Err(Error::io(&activation.user_path, error));
-        }
-        fsync(&parent_fd).map_err(|error| Error::io(&activation.user_path, error.into()))?;
+        let _ = publish_activation_shim(&staged)?;
     }
     Ok(())
+}
+
+/// Stage a complete shim without making its user-facing pathname visible.
+fn stage_activation_shim(
+    output_root: &OutputRoot,
+    template: &Template,
+    activation: &Activation,
+) -> Result<Option<StagedOutput>> {
+    let Activation::Shim {
+        user_path,
+        contents,
+        ..
+    } = activation
+    else {
+        return Ok(None);
+    };
+    let (parent_fd, final_name) = output_root.open_parent(user_path)?;
+    match openat(
+        &parent_fd,
+        &final_name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(_) | Err(Errno::LOOP) => return Ok(None),
+        Err(Errno::NOENT) => {}
+        Err(error) => return Err(Error::io(user_path, error.into())),
+    }
+    let contents = shim_contents(
+        contents,
+        &absolute_root(&output_root.display).join(&template.target),
+    );
+    stage(parent_fd, final_name, &contents).map(Some)
+}
+
+/// Atomically publish a staged shim only when the user path remains absent.
+///
+/// `false` means another writer won the race and its user-owned file remains.
+fn publish_activation_shim(staged: &StagedOutput) -> Result<bool> {
+    match renameat_with(
+        &staged.parent_fd,
+        &staged.temporary,
+        &staged.parent_fd,
+        &staged.final_name,
+        RenameFlags::NOREPLACE,
+    ) {
+        Ok(()) => {
+            fsync(&staged.parent_fd)
+                .map_err(|error| Error::io(&staged.final_name, error.into()))?;
+            Ok(true)
+        }
+        Err(Errno::EXIST) => {
+            cleanup(staged)?;
+            Ok(false)
+        }
+        Err(error) => {
+            cleanup(staged)?;
+            Err(Error::io(&staged.final_name, error.into()))
+        }
+    }
 }
 
 /// Write `text` to a unique sibling through the held parent and flush it.
@@ -779,6 +876,102 @@ mod tests {
     }
 
     #[test]
+    fn foot_activation_shim_is_exact_and_preserves_an_existing_file() {
+        let root = tempfile::tempdir().unwrap();
+        apply_with(
+            &shipped(),
+            root.path(),
+            &templates(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
+
+        let foot = root.path().join("foot/foot.ini");
+        assert_eq!(
+            std::fs::read_to_string(&foot).unwrap(),
+            format!(
+                "include={}\n",
+                root.path().join("helm/generated/foot/foot.ini").display()
+            )
+        );
+
+        let existing_root = tempfile::tempdir().unwrap();
+        let existing = existing_root.path().join("foot/foot.ini");
+        std::fs::create_dir_all(existing.parent().unwrap()).unwrap();
+        std::fs::write(&existing, b"# user foot configuration\n").unwrap();
+        apply_with(
+            &shipped(),
+            existing_root.path(),
+            &templates(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(&existing).unwrap(),
+            b"# user foot configuration\n"
+        );
+    }
+
+    #[test]
+    fn activation_shims_are_staged_then_published_without_replacing_user_files() {
+        let root = tempfile::tempdir().unwrap();
+        let output_root = OutputRoot::open(root.path()).unwrap();
+        let template = templates()
+            .into_iter()
+            .find(|template| template.id == "gtk4")
+            .unwrap();
+        let activation = template.activation.as_ref().unwrap();
+        let Activation::Shim {
+            user_path,
+            contents,
+            ..
+        } = activation
+        else {
+            panic!("gtk4 must use a first-run shim");
+        };
+        let expected = shim_contents(
+            contents,
+            &root.path().join("helm/generated/gtk-4.0/helm.css"),
+        );
+
+        let staged = stage_activation_shim(&output_root, &template, activation)
+            .unwrap()
+            .unwrap();
+        let final_path = root.path().join(user_path);
+        assert!(
+            !final_path.exists(),
+            "the final user path appeared before the fully-written shim was published"
+        );
+        assert_eq!(
+            std::fs::read_to_string(
+                root.path()
+                    .join(user_path)
+                    .with_file_name(&staged.temporary)
+            )
+            .unwrap(),
+            expected
+        );
+
+        assert!(publish_activation_shim(&staged).unwrap());
+        assert_eq!(std::fs::read_to_string(&final_path).unwrap(), expected);
+
+        let user_file = root.path().join("gtk-3.0/gtk.css");
+        std::fs::create_dir_all(user_file.parent().unwrap()).unwrap();
+        std::fs::write(&user_file, b"/* user wins */\n").unwrap();
+        let gtk3 = templates()
+            .into_iter()
+            .find(|template| template.id == "gtk3")
+            .unwrap();
+        assert!(
+            stage_activation_shim(&output_root, &gtk3, gtk3.activation.as_ref().unwrap())
+                .unwrap()
+                .is_none(),
+            "staging must not replace a concurrently-existing user file"
+        );
+        assert_eq!(std::fs::read(&user_file).unwrap(), b"/* user wins */\n");
+    }
+
+    #[test]
     fn existing_gtk_activation_files_remain_byte_identical() {
         let root = tempfile::tempdir().unwrap();
         let existing = [
@@ -822,9 +1015,11 @@ mod tests {
             id: "activation-failure",
             source: "focus = {{ accent.violet }}\n",
             target: PathBuf::from("helm/generated/test/theme.conf"),
-            activation: Some(crate::Activation {
+            activation: Some(crate::Activation::Shim {
                 user_path: PathBuf::from("blocked/gtk.css"),
-                import: "@import url(\"../helm/generated/test/theme.conf\");\n",
+                contents: crate::ShimContents::Literal(
+                    "@import url(\"../helm/generated/test/theme.conf\");\n",
+                ),
             }),
             reload: Reload::Command(vec!["must-not-run".to_owned()]),
         }];
@@ -850,9 +1045,11 @@ mod tests {
             id: "unsafe-activation",
             source: "focus = {{ accent.violet }}\n",
             target: PathBuf::from("helm/generated/test/theme.conf"),
-            activation: Some(crate::Activation {
+            activation: Some(crate::Activation::Shim {
                 user_path: outside.path().join("gtk.css"),
-                import: "@import url(\"../helm/generated/test/theme.conf\");\n",
+                contents: crate::ShimContents::Literal(
+                    "@import url(\"../helm/generated/test/theme.conf\");\n",
+                ),
             }),
             reload: Reload::None,
         }];
@@ -866,19 +1063,80 @@ mod tests {
     }
 
     #[test]
-    fn gtk_activation_diagnostics_expose_the_exact_import_and_generated_target() {
-        let diagnostics = activation_diagnostics();
+    fn activation_diagnostics_cover_every_shipped_target() {
+        let root = tempfile::tempdir().unwrap();
+        let diagnostics = activation_diagnostics(root.path());
 
-        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics.len(), templates().len());
         assert!(diagnostics.contains(&ActivationDiagnostic {
-            user_path: PathBuf::from("gtk-3.0/gtk.css"),
-            import: "@import url(\"../helm/generated/gtk-3.0/helm.css\");\n",
+            template_id: "gtk3",
+            user_path: Some(PathBuf::from("gtk-3.0/gtk.css")),
+            remedy: "@import url(\"../helm/generated/gtk-3.0/helm.css\");\n".to_owned(),
             generated_target: PathBuf::from("helm/generated/gtk-3.0/helm.css"),
         }));
         assert!(diagnostics.contains(&ActivationDiagnostic {
-            user_path: PathBuf::from("gtk-4.0/gtk.css"),
-            import: "@import url(\"../helm/generated/gtk-4.0/helm.css\");\n",
+            template_id: "gtk4",
+            user_path: Some(PathBuf::from("gtk-4.0/gtk.css")),
+            remedy: "@import url(\"../helm/generated/gtk-4.0/helm.css\");\n".to_owned(),
             generated_target: PathBuf::from("helm/generated/gtk-4.0/helm.css"),
+        }));
+        assert!(diagnostics.contains(&ActivationDiagnostic {
+            template_id: "foot",
+            user_path: Some(PathBuf::from("foot/foot.ini")),
+            remedy: format!(
+                "include={}\n",
+                root.path().join("helm/generated/foot/foot.ini").display()
+            ),
+            generated_target: PathBuf::from("helm/generated/foot/foot.ini"),
+        }));
+        assert!(diagnostics.contains(&ActivationDiagnostic {
+            template_id: "yazi",
+            user_path: None,
+            remedy: format!(
+                "YAZI_CONFIG_HOME={} yazi",
+                root.path().join("helm/generated/yazi").display()
+            ),
+            generated_target: PathBuf::from("helm/generated/yazi/theme.toml"),
+        }));
+        assert!(diagnostics.contains(&ActivationDiagnostic {
+            template_id: "btop",
+            user_path: None,
+            remedy: format!(
+                "btop --themes-dir {} ; set color_theme = \"helm\" in btop.conf",
+                root.path().join("helm/generated/btop/themes").display()
+            ),
+            generated_target: PathBuf::from("helm/generated/btop/themes/helm.theme"),
+        }));
+        assert!(diagnostics.contains(&ActivationDiagnostic {
+            template_id: "starship",
+            user_path: None,
+            remedy: format!(
+                "STARSHIP_CONFIG={} starship",
+                root.path()
+                    .join("helm/generated/starship/starship.toml")
+                    .display()
+            ),
+            generated_target: PathBuf::from("helm/generated/starship/starship.toml"),
+        }));
+        assert!(diagnostics.contains(&ActivationDiagnostic {
+            template_id: "fuzzel",
+            user_path: None,
+            remedy: format!(
+                "fuzzel --config={}",
+                root.path()
+                    .join("helm/generated/fuzzel/fuzzel.ini")
+                    .display()
+            ),
+            generated_target: PathBuf::from("helm/generated/fuzzel/fuzzel.ini"),
+        }));
+        assert!(diagnostics.contains(&ActivationDiagnostic {
+            template_id: "qt6ct",
+            user_path: None,
+            remedy: format!(
+                "QT_QPA_PLATFORMTHEME=qt6ct; set custom_palette=true and color_scheme_path={} in qt6ct.conf",
+                root.path().join("helm/generated/qt6ct/colors/helm.conf").display()
+            ),
+            generated_target: PathBuf::from("helm/generated/qt6ct/colors/helm.conf"),
         }));
     }
 

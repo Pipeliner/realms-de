@@ -19,16 +19,43 @@ pub struct Template {
     pub reload: Reload,
 }
 
-/// The user-owned file and exact import that activate a generated template.
-///
-/// This is metadata only. Applying it is intentionally a separate concern so
-/// the owned-output writer never gains authority over an existing user file.
+/// How a template's Helm-owned output reaches its consumer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Activation {
-    /// Path to the user-owned activation file, relative to `$XDG_CONFIG_HOME`.
-    pub user_path: PathBuf,
-    /// The complete import line a user file needs, including its newline.
-    pub import: &'static str,
+pub enum Activation {
+    /// An absent user-owned file may atomically receive a minimal shim.
+    Shim {
+        /// Path to the user-owned activation file, relative to `$XDG_CONFIG_HOME`.
+        user_path: PathBuf,
+        /// The complete contents of the shim.
+        contents: ShimContents,
+    },
+    /// Helm must not create a user configuration; the launcher or user follows
+    /// this target-specific remedy instead.
+    Manual(ManualActivation),
+}
+
+/// The contents of an atomically published first-run shim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShimContents {
+    /// A complete literal shim, including its terminal newline.
+    Literal(&'static str),
+    /// A foot include whose required absolute path is derived at apply time.
+    FootInclude,
+}
+
+/// A consumer whose generated output requires an explicit launch/config step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManualActivation {
+    /// Yazi reads the generated directory when `YAZI_CONFIG_HOME` selects it.
+    Yazi,
+    /// btop requires its custom theme directory and a user `color_theme` value.
+    Btop,
+    /// Starship reads its generated configuration through `STARSHIP_CONFIG`.
+    Starship,
+    /// Helm launches fuzzel with its generated configuration path.
+    Fuzzel,
+    /// qt6ct requires its platform-theme environment and appearance settings.
+    Qt6ct,
 }
 
 /// How a themed program is told the theme changed.
@@ -72,18 +99,20 @@ fn gtk_restyle() -> Reload {
 
 /// The templates helm ships.
 ///
-/// Targets land below `$XDG_CONFIG_HOME/helm/generated`. GTK's user-owned
-/// stylesheet is declared as activation metadata; the writer handles that
-/// metadata separately from the Helm-owned generated output.
+/// Targets land below `$XDG_CONFIG_HOME/helm/generated`; each declares the
+/// explicit mechanism that consumes it without granting Helm ownership of an
+/// existing user configuration.
 pub fn templates() -> Vec<Template> {
     vec![
         Template {
             id: "gtk4",
             source: include_str!("../../../configs/templates/gtk4.css"),
             target: PathBuf::from("helm/generated/gtk-4.0/helm.css"),
-            activation: Some(Activation {
+            activation: Some(Activation::Shim {
                 user_path: PathBuf::from("gtk-4.0/gtk.css"),
-                import: "@import url(\"../helm/generated/gtk-4.0/helm.css\");\n",
+                contents: ShimContents::Literal(
+                    "@import url(\"../helm/generated/gtk-4.0/helm.css\");\n",
+                ),
             }),
             reload: gtk_restyle(),
         },
@@ -91,9 +120,11 @@ pub fn templates() -> Vec<Template> {
             id: "gtk3",
             source: include_str!("../../../configs/templates/gtk3.css"),
             target: PathBuf::from("helm/generated/gtk-3.0/helm.css"),
-            activation: Some(Activation {
+            activation: Some(Activation::Shim {
                 user_path: PathBuf::from("gtk-3.0/gtk.css"),
-                import: "@import url(\"../helm/generated/gtk-3.0/helm.css\");\n",
+                contents: ShimContents::Literal(
+                    "@import url(\"../helm/generated/gtk-3.0/helm.css\");\n",
+                ),
             }),
             reload: gtk_restyle(),
         },
@@ -101,7 +132,10 @@ pub fn templates() -> Vec<Template> {
             id: "foot",
             source: include_str!("../../../configs/templates/foot.ini"),
             target: PathBuf::from("helm/generated/foot/foot.ini"),
-            activation: None,
+            activation: Some(Activation::Shim {
+                user_path: PathBuf::from("foot/foot.ini"),
+                contents: ShimContents::FootInclude,
+            }),
             reload: Reload::Signal {
                 process: "foot",
                 signal: SIGUSR1,
@@ -111,35 +145,35 @@ pub fn templates() -> Vec<Template> {
             id: "yazi",
             source: include_str!("../../../configs/templates/yazi-theme.toml"),
             target: PathBuf::from("helm/generated/yazi/theme.toml"),
-            activation: None,
+            activation: Some(Activation::Manual(ManualActivation::Yazi)),
             reload: Reload::None,
         },
         Template {
             id: "btop",
             source: include_str!("../../../configs/templates/btop.theme"),
             target: PathBuf::from("helm/generated/btop/themes/helm.theme"),
-            activation: None,
+            activation: Some(Activation::Manual(ManualActivation::Btop)),
             reload: Reload::None,
         },
         Template {
             id: "starship",
             source: include_str!("../../../configs/templates/starship.toml"),
             target: PathBuf::from("helm/generated/starship/starship.toml"),
-            activation: None,
+            activation: Some(Activation::Manual(ManualActivation::Starship)),
             reload: Reload::None,
         },
         Template {
             id: "fuzzel",
             source: include_str!("../../../configs/templates/fuzzel.ini"),
             target: PathBuf::from("helm/generated/fuzzel/fuzzel.ini"),
-            activation: None,
+            activation: Some(Activation::Manual(ManualActivation::Fuzzel)),
             reload: Reload::None,
         },
         Template {
             id: "qt6ct",
             source: include_str!("../../../configs/templates/qt6ct-colors.conf"),
             target: PathBuf::from("helm/generated/qt6ct/colors/helm.conf"),
-            activation: None,
+            activation: Some(Activation::Manual(ManualActivation::Qt6ct)),
             reload: Reload::None,
         },
     ]

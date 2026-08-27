@@ -1,6 +1,6 @@
 # SPEC 0002 — Theme pipeline
 
-- **Status:** Accepted; implemented through A18 (2026-08-27), including A11's
+- **Status:** Accepted; implemented through A18, A20 and A21 (2026-08-27), including A11's
   equivalent-spelling configuration-root correction, A13's matching palette
   containment rule, and #110's A12/A14 descriptor-relative writer
   protections. Multi-file all-or-nothing publication remains #22's boundary.
@@ -145,8 +145,10 @@ Each row is one happy path and becomes one test.
 | A15 | Given the shipped template set, when its targets are inspected, then every target begins `helm/generated/` and is therefore Helm-owned | `theme::tests::every_shipped_template_target_is_helm_owned` |
 | A16 | Given an empty configuration root, when `apply` creates a GTK activation file, then each `gtk.css` contains exactly one documented Helm import and no other bytes | `theme::tests::missing_gtk_activation_files_get_exactly_one_helm_import` |
 | A17 | Given an existing GTK activation file, when `apply` runs, then that file remains byte-identical while the Helm-owned generated outputs are applied | `theme::tests::existing_gtk_activation_files_remain_byte_identical` |
-| A18 | Given the GTK activation metadata, when doctor diagnostics are requested, then each diagnostic exposes the user file, exact import (including its terminal newline), and Helm-owned generated target | `theme::tests::gtk_activation_diagnostics_expose_the_exact_import_and_generated_target` |
+| A18 | Given the shipped template set, when doctor diagnostics are requested, then each diagnostic exposes its stable template id, optional user shim path, exact remedy, and Helm-owned generated target | `theme::tests::activation_diagnostics_cover_every_shipped_target` |
 | A19 *(planned, #23)* | Given a user-owned GTK activation file, including one that reproduces the exact import only in a CSS comment or string, when `helmctl doctor` inspects it, then it prints the conservative activation remediation and never claims that the theme is active | `ctl::tests::user_owned_gtk_activation_files_are_reported_conservatively` |
+| A20 | Given an empty configuration root, when `apply` activates foot, then it atomically creates the exact absolute-path include shim; given an existing `foot.ini`, it remains byte-identical | `theme::tests::foot_activation_shim_is_exact_and_preserves_an_existing_file` |
+| A21 | Given a first-run GTK or foot activation shim, when it is staged before publication, then the final user path is absent; when publication completes, it appears with the full exact contents and never replaces a pre-existing file | `theme::tests::activation_shims_are_staged_then_published_without_replacing_user_files` |
 
 A9 and A10 name `helm ctl` subcommands, but the CLI is a separate M1 slice and
 does not exist yet. Both are tested at the library boundary the subcommands will
@@ -177,40 +179,58 @@ template for a program with a user-owned configuration file renders to a
 tool-specific file below that subtree; it never writes into the program's
 ordinary configuration directory.
 
-For an activation file that the program reads by default (for example GTK's
-`gtk.css`), `theme apply` may create the user-side file *only when it is
-absent*. That first-run file contains only the documented Helm import and is
-thereafter user-owned. If the activation file already exists, Helm must not
-modify, replace, append to, or delete it. `helmctl doctor` reports the exact
-import line and target file when the existing configuration does not activate
-the generated theme.
+Every generated target has an activation contract. Helm owns its generated
+file, not the activation mechanism: an existing user configuration is never
+modified, replaced, appended to, or deleted. An absent user configuration may
+receive only a minimal, immutable shim when the consumer documents a safe
+single-file selection mechanism. Helm publishes such a shim by writing and
+`fsync`ing a unique sibling, then atomically publishing it with
+`renameat2(RENAME_NOREPLACE)` and `fsync`ing the parent. It must never expose a
+partially written final shim or replace a file created by the user meanwhile.
+
+| Target | Helm-owned output | Activation contract |
+|---|---|---|
+| GTK 3/4 | `helm/generated/gtk-<major>.0/helm.css` | If `gtk-<major>.0/gtk.css` is absent, atomically create a file containing only the exact relative `@import`; otherwise leave it byte-identical. |
+| foot | `helm/generated/foot/foot.ini` | If `foot/foot.ini` is absent, atomically create a file containing only `include=<absolute generated output path>`; otherwise leave it byte-identical. foot requires an absolute or `~/` include path, so `apply` derives the exact absolute path from its configuration-root argument. |
+| yazi | `helm/generated/yazi/theme.toml` | Do not create a shim: selecting an alternate `YAZI_CONFIG_HOME` changes the whole configuration directory. The Helm launcher or user invokes `YAZI_CONFIG_HOME=<config-root>/helm/generated/yazi yazi`; doctor prints that exact remedy. |
+| btop | `helm/generated/btop/themes/helm.theme` | Do not create a shim: selection requires both `btop --themes-dir <config-root>/helm/generated/btop/themes` and `color_theme = "helm"` in a user configuration. Doctor prints both exact steps. |
+| starship | `helm/generated/starship/starship.toml` | Do not create a shim: the launcher or shell exports `STARSHIP_CONFIG=<config-root>/helm/generated/starship/starship.toml`; doctor prints that exact remedy. |
+| fuzzel | `helm/generated/fuzzel/fuzzel.ini` | Do not create a shim: Helm launches `fuzzel --config=<config-root>/helm/generated/fuzzel/fuzzel.ini`; doctor prints that exact remedy. |
+| qt6ct | `helm/generated/qt6ct/colors/helm.conf` | Do not create a shim: activation requires the user-owned `qt6ct.conf` appearance settings and `QT_QPA_PLATFORMTHEME=qt6ct`. Doctor prints the exact `custom_palette=true` and absolute `color_scheme_path` remedy. |
+
+The non-shim rows are intentionally not treated as active merely because the
+generated file exists. This keeps Helm from silently replacing a whole
+application configuration when that application does not offer an import-like
+selection boundary.
 
 ### Doctor activation diagnostic contract
 
 This is the handoff contract for #23 (`helmctl doctor`). `helm-theme` exposes
-one `ActivationDiagnostic` per activation-capable template. The diagnostic is
-data only and performs no filesystem I/O:
+one `ActivationDiagnostic` per shipped template. The diagnostic is data only
+and performs no filesystem I/O:
 
 | Field | Contract |
 |---|---|
-| `user_path` | The normalized path relative to `$XDG_CONFIG_HOME` of the user-owned file that the program reads by default. |
-| `import` | The complete, exact line required to activate Helm's generated output, including its terminating newline. |
-| `generated_target` | The normalized path relative to `$XDG_CONFIG_HOME` under `helm/generated/` selected by `import`. |
+| `template_id` | The stable shipped-template identifier. |
+| `user_path` | The normalized user-owned path relative to `$XDG_CONFIG_HOME` for a first-run shim, or absent for a launch/config remedy. |
+| `remedy` | The complete exact first-run shim contents or target-specific launch/config instruction. Manual-path remedies are derived against the caller's configuration root and are absolute; GTK's documented import stays relative to its `gtk.css` sibling. |
+| `generated_target` | The normalized path relative to `$XDG_CONFIG_HOME` under `helm/generated/` selected by the remedy. |
 
-Raw byte containment is not an activation check: the import can occur inside a
-CSS comment or string without GTK evaluating it. #23 therefore does **not**
+Raw byte containment is not an activation check: a GTK import can occur inside
+a CSS comment or string without GTK evaluating it. #23 therefore does **not**
 parse, search, or otherwise infer activation from a user-owned file. For every
 existing `user_path`, it must print this conservative wording, substituting
-the diagnostic values and printing `import` verbatim:
+the diagnostic values and printing `remedy` verbatim:
 
 ```text
-<user_path> is user-owned; ensure it activates Helm's generated theme with exactly: <import>
+<user_path> is user-owned; ensure it activates Helm's generated theme with exactly: <remedy>
 ```
 
-`doctor` must not create, edit, append to, replace, or delete `user_path`.
-The fields, their relative-path basis, and the prescribed wording are stable
-for the M1 doctor integration; consumers must use `activation_diagnostics()`
-rather than reconstructing paths or imports. A future, accepted CSS parsing
+For a diagnostic without `user_path`, #23 prints `remedy` verbatim. `doctor`
+must not create, edit, append to, replace, or delete any user-owned path. The
+fields, their relative-path basis, and the prescribed wording are stable for
+the M1 doctor integration; consumers must use `activation_diagnostics(root)`
+rather than reconstructing paths or remedies. A future, accepted CSS parsing
 contract may replace this conservative diagnostic only with tests that cover
 comments, strings, and valid `@import` syntax.
 
