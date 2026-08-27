@@ -29,23 +29,32 @@
     name = "helm-session-boots";
 
     nodes.machine =
-      { ... }:
+      { config, ... }:
       {
         imports = [ nixosModule ];
         programs.helm.enable = true;
-        # Keep the VM small: no display manager, no graphical login. This test
-        # asserts the *contract* is installed, not that a desktop renders — see
-        # the M2 block below for that.
+        services.displayManager.ly.enable = true;
         virtualisation.memorySize = 2048;
       };
 
-    testScript = ''
+    testScript =
+      { nodes, ... }:
+      let
+        desktops = nodes.machine.config.services.displayManager.sessionData.desktops;
+      in
+      ''
       # Everything asserted here is true of helm 0.1.0 today.
       machine.wait_for_unit("multi-user.target")
 
-      # The wayland-session entry a display manager would offer.
-      machine.succeed("test -f /run/current-system/sw/share/wayland-sessions/helm.desktop")
-      machine.succeed("grep -q '^DesktopNames=helm$' /run/current-system/sw/share/wayland-sessions/helm.desktop")
+      # The wayland-session entry materialised by NixOS display-manager session data.
+      machine.succeed("test -f ${desktops}/share/wayland-sessions/helm.desktop")
+      machine.succeed(
+        "grep -q '^DesktopNames=helm$' ${desktops}/share/wayland-sessions/helm.desktop"
+      )
+      machine.succeed(
+        "grep -Eq '^Exec=/nix/store/[^/]+-helm-session-launch$' "
+        + "${desktops}/share/wayland-sessions/helm.desktop"
+      )
 
       # The session wrapper is installed, wrapped, and its preflight agrees that
       # the compositor and the D-Bus tooling are present.
