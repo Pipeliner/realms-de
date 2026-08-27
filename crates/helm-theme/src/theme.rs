@@ -272,6 +272,11 @@ fn apply_with_inner(
         written.push(output_root.display.join(&template.target));
     }
 
+    // Activation files are deliberately outside the owned-output transaction.
+    // Create them only after every generated output has committed, and use
+    // CREATE|EXCL so an existing user file wins every race unchanged.
+    create_missing_activations(&output_root, templates)?;
+
     // Phase 4: and only now, one reload per distinct mechanism. Reloading per
     // file would show the desktop a half-applied theme, which is the whole
     // reason for the three phases above.
@@ -386,6 +391,28 @@ fn validate_targets(templates: &[Template]) -> Result<()> {
                 reason: "two templates target the same output",
             });
         }
+        if let Some(activation) = &template.activation {
+            if activation.user_path.as_os_str().is_empty() {
+                return Err(Error::UnsafeTarget {
+                    target: activation.user_path.clone(),
+                    reason: "activation path is empty",
+                });
+            }
+            if activation.user_path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::Prefix(_)
+                        | Component::RootDir
+                        | Component::CurDir
+                        | Component::ParentDir
+                )
+            }) {
+                return Err(Error::UnsafeTarget {
+                    target: activation.user_path.clone(),
+                    reason: "activation path must be a normalized relative path",
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -470,8 +497,8 @@ impl OutputRoot {
         })
     }
 
-    /// Open or create `target`'s parents without leaving the held descriptor
-    /// chain, returning that parent and the normalized final basename.
+    /// Open or create a validated relative path's parents without leaving the
+    /// held descriptor chain, returning that parent and its final basename.
     fn open_parent(&self, target: &Path) -> Result<(OwnedFd, OsString)> {
         let final_name = target
             .file_name()
@@ -528,6 +555,41 @@ fn contents_match(parent_fd: &OwnedFd, final_name: &OsStr, expected: &[u8]) -> R
     file.read_to_end(&mut old)
         .map_err(|error| Error::io(final_name, error))?;
     Ok(old == expected)
+}
+
+/// Create first-run activation files without ever opening an existing file for
+/// writing. These files become user-owned as soon as they are created and are
+/// intentionally omitted from [`Applied::written`].
+fn create_missing_activations(output_root: &OutputRoot, templates: &[Template]) -> Result<()> {
+    for template in templates {
+        let Some(activation) = &template.activation else {
+            continue;
+        };
+        let (parent_fd, final_name) = output_root.open_parent(&activation.user_path)?;
+        let fd = match openat(
+            &parent_fd,
+            &final_name,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        ) {
+            Ok(fd) => fd,
+            Err(Errno::EXIST) => continue,
+            Err(error) => return Err(Error::io(&activation.user_path, error.into())),
+        };
+
+        let mut file = std::fs::File::from(fd);
+        if let Err(error) = file
+            .write_all(activation.import.as_bytes())
+            .and_then(|()| fsync(&file).map_err(std::io::Error::from))
+        {
+            // The pathname became user-owned at the successful exclusive
+            // create. Never unlink it on an error: another process could have
+            // replaced the directory entry while this descriptor stayed open.
+            return Err(Error::io(&activation.user_path, error));
+        }
+        fsync(&parent_fd).map_err(|error| Error::io(&activation.user_path, error.into()))?;
+    }
+    Ok(())
 }
 
 /// Write `text` to a unique sibling through the held parent and flush it.
@@ -743,6 +805,58 @@ mod tests {
                 contents
             );
         }
+    }
+
+    #[test]
+    fn activation_create_failure_is_returned_after_owned_outputs_commit_without_reload() {
+        let root = tempfile::tempdir().unwrap();
+        let blocked_parent = root.path().join("blocked");
+        std::fs::write(&blocked_parent, b"user-owned blocker\n").unwrap();
+        let set = [Template {
+            id: "activation-failure",
+            source: "focus = {{ accent.violet }}\n",
+            target: PathBuf::from("helm/generated/test/theme.conf"),
+            activation: Some(crate::Activation {
+                user_path: PathBuf::from("blocked/gtk.css"),
+                import: "@import url(\"../helm/generated/test/theme.conf\");\n",
+            }),
+            reload: Reload::Command(vec!["must-not-run".to_owned()]),
+        }];
+        let mut recorder = Recorder::default();
+
+        let error = apply_with(&shipped(), root.path(), &set, &mut recorder)
+            .expect_err("an activation creation failure must be returned");
+
+        assert!(error.to_string().contains("blocked/gtk.css"), "{error}");
+        assert_eq!(
+            std::fs::read(&blocked_parent).unwrap(),
+            b"user-owned blocker\n"
+        );
+        assert!(root.path().join("helm/generated/test/theme.conf").is_file());
+        assert!(recorder.0.is_empty(), "reload ran after activation failed");
+    }
+
+    #[test]
+    fn unsafe_activation_paths_abort_before_owned_outputs_are_written() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let set = [Template {
+            id: "unsafe-activation",
+            source: "focus = {{ accent.violet }}\n",
+            target: PathBuf::from("helm/generated/test/theme.conf"),
+            activation: Some(crate::Activation {
+                user_path: outside.path().join("gtk.css"),
+                import: "@import url(\"../helm/generated/test/theme.conf\");\n",
+            }),
+            reload: Reload::None,
+        }];
+
+        let error = apply_with(&shipped(), root.path(), &set, &mut Recorder::default())
+            .expect_err("an absolute activation path must be refused");
+
+        assert!(error.to_string().contains("target"), "{error}");
+        assert!(tree(root.path()).is_empty());
+        assert!(!outside.path().join("gtk.css").exists());
     }
 
     #[test]

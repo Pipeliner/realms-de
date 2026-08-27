@@ -72,15 +72,15 @@ fn gtk_restyle() -> Reload {
 
 /// The templates helm ships.
 ///
-/// Targets are relative to `$XDG_CONFIG_HOME`. GTK's user-owned stylesheet is
-/// declared as activation metadata; the writer handles that metadata separately
-/// from the Helm-owned generated output.
+/// Targets land below `$XDG_CONFIG_HOME/helm/generated`. GTK's user-owned
+/// stylesheet is declared as activation metadata; the writer handles that
+/// metadata separately from the Helm-owned generated output.
 pub fn templates() -> Vec<Template> {
     vec![
         Template {
             id: "gtk4",
             source: include_str!("../../../configs/templates/gtk4.css"),
-            target: PathBuf::from("gtk-4.0/helm.css"),
+            target: PathBuf::from("helm/generated/gtk-4.0/helm.css"),
             activation: Some(Activation {
                 user_path: PathBuf::from("gtk-4.0/gtk.css"),
                 import: "@import url(\"../helm/generated/gtk-4.0/helm.css\");\n",
@@ -90,7 +90,7 @@ pub fn templates() -> Vec<Template> {
         Template {
             id: "gtk3",
             source: include_str!("../../../configs/templates/gtk3.css"),
-            target: PathBuf::from("gtk-3.0/helm.css"),
+            target: PathBuf::from("helm/generated/gtk-3.0/helm.css"),
             activation: Some(Activation {
                 user_path: PathBuf::from("gtk-3.0/gtk.css"),
                 import: "@import url(\"../helm/generated/gtk-3.0/helm.css\");\n",
@@ -100,7 +100,7 @@ pub fn templates() -> Vec<Template> {
         Template {
             id: "foot",
             source: include_str!("../../../configs/templates/foot.ini"),
-            target: PathBuf::from("foot/foot.ini"),
+            target: PathBuf::from("helm/generated/foot/foot.ini"),
             activation: None,
             reload: Reload::Signal {
                 process: "foot",
@@ -110,35 +110,35 @@ pub fn templates() -> Vec<Template> {
         Template {
             id: "yazi",
             source: include_str!("../../../configs/templates/yazi-theme.toml"),
-            target: PathBuf::from("yazi/theme.toml"),
+            target: PathBuf::from("helm/generated/yazi/theme.toml"),
             activation: None,
             reload: Reload::None,
         },
         Template {
             id: "btop",
             source: include_str!("../../../configs/templates/btop.theme"),
-            target: PathBuf::from("btop/themes/helm.theme"),
+            target: PathBuf::from("helm/generated/btop/themes/helm.theme"),
             activation: None,
             reload: Reload::None,
         },
         Template {
             id: "starship",
             source: include_str!("../../../configs/templates/starship.toml"),
-            target: PathBuf::from("starship.toml"),
+            target: PathBuf::from("helm/generated/starship/starship.toml"),
             activation: None,
             reload: Reload::None,
         },
         Template {
             id: "fuzzel",
             source: include_str!("../../../configs/templates/fuzzel.ini"),
-            target: PathBuf::from("fuzzel/fuzzel.ini"),
+            target: PathBuf::from("helm/generated/fuzzel/fuzzel.ini"),
             activation: None,
             reload: Reload::None,
         },
         Template {
             id: "qt6ct",
             source: include_str!("../../../configs/templates/qt6ct-colors.conf"),
-            target: PathBuf::from("qt6ct/colors/helm.conf"),
+            target: PathBuf::from("helm/generated/qt6ct/colors/helm.conf"),
             activation: None,
             reload: Reload::None,
         },
