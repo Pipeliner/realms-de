@@ -138,3 +138,10 @@ verifiable ones next to it.
 An instruction given once is written here, generalised past its immediate
 occasion, so it applies to future work without being repeated. This file is the
 place; `CLAUDE.md` indexes it.
+
+## S16 — Verify; do not guess
+
+Never present an assumption as a fact. Check the authoritative local state,
+the relevant source, or the live external system before acting on or reporting
+it. When verification is unavailable, say precisely what remains unverified
+and keep the corresponding issue blocked rather than inventing an answer.
