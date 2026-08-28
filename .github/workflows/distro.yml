@@ -87,8 +87,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      # ADR 0010 makes the flake the reference build and deb/rpm generated from
-      # it, so this job is load-bearing — but packaging/nix/ is scaffolded in M3
+      # ADR 0010 makes the flake the reference build; deb/rpm use tracked native
+      # definitions with planned overlap consistency checks. This job is
+      # load-bearing — but packaging/nix/ is scaffolded in M3
       # (docs/MVP.md), and a job that fails for eight weeks because its input
       # does not exist yet trains everyone to ignore red. It skips cleanly until
       # the flake lands, then starts gating with no edit to this file.
