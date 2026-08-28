@@ -431,16 +431,19 @@ interface rather than letting behaviour depend on what happens to be installed:
 ```ini
 [preferred]
 default=gtk
+org.freedesktop.impl.portal.Settings=gtk
+org.freedesktop.impl.portal.Inhibit=none
 org.freedesktop.impl.portal.ScreenCast=wlr
 org.freedesktop.impl.portal.Screenshot=wlr
 ```
 
-The values are `.portal` file basenames (`gtk.portal` → `gtk`). The GTK backend
-implements `FileChooser` and `Settings` but **not** `ScreenCast` on
-wlroots-based compositors, so screen sharing must be routed to a wlroots
-backend explicitly. This file does not exist yet; today only the Nix module
-expresses the equivalent, which means the deb and the rpm have no portal policy
-at all.
+The values are `.portal` file basenames (`gtk.portal` → `gtk`). `Settings=gtk`
+is explicit so another installed backend cannot silently take over that
+contract; `Inhibit=none` is explicit because helm makes no supported
+inhibition-policy promise. The GTK backend implements `FileChooser` and
+`Settings` but **not** `ScreenCast` on wlroots-based compositors, so screen
+sharing must be routed to a wlroots backend explicitly. Packaging installs this
+shared policy for every target.
 
 **Package dependencies.** Every package depends on `xdg-desktop-portal` **and**
 on a named backend set — not on a disjunction that a solver may satisfy with the

@@ -411,7 +411,7 @@ genuinely not observable any other way.
 
 | Module | Source | Mechanism | Ladder |
 |---|---|---|---|
-| clock | wall clock | 1 s `timerfd` in `helm-session` | the one sanctioned timer (ADR 0009) |
+| clock | wall clock | `timerfd` scheduled to the next minute boundary in `helm-session` | minute-aligned display update (ADR 0009) |
 | battery | `power_supply` | udev uevent | step 1 — an event exists |
 | vol | PipeWire / WirePlumber | node param change | step 1 — an event exists |
 | net | `/proc/net/dev` | sampled | step 3 |
@@ -473,7 +473,7 @@ Recorded here rather than resolved in code, so nobody has to re-derive them.
 | Which-key type size | `font-size:11.5px` | 11.5 is not in the type scale. `typography.size_meta` (11.0) |
 | Hecate scrim, reused by the grimoire | `rgba(4,5,10,.6)` — `#04050a` | `background.void` (`#05060c`) at alpha 0.60 |
 | `Module::urgent` | not shown | the module's accent as a 0.14 wash behind it, matching the mode badge and active rune. It does not blink |
-| Clock ownership | "clock 1s tick", owner unstated; [INTERFACES.md §3](../INTERFACES.md) says "no timers except the clock" without saying whose | settled by [SPEC 0003](0003-helm-session.md) §8 in `helm-session`. The bar has no timer (§7) |
+| Clock ownership | "clock 1s tick", owner unstated | settled by [SPEC 0003](0003-helm-session.md) §8 in `helm-session`; ADR 0009 refines the displayed clock to the next minute boundary. The bar has no timer (§7) |
 | Bar over a fullscreen window | not drawn; ADR 0013 assumed node ordering would decide | `river-layer-shell-v1` has no node ordering, so the layer decides: both strips sit on `Bottom` and a fullscreen window covers them (§1) |
 | Uncoverable codepoints in titles | not considered | replaced with `?` before shaping (§6) |
 

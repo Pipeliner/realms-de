@@ -26,13 +26,13 @@ Copy [`template.md`](template.md) to start a new one.
 | [0007](0007-reuse-yazi-btop-starship.md) | Reuse yazi, btop and zsh+starship | Accepted | charon and horus are ~90% theme and keymap; always behind a seam | Low per tool |
 | [0008](0008-layer-shell-rendering-stack.md) | `smithay-client-toolkit` + `tiny-skia` + `cosmic-text` | Accepted | Pure Rust, no GPU context for a 32px bar, real font fallback | **Medium** — a client rewrite |
 | [0009](0009-no-animation-budget.md) | No animations; the frame budget is a CI gate | Accepted | "Snappy" is five numbers, not an adjective | Low |
-| [0010](0010-nix-flake-as-reference-build.md) | The Nix flake is the reference build | Accepted | deb and rpm generated from the same metadata; a NixOS VM test boots the session | **Medium** |
+| [0010](0010-nix-flake-as-reference-build.md) | The Nix flake is the reference build | Accepted | root flake plus tracked native distro packaging; a NixOS VM test boots the session | **Medium** |
 | [0011](0011-session-integration-contract.md) | The session entry owns the environment handshake | Accepted | Import into systemd **and** D-Bus before starting anything, or portals hang | Low — the requirement is not reversible |
-| [0012](0012-font-fallback-is-a-contract.md) | Font fallback is a contract | Accepted | Glyph inventory, a startup probe, and an ASCII fallback for all 37 glyphs | Low |
+| [0012](0012-font-fallback-is-a-contract.md) | Font fallback is a contract | Accepted — guard pending | Glyph inventory, a startup probe, and an ASCII fallback for all 37 glyphs | Low |
 | [0013](0013-river-window-management-backend.md) | helm **is** the window manager, on river's protocol | Accepted — supersedes [0002](0002-borrow-a-compositor-first.md) | river 0.4 moved window management out of the compositor; every row 0002 marked lossy becomes faithful | **Medium** — back to niri is an architecture change, not a module swap |
 
-All are **provisional**, as `docs/ARCHITECTURE.md` says of the architecture as a
-whole. "Accepted" means we are building on it, not that it is settled forever —
+All active decisions were **ratified by the owner on 2026-08-28**, after the
+correction set tracked by #3. "Accepted" means we are building on it, not that it is settled forever —
 0002 is the worked example, superseded within a day of being written and kept
 intact because the trail is the point.
 
@@ -65,11 +65,11 @@ decision silently stopped being true:
 |---|---|
 | 0001 | `layout::tests::projection_is_pure_and_focus_only_moves_the_flag`, `layout::tests::every_layout_tiles_exactly_for_every_plausible_size`, `ledger::tests::undo_restores_the_exact_previous_ledger` |
 | 0003 | `state::tests::revision_alone_does_not_force_a_redraw`, `state::tests::state_round_trips_through_json` |
-| 0004 | `ipc::tests::requests_round_trip_through_a_frame`, `ipc::tests::unknown_frames_are_an_error_not_a_panic` |
+| 0004 | `ipc::tests::requests_round_trip_through_a_frame`, `ipc::tests::unknown_frames_are_an_error_not_a_panic`; required M2 transport guards are named in ADR 0004 and SPEC 0003 |
 | 0005 | `palette::tests::shipped_palette_passes_its_own_lint`, `palette::tests::lint_catches_muddy_text_and_duplicate_accents` |
 | 0006 | `color::tests::contrast_stops_at_the_gamut_boundary_instead_of_desaturating`, `color::tests::contrast_preserves_accent_hue` |
 | 0009 | `palette::tests::out_of_range_values_are_rejected_at_parse_time` (enforces `metrics.radius == 0`) |
-| 0012 | `glyphs::tests::a_bare_ascii_font_degrades_instead_of_drawing_tofu` |
+| 0012 | `glyphs::tests::a_bare_ascii_font_degrades_instead_of_drawing_tofu`; ratification also requires `palette::tests::empty_typography_fallback_is_rejected` to fail for an empty-only fixture and pass for the shipped palette |
 
 ADRs 0007, 0008, 0010, 0011 and 0013 depend on guards that land with their
 milestones; each names them as *planned* with the milestone attached. 0013's

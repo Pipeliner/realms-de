@@ -1,6 +1,6 @@
 # ADR 0006 — Contrast is derived in OKLab, not applied as a filter
 
-- **Status:** Accepted (2026-08-26) — provisional; see Reversal
+- **Status:** Accepted (ratified 2026-08-28); see Reversal
 - **Deciders:** helm maintainers
 - **Supersedes / Superseded by:** —
 
@@ -82,7 +82,7 @@ instead.
 - Zero runtime cost. The derivation happens once, inside the 150 ms theme-apply
   budget, and the compositor draws plain colours.
 - Accent hues survive the whole contrast range. `contrast_preserves_accent_hue`
-  asserts under 4 degrees of drift at 0.85, 1.20 and 1.40 for all five accents.
+  asserts under 4 degrees of drift at 0.85, 1.20 and 1.40 for all six accents.
 - Accents keep their chroma at the top of the range rather than washing out.
 - No GPU context is needed anywhere, which is what makes ADR 0008's CPU
   rasteriser viable and keeps cold start under 900 ms.
@@ -127,7 +127,7 @@ accessibility filter rather than making the default path a filter again.
   — the named guard for this decision. Asserts that at contrast 1.40 every
   accent retains more than 90% of its chroma and never loses contrast.
 - `color::tests::contrast_preserves_accent_hue` — under 4 degrees of drift for
-  all five accents across the range.
+  all six accents across the range.
 - `color::tests::gamut_mapping_holds_hue_where_clamping_would_not` — asserts
   directly that chroma reduction beats channel clamping on hue fidelity. This is
   the test that encodes the 18 degree observation as a permanent invariant.

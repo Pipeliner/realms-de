@@ -1,6 +1,6 @@
 # ADR 0001 — The ledger is the single source of truth
 
-- **Status:** Accepted (2026-08-26) — provisional; see Reversal
+- **Status:** Accepted (ratified 2026-08-28); see Reversal
 - **Deciders:** helm maintainers
 - **Supersedes / Superseded by:** —
 
@@ -34,7 +34,9 @@ integer arithmetic over a short list with no allocation-heavy bookkeeping.
 
 `helm-core::ledger::Ledger` holds an ordered `Vec<WinId>` per orbit and nothing
 else that describes position. Six orbits, each with its own layout, focus index,
-stow list and optional fullscreen window.
+stow list and optional fullscreen window. `TriptychParams` is an external
+projection input: M0 passes it to `layout::project` and the ledger does not own
+or persist it.
 
 1. Every user action — summon, banish, swap, focus, stow, fullscreen, move to
    orbit, set layout — is a mutation of the ledger and of nothing else.
@@ -44,7 +46,9 @@ stow list and optional fullscreen window.
 3. Undo is a stack of whole ledger snapshots (`HISTORY_DEPTH = 64`), not an
    inverse-op log. `Ledger::checkpoint` runs before each mutation; no-op
    mutations do not checkpoint, so `mod+1` while already on orbit 1 does not
-   burn an undo step.
+   burn an undo step. Undo history and the current `TriptychParams` are
+   session-local and are not restored across a new login; no accepted
+   requirement promises cross-session undo or persistent layout parameters.
 4. `focused` and `occluded` are flags on a `Placement`. They may change what is
    painted; they may never change a rectangle.
 
@@ -67,8 +71,10 @@ The scene-graph option is not dead. It is what `helm-compositor` (M5) will build
   asserts equality of the whole orbit, not of a summary.
 - Focus is free. `layout::tests::projection_is_pure_and_focus_only_moves_the_flag`
   asserts that stepping focus leaves every rectangle identical.
-- Relayout is skippable: same ledger plus same workarea implies same geometry,
-  so the session can compare and submit nothing.
+- Relayout is skippable only when the cache identity contains the ledger,
+  `TriptychParams`, and workarea. The ledger snapshots contain only ledger
+  state; a future requirement to undo parameter changes must first extend the
+  accepted ledger specification and its tests.
 - The whole model is testable without a Wayland socket. `helm-core` has no I/O
   dependencies at all, which is why M0 landed before any compositor work.
 - The IPC state broadcast is small: `HelmState` is a handful of strings and six

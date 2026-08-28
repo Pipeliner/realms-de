@@ -58,7 +58,7 @@ pub struct Texts {
     pub faint: Rgb,
 }
 
-/// The five accent hues.
+/// The six accent hues.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Accents {
     /// Arcane: focus, odin, hecate.

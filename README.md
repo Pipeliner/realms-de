@@ -54,8 +54,8 @@
 
 - **Three distributions, all first-class.** NixOS, Ubuntu and Fedora are tested
   in CI from the outset. The Nix flake is the reference build; the `.deb` and
-  `.rpm` are generated from the same metadata rather than maintained in
-  parallel. [ADR 0010](docs/adr/0010-nix-flake-as-reference-build.md)
+  `.rpm` use tracked native definitions under `packaging/`; a mechanical
+  consistency check guards their shared contract. [ADR 0010](docs/adr/0010-nix-flake-as-reference-build.md)
 
 Behaviour is written down before it is written in Rust: every non-trivial
 component gets a spec in [`docs/specs/`](docs/specs/), and its happy-path tests
@@ -154,7 +154,7 @@ label.
 |---|---|---|
 | **`river-window-management-v1` is an unstable protocol, and no distribution ships a river that speaks it.** river 0.4 is what makes helm's ledger drive real pixels at M2. Ubuntu and Fedora ship river 0.3.x or river-classic. Do we vendor and pin a river 0.4.x in all three packages, and accept a protocol bump as a tracked event? | It is a maintenance commitment, not a technical question: someone has to own a vendored compositor and re-test it on every bump. river's maintainer pledges "we do not break window managers"; the registry still says *unstable*. Both are true. See [ADR 0013](docs/adr/0013-river-window-management-backend.md). | (a) vendor a pinned river 0.4.x in every package and track bumps; (b) wait for distributions to catch up and delay M2; (c) bring `helm-compositor` forward and pay for it with a year. |
 | **Which lock screen ships, and what are the idle defaults?** A desktop that does not lock on lid-close is not daily-drivable, and blank/lock timeouts are user-visible security defaults. | Choosing a lock screen is choosing a security posture, and the repository should not pick one silently. See [ADR 0011](docs/adr/0011-session-integration-contract.md). | (a) `gtklock` — `ext-session-lock-v1` is the property that matters; (b) `swaylock-effects` themed from `palette.toml`; (c) write `helm-ward` later and use a stopgap until then. Timeouts: not to be guessed. |
-| **Where do distro packages live, and who holds the signing key?** The `.deb` and `.rpm` are generated, but generated artefacts need somewhere to live and something to sign them. | Needs an account, a key and a person willing to hold it. Nothing in the repository can decide this. See [ADR 0010](docs/adr/0010-nix-flake-as-reference-build.md). | (a) GitHub Releases only, install by download; (b) a self-hosted apt repo plus a Copr; (c) an OBS project covering both. |
+| **Where do distro packages live, and who holds the signing key?** The tracked native `.deb` and `.rpm` package paths still need a distribution channel and signed artefacts. | Needs an account, a key and a person willing to hold it. Nothing in the repository can decide this. See [ADR 0010](docs/adr/0010-nix-flake-as-reference-build.md). | (a) GitHub Releases only, install by download; (b) a self-hosted apt repo plus a Copr; (c) an OBS project covering both. |
 | **Font licensing for the Nerd Font fallback.** helm's glyph inventory — runes, planetary and alchemical symbols — needs a symbol font present at first boot, and the packages must be able to redistribute it. | A licence call. Redistribution terms differ per family, and getting it wrong is a legal problem, not a bug. See [ADR 0012](docs/adr/0012-font-fallback-is-a-contract.md). | (a) depend on distribution packages and refuse to vendor; (b) vendor Symbols Nerd Font Mono where its licence permits; (c) ship only the ASCII fallbacks and let the user install a symbol font. |
 
 None of these blocks M0 or M1.

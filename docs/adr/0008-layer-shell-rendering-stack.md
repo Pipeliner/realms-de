@@ -1,6 +1,6 @@
 # ADR 0008 — `smithay-client-toolkit` + `tiny-skia` + `cosmic-text` for layer-shell clients
 
-- **Status:** Accepted (2026-08-26) — provisional; see Reversal
+- **Status:** Accepted (ratified 2026-08-28); see Reversal
 - **Deciders:** helm maintainers
 - **Supersedes / Superseded by:** —
 

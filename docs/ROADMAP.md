@@ -138,8 +138,9 @@ on a machine that is not the author's.
   and starship), a terminal on the generated ANSI theme, and fuzzel dressed as
   hecate.
 - Packaging: the Nix flake as the reference build with `nixosModules.helm` and
-  `homeManagerModules.helm`, plus the `.deb` and `.rpm` generated from the same
-  metadata. A NixOS VM test that boots the session and asserts the bar appears.
+  `homeManagerModules.helm`, plus tracked native Debian and Fedora definitions
+  with planned consistency checks for overlapping metadata. A NixOS VM test
+  that boots the session and asserts the bar appears.
 - A **vendored, pinned river 0.4.x** in every package. Ubuntu and Fedora ship
   river 0.3.x or river-classic, neither of which speaks the window-management
   protocol. Vendoring puts Zig in the packaging pipeline only, never in helm's

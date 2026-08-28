@@ -16,9 +16,9 @@ banned list live in `SKILL.md`.
 |---|---|---|
 | Key press → geometry < 4 ms | The desktop feels laggy exactly when you are navigating fastest | `layout::project` is pure integer maths over a `Vec<WinId>`, with no allocation-heavy bookkeeping and no I/O (ADR 0001) |
 | State change → bar redraw < 8 ms | The bar lags behind the thing it is describing | `HelmState` is a plain data struct; `renders_same_as` gates the frame before any drawing |
-| Idle CPU ~0% | Fans spin on a laptop doing nothing; battery life drops for no benefit | every module push-driven, one 1 s clock tick, damage-tracked repaint |
+| Idle CPU ~0% | Fans spin on a laptop doing nothing; battery life drops for no benefit | event-driven modules, one shared 1 Hz sampler for interval-derived rates, minute-aligned clock, damage-tracked repaint |
 | Cold start < 900 ms | Login feels like a workstation booting | no GPU context for a 32px bar (ADR 0008), no icon-cache scan, no thumbnailer |
-| `theme apply` < 150 ms | A colour tweak feels like a recompile, so nobody tweaks colours | templates render in parallel; byte-identical outputs are skipped entirely (SPEC 0002) |
+| `theme apply` < 150 ms | A colour tweak feels like a recompile, so nobody tweaks colours | templates render serially, are replaced atomically per file, then trigger one reload fan-out (ADR 0009) |
 
 ## Deciding whether a timer is justified
 

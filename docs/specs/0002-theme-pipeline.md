@@ -112,7 +112,7 @@ all-or-nothing publication, which remains #22's boundary.
 | Qt (qt6ct) | rewrite the colour scheme; running apps pick it up on next start |
 | foot / terminals | `SIGUSR1` to the process |
 | yazi, btop, starship | read on next start; no signal available |
-| helm's own clients | `Event::State` over the control socket |
+| helm's own clients | session notification is planned; its IPC event/ordering contract is deferred until accepted and test-first implemented |
 
 Where a target genuinely cannot hot-reload, `apply` says so in its report rather
 than pretending. Users should never wonder whether it worked.
@@ -134,7 +134,7 @@ Each row is one happy path and becomes one test.
 | A4 | Given `contrast = 1.30`, when `apply` runs, then output colours match `Palette::derived()` and no template contains the literal source colour | `theme::tests::outputs_carry_derived_colours_not_source_literals`, `render::tests::every_template_renders_across_the_whole_contrast_range` |
 | A5 | Given a template with an unknown placeholder, when `apply` runs, then it fails with the placeholder name and writes no file | `theme::tests::an_unknown_placeholder_aborts_the_apply_and_writes_nothing`, `render::tests::unknown_paths_and_transforms_are_errors_not_empty_strings` |
 | A6 | Given a palette with a fatal lint finding, when `apply` runs, then it refuses, prints the findings, and leaves existing outputs untouched | `theme::tests::a_fatally_linted_palette_is_refused_and_leaves_the_theme_live` |
-| A7 | Given a successful apply, when the reload fan-out runs, then each reload mechanism fires exactly once regardless of how many templates share it | `theme::tests::each_reload_mechanism_fires_exactly_once` |
+| A7 | Given a successful apply, when the reload fan-out runs, then each implemented reload mechanism fires exactly once regardless of how many templates share it | `theme::tests::each_reload_mechanism_fires_exactly_once` |
 | A8 | Given no user palette, when `apply` runs, then the shipped palette is copied to the user config path first | `theme::tests::first_run_copies_the_shipped_palette_to_the_user_config` |
 | A9 | Given the shipped palette, when `helm ctl theme lint` runs, then it exits 0 and prints the accent hue separations | `theme::tests::lint_report_is_clean_for_the_shipped_palette_and_lists_hue_separations` |
 | A10 | Given a modified palette, when `helm ctl theme diff` runs, then it prints which outputs would change without writing any | `theme::tests::diff_reports_what_would_change_and_writes_nothing` |

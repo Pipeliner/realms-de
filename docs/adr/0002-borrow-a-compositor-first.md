@@ -11,7 +11,9 @@
 > did not assess — it evaluated the older, dimensions-only `river-layout-v3` and
 > reasonably rejected it. Under the new protocol `helm-session` *is* the window
 > manager, and every row this ADR marks **Lossy** in the niri mapping table
-> below becomes faithful. See [ADR 0013](0013-river-window-management-backend.md).
+> below becomes faithful except exact client dimensions: `propose_dimensions` is
+> a proposal and a client may quantise it. See
+> [ADR 0013](0013-river-window-management-backend.md).
 >
 > Nothing here has been rewritten. The niri mapping table is the evidence for
 > why we moved, and the reversal path in ADR 0013 points back to it. The two

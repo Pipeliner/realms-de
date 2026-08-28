@@ -1,6 +1,6 @@
 # ADR 0004 — Newline-delimited JSON over a unix socket
 
-- **Status:** Accepted (2026-08-26) — provisional; see Reversal
+- **Status:** Accepted (2026-08-26; IPC security amendment accepted 2026-08-28)
 - **Deciders:** helm maintainers
 - **Supersedes / Superseded by:** —
 
@@ -28,9 +28,52 @@ properties, in this order of importance:
 
 One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 
-- Path: `$XDG_RUNTIME_DIR/helm/ctl.sock`, overridable with `HELM_SOCKET`, with a
-  per-uid `/tmp/helm-$uid/` fallback when `XDG_RUNTIME_DIR` is unset so two
-  users never collide. Implemented in `ipc::socket_path`.
+### Endpoint and admission
+
+- The only production endpoint is `$XDG_RUNTIME_DIR/helm/ctl.sock`.
+  `XDG_RUNTIME_DIR` must be an absolute existing directory; if it is absent,
+  relative, or not a directory, path resolution fails with
+  `IpcPathError::MissingRuntimeDir` and neither a client nor the daemon falls
+  back to `/tmp`. `helm-wm` exits non-zero before binding; `helmctl` reports the
+  same condition as "not inside a helm session" and does not connect anywhere.
+- `HELM_SOCKET` is not a production override and `helmctl --socket` is not a
+  public option. The only test seam is a non-production path resolver which
+  receives an explicit temporary runtime directory. It must produce the same
+  `helm/ctl.sock` descendant and perform the same ownership/type checks as the
+  production resolver; it must not accept an arbitrary socket pathname. This
+  seam exists solely to make isolated integration fixtures possible without
+  mutating process environment.
+- Endpoint identity, descriptor-relative resolution, ownership/mode policy,
+  stale reclaim predicate, and post-bind verification are defined completely
+  by SPEC 0007. In particular, only verified `ECONNREFUSED` authorizes reclaim;
+  a timeout, permission failure, or overloaded peer never authorizes unlink.
+- Before reading any frame, the listener obtains Linux `SO_PEERCRED`. It admits
+  only peers whose uid equals the daemon's effective uid. A missing credential,
+  credential lookup failure, or different uid closes that connection without a
+  protocol reply and without delaying healthy peers. Directory permissions are
+  defence in depth, not a substitute for peer admission.
+
+### Connection protocol and liveness
+
+- `Request::Hello { version, client }` is the mandatory first complete frame on
+  **every** connection, including one-shot shell clients. The server answers
+  `Response::Hello` before any other response. A matching version moves the
+  connection to ready; a mismatch receives the server version and is then
+  closed. A request before `Hello`, a second `Hello`, or `Subscribe` before a
+  successful matching Hello is refused with `Response::Error` and then closed.
+  Shell scriptability remains: a script writes a Hello frame followed by its
+  request, each newline terminated.
+- A ready client may issue ordinary requests. `Subscribe` is a terminal request:
+  after a successful Hello it changes the connection into a subscriber, emits
+  an immediate `Event::State` snapshot, and accepts no further client frames.
+  EOF or a forbidden subsequent frame removes only that subscriber.
+- The complete state machine, frame/error classification, capacity accounting,
+  queue classes, nonblocking write deadlines, and fake-clock/credential test
+  seams are defined by SPEC 0007. They are intentionally a state machine: NDJSON
+  removes length-prefix state, not connection, handshake, queue, or deadline
+  state. These limits are liveness guarantees: a local peer cannot turn
+  control-socket I/O into a window-management stall.
+
 - One JSON value per line. `ipc::encode` appends the newline and
   `ipc::tests::requests_round_trip_through_a_frame` asserts every frame contains
   exactly one.
@@ -38,9 +81,9 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
   (`tag = "cmd", content = "arg"` and so on), which keeps frames readable and
   keeps the tag stable when a variant gains fields.
 - `PROTOCOL_VERSION` (currently 1) is exchanged by `Request::Hello` /
-  `Response::Hello`. The session always answers Hello, including on mismatch, so
-  the client can print a useful error. A mismatched client refuses to proceed
-  rather than guessing at fields.
+  `Response::Hello` before any operation. The session always answers Hello,
+  including on mismatch, so the client can print a useful error. A mismatched
+  client refuses to proceed rather than guessing at fields.
 - Unknown frames are an error, never a panic
   (`ipc::tests::unknown_frames_are_an_error_not_a_panic`).
 
@@ -57,14 +100,15 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 
 ### Good
 
-- `socat`, `nc -U`, `jq` and a shell are a complete client. So is `helm ctl`,
-  which is a thin wrapper rather than a privileged path.
+- `socat`, `nc -U`, `jq` and a shell are a complete client: write the mandatory
+  Hello frame first. `helmctl` is a thin wrapper rather than a privileged path.
 - Framing is unambiguous by inspection: if there is no newline yet, the frame is
-  not complete. No length prefix to get wrong, no state machine.
+  not complete. There is no length prefix to get wrong; the explicit connection
+  state machine in SPEC 0007 governs handshake, queues, and deadlines.
 - Serde does the work. Adding a `Request` variant is one enum arm and the tests
   cover it.
-- Unix socket permissions give us the access control we need for free: the
-  socket lives under `$XDG_RUNTIME_DIR`, which is already mode 0700 and per-uid.
+- The fixed per-user runtime endpoint plus same-uid credential admission avoids
+  trusting a world-visible fallback directory or caller-controlled endpoint.
 - Version skew fails loudly at Hello instead of quietly at field access.
 
 ### Bad
@@ -105,8 +149,17 @@ someone wanting to drive orbits from an existing panel or a global hotkey daemon
 - `ipc::tests::responses_round_trip`.
 - `ipc::tests::unknown_frames_are_an_error_not_a_panic` — an unrecognised
   command or malformed input must be a decode error.
-- `ipc::tests::socket_path_honours_the_environment`.
+- *Required before M2 implementation:* `ipc::tests::socket_path_requires_xdg_runtime_dir`,
+  `ipc::tests::test_runtime_dir_resolver_preserves_the_fixed_descendant`, and
+  `ipc::tests::production_path_ignores_helm_socket`.
+- *Required before M2 implementation:* `control_socket::tests::rejects_foreign_uid_before_read`,
+  `control_socket::tests::rejects_missing_peer_credentials_before_read`,
+  `control_socket::tests::path_resolution_is_descriptor_relative`, and
+  `control_socket::tests::stale_same_uid_socket_is_reclaimed_only_after_verified_refusal`.
 - *Planned (M2):* a CI job that drives a live session end to end with `socat`
   and `jq` only, so the scriptability claim is tested rather than asserted.
-- *Planned (M2):* a handshake test asserting that a client presenting the wrong
-  `PROTOCOL_VERSION` is refused with a `Response::Hello` and then disconnected.
+- *Required before M2 implementation:* `control_socket::tests::protocol_state_machine_is_total`,
+  `control_socket::tests::connection_and_queue_limits_preserve_admitted_peers`,
+  `control_socket::tests::all_write_classes_have_bounded_nonblocking_drain`,
+  `control_socket::tests::stalled_peer_preserves_key_path`, and
+  `control_socket::tests::linux_key_path_budget_with_full_socket_buffer`.

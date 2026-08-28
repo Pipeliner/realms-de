@@ -1,6 +1,7 @@
 # ADR 0012 — Font fallback is a contract, not a hope
 
-- **Status:** Accepted (2026-08-26) — provisional; see Reversal
+- **Status:** Accepted (ratified 2026-08-28); the missing guard remains tracked
+  implementation work
 - **Deciders:** helm maintainers
 - **Supersedes / Superseded by:** —
 
@@ -133,9 +134,12 @@ needs to move from font-database queries to actual rasterisation.
   every fallback present, every fallback ASCII.
 - `glyphs::tests::a_complete_font_substitutes_nothing` — the other direction:
   with full coverage nothing is substituted.
-- `palette::tests::out_of_range_values_are_rejected_at_parse_time` — includes
-  the rejection of an empty `typography.fallback`, so the chain can never be
-  absent.
+- `palette::tests::empty_typography_fallback_is_rejected` — asserts the
+  validation guard that rejects an empty `typography.fallback`, so the chain
+  can never be absent. **Acceptance requirement:** this guard must exist,
+  fail against a fixture whose only defect is `typography.fallback = []`, and
+  pass for the shipped palette before ADR 0012 may move from Proposed to
+  Accepted. The current parse-range test does not prove the empty-list case.
 - *Planned (M2):* a render test that rasterises the whole inventory through the
   real `cosmic-text` stack against the shipped font list and asserts no
   `.notdef` mask is produced. This closes the gap between "the database says it

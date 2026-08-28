@@ -51,7 +51,9 @@ Reference of a GTK4 app under the helm theme + annotated reach/limits. Implement
 - Everything keyboard-first; chords under one `mod`. Mode badge in bar reflects state (NAV / RESIZE / …); chord echo shows pending prefix. `?` opens a full keybind sheet ("grimoire").
 - **No animations/transitions in v1.** State changes are instant: workspace switch, focus, launcher open/close, preview toggle. Later minimal-motion pass (opt-in): ≤120ms opacity-only fades on overlays; never move/scale windows.
 - Launcher: fuzzy over PATH + desktop entries + "spells" (user scripts) + commands; ⇥ cycles, ↵ invokes.
-- Bar modules update event-driven; clock 1s tick.
+- Bar modules update event-driven; the original 1s clock direction is refined
+  by ADR 0009 to schedule the displayed `HH:MM` clock at the next minute
+  boundary.
 - Focus follows keyboard (j/k next/prev in ledger order, h/l swap); mouse works but is never required.
 
 ## State Management (compositor core)

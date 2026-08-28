@@ -47,8 +47,10 @@ for it. Update memory at the moment of learning.
 ## S6 — Target Nix/NixOS, Ubuntu and Fedora
 
 All three are first-class and tested in CI. The Nix flake is the reference
-build; deb and rpm are generated from the same metadata rather than maintained
-in parallel. Anything else is best-effort.
+build; Debian and Fedora use the tracked native definitions under `packaging/`.
+There is no generated shared package-metadata source of truth today, so the
+overlapping package contract must be checked mechanically. Anything else is
+best-effort.
 
 ## S7 — Robust and snappy, and avoid the common DE problems
 
