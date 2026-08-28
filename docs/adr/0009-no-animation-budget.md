@@ -1,6 +1,6 @@
 # ADR 0009 — No animations in v1, and "snappy" is a number
 
-- **Status:** Accepted (2026-08-26) — provisional; see Reversal
+- **Status:** Accepted (ratified 2026-08-28); see Reversal
 - **Deciders:** helm maintainers
 - **Supersedes / Superseded by:** —
 

@@ -1,6 +1,6 @@
 # ADR 0005 — One `palette.toml`, and everything themed is generated from it
 
-- **Status:** Accepted (2026-08-26) — provisional; see Reversal
+- **Status:** Accepted (ratified 2026-08-28); see Reversal
 - **Deciders:** helm maintainers
 - **Supersedes / Superseded by:** —
 

@@ -1,6 +1,6 @@
 # ADR 0013 — helm is the window manager, on river's window-management protocol
 
-- **Status:** Accepted (2026-08-26) — provisional; see Reversal
+- **Status:** Accepted (ratified 2026-08-28); see Reversal
 - **Deciders:** helm maintainers, repo owner
 - **Supersedes / Superseded by:** **Supersedes [ADR 0002](0002-borrow-a-compositor-first.md)**
 

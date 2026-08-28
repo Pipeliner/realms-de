@@ -1,6 +1,6 @@
 # ADR 0007 — Reuse yazi, btop and zsh+starship rather than rewrite them
 
-- **Status:** Accepted (2026-08-26) — provisional; see Reversal
+- **Status:** Accepted (ratified 2026-08-28); see Reversal
 - **Deciders:** helm maintainers
 - **Supersedes / Superseded by:** —
 

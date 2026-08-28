@@ -1,6 +1,6 @@
 # helm — architecture
 
-> **Status: provisional.** This document records the shape we are building
+> **Status: ratified 2026-08-28.** This document records the shape we are building
 > towards and *why*. It is meant to be argued with. Every decision here has an
 > ADR in [`docs/adr/`](adr/) with its alternatives and its reversal cost; a
 > decision that turns out wrong gets a new ADR, not a quiet edit.
