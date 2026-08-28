@@ -578,16 +578,14 @@ mismatch, so the client can print something useful — and on mismatch the
 connection is then closed. **`Hello` is optional.** ADR 0004's own headline
 example is `echo '{"cmd":"switch-orbit","arg":3}' | socat - $HELM_SOCKET` with
 no handshake at all, and requirement 1 of that ADR is scriptability; a
-connection that never says hello is served at `PROTOCOL_VERSION`. `Hello`, when
-present, must be the first frame; it is required before `Subscribe`, so a
-long-lived subscriber cannot silently survive an unknown protocol version.
+connection that never says hello is served at `PROTOCOL_VERSION`. The M0 helper
+continues to define its path/override/fallback behavior until an accepted IPC
+specification replaces it.
 
-**Admission and resource bounds.** The runtime directory is required; the
-server creates `$XDG_RUNTIME_DIR/helm` mode 0700 without following links and
-the socket mode 0600. It admits only peers whose `SO_PEERCRED` uid equals the
-session's effective uid, and enforces bounded connection count, frame size,
-initial-handshake deadline, and read/write queues. Unauthorized, malformed, or
-over-limit peers are closed without delaying the session.
+**Deferred admission hardening.** Same-uid `SO_PEERCRED` checks, socket/directory
+creation modes, and connection/frame/queue limits are M2 proposals. They cannot
+alter the public M0 helper until SPEC 0001/0003 and failing tests define the
+override-fixture and fallback behavior together.
 
 **Requests.** A mutating `Request` is applied to the `Ledger` by calling the
 corresponding `helm-core` method, after which the session makes `manage_dirty`
@@ -677,7 +675,6 @@ Each row is one happy path and becomes one test.
 | A12 | Given a subscriber that has stopped reading and whose socket buffer is full, when a bound key is pressed, then `manage_finish` is made within the key-press budget and before any byte is written to that subscriber | |
 | A13 | Given a subscriber whose write cursor has not advanced for `SUBSCRIBER_STALL_LIMIT`, when the next state change occurs, then that subscriber is closed and every remaining subscriber receives exactly one `Event::State` | |
 | A14 | Given a client that sends `Request::Hello` with a version other than `PROTOCOL_VERSION`, when the session receives it, then it answers `Response::Hello` carrying its own version and then closes the connection | |
-| A14a | Given a client that sends `Subscribe` before `Hello`, an unauthorized peer, or an oversized initial frame, when the session receives it, then it closes only that connection and continues serving healthy peers | |
 | A15 | Given an idle session, when the clock module's tick changes the clock text, then exactly one `Event::State` is broadcast and no `manage_dirty` and no other river request is made | |
 | A16 | Given a module that recomputes to the text it already had, when derivation runs, then `revision` does not increment and no `Event::State` is sent | |
 | A17 | Given a client that quantises its dimensions down to a multiple of a 9×18 cell, when a triptych of three such clients is applied, then after at most one corrective `propose_dimensions` per window each `set_content_clip_box` equals that window's projected rect and the clip boxes tile the workarea exactly | |

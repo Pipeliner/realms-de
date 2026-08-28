@@ -31,12 +31,13 @@ regenerates an icon cache.
    `Palette::derived()`, with the contrast setting already folded in (ADR 0006).
 3. `helm ctl theme apply` renders the small shipped template set serially to
    temporary files, then `rename(2)`s each into place, and only then performs a
-   single reload fan-out: `gsettings` writes for GTK, `SIGUSR1` to clients that
-   support it, and an unsuppressible `Event::ThemeReloaded` on the control
-   socket for helm's own processes. Renames are atomic per file only: there is
-   no cross-file all-or-nothing publication. Rendering/staging failure before
-   the first rename leaves outputs untouched; an interruption during publication
-   can expose a mixed generation until the next successful apply.
+   single reload fan-out: `gsettings` writes for GTK and `SIGUSR1` to clients
+   that support it. A helm-client reload notification remains planned session
+   integration: its IPC event/ordering contract must be accepted and tested
+   before a new `Event` variant is named. Renames are atomic per file only:
+   there is no cross-file all-or-nothing publication. Rendering/staging failure
+   before the first rename leaves outputs untouched; an interruption during
+   publication can expose a mixed generation until the next successful apply.
 4. `Palette::lint` runs before anything is written. A fatal finding aborts the
    apply. Nothing is rendered from a palette that fails its own readability
    floors.
@@ -88,8 +89,8 @@ with the implementation: the limits are documented, not fought.
 - The pantheon map means a pane's accent is data, not a literal in the bar's
   drawing code.
 - Per-file atomic replacement prevents torn files. It does not promise a
-  cross-file transaction; supported consumers receive exactly one reload event
-  only after the requested replacements complete.
+  cross-file transaction; the future helm-client notification must occur only
+  after the requested replacements complete.
 
 ### Bad
 
@@ -134,5 +135,5 @@ target gets an exception and the rule survives.
   `design/` and `docs/` contains a `#rrggbb` literal. This is the guard for the
   rule itself and is the one most likely to erode.
 - *Planned (M1):* apply tests that distinguish per-file atomicity from a
-  cross-file transaction, and assert `Event::ThemeReloaded` is delivered once
-  and is never suppressed by state-frame coalescing.
+  cross-file transaction. The helm-client notification is deferred until its
+  IPC contract is accepted and has test-first implementation evidence.

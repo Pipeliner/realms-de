@@ -28,28 +28,21 @@ properties, in this order of importance:
 
 One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 
-- Path: `$XDG_RUNTIME_DIR/helm/ctl.sock`. `XDG_RUNTIME_DIR` is required; there
-  is no `/tmp` fallback. The daemon creates `$XDG_RUNTIME_DIR/helm` mode 0700
-  without following links and the socket mode 0600. `HELM_SOCKET` is accepted
-  only for explicit test fixtures and must name a socket below the caller's
-  runtime directory; production clients use the fixed path.
+- Current M0 path helper: `HELM_SOCKET`, when set, is the complete override
+  path. Otherwise it returns `$XDG_RUNTIME_DIR/helm/ctl.sock`, or the per-uid
+  `/tmp/helm-$uid/helm/ctl.sock` fallback when `XDG_RUNTIME_DIR` is absent.
+  This is the implemented, tested `ipc::socket_path()` contract; it does not
+  create or secure a listening socket.
 - One JSON value per line. `ipc::encode` appends the newline and
   `ipc::tests::requests_round_trip_through_a_frame` asserts every frame contains
   exactly one.
 - `Request`, `Response` and `Event` are adjacently-tagged serde enums
   (`tag = "cmd", content = "arg"` and so on), which keeps frames readable and
   keeps the tag stable when a variant gains fields.
-- `Request::Hello` is optional for one-shot, hand-written requests and required
-  before `Request::Subscribe`. If it is sent, it must be the first frame. The
-  session answers it, including on mismatch, then disconnects on mismatch; a
-  client that received a mismatched `Response::Hello` must not proceed. This
-  preserves shell scriptability without letting subscribers silently run with
-  an unknown protocol version.
-- The listener obtains `SO_PEERCRED` before reading a frame and accepts only a
-  peer whose uid equals the daemon's effective uid. It applies a bounded
-  connection count, frame size, initial-handshake deadline, and read/write
-  queues; excess, malformed, idle-before-subscribe, or unauthorized peers are
-  closed without affecting the session.
+- `PROTOCOL_VERSION` (currently 1) is exchanged by `Request::Hello` /
+  `Response::Hello`. The session always answers Hello, including on mismatch,
+  so the client can print a useful error. A mismatched client refuses to proceed
+  rather than guessing at fields.
 - Unknown frames are an error, never a panic
   (`ipc::tests::unknown_frames_are_an_error_not_a_panic`).
 
@@ -72,9 +65,8 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
   not complete. No length prefix to get wrong, no state machine.
 - Serde does the work. Adding a `Request` variant is one enum arm and the tests
   cover it.
-- Runtime-directory and socket modes are necessary but not sufficient access
-  control: the server also admits only same-uid `SO_PEERCRED` peers and bounds
-  every resource a local peer can consume.
+- The M0 helper is transport-neutral and provides no access control by itself;
+  listener ownership, permissions, and peer admission belong to `helm-session`.
 - Version skew fails loudly at Hello instead of quietly at field access.
 
 ### Bad
@@ -120,6 +112,8 @@ someone wanting to drive orbits from an existing panel or a global hotkey daemon
   and `jq` only, so the scriptability claim is tested rather than asserted.
 - *Planned (M2):* a handshake test asserting that a client presenting the wrong
   `PROTOCOL_VERSION` is refused with a `Response::Hello` and then disconnected.
-- *Planned (M2):* transport tests for no runtime-dir fallback, unsafe override
-  rejection, same-uid peer admission, pre-subscription Hello enforcement, and
-  connection/frame/queue limits.
+- *Deferred M2 hardening:* before changing `ipc::socket_path()` or shipping a
+  server, write an accepted SPEC 0001/0003 delta and failing tests that decide
+  the override fixture contract, runtime-directory fallback, same-uid
+  `SO_PEERCRED` admission, Hello/subscription ordering, and connection/frame/
+  queue limits. Until then these are proposals, not the M0 public contract.

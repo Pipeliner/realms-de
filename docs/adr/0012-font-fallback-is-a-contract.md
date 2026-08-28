@@ -1,6 +1,7 @@
 # ADR 0012 — Font fallback is a contract, not a hope
 
-- **Status:** Accepted (2026-08-26) — provisional; see Reversal
+- **Status:** Proposed — pending its missing guard and the ADR-set human
+  ratification (2026-08-26)
 - **Deciders:** helm maintainers
 - **Supersedes / Superseded by:** —
 
