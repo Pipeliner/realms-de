@@ -286,11 +286,13 @@ Rules, enforced by review and by the budgets in ARCHITECTURE.md §4:
 ```rust
 /// A connection to helm-session.
 impl Client {
-    /// Connect and complete the version handshake. Refuses on mismatch rather
-    /// than guessing at field meanings.
+    /// Resolve the fixed XDG runtime endpoint and complete the mandatory version
+    /// handshake. Refuses a missing runtime directory or mismatch rather than
+    /// guessing at field meanings.
     pub fn connect() -> Result<Client>;
     pub fn request(&mut self, req: Request) -> Result<Response>;
-    /// Subscribe; yields a state snapshot on every change until dropped.
+    /// Subscribe after a successful Hello; yields an immediate state snapshot
+    /// and every later change until dropped. No further request is valid.
     pub fn subscribe(self) -> Result<impl Iterator<Item = Result<Event>>>;
 }
 ```

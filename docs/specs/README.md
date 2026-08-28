@@ -58,3 +58,4 @@ Sequential, never reused. A superseded spec keeps its number and gains a
 |---|---|---|
 | [0001](0001-helm-core-contracts.md) | helm-core contracts | Implemented |
 | [0002](0002-theme-pipeline.md) | Theme pipeline | Implemented |
+| [0007](0007-control-socket-security.md) | Control-socket security amendment | Accepted |

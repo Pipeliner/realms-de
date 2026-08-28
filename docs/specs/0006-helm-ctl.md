@@ -67,12 +67,14 @@ decision and this spec does not make it.
 ### 1. Command surface
 
 ```
-helm ctl [--json] [--socket PATH] [--palette PATH] <group> <verb> [args]
+helm ctl [--json] [--palette PATH] <group> <verb> [args]
 helm ctl doctor [--json] [--portal-roundtrip]
 helm ctl --version
 ```
 
-`--socket` overrides `HELM_SOCKET` and therefore `ipc::socket_path()`.
+The control endpoint is always `$XDG_RUNTIME_DIR/helm/ctl.sock`; `helmctl` has
+no `--socket` or `HELM_SOCKET` override. Isolated tests use the non-production
+runtime-directory resolver documented by ADR 0004.
 `--palette` overrides the palette search order (`$XDG_CONFIG_HOME/helm/palette.toml`,
 then the shipped `palette.toml`). Both exist so that tests and the NixOS VM can
 point at a fixture without an environment dance. `--portal-roundtrip` is

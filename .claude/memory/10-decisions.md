@@ -46,6 +46,14 @@ protocol** — because internally tagged enums cannot serialise newtype variants
 holding integers or sequences, which the protocol is full of — *revisit if* the
 protocol moves to a binary encoding.
 
+**2026-08-28 — The control socket has one fixed XDG-runtime endpoint, mandatory
+Hello, same-euid peer admission and bounded I/O; test fixtures inject a runtime
+directory rather than overriding a socket pathname** — because `/tmp` fallback,
+caller-controlled endpoints and unbounded same-user local sockets turn a
+scriptable control plane into an avoidable local attack and liveness surface —
+*revisit if* a separately authenticated remote control transport is designed in
+a new ADR. See ADR 0004 and SPEC 0003; this does not ratify the ADR set.
+
 **2026-08-26 — Layout tunables (`TriptychParams`) are ratios, not pixels, and
 default to the reference desktop's proportions** — because the mockup is 1920×1080
 and the same shape has to survive 2560×1440 and 3840×2160 — *revisit if* users
