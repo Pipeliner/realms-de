@@ -145,3 +145,14 @@ Never present an assumption as a fact. Check the authoritative local state,
 the relevant source, or the live external system before acting on or reporting
 it. When verification is unavailable, say precisely what remains unverified
 and keep the corresponding issue blocked rather than inventing an answer.
+
+## S17 — Autonomous evidence-backed corrective work
+
+The owner authorises spec-first, evidence-backed corrections and closely similar
+actions needed to advance the MVP: reconcile ADRs and specifications with their
+accepted constraints, update issue state and labels, file verified defects,
+write and review implementation plans, and implement the resulting approved
+contracts. Make the reasonable decision when the evidence and existing product
+intent determine it. Still ask before a genuinely new product direction,
+security or privacy posture, licensing choice, material external cost, or any
+infrastructure publication; never use this authorisation to guess.
