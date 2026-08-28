@@ -1,4 +1,4 @@
-# ADR 0010 — The Nix flake is the reference build; deb and rpm are generated
+# ADR 0010 — The Nix flake is the reference build; native deb and rpm packaging is tracked
 
 - **Status:** Accepted (2026-08-26) — provisional; see Reversal
 - **Deciders:** helm maintainers
@@ -26,20 +26,25 @@ tell you whether a session starts. Only booting one does.
 
 ## Decision
 
-1. **The flake is the definition.** `packaging/nix/` contains the flake with
-   `packages.*`, `nixosModules.helm` and `homeManagerModules.helm`. It is the
-   build that must always work, and it is what a maintainer runs to reproduce a
-   user's report.
+1. **The root `flake.nix` is the Nix reference build definition.** It imports
+   `packaging/nix/` for the derivation, checks, and modules; `flake.lock` is
+   intentionally not committed yet, so the current Nix build is evaluable but
+   not reproducible until a reviewed lock file is committed. It is the build a
+   maintainer runs to reproduce a user's report once locked.
 2. **The NixOS VM test is the acceptance test for the session.** It boots a
    VM, logs into helm, and asserts the bar appears and `helm ctl doctor` passes.
    This is the only test that exercises the session contract (ADR 0011) end to
    end, and it is why NixOS is the reference rather than merely a target.
-3. **Distro packages are generated from the same metadata, not maintained in
-   parallel.** `.deb` via `cargo-deb`, `.rpm` via `cargo-generate-rpm`, both
-   driven by `[package.metadata.*]` in the workspace manifests. Dependency
-   lists, binary paths, unit files and the desktop entry are declared once.
-4. **CI builds and installs all three.** A job per distro, installing the
-   generated package into a clean container and running `helm ctl doctor`.
+3. **Native distro packaging is tracked explicitly.** Debian uses
+   `packaging/debian/`; Fedora uses `packaging/fedora/helm.spec`; shared session
+   assets live under `packaging/session/` and `packaging/systemd/`. The optional
+   `cargo-deb` fragment is not installed into `Cargo.toml`, and no generated
+   metadata source of truth exists today. Dependency lists, binary paths, units,
+   and desktop entries therefore require a consistency check rather than a
+   false claim of generation.
+4. **CI builds and installs all three once each package path is buildable.** A
+   job per distro installs its native package into a clean container and runs
+   `helmctl doctor`.
 5. **The MSRV is pinned by the oldest supported target.** `rust-version` in the
    workspace manifest is currently 1.85 and moves only with a stated reason.
 6. **Nothing distro-specific may live outside `packaging/`.** No `#[cfg]` on a
@@ -47,10 +52,11 @@ tell you whether a session starts. Only booting one does.
 7. **A pinned river 0.4.x is vendored**, per
    [ADR 0013](0013-river-window-management-backend.md). The target distros ship
    0.3.x or river-classic, neither of which speaks
-   `river-window-management-v1`. The flake pins the input and the deb and rpm
-   bundle the same pin, so this follows the rule in point 3 rather than
-   excepting it. It is the one runtime dependency helm ships rather than
-   depends on, and it must be rebuilt on every river security fix.
+   `river-window-management-v1`. Nix currently constrains river through its
+   unlocked `nixpkgs` input; Debian and Fedora record alternative/runtime
+   requirements but do not yet build or bundle a verified `helm-river` package.
+   Treat that as an unsatisfied packaging obligation, not as a shared pin. It
+   must be resolved and tested before a distributable session is claimed.
 
 ## Alternatives considered
 
@@ -66,12 +72,12 @@ tell you whether a session starts. Only booting one does.
 
 ### Good
 
-- One reproducible definition of what helm *is*, including its runtime
-  dependencies, which is exactly the knowledge that usually lives only in a
-  maintainer's head.
+- One reviewable Nix definition of what helm *should* be, including runtime
+  dependencies. It becomes reproducible only when `flake.lock` is committed.
 - The VM test catches the session contract failures (portals, environment
   import, unit ordering) before a user does. Nothing else can.
-- Adding a fourth target means adding a generator, not a maintainer.
+- Adding a fourth target means adding a native package definition and extending
+  the consistency checks.
 - Contributors can reproduce a bug with one command.
 - Dependency version floors are declared once and checked on all three distros.
 
@@ -122,8 +128,10 @@ someone else is paying it.
 - *Planned (M3):* three container jobs, one per distro, installing the generated
   package into a clean image and running `helm ctl doctor`.
 - *Planned (M3):* a metadata consistency test asserting that the dependency
-  lists in the flake, the deb metadata and the rpm metadata are generated from
-  the same source and agree. This is the guard for the decision itself.
+  lists, binary paths, session assets, and portal policy in the root flake,
+  Debian control files, and Fedora spec agree where the targets overlap. This
+  is the guard for the decision itself; it does not claim a nonexistent shared
+  generator.
 - *Planned (M3):* an MSRV job pinned to the `rust-version` floor, so raising it
   is a deliberate change rather than an accident.
 - *Planned (M3):* a Fedora job with SELinux enforcing, which is what turns the

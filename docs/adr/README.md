@@ -26,7 +26,7 @@ Copy [`template.md`](template.md) to start a new one.
 | [0007](0007-reuse-yazi-btop-starship.md) | Reuse yazi, btop and zsh+starship | Accepted | charon and horus are ~90% theme and keymap; always behind a seam | Low per tool |
 | [0008](0008-layer-shell-rendering-stack.md) | `smithay-client-toolkit` + `tiny-skia` + `cosmic-text` | Accepted | Pure Rust, no GPU context for a 32px bar, real font fallback | **Medium** — a client rewrite |
 | [0009](0009-no-animation-budget.md) | No animations; the frame budget is a CI gate | Accepted | "Snappy" is five numbers, not an adjective | Low |
-| [0010](0010-nix-flake-as-reference-build.md) | The Nix flake is the reference build | Accepted | deb and rpm generated from the same metadata; a NixOS VM test boots the session | **Medium** |
+| [0010](0010-nix-flake-as-reference-build.md) | The Nix flake is the reference build | Accepted | root flake plus tracked native distro packaging; a NixOS VM test boots the session | **Medium** |
 | [0011](0011-session-integration-contract.md) | The session entry owns the environment handshake | Accepted | Import into systemd **and** D-Bus before starting anything, or portals hang | Low — the requirement is not reversible |
 | [0012](0012-font-fallback-is-a-contract.md) | Font fallback is a contract | Accepted | Glyph inventory, a startup probe, and an ASCII fallback for all 37 glyphs | Low |
 | [0013](0013-river-window-management-backend.md) | helm **is** the window manager, on river's protocol | Accepted — supersedes [0002](0002-borrow-a-compositor-first.md) | river 0.4 moved window management out of the compositor; every row 0002 marked lossy becomes faithful | **Medium** — back to niri is an architecture change, not a module swap |

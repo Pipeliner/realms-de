@@ -41,27 +41,34 @@ change that misses a budget is a regression, not a trade-off.
 |---|---|---|---|
 | Key press to new geometry submitted | < 4 ms | The projection is pure integer arithmetic over a short list; no allocation on the hot path | *planned:* M2 benchmark |
 | State change to bar redraw | < 8 ms | Damage-tracked CPU rasterising (ADR 0008); `HelmState::renders_same_as` drops no-op frames | *planned:* M2 benchmark |
-| Bar idle CPU | ~0% | Event-driven modules; only the clock ticks, once a second. One narrow exception, below | *planned:* M2 idle-frame count test |
+| Bar idle CPU | ~0% | Event-driven modules; the clock ticks to the next minute boundary and a shared 1 Hz sampler runs off the input path. Held-key repeat is a separately bounded active-input exception below | *planned:* M2 idle-frame count test |
 | Cold session start to usable | < 900 ms | No GPU context, no icon-cache scan, no thumbnailer | *planned:* M2 startup benchmark |
-| `helm ctl theme apply` | < 150 ms | Templates rendered in parallel, written atomically | *planned:* M1 benchmark |
+| `helm ctl theme apply` | < 150 ms | Templates rendered serially and replaced atomically per file | *planned:* M1 benchmark |
 
 Benchmarks run on a fixed CI runner class so the numbers are comparable across
 commits. M6's acceptance criterion is holding the same budgets on a 2015-era
 laptop; until then the runner is the reference.
 
-### The one permitted timer beyond the clock
+### Permitted timer exceptions
+
+The shared 1 Hz sampler is required for CPU, memory, GPU, and network-rate
+modules; those counters have no useful event source. It runs on one session
+thread outside the input path. The clock schedules the next minute boundary,
+not a one-second redraw. Neither timer licenses polling by individual clients.
+
+### Held-key repeat
 
 [ADR 0013](0013-river-window-management-backend.md) found that
 `river_xkb_binding_v1` sends `stop_repeat`, which establishes that key repeat
 for bound keys is the **window manager's** job. If `mod+j` should repeat while
-held, `helm-session` repeats it; river does not. That is a second timer, and it
-is a genuine exception to "only the clock ticks".
+held, `helm-session` repeats it; river does not. That is an active-input timer,
+not permission for background polling.
 
 It is scoped so that the idle claim survives intact:
 
 - Armed only on `pressed`, and only for bindings marked repeatable.
 - Disarmed on `released` or `stop_repeat`, whichever arrives first.
-- Never armed at any other time, so an idle session still has exactly one timer.
+- Never armed at any other time, so an idle session has no active repeat timer.
 
 An idle session is therefore still idle; a session with a key held down is by
 definition not idle. The idle-frame test above is the guard, and ADR 0013 adds

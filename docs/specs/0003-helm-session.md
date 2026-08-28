@@ -270,10 +270,10 @@ declares its exclusive zone, river subtracts it, and helm learns the result.
 Computing it locally is how helm and the bar come to disagree by 26 px the first
 time someone toggles the which-key strip.
 
-### 3. The three protocols helm must serve
+### 3. The five companion protocols helm must serve
 
 Under river a window manager is not merely a client of the window-management
-protocol. Three companion protocols are obligations, and helm ships broken
+protocol. Five companion protocols are obligations, and helm ships broken
 without them.
 
 **`river-layer-shell-v1` — the bar exists because of this.** Covered in §1
@@ -293,6 +293,11 @@ step 3 and in the workarea note above. One further correction:
 **`river-xkb-bindings-v1` — the keymap does not exist until this is served.**
 No `river_xkb_binding_v1` object means no keybinding fires at all; the desktop
 is a mouse-only tiler.
+
+**`river-xkb-config-v1` and `river-libinput-config-v1` — usable input is not
+implicit.** The former is required to manage keyboard layouts rather than
+freezing the layout river started with; the latter is required for input-device
+policy such as tap-to-click. Both are bound and version-checked during startup.
 
 - At start-up, for each `Binding` in the `Keymap`, call
   `river_xkb_bindings_v1::get_xkb_binding(seat, keysym, modifiers)`. This spec
@@ -573,7 +578,16 @@ mismatch, so the client can print something useful — and on mismatch the
 connection is then closed. **`Hello` is optional.** ADR 0004's own headline
 example is `echo '{"cmd":"switch-orbit","arg":3}' | socat - $HELM_SOCKET` with
 no handshake at all, and requirement 1 of that ADR is scriptability; a
-connection that never says hello is served at `PROTOCOL_VERSION`.
+connection that never says hello is served at `PROTOCOL_VERSION`. `Hello`, when
+present, must be the first frame; it is required before `Subscribe`, so a
+long-lived subscriber cannot silently survive an unknown protocol version.
+
+**Admission and resource bounds.** The runtime directory is required; the
+server creates `$XDG_RUNTIME_DIR/helm` mode 0700 without following links and
+the socket mode 0600. It admits only peers whose `SO_PEERCRED` uid equals the
+session's effective uid, and enforces bounded connection count, frame size,
+initial-handshake deadline, and read/write queues. Unauthorized, malformed, or
+over-limit peers are closed without delaying the session.
 
 **Requests.** A mutating `Request` is applied to the `Ledger` by calling the
 corresponding `helm-core` method, after which the session makes `manage_dirty`
@@ -649,7 +663,7 @@ Each row is one happy path and becomes one test.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| A1 | Given a river advertising `river_window_manager_v1` v5, `river_xkb_bindings_v1` v3, `river_layer_shell_v1` v1 and `river_input_manager_v1` v2, when `helm-session` starts, then it binds all four, seeds six orbits with orbit 1 active, and reports `Capabilities` with `exact_geometry`, `server_side_borders`, `hide_show`, `explicit_ordering` and `fullscreen` all true and `unsupported` empty | |
+| A1 | Given a river advertising `river_window_manager_v1` v5, `river_xkb_bindings_v1` v3, `river_layer_shell_v1` v1, `river_input_manager_v1` v2, `river_xkb_config_v1`, and `river_libinput_config_v1`, when `helm-session` starts, then it binds all six, seeds six orbits with orbit 1 active, and reports `Capabilities` with `exact_geometry`, `server_side_borders`, `hide_show`, `explicit_ordering` and `fullscreen` all true and `unsupported` empty | |
 | A2 | Given a river advertising `river_xkb_bindings_v1` at version 2, when `helm-session` starts, then it exits non-zero with a message naming the interface, the version advertised and the version required, and makes no window-management request | |
 | A3 | Given a projection placing two windows, when `apply` runs, then every `propose_dimensions` is sent before `manage_finish`, every `set_position` is sent after `render_start` and before `render_finish`, and no `set_position` is sent inside the manage sequence | |
 | A4 | Given two tiled windows, when `Swap(Dir::Next)` is applied, then both windows' new positions are sent in a single render sequence terminated by exactly one `render_finish` | |
@@ -663,6 +677,7 @@ Each row is one happy path and becomes one test.
 | A12 | Given a subscriber that has stopped reading and whose socket buffer is full, when a bound key is pressed, then `manage_finish` is made within the key-press budget and before any byte is written to that subscriber | |
 | A13 | Given a subscriber whose write cursor has not advanced for `SUBSCRIBER_STALL_LIMIT`, when the next state change occurs, then that subscriber is closed and every remaining subscriber receives exactly one `Event::State` | |
 | A14 | Given a client that sends `Request::Hello` with a version other than `PROTOCOL_VERSION`, when the session receives it, then it answers `Response::Hello` carrying its own version and then closes the connection | |
+| A14a | Given a client that sends `Subscribe` before `Hello`, an unauthorized peer, or an oversized initial frame, when the session receives it, then it closes only that connection and continues serving healthy peers | |
 | A15 | Given an idle session, when the clock module's tick changes the clock text, then exactly one `Event::State` is broadcast and no `manage_dirty` and no other river request is made | |
 | A16 | Given a module that recomputes to the text it already had, when derivation runs, then `revision` does not increment and no `Event::State` is sent | |
 | A17 | Given a client that quantises its dimensions down to a multiple of a 9×18 cell, when a triptych of three such clients is applied, then after at most one corrective `propose_dimensions` per window each `set_content_clip_box` equals that window's projected rect and the clip boxes tile the workarea exactly | |
@@ -676,8 +691,8 @@ From [ARCHITECTURE.md §4](../ARCHITECTURE.md); no number here is new.
 |---|---|---|
 | Key press → new geometry submitted | **< 4 ms** | The whole of it. Measured from the `pressed` event being read off river's fd to `manage_finish` being flushed |
 | State change → bar redraw | **< 8 ms** | The first part: derive, `renders_same_as`, encode, non-blocking write |
-| Bar idle CPU | **~0%** | Nothing polls. The only timers are the 1 s clock and the key-repeat timer, which exists only while a key is held |
-| Cold session start → usable | **< 900 ms** | Socket bound, four globals bound, ledger seeded or recovered, first `manage_finish` made |
+| Bar idle CPU | **~0%** | Nothing polls. The clock schedules the next minute boundary; one shared 1 Hz sampler runs off the input path; the key-repeat timer exists only while a key is held |
+| Cold session start → usable | **< 900 ms** | Socket bound, six globals bound, ledger seeded or recovered, first `manage_finish` made |
 | `helm ctl theme apply` | **< 150 ms** | Runs on the worker thread. The budget is [SPEC 0002](0002-theme-pipeline.md)'s; what this spec adds is that it must not appear on the input path |
 
 **Which of these become correctness bounds under river, and why.**

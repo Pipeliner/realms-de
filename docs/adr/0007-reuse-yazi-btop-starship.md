@@ -35,7 +35,7 @@ specific assignments.
 | thoth (shell) | **zsh + starship** | `configs/zsh/`, `configs/starship/`: generated prompt and colours | M1 |
 | hecate (launcher) | **fuzzel**, as a stopgap | `configs/fuzzel/`: generated theme. Retired by `helm-hecate` | M1, retired M4 |
 | odin (agent harness) | **`helm-odin`, written from scratch** | A `ratatui` TUI. Nothing existing matches | M4 |
-| charon portal | **`xdg-desktop-portal-termfilechooser`** pointed at yazi | `configs/portal/`. Stopgap; native dialog at M4 | M3, retired M4 |
+| charon portal | **GTK FileChooser through `xdg-desktop-portal-gtk`** | `configs/portal/`. The toolkit chooser remains the supported portal FileChooser through M3; a terminal chooser is not substituted for it. Native charon dialog is considered at M4. | M3, reconsider M4 |
 
 The rule that makes this safe: **always behind a seam.** Every reused tool is
 reached through a generated config file (ADR 0005) or a documented invocation in
@@ -98,8 +98,9 @@ Low per tool. Replacing a reused tool means writing the replacement — which is
 the expensive part and is unchanged by this decision — and then deleting a
 template and editing a keymap entry, which is an afternoon.
 
-We have already scheduled two reversals: fuzzel to `helm-hecate` at M4, and the
-termfilechooser portal to a native charon dialog at M4. Doing them will prove
+We have already scheduled one reversal: fuzzel to `helm-hecate` at M4. A native
+charon dialog is considered only after the toolkit portal chooser has served
+through M3. Those changes will prove
 the seam works, or reveal that it does not, at a point where the cost of fixing
 it is still low.
 

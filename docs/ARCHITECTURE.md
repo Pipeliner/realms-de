@@ -86,7 +86,7 @@ counts.
 | Crate | Kind | Owns | Lands in |
 |---|---|---|---|
 | `helm-core` | lib | Ledger, layout projection, palette, keymap, IPC types, glyph inventory | **M0 — done** |
-| `helm-theme` | lib | `palette.toml` → every themed file. Template engine, atomic writes, reload signalling | M1 |
+| `helm-theme` | lib | `palette.toml` → every themed file. Serial template engine, per-file atomic writes, reload signalling | M1 |
 | `helm-ctl` | bin (`helmctl`) | `helmctl theme/orbit/ledger/doctor/run`. The scriptable surface | M1–M2 |
 | `helm-session` | bin (`helm-wm`) | Holds `HelmState`, drives a `WmBackend`, serves the control socket, launches clients. Under river it *is* the window manager, hence the binary name | M2 |
 | `helm-bar` | bin | Layer-shell bar, which-key strip, mode badge, chord echo | M2 |
@@ -115,7 +115,7 @@ Each row links to its ADR. "Reversal" is the honest cost of changing our mind.
 | [0007](adr/0007-reuse-yazi-btop-starship.md) | Reuse yazi / btop / zsh+starship rather than rewrite | charon and horus are ~90% theme + keymap. Rewrites cost years and lose features | Low |
 | [0008](adr/0008-layer-shell-rendering-stack.md) | `smithay-client-toolkit` + `tiny-skia` + `cosmic-text` | Pure Rust, no GPU context for a 32px bar, real font fallback | Medium |
 | [0009](adr/0009-no-animation-budget.md) | Zero animations; a frame budget, enforced in CI | "Snappy" is a number, not an adjective | Low |
-| [0010](adr/0010-nix-flake-as-reference-build.md) | Nix flake is the reference build; deb/rpm generated | One reproducible definition; distro packages follow from it | Medium |
+| [0010](adr/0010-nix-flake-as-reference-build.md) | Nix flake is the reference build; native deb/rpm packaging is tracked | Root flake plus reviewed consistency checks | Medium |
 | [0011](adr/0011-session-integration-contract.md) | Session startup owns the D-Bus/systemd environment handshake | The #1 way minimal Wayland desktops break for users | Low |
 | [0012](adr/0012-font-fallback-is-a-contract.md) | Glyph inventory + startup probe + ASCII fallbacks | A glyph-heavy DE must never ship tofu | Low |
 
@@ -182,7 +182,7 @@ Neither word is allowed to stay an adjective. Both are tests.
 | Bar idle CPU | ~0% | The bar owns no timer and redraws only on a state change |
 | Sampler wakeups | 1 Hz, one thread, in `helm-session` | cpu, mem, gpu and net throughput are rates over counters with no kernel event behind them. One shared sampler off the input path is the single documented exception to the no-timers rule; the clock ticks to the next minute boundary, not every second |
 | Cold session start → usable | < 900 ms | No GPU context for the bar, no icon-cache scan, no thumbnailer |
-| `helm ctl theme apply` | < 150 ms | Templates rendered in parallel, written atomically |
+| `helm ctl theme apply` | < 150 ms | Templates rendered serially, replaced atomically per file, then one reload fan-out |
 
 **Robust — the failure modes we refuse to ship** (see
 [docs/PITFALLS.md](PITFALLS.md) for the full register):
@@ -191,8 +191,9 @@ Neither word is allowed to stay an adjective. Both are tests.
 - Tofu glyphs on a machine without Nerd Fonts — *closed by the glyph probe.*
 - Portals that hang because `WAYLAND_DISPLAY` never reached the D-Bus
   activation environment — *closed by the session contract (ADR 0011).*
-- A theme change that half-applies and leaves the desktop two-toned — *closed by
-  atomic writes plus a single reload fan-out.*
+- Torn generated files during a theme apply — *closed by per-file atomic writes
+  plus a single reload fan-out.* Cross-file all-or-nothing publication is not
+  claimed.
 - A crashed bar taking the session with it — *clients are restartable units; the
   session daemon outlives them.*
 - An unreadable palette after a contrast tweak — *closed by `palette lint` in CI.*
@@ -215,13 +216,14 @@ Supported from day one, tested in CI:
 
 | Platform | Delivery | Notes |
 |---|---|---|
-| **NixOS / Nix** | Flake: packages, `nixosModules.helm`, `homeManagerModules.helm` | Reference build. A NixOS VM test boots the session and asserts the bar appears |
-| **Ubuntu** 24.04 LTS + | `.deb` via `cargo-deb`, plus a PPA-shaped repo layout | Oldest supported glibc. Note the MSRV is pinned harder by the dependency set (1.85, edition 2024) than by glibc |
+| **NixOS / Nix** | Root flake imports packages, `nixosModules.helm`, `homeManagerModules.helm` | Reference build after a reviewed `flake.lock` is committed. A NixOS VM test boots the session and asserts the bar appears |
+| **Ubuntu** 24.04 LTS + | tracked native `packaging/debian/` files | Oldest supported glibc. Note the MSRV is pinned harder by the dependency set (1.85, edition 2024) than by glibc |
 | **Compositor** | A **vendored, pinned river 0.4.x** on every target | Ubuntu and Fedora ship river 0.3.x or river-classic, neither of which speaks the WM protocol. Vendoring puts Zig in the packaging pipeline only, never in helm's own workspace |
-| **Fedora** 41 + | `.rpm` via `cargo-generate-rpm` and a `.spec` | SELinux-clean; no custom labels required |
+| **Fedora** 41 + | tracked native `packaging/fedora/helm.spec` | SELinux-clean only after enforcing-mode verification |
 
-Anything else is best-effort. The flake is the definition; the distro packages
-are generated from the same metadata rather than maintained in parallel.
+Anything else is best-effort. The root flake is the Nix reference definition;
+the distro packages are tracked native definitions whose common contract must
+be checked mechanically before release.
 
 ---
 

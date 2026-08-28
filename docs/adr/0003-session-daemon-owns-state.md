@@ -35,8 +35,12 @@ Something has to own lifecycle, and it must not be a client.
    into the ledger.
 3. Serves the control socket (ADR 0004): accepts `Request`s, answers
    `Response`s, and pushes `Event::State` to every subscriber on change.
-4. Launches and supervises clients. The bar, the launcher and the terminal are
-   restartable; the session outlives all of them.
+4. Owns client connections, not client process supervision. `systemd --user`
+   units launch and restart the bar, launcher, and terminal; the session
+   outlives their connections and is never responsible for respawning them.
+5. Delivers subscriber events through bounded, nonblocking per-subscriber
+   queues. A full queue or write failure evicts that subscriber; a socket write
+   may never delay window-management or input processing.
 
 Clients hold no authoritative state. `helm-bar` connects, sends
 `Request::Subscribe`, and renders whatever arrives. If it dies, systemd restarts
@@ -63,9 +67,11 @@ clients additionally drop no-op frames with `HelmState::renders_same_as`.
 - Clients are trivially testable: feed them JSON, assert what they draw. No
   compositor, no bus.
 - Swapping the compositor changes one module, as ADR 0002 promises.
-- Client crashes are recoverable and invisible: restart, re-subscribe, redraw.
-- Idle CPU can genuinely reach roughly zero, because nothing polls. Only the
-  clock module ticks, once a second, and it ticks inside the session.
+- Client crashes are recoverable: systemd restarts the client, which
+  re-subscribes and redraws.
+- Idle CPU can genuinely reach roughly zero, because clients do not poll. The
+  session alone owns the minute-aligned clock and the shared 1 Hz rate sampler,
+  both off the input path (ADR 0009).
 
 ### Bad
 
@@ -105,3 +111,6 @@ compositor and the daemon becomes a state mirror.
   `Event::State` with identical content.
 - *Planned (M2):* a supervision test that kills `helm-bar` and asserts the
   session is still serving and the restarted bar receives a full snapshot.
+- *Planned (M2):* a liveness test that wedges one subscriber, verifies its
+  eviction, and proves a window-management round trip and a healthy subscriber
+  still complete within budget.

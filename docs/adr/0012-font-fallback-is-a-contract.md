@@ -133,9 +133,10 @@ needs to move from font-database queries to actual rasterisation.
   every fallback present, every fallback ASCII.
 - `glyphs::tests::a_complete_font_substitutes_nothing` — the other direction:
   with full coverage nothing is substituted.
-- `palette::tests::out_of_range_values_are_rejected_at_parse_time` — includes
-  the rejection of an empty `typography.fallback`, so the chain can never be
-  absent.
+- `palette::tests::empty_typography_fallback_is_rejected` — asserts the
+  validation guard that rejects an empty `typography.fallback`, so the chain
+  can never be absent. This test must be added before this ADR is ratified;
+  the current parse-range test does not prove the empty-list case.
 - *Planned (M2):* a render test that rasterises the whole inventory through the
   real `cosmic-text` stack against the shipped font list and asserts no
   `.notdef` mask is produced. This closes the gap between "the database says it

@@ -84,11 +84,13 @@ end the session.
 **5. Declare a portal backend dependency.**
 
 The packages must depend on `xdg-desktop-portal` plus at least one backend.
-helm's own choice for M3 is `xdg-desktop-portal-gtk` for the file chooser and
-`xdg-desktop-portal-wlr` for screencast, with
-`xdg-desktop-portal-termfilechooser` pointed at yazi as the charon stopgap
-(ADR 0007). Ship `configs/portal/helm-portals.conf` mapping each interface to a
-backend for `XDG_CURRENT_DESKTOP=helm`.
+helm's own choice for M3 is `xdg-desktop-portal-gtk` for `FileChooser` and
+`Settings`, and `xdg-desktop-portal-wlr` for `ScreenCast` and `Screenshot`.
+`Inhibit` is explicitly `none`; helm does not claim an inhibition-policy
+contract. The toolkit file chooser remains supported through M3; do not replace
+it with a terminal chooser (ADR 0007). Ship
+`configs/portal/helm-portals.conf` mapping each interface for
+`XDG_CURRENT_DESKTOP=helm`.
 
 **6. Set the cursor theme and size in both places.**
 
@@ -124,7 +126,7 @@ something that fails loudly. Its checks:
 | Check | Covers |
 |---|---|
 | `WAYLAND_DISPLAY` and `XDG_CURRENT_DESKTOP=helm` present in the systemd user environment **and** in the D-Bus activation environment, separately reported | steps 1, 3 |
-| A portal backend answers on `org.freedesktop.portal.Desktop`, the config names one for `helm`, and `FileChooser` and `ScreenCast` both resolve | step 5 |
+| The portal config names GTK for `FileChooser` and `Settings`, `none` for `Inhibit`, and wlr for `ScreenCast`/`Screenshot`; the selected implementations resolve, and an on-demand `FileChooser.OpenFile` round trip returns a request handle within two seconds | step 5 |
 | Cursor theme resolvable and gsettings agrees with the environment | step 6 |
 | XWayland running if enabled; scale policy as configured | step 7 |
 | Idle and lock units active | step 8 |

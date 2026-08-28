@@ -38,7 +38,7 @@ on, not code in our workspace.
    window manager side of it directly, behind the existing `WmBackend` seam.
 2. `NiriBackend` is dropped. `NativeBackend` against `helm-compositor` (M5) is
    unchanged as the long-term destination.
-3. **Three companion protocols are obligations, not options.** Verification
+3. **Five companion protocols are obligations, not options.** Verification
    against river's `protocol/` directory found that a usable helm needs all of:
 
    | Protocol | Why helm cannot ship without it |
@@ -47,6 +47,8 @@ on, not code in our workspace.
    | `river-layer-shell-v1` (v1) | **The bar does not work at all otherwise.** river supports `wlr-layer-shell` only if the window manager implements this. `helm-bar` and `helm-hecate` stay ordinary `wlr-layer-shell` clients (ADR 0008 is unaffected); `helm-session` must serve the manager half |
    | `river-xkb-bindings-v1` (v3) | The entire keymap, and the chord model specifically |
    | `river-input-management-v1` (v2) | Seat creation, keyboard repeat rate |
+   | `river-xkb-config-v1` | Keyboard layouts; without it helm freezes the layout river started with |
+   | `river-libinput-config-v1` | Input-device policy such as tap-to-click; without it helm cannot provide laptop input configuration |
 
 4. Packaging vendors a pinned river 0.4.x. Ubuntu 24.04 and Fedora 41 ship
    0.3.x or river-classic, neither of which speaks the protocol. *(Distro
@@ -210,7 +212,7 @@ is an empirical question for M2.
   exists specifically for users who did not want this change, which is a signal
   about migration friction and about third-party tooling that assumes the old
   model.
-- We implement four protocols, not one — a larger phase-1 surface than ADR 0002
+- We implement six protocols including window management, not one — a larger phase-1 surface than ADR 0002
   scoped, with `river-layer-shell-v1` on the critical path for the bar
   appearing at all.
 - The dimension-quantisation gap above is unresolved and needs an M2 experiment.

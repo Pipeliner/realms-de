@@ -24,16 +24,19 @@ regenerates an icon cache.
 
 1. `palette.toml` is the only file in the repository or on a user's disk that
    may contain a colour literal. `helm-core::palette::Palette` is its schema:
-   backgrounds, a six-step text ramp, five accents, borders with alphas carried
+   backgrounds, a six-step text ramp, six accents, borders with alphas carried
    separately, a `[pantheon]` tool-to-accent map, typography, metrics, glyphs.
 2. Every themed file is a template in `configs/templates/`, rendered by
    `helm-theme` from the *derived* palette — that is, from
    `Palette::derived()`, with the contrast setting already folded in (ADR 0006).
-3. `helm ctl theme apply` renders every template in parallel to temporary files,
-   `rename(2)`s each into place, and only then performs a single reload fan-out:
-   `gsettings` writes for GTK, `SIGUSR1` to clients that support it, and a
-   `Request::ReloadTheme` on the control socket for helm's own processes.
-   Atomicity per file plus one fan-out is what closes the half-applied window.
+3. `helm ctl theme apply` renders the small shipped template set serially to
+   temporary files, then `rename(2)`s each into place, and only then performs a
+   single reload fan-out: `gsettings` writes for GTK, `SIGUSR1` to clients that
+   support it, and an unsuppressible `Event::ThemeReloaded` on the control
+   socket for helm's own processes. Renames are atomic per file only: there is
+   no cross-file all-or-nothing publication. Rendering/staging failure before
+   the first rename leaves outputs untouched; an interruption during publication
+   can expose a mixed generation until the next successful apply.
 4. `Palette::lint` runs before anything is written. A fatal finding aborts the
    apply. Nothing is rendered from a palette that fails its own readability
    floors.
@@ -70,7 +73,7 @@ with the implementation: the limits are documented, not fought.
 |---|---|---|
 | **Hand-maintained theme files, one per target** | No template engine, no build step; each file can use its format's full expressiveness; easiest to hand to a contributor who knows GTK CSS but not helm | Forty values times eleven files is the drift problem stated as a number. It also makes "change the accent" a multi-file patch, which is exactly the operation the handoff wants to be one line |
 | **A runtime theming daemon that pushes colours over IPC** | No files on disk to get stale; instant application; one authoritative in-memory palette | Only works for clients that speak helm's protocol. GTK, Qt, yazi and btop all read files, so we would need the file pipeline anyway *and* a daemon. Strictly more machinery for the same result |
-| **Adopt an existing scheme system** (base16, pywal, stylix) | Large ecosystem of ready-made templates; users already understand it; stylix in particular is idiomatic on our reference platform | base16's sixteen slots cannot express helm's six-step text ramp plus five accents plus per-border alphas without lossy mapping, and the handoff's palette is not negotiable at that fidelity. Stylix would also invert control: the palette would live in a NixOS module rather than in a file that works on Ubuntu and Fedora too. We can *export* a base16 mapping from `palette.toml` later; we cannot import from it without losing values |
+| **Adopt an existing scheme system** (base16, pywal, stylix) | Large ecosystem of ready-made templates; users already understand it; stylix in particular is idiomatic on our reference platform | base16's sixteen slots cannot express helm's six-step text ramp plus six accents plus per-border alphas without lossy mapping, and the handoff's palette is not negotiable at that fidelity. Stylix would also invert control: the palette would live in a NixOS module rather than in a file that works on Ubuntu and Fedora too. We can *export* a base16 mapping from `palette.toml` later; we cannot import from it without losing values |
 | **Write templates against the raw palette, apply contrast at render time in each template** | One less derivation step | Every template would reimplement OKLab contrast, in whatever language the template engine offers. `Palette::derived()` does it once, correctly, in Rust |
 
 ## Consequences
@@ -84,8 +87,9 @@ with the implementation: the limits are documented, not fought.
   written, by code that already exists and is tested.
 - The pantheon map means a pane's accent is data, not a literal in the bar's
   drawing code.
-- Atomic rename plus one fan-out means the desktop is never two-toned, even if
-  the apply is interrupted mid-way.
+- Per-file atomic replacement prevents torn files. It does not promise a
+  cross-file transaction; supported consumers receive exactly one reload event
+  only after the requested replacements complete.
 
 ### Bad
 
@@ -119,7 +123,8 @@ target gets an exception and the rule survives.
 - `palette::tests::shipped_palette_passes_its_own_lint` — the shipped palette
   must satisfy the floors it enforces on users.
 - `palette::tests::shipped_palette_survives_the_whole_contrast_range` — lint
-  holds at every contrast setting in `[0.85, 1.40]`, not just the default 1.08.
+  holds at every contrast setting in `[0.85, 1.40]`, not just the default 1.08,
+  for all six accents.
 - `palette::tests::lint_catches_muddy_text_and_duplicate_accents` — the lint
   itself is tested against a palette that should fail.
 - `palette::tests::out_of_range_values_are_rejected_at_parse_time` — including
@@ -128,5 +133,6 @@ target gets an exception and the rule survives.
 - *Planned (M1):* a CI grep asserting that no file outside `palette.toml`,
   `design/` and `docs/` contains a `#rrggbb` literal. This is the guard for the
   rule itself and is the one most likely to erode.
-- *Planned (M1):* an apply test that interrupts the fan-out and asserts no
-  generated file is left partially written.
+- *Planned (M1):* apply tests that distinguish per-file atomicity from a
+  cross-file transaction, and assert `Event::ThemeReloaded` is delivered once
+  and is never suppressed by state-frame coalescing.

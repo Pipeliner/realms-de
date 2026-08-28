@@ -393,7 +393,7 @@ Each row is one happy path and becomes one test.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| B1 | Given the shipped palette and no session running, when `theme lint` runs, then it exits 0 and prints the five accents' hue separations | |
+| B1 | Given the shipped palette and no session running, when `theme lint` runs, then it exits 0 and prints the six accents' hue separations | |
 | B2 | Given a palette with a fatal finding, when `theme lint` runs, then it exits 1 and prints every finding, not only the first | |
 | B3 | Given a rendered theme and one edited accent, when `theme diff` runs, then it exits 1, names only the outputs that would change, and writes no file | |
 | B4 | Given a session with windows in orbits 1 and 3, when `orbit list` runs, then it prints six rows carrying rune, name, window count and layout, with orbit 1 marked active | |
@@ -414,7 +414,7 @@ From [ARCHITECTURE.md §4](../ARCHITECTURE.md):
 
 | Path | Budget | How it is held |
 |---|---|---|
-| `helm ctl theme apply` | **< 150 ms** | templates rendered in parallel, byte-identical outputs skipped entirely, the rename phase serial and cheap (SPEC 0002) |
+| `helm ctl theme apply` | **< 150 ms** | templates rendered serially, byte-identical outputs skipped entirely, then replaced atomically per file (SPEC 0002) |
 
 Two budgets belong to this component alone:
 
