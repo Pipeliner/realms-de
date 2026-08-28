@@ -623,7 +623,7 @@ ledger plus the session's own mode and module state.
 | `focused_title` | The last `river_window_v1::title` for `ledger.focused()`; empty when nothing is focused, when the title is null, or while a layer surface holds exclusive focus |
 | `chord_echo` | Non-empty exactly while a submap is pending or `mod4` is held; cleared on `ate_unbound_key`, on leaving the submap, and on restart |
 | `whichkey` | Toggled by `Action::ToggleWhichKey`. Changing it changes the bar's exclusive zone, so the new `Workarea` arrives from river as a `non_exclusive_area` event rather than being computed here |
-| `modules` | Owned by the session. Push-driven except the clock, which ticks once a second |
+| `modules` | Owned by the session. Push-driven except for one shared 1 Hz sampler for interval-derived CPU, memory, GPU, and network-rate values; the clock schedules the next minute boundary rather than ticking once a second |
 | `revision` | See below |
 
 **When `revision` increments.** The session derives a candidate state and

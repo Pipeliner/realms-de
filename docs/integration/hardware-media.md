@@ -1092,10 +1092,10 @@ Two smaller consequences fall out of the same audit:
   that differ per vendor, or NVML for NVIDIA, it is the least actionable number
   on the bar, and it is duplicated in horus and urania. It is the first thing to
   cut if the bar needs to lose a module.
-- **The clock's 1 s tick is fine and should stay.** It damages one text run,
-  ARCHITECTURE §4 already budgets for it, and `jiff` can compute the exact
-  duration to the next minute boundary so the tick can be once a minute for the
-  displayed format — the mockup shows `14:32`, not seconds.
+- **The displayed clock is minute-aligned.** It damages one text run, and
+  `jiff` computes the exact duration to the next minute boundary. The mockup
+  shows `14:32`, not seconds, so a one-second redraw would be redundant; ADR
+  0009 records the minute-boundary rule.
 
 ---
 

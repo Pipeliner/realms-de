@@ -62,9 +62,9 @@ tell you whether a session starts. Only booting one does.
 
 | Option | Why it was attractive | Why it lost |
 |---|---|---|
-| **Maintain three packagings by hand** | Each uses its ecosystem's idioms properly: a real `debian/rules`, a real `.spec` with `%post` scriptlets, packaging that a Debian or Fedora maintainer would recognise and could adopt. Generated packaging is always slightly wrong by native standards | Three copies of the dependency list drift, and the drift is invisible until a user on the least-used distro cannot log in. That is precisely the pitfall on the register. Generation makes divergence structurally impossible for the parts that matter |
+| **Use unreviewed, ad-hoc distro packaging** | It avoids maintaining packaging definitions in the repository | It leaves package contents and dependencies unverifiable until a user fails to start a session. Tracked native definitions plus a consistency check make drift visible without pretending a generator exists |
 | **Ship only a tarball or an AppImage** | One artifact, no distro work at all, works everywhere in principle | A desktop environment is not a single application. It must install a session desktop entry where the display manager will find it, install systemd user units, and declare a dependency on a portal backend and on a compositor. None of that is expressible in a tarball, and AppImage's sandbox assumptions are wrong for something that *is* the session. It would also make `helm ctl doctor` the only line of defence against a broken install |
-| **Make a traditional distro the reference and treat Nix as a port** | Larger user base; more contributors already know `debhelper`; the reference build would match what most users run | We would lose the VM test, which is the single most valuable test in the project. Reproducing a user's exact environment would also stop being a one-line operation. And the generation direction has to point somewhere: pointing it away from the most precisely specified build makes the generated end less reliable, not more |
+| **Make a traditional distro the reference and treat Nix as a port** | Larger user base; more contributors already know `debhelper`; the reference build would match what most users run | We would lose the VM test, which is the single most valuable test in the project. Reproducing a user's exact environment would also stop being a one-line operation. Native package definitions remain supported targets, but do not replace the reference session test |
 | **Distribute via Flatpak** | Handles dependencies and works across distros | Flatpak is for applications. It cannot install a session, cannot own systemd user units, and its sandbox is on the wrong side of the boundary for a compositor and a session daemon. It is also, per ADR 0005, one of the theming pipeline's documented limits |
 | **Nix flake plus a distro-agnostic install script** | Simple; no packaging tooling to learn | An install script is an unversioned, unremovable package manager. Upgrades and uninstalls become the user's problem |
 
@@ -79,17 +79,17 @@ tell you whether a session starts. Only booting one does.
 - Adding a fourth target means adding a native package definition and extending
   the consistency checks.
 - Contributors can reproduce a bug with one command.
-- Dependency version floors are declared once and checked on all three distros.
+- The explicit package definitions make each distro's policy-visible choices
+  reviewable; the consistency check identifies overlapping values that drift.
 
 ### Bad
 
-- Generated `.deb` and `.rpm` packages are not idiomatic. They will not satisfy
-  Debian policy or Fedora packaging guidelines without work, which means helm
-  cannot enter the official repositories of either distro as-is. That is a real
-  cost and it is the strongest argument for the hand-maintained alternative.
-- `cargo-deb` and `cargo-generate-rpm` do not cover everything. Post-install
-  scriptlets, alternatives registration and SELinux contexts need hand-written
-  fragments, and those fragments are the parts that will drift.
+- Native Debian and Fedora definitions duplicate some shared facts. Until the
+  planned consistency check exists, a changed dependency, binary path, unit or
+  desktop entry can drift between them.
+- The optional `cargo-deb` fragment is not active metadata, and Fedora's native
+  `.spec` is the supported rpm path. Neither `cargo-deb` nor
+  `cargo-generate-rpm` is a current shared source of truth.
 - Nix expertise becomes load-bearing for the project. A contributor who cannot
   read the flake cannot fully review a packaging change.
 - Vendoring river (point 7) means a pinned Zig toolchain in the deb and rpm
@@ -103,19 +103,20 @@ tell you whether a session starts. Only booting one does.
 ### Neutral
 
 - The three-target list is a choice about where to spend effort, not a technical
-  limit. Arch, openSUSE and others are buildable from the same metadata by
-  anyone who wants to add a generator.
+  limit. Arch, openSUSE and others require their own tracked package definition
+  and an extension of the consistency check if they become supported.
 
 ## Reversal
 
-Medium. `packaging/` is self-contained, so switching the generation direction
-means rewriting the generators, not the crates. Estimated one to two weeks per
-distro to move to hand-maintained native packaging, plus ongoing maintenance
-forever, which is the actual cost.
+Medium. `packaging/` is self-contained, so changing the supported native
+package formats does not require changing crates. It does require changing and
+re-validating every affected package definition and its overlap checks.
 
-A partial reversal is more likely and is cheap: keep generation as the source of
-truth and hand-write a native `.spec` or `debian/` directory *derived* from it
-for repository submission, accepting one-way drift at release time only.
+A possible future change is to introduce a reviewed shared metadata model for
+the facts that truly are common. That would be a new decision: it must define
+the source of truth, native escape hatches, generation/review flow, and a guard
+that proves generated output matches each supported package format. It is not
+the current model.
 
 The signal to reconsider is concrete: a distro maintainer willing to package
 helm properly. At that point idiomatic packaging becomes worth its cost, because
@@ -125,8 +126,8 @@ someone else is paying it.
 
 - *Planned (M3):* the NixOS VM test — boots the session, asserts the bar
   surface appears and `helm ctl doctor` exits zero.
-- *Planned (M3):* three container jobs, one per distro, installing the generated
-  package into a clean image and running `helm ctl doctor`.
+- *Planned (M3):* three container jobs, one per distro, building and installing
+  its tracked native package into a clean image and running `helm ctl doctor`.
 - *Planned (M3):* a metadata consistency test asserting that the dependency
   lists, binary paths, session assets, and portal policy in the root flake,
   Debian control files, and Fedora spec agree where the targets overlap. This

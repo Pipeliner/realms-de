@@ -23,23 +23,26 @@ budget.
 |---|---|---|
 | Key press → new geometry submitted | **< 4 ms** | `layout::project` is pure integer arithmetic over a short list |
 | State change → bar redraw | **< 8 ms** | damage tracking; `HelmState::renders_same_as` drops no-op frames |
-| Bar idle CPU | **~0%** | event-driven modules; only the clock ticks, once a second |
+| Bar idle CPU | **~0%** | event-driven modules; the clock schedules the next minute boundary and one shared 1 Hz sampler runs off the input path |
 | Cold session start → usable | **< 900 ms** | no GPU context for the bar, no icon-cache scan, no thumbnailer |
-| `helm ctl theme apply` | **< 150 ms** | templates rendered in parallel, written atomically |
+| `helm ctl theme apply` | **< 150 ms** | templates rendered serially, replaced atomically per file, then one reload fan-out |
 
 ## Rendering is event-driven, never polled
 
-The one sanctioned timer in the whole desktop is the clock's 1 s tick. Every
-other bar module is push-driven (`docs/INTERFACES.md` §3, rule 1); a module that
-can only be polled has to justify itself in its own PR, and the justification
-has to say why the data source offers no notification.
+Every bar module is push-driven (`docs/INTERFACES.md` §3, rule 1) unless it is
+served by the one shared 1 Hz sampler in `helm-session`: CPU, memory, GPU and
+network-rate values are interval-derived and have no useful event source. The
+clock schedules the next minute boundary rather than redrawing each second. A
+module that needs any other polling has to justify it in its own PR and explain
+why its data source offers no notification.
 
 A poll loop is how idle CPU never reaches zero and how laptop fans start — the
 "redraw on a timer" row in `docs/PITFALLS.md`. If you are reaching for an
 interval, first check for: a Wayland event, a control-socket `Event::State`, an
 inotify watch, a netlink or udev event, or a D-Bus signal.
 
-Even the clock tick must **damage the clock, not the bar**.
+The clock boundary or shared sampler update must **damage only its changed
+module, not the bar**.
 
 ## Before you redraw, prove you must
 

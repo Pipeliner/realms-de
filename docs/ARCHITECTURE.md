@@ -115,7 +115,7 @@ Each row links to its ADR. "Reversal" is the honest cost of changing our mind.
 | [0007](adr/0007-reuse-yazi-btop-starship.md) | Reuse yazi / btop / zsh+starship rather than rewrite | charon and horus are ~90% theme + keymap. Rewrites cost years and lose features | Low |
 | [0008](adr/0008-layer-shell-rendering-stack.md) | `smithay-client-toolkit` + `tiny-skia` + `cosmic-text` | Pure Rust, no GPU context for a 32px bar, real font fallback | Medium |
 | [0009](adr/0009-no-animation-budget.md) | Zero animations; a frame budget, enforced in CI | "Snappy" is a number, not an adjective | Low |
-| [0010](adr/0010-nix-flake-as-reference-build.md) | Nix flake is the reference build; native deb/rpm packaging is tracked | Root flake plus reviewed consistency checks | Medium |
+| [0010](adr/0010-nix-flake-as-reference-build.md) | Nix flake is the reference build; native deb/rpm packaging is tracked | Root flake plus planned overlap-consistency checks; no shared package-metadata generator | Medium |
 | [0011](adr/0011-session-integration-contract.md) | Session startup owns the D-Bus/systemd environment handshake | The #1 way minimal Wayland desktops break for users | Low |
 | [0012](adr/0012-font-fallback-is-a-contract.md) | Glyph inventory + startup probe + ASCII fallbacks | A glyph-heavy DE must never ship tofu | Low |
 
