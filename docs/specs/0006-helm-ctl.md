@@ -72,9 +72,9 @@ helm ctl doctor [--json] [--portal-roundtrip]
 helm ctl --version
 ```
 
-The control endpoint is always `$XDG_RUNTIME_DIR/helm/ctl.sock`; `helmctl` has
-no `--socket` or `HELM_SOCKET` override. Isolated tests use the non-production
-runtime-directory resolver documented by ADR 0004.
+The control endpoint is always the fixed descendant resolved by SPEC 0007;
+`helmctl` has no `--socket` or `HELM_SOCKET` override. Isolated tests use its
+non-production runtime-directory resolver, never an arbitrary socket path.
 `--palette` overrides the palette search order (`$XDG_CONFIG_HOME/helm/palette.toml`,
 then the shipped `palette.toml`). Both exist so that tests and the NixOS VM can
 point at a fixture without an environment dance. `--portal-roundtrip` is
@@ -153,7 +153,7 @@ theme for free and no colour is written down twice
 | 0 | Success. For `doctor`, every check passed or warned |
 | 1 | The command ran and the answer is negative: a fatal lint finding, one or more failed `doctor` checks, or a `theme diff` that found changes |
 | 2 | Usage error — unknown group or verb, missing or invalid argument. Caught client-side; the socket is never opened |
-| 3 | No session: the socket is absent, or connecting was refused |
+| 3 | No session: the fixed endpoint remains absent or refused after SPEC 0007's bounded startup retry |
 | 4 | Protocol version mismatch at the handshake |
 | 5 | The session refused the command; derived from `Response::Error::kind` |
 | 6 | A filesystem or I/O failure while applying a theme. Nothing was renamed, so the desktop is untouched (SPEC 0002) |
@@ -241,7 +241,7 @@ the tool's absence *is* the finding.
 | `portal/config` | a `helm-portals.conf` is found and names a backend per interface | the config search path and the `.portal` files' `DesktopNames`; a **CI** check on the file, a VM check on the effect | *"Behaviour that changes with whatever happens to be installed."* |
 | `portal/filechooser` | `--portal-roundtrip` only: a real `FileChooser.OpenFile` returns a request handle within 2 s | the D-Bus call, then cancel the request | `skip` unless `--portal-roundtrip` is given, because it opens a dialog. *"The 25-second hang, reproduced deliberately and bounded"* |
 | `portal/screencast` | the `ScreenCast` interface exists and the configured backend implements it | introspection | *"Screen sharing silently produces nothing."* The real capture is hardware-only and is not attempted |
-| `session/socket` | `ipc::socket_path()` exists and answers `Hello` | one frame | `skip` with no session (§4). `FAIL` when the path exists but nothing answers: *"The session daemon has died; windows are unplaced and keys are dead."* |
+| `session/socket` | SPEC 0007's fixed endpoint exists and answers `Hello` | one frame | `skip` with no session (§4). `FAIL` when the path exists but nothing answers: *"The session daemon has died; windows are unplaced and keys are dead."* |
 | `session/protocol-version` | the session's version equals `ipc::PROTOCOL_VERSION` | `Response::Hello` | *"The CLI and the session are from different builds and would misread each other's frames."* Both versions printed |
 | `session/degraded` | every `DEGRADED <CODE>` in force for this session | the session log's stable codes (SPEC 0005 §6) | any code present is a `warn` reprinting the entry's own sentence. *"A degraded session pretending to be healthy."* This is the check that stops a session that started with no cursor theme from reading as clean |
 | `palette/lint` | the palette parses and passes `Palette::lint` | `Palette::load` on the resolved path, then `lint()`; names the file used, user or shipped, and prints the accent hue separations | `FAIL` on any fatal `Finding`, `warn` otherwise. Prints every finding through its `Display` impl — `error text.normal: contrast 1.02:1 on background.pane is below 4.5:1` — not the first |
@@ -401,7 +401,7 @@ Each row is one happy path and becomes one test.
 | B4 | Given a session with windows in orbits 1 and 3, when `orbit list` runs, then it prints six rows carrying rune, name, window count and layout, with orbit 1 marked active | |
 | B5 | Given a running session, when `orbit switch 3` runs, then it sends `Request::SwitchOrbit(3)`, prints the new orbit and exits 0 | |
 | B6 | Given a session whose backend has disconnected, when `orbit switch 2` runs and the session answers `Error { kind: backend-refused }`, then the CLI prints the session's message and exits 5 | |
-| B7 | Given no socket at `ipc::socket_path()`, when `orbit switch 2` runs, then it exits 3, names the path it tried, and suggests how to start a session | |
+| B7 | Given no listener at SPEC 0007's fixed endpoint after its bounded retry, when `orbit switch 2` runs, then it exits 3, names the path it tried, and suggests how to start a session | |
 | B8 | Given a session answering `Hello` with a different `version`, when any command runs, then the CLI refuses before sending anything else, prints both versions and exits 4 | |
 | B9 | Given a session with three windows in orbit 1, when `ledger show 1 --json` runs, then stdout is exactly one object that deserialises as `Response::Ledger` with the windows in ledger order and the focused one marked | |
 | B10 | Given a running session, when `run foot -e yazi` runs, then it sends `Request::Spawn(["foot","-e","yazi"])`, exits 0 without waiting, and reports the argv as accepted rather than launched | |

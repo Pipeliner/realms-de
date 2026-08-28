@@ -43,11 +43,10 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
   production resolver; it must not accept an arbitrary socket pathname. This
   seam exists solely to make isolated integration fixtures possible without
   mutating process environment.
-- The daemon creates the `helm` child directory mode `0700` and the listener
-  mode `0600`. It rejects a pre-existing non-directory `helm` path and a
-  pre-existing non-socket `ctl.sock` without following links. A stale socket
-  owned by the daemon's effective uid may be unlinked only after a connection
-  attempt proves that no listener answers.
+- Endpoint identity, descriptor-relative resolution, ownership/mode policy,
+  stale reclaim predicate, and post-bind verification are defined completely
+  by SPEC 0007. In particular, only verified `ECONNREFUSED` authorizes reclaim;
+  a timeout, permission failure, or overloaded peer never authorizes unlink.
 - Before reading any frame, the listener obtains Linux `SO_PEERCRED`. It admits
   only peers whose uid equals the daemon's effective uid. A missing credential,
   credential lookup failure, or different uid closes that connection without a
@@ -68,19 +67,12 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
   after a successful Hello it changes the connection into a subscriber, emits
   an immediate `Event::State` snapshot, and accepts no further client frames.
   EOF or a forbidden subsequent frame removes only that subscriber.
-- The listener admits at most **64** live connections. It reads at most
-  **64 KiB** for a complete NDJSON frame and requires the initial Hello within
-  **one second** of `accept(2)`. It permits at most **one** queued complete
-  inbound request beyond the first Hello and one queued complete ordinary
-  response per connection.
-  A connection that exceeds a bound or misses the Hello deadline is closed;
-  accepting the 65th connection must not evict or delay an admitted peer.
-- Subscriber output remains a one-frame latest-state slot plus the current
-  partial write. Writes are non-blocking. A cursor that has not advanced for
-  `SUBSCRIBER_STALL_LIMIT` (**2 seconds**) is closed; `Event::Shutdown` has a
-  bounded best-effort write and never delays process exit. These limits are
-  liveness guarantees: a local peer cannot turn control-socket I/O into a
-  window-management stall.
+- The complete state machine, frame/error classification, capacity accounting,
+  queue classes, nonblocking write deadlines, and fake-clock/credential test
+  seams are defined by SPEC 0007. They are intentionally a state machine: NDJSON
+  removes length-prefix state, not connection, handshake, queue, or deadline
+  state. These limits are liveness guarantees: a local peer cannot turn
+  control-socket I/O into a window-management stall.
 
 - One JSON value per line. `ipc::encode` appends the newline and
   `ipc::tests::requests_round_trip_through_a_frame` asserts every frame contains
@@ -111,7 +103,8 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 - `socat`, `nc -U`, `jq` and a shell are a complete client: write the mandatory
   Hello frame first. `helmctl` is a thin wrapper rather than a privileged path.
 - Framing is unambiguous by inspection: if there is no newline yet, the frame is
-  not complete. No length prefix to get wrong, no state machine.
+  not complete. There is no length prefix to get wrong; the explicit connection
+  state machine in SPEC 0007 governs handshake, queues, and deadlines.
 - Serde does the work. Adding a `Request` variant is one enum arm and the tests
   cover it.
 - The fixed per-user runtime endpoint plus same-uid credential admission avoids
@@ -161,14 +154,12 @@ someone wanting to drive orbits from an existing panel or a global hotkey daemon
   `ipc::tests::production_path_ignores_helm_socket`.
 - *Required before M2 implementation:* `control_socket::tests::rejects_foreign_uid_before_read`,
   `control_socket::tests::rejects_missing_peer_credentials_before_read`,
-  `control_socket::tests::refuses_symlink_or_wrong_type_at_runtime_path`, and
-  `control_socket::tests::stale_same_uid_socket_is_reclaimed_only_after_connect_fails`.
+  `control_socket::tests::path_resolution_is_descriptor_relative`, and
+  `control_socket::tests::stale_same_uid_socket_is_reclaimed_only_after_verified_refusal`.
 - *Planned (M2):* a CI job that drives a live session end to end with `socat`
   and `jq` only, so the scriptability claim is tested rather than asserted.
-- *Required before M2 implementation:* `control_socket::tests::hello_is_required_before_every_request`,
-  `control_socket::tests::version_mismatch_gets_hello_then_eof`,
-  `control_socket::tests::subscribe_requires_matching_hello_and_emits_snapshot`,
-  `control_socket::tests::connection_limit_rejects_without_harming_admitted_peers`,
-  `control_socket::tests::oversized_or_unterminated_frame_is_closed`,
-  `control_socket::tests::hello_deadline_closes_idle_peer`, and
-  `control_socket::tests::stalled_subscriber_is_evicted_without_missing_key_budget`.
+- *Required before M2 implementation:* `control_socket::tests::protocol_state_machine_is_total`,
+  `control_socket::tests::connection_and_queue_limits_preserve_admitted_peers`,
+  `control_socket::tests::all_write_classes_have_bounded_nonblocking_drain`,
+  `control_socket::tests::stalled_peer_preserves_key_path`, and
+  `control_socket::tests::linux_key_path_budget_with_full_socket_buffer`.

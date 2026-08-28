@@ -22,7 +22,9 @@ compositor, the bar, the launcher and the CLI each invent their own notion of
 assembled-from-parts desktops feel like a pile of programs rather than one thing.
 
 It is deliberately free of I/O, timers and toolkit dependencies, so the
-interesting logic is testable without a Wayland socket.
+interesting logic is testable without a Wayland socket. The historical M0
+`ipc::socket_path()` helper is an acknowledged exception slated for removal by
+Accepted SPEC 0007; it is not a supported `helm-core` contract.
 
 ## Scope
 
@@ -30,9 +32,10 @@ interesting logic is testable without a Wayland socket.
 the palette file format; the keymap model; the control-protocol wire types; the
 bar state snapshot; the glyph inventory and fallback contract.
 
-**Out:** anything that talks to something. Sockets belong to `helm-session`,
-rendering to `helm-bar`, template expansion to `helm-theme`, and process
-spawning to `helm-ctl`.
+**Out:** anything that talks to something. Socket transport, runtime-directory
+resolution, filesystem validation, and peer credentials belong to the Linux
+session/client transport defined by SPEC 0007; rendering belongs to `helm-bar`,
+template expansion to `helm-theme`, and process spawning to `helm-ctl`.
 
 ## Behaviour
 
@@ -111,6 +114,13 @@ Responsible for not causing, from [PITFALLS.md](../PITFALLS.md): rounding loss
 between tiles, off-by-one at odd resolutions, focus causing relayout, redraw on
 a timer, tofu glyphs, contrast-as-a-filter, an unreadable palette, and protocol
 version skew.
+
+## Implementation-status note
+
+The acceptance table covers the implemented M0 ledger, layout, palette, wire,
+state, and glyph behaviour. It does not claim that the legacy impure
+`ipc::socket_path()` helper is accepted or passing as an M2 transport contract;
+SPEC 0007 supersedes that helper before session transport work begins.
 
 ## Open questions
 

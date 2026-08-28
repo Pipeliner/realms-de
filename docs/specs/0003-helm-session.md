@@ -73,16 +73,12 @@ prevent.
 refuses to start without `WAYLAND_DISPLAY` (already enforced by the unit's
 `ConditionEnvironment`).
 
-1. **Bind the control socket first.** Determine the fixed path with
-   `helm_core::ipc::socket_path()`. `XDG_RUNTIME_DIR` is mandatory: if path
-   resolution returns `IpcPathError::MissingRuntimeDir`, exit non-zero before
-   binding and name that condition. Never fall back to `/tmp` and never honour
-   `HELM_SOCKET`. If a socket file already exists, try to
-   connect to it. If something answers, another session is live: exit non-zero
-   with that message and change nothing. If nothing answers, the file is stale
-   from a dead process: unlink it and bind. Binding before touching Wayland
-   means a client that raced the session gets `ECONNREFUSED` and retries
-   (ADR 0004 requires clients to have a retry loop) rather than hanging on a
+1. **Bind the control socket first.** Bind the fixed endpoint through the
+   Accepted resolver, filesystem, admission, and stale-reclaim contract in
+   [SPEC 0007](0007-control-socket-security.md). This Draft session
+   specification does not define another path, reclaim predicate, or transport
+   API. Binding before touching Wayland means a client that races the session
+   gets the bounded retry behaviour specified there rather than hanging on a
    socket nobody is listening to.
 2. **Connect to river and negotiate versions.** Bind, from the registry:
 
@@ -571,30 +567,12 @@ one of the open questions.
 
 ### 7. The control-socket server
 
-Serves `helm_core::ipc` at the fixed path from `ipc::socket_path()`, one JSON
-value per line, encoded through `ipc::encode` and decoded through `ipc::decode`
-([ADR 0004](../adr/0004-ndjson-control-socket.md)). The resolver requires a
-valid `XDG_RUNTIME_DIR`; it has no `/tmp` fallback or production socket-path
-override. A non-production resolver which accepts a temporary *runtime
-directory* (not a socket path) is the only fixture seam.
-
-**Admission.** Before reading, obtain `SO_PEERCRED`; accept only a peer with
-the session's effective uid. Create `$XDG_RUNTIME_DIR/helm` mode 0700 and its
-listener mode 0600 without following links. Refuse an unsafe pre-existing path.
-The listener has 64 slots; a 65th peer, a credential failure, or a foreign uid
-is closed without affecting admitted connections or the event loop.
-
-**Handshake and bounds.** Every connection must send a complete
-`Request::Hello { version, client }` within one second and before any other
-frame. The server answers `Response::Hello { version: PROTOCOL_VERSION,
-session }`; mismatch is followed by EOF. A missing/late Hello, request before
-Hello, duplicate Hello, malformed/unterminated frame above 64 KiB, or more than
-one queued request/ordinary response closes only that peer. `Subscribe` is
-allowed only after a matching Hello; it is terminal, immediately emits an
-`Event::State` snapshot, and accepts no subsequent client frames. The
-subscriber's output is one latest-state slot plus a partial write; all writes
-are non-blocking and a cursor stalled for two seconds is evicted. Ordinary
-commands remain scriptable by writing a Hello frame and a command frame.
+Serves `helm_core::ipc` one JSON value per line, encoded through `ipc::encode`
+and decoded through `ipc::decode` ([ADR 0004](../adr/0004-ndjson-control-socket.md)).
+SPEC 0007 is the complete Accepted contract for endpoint ownership, admission,
+connection states, malformed frames, queues, replies, deadlines, and test
+seams. This section adds only the integration rule below; it must not be read
+as a second transport state machine.
 
 **Requests.** A mutating `Request` is applied to the `Ledger` by calling the
 corresponding `helm-core` method, after which the session makes `manage_dirty`
@@ -605,9 +583,9 @@ would put a `helm ctl` client on the input path, which §4 forbids.
 the ledger plus the per-window `app_id` and `title` last reported by river (both
 nullable in the protocol *(verified)*, rendered as empty strings).
 `Request::ReloadTheme` and `Request::Spawn` are handed to the worker and
-answered `Response::Ok` on acceptance. A frame that does not decode is answered
-`Response::Error { message }` and the connection stays open —
-`ipc::tests::unknown_frames_are_an_error_not_a_panic` is the shape.
+answered `Response::Ok` on acceptance. Decoding and protocol-error outcomes
+are exactly those in SPEC 0007's state/error table; they are not kept open by
+default merely because a decoder can return an error.
 
 **Subscribers.** `Request::Subscribe` turns a connection into a subscriber. Its
 first frame is an immediate `Event::State` snapshot, so a restarted bar draws at
@@ -629,8 +607,8 @@ change (§8).
   (2 seconds), it is closed with a log line naming the client from its `Hello`.
   A client that cannot read for two seconds is wedged, and the desktop does not
   wait for it.
-- `Event::Shutdown` is the one frame that is not droppable; it is written with
-  a short bounded deadline and the session exits regardless.
+- `Event::Shutdown` uses SPEC 0007's 100 ms total bounded drain and the session
+  exits regardless.
 
 ### 8. State derivation
 
@@ -686,9 +664,9 @@ Each row is one happy path and becomes one test.
 | A14 | Given a client that sends `Request::Hello` with a version other than `PROTOCOL_VERSION`, when the session receives it, then it answers `Response::Hello` carrying its own version and then closes the connection | |
 | A14a | Given `XDG_RUNTIME_DIR` is absent, relative, or not a directory, when `helm-session` starts or a production client resolves the control socket, then it fails with `IpcPathError::MissingRuntimeDir`, never probes `/tmp`, and ignores `HELM_SOCKET` | `ipc::tests::socket_path_requires_xdg_runtime_dir`, `ipc::tests::production_path_ignores_helm_socket` |
 | A14b | Given a connecting peer with a uid other than the session's effective uid, or no readable credentials, when it is accepted, then the session closes it before consuming a frame and continues serving a same-uid peer | `control_socket::tests::rejects_foreign_uid_before_read`, `control_socket::tests::rejects_missing_peer_credentials_before_read` |
-| A14c | Given a connection sends anything other than a matching `Hello` as its first complete frame, or waits more than one second, when the server reads it, then it returns `Response::Error` only for a decodable ordering error, closes that peer, and does not affect another peer | `control_socket::tests::hello_is_required_before_every_request`, `control_socket::tests::hello_deadline_closes_idle_peer` |
-| A14d | Given a matching Hello followed by `Subscribe`, when the session accepts it, then it sends an immediate `Event::State`; a subsequent client frame is closed, and a Subscribe before matching Hello is rejected | `control_socket::tests::subscribe_requires_matching_hello_and_emits_snapshot` |
-| A14e | Given 64 admitted peers, a 65th peer, an oversized/unterminated frame, or a peer with more than one queued request/ordinary response, when the limit is reached, then only the offending/new peer is closed and the event loop and existing peers remain live | `control_socket::tests::connection_limit_rejects_without_harming_admitted_peers`, `control_socket::tests::oversized_or_unterminated_frame_is_closed` |
+| A14c | Given every accepted connection state and frame error class, when input is read, then the response, drain deadline, and close/continue result match SPEC 0007's total table without affecting another peer | `control_socket::tests::protocol_state_machine_is_total` |
+| A14d | Given a matching Hello followed by `Subscribe`, when the session accepts it, then it sends an immediate `Event::State`; later input and all queue/write limits follow SPEC 0007 | `control_socket::tests::subscribe_requires_matching_hello_and_emits_snapshot` |
+| A14e | Given 64 admitted peers, a 65th peer, oversized/unterminated input, excess pipeline, a stalled subscriber, or a stalled ordinary client, when a limit/deadline is reached, then only the affected peer is closed and the event loop remains live | `control_socket::tests::connection_and_queue_limits_preserve_admitted_peers`, `control_socket::tests::all_write_classes_have_bounded_nonblocking_drain`, `control_socket::tests::stalled_peer_preserves_key_path` |
 | A15 | Given an idle session, when the clock module's tick changes the clock text, then exactly one `Event::State` is broadcast and no `manage_dirty` and no other river request is made | |
 | A16 | Given a module that recomputes to the text it already had, when derivation runs, then `revision` does not increment and no `Event::State` is sent | |
 | A17 | Given a client that quantises its dimensions down to a multiple of a 9×18 cell, when a triptych of three such clients is applied, then after at most one corrective `propose_dimensions` per window each `set_content_clip_box` equals that window's projected rect and the clip boxes tile the workarea exactly | |
