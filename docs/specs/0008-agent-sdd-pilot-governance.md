@@ -211,14 +211,21 @@ sensitive material is not recoverably retractable and must never be recorded.
 File observations and command results are commit-scoped. A passing assessment
 requires a clean repository: `git status --porcelain=v1 --untracked-files=all`
 is empty and its observed dirty state equals `workspace.dirty` (therefore both
-are `false`). It additionally requires `checkpoint.git_head == HEAD` and
-`workspace.base` to be an ancestor of `HEAD`; otherwise it reports
-`fresh_checkpoint` as unmet. Otherwise it reports `clean_workspace` as unmet.
-It reports each item whose `git_head` differs from `HEAD` as
-`stale_evidence(issue, evidence_id, recorded_commit, current_commit)` and
-returns the unmet-obligation exit status. It never treats old success as a
-current fact; live files/tests must be reread or rerun before a new record at
-the current commit supplies the evidence.
+are `false`). Assessment `HEAD` must be a **record-carrier commit** with exactly
+one parent, called `C`. Compare `C^{tree}` and `HEAD^{tree}` recursively as raw
+Git tree entries, without rename or copy inference. The set of paths with any
+addition, deletion, blob-object, mode or type difference must be exactly
+`.agent/work/<issue>/checkpoint.toml` and `.agent/work/<issue>/evidence.jsonl`.
+Both paths at `HEAD` must be regular non-executable blobs (`100644`); at `C`
+each may be absent or a regular non-executable blob. No other tree entry may
+differ. `checkpoint.git_head` and every `evidence.git_head` must equal `C`, and
+`workspace.base` must be an ancestor of `C`. Otherwise it reports
+`fresh_checkpoint` or `fresh_evidence` as unmet, as applicable. This permits the
+tracked metadata commit to describe the immediately preceding, unchanged
+repository revision without requiring an impossible Git self-reference. It
+never treats old success as a current fact: a new record-carrier commit is
+required after any non-record change, and live files/tests must be reread or
+rerun before that record supplies evidence.
 
 ## Report-only gate contract
 
@@ -258,9 +265,13 @@ For either valid edge, `transition_fields` is met only when all required table
 fields for that edge are present and non-empty where their type permits; for
 `spike → prototype`, `limitations` must contain at least one prose item.
 `transition_evidence` is met only when at least one command with `exit_code`
-zero or one file observation exists at `HEAD`. All evidence must be fresh for
+zero or one file observation exists at `C`. All evidence must be fresh for
 `fresh_evidence` to be met; a failing command can be recorded but does not
-satisfy `transition_evidence`.
+satisfy `transition_evidence`. If assessment `HEAD` is a root or merge commit,
+there is no unique `C`: `fresh_checkpoint`, `fresh_evidence` and
+`transition_evidence` are all `unmet`. If `HEAD` has one parent but otherwise
+fails the record-carrier tree rule, `transition_evidence` is still assessed at
+that parent; the two freshness obligations remain `unmet`.
 
 Output is canonical compact JSON with top-level properties in this exact order:
 `issue`, `from`, `to`, `outcome`, `obligations`. `obligations` contains exactly
@@ -274,8 +285,8 @@ each object has properties in order `code`, `status`. Status is one of `met`,
 | `cli` | CLI parse failure | `invalid` |
 | `clean_workspace` | step 5 | `met` only under the clean-workspace rule, else `unmet` |
 | `decision_provenance` | record loads | `invalid` unless every decision meets its direct-parent rule, else `met` |
-| `fresh_evidence` | step 5 | `met` only when all evidence is at HEAD, else `unmet` |
-| `fresh_checkpoint` | step 5 | `met` only when checkpoint head is HEAD and workspace base is its ancestor, else `unmet` |
+| `fresh_evidence` | step 5 | `met` only when assessment `HEAD` is a record-carrier commit and all evidence is at its parent `C`, else `unmet` |
+| `fresh_checkpoint` | step 5 | `met` only when assessment `HEAD` is a record-carrier commit, checkpoint head is its parent `C`, and workspace base is an ancestor of `C`, else `unmet` |
 | `git_objects` | record loads | `invalid` unless every commit ID resolves, else `met` |
 | `hygiene` | record loads | `invalid` unless all field/file rules pass, else `met` |
 | `issue_directory` | record loads | `invalid` unless checkpoint issue equals directory, else `met` |
@@ -298,10 +309,10 @@ requirements, not existing-tool claims.
 
 | # | Given / When / Then | Planned verification |
 |---|---|---|
-| A1 | A valid `probe → spike` record is assessed | Exit 0 and exact pass JSON without tracked-file changes | #120 fixture + clean `git diff --exit-code` |
+| A1 | A valid `probe → spike` record is assessed from a clean record-carrier commit with initial regular-blob record files | Exit 0 and exact pass JSON without tracked-file changes | #120 temporary-Git fixture + clean `git diff --exit-code` |
 | A2 | Every scalar/table/array boundary, unknown field, duplicate ID, bad reference/timestamp/Git object, mismatched issue directory, cross-revision decision or decision cycle is supplied | Exit 3 identifies only safe metadata | #120 fixtures |
 | A3 | A forbidden raw-output-like field, environment-like assignment, credential-like value, source delimiter/snapshot, disallowed command syntax or unknown file/field is supplied | Hygiene/evidence validation fails without echoing it | positive and negative #120 fixtures covering every permitted field class and detector pattern |
-| A4 | Evidence or checkpoint at a non-current revision, non-ancestor workspace base, or dirty/index/untracked workspace is assessed | Exit 2 with `fresh_evidence`, `fresh_checkpoint` or `clean_workspace` obligation | #120 fixture |
+| A4 | Evidence or checkpoint not at the record-carrier parent, a root/merge/non-regular carrier, a carrier diff that touches another path or changes an outside-path mode, a non-ancestor workspace base, or dirty/index/untracked workspace is assessed | Exit 2 with the exact `fresh_evidence`, `fresh_checkpoint`, `transition_evidence` and/or `clean_workspace` obligation vector | #120 temporary-Git fixture |
 | A5 | A permitted transition is assessed with a selected issue and matching maturity fields | Stable complete JSON and no writes | #120 fixture + clean diff |
 | A6 | Candidate/production is requested | Exit 4 unsupported and no writes | #120 fixture + clean diff |
 | A7 | An accepted reference is missing, non-Accepted, malformed, or differs between record commit and HEAD | Exit 3 resolves only current HEAD accepted documents | #120 fixtures |
