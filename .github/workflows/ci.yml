@@ -40,7 +40,10 @@ jobs:
       # advisories, the explicit licence allowlist, and dependency sources.
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
-          rust-version: "1.85.0"
+          # rust-toolchain.toml selects stable for repository commands. Keep
+          # cargo-deny's installed toolchain aligned with that override; the
+          # separate MSRV job verifies the 1.85 floor.
+          rust-version: "stable"
           command: check advisories licenses sources
 
   action-pins:
