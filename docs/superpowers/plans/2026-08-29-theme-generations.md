@@ -32,16 +32,16 @@
 
 - [ ] Write G2/G3/G4/G8/G9 tests using injected commit checkpoints and two writers.
 - [ ] Run the focused tests and observe failure.
-- [ ] Implement one persistent no-follow lock inode, staging/fsync/seal/pointer ordering, and fail-closed recovery.
+- [ ] Implement one persistent no-follow lock inode, root control-entry validation, staging/fsync/seal/publication-order/pointer ordering, and fail-closed recovery.
 - [ ] Run `cargo test -p helm-theme generation::tests`; commit `feat: publish theme generations atomically`.
 
 ### Task 3: Pointer selection, leases and GC
 
 **Files:** modify `generation.rs`; test `generation.rs`.
 
-- [ ] Write G1/G5/G6/G7 tests for old-generation selection, invalid pointer refusal, stale PID/boot/start-time leases, protected retention and rollback.
+- [ ] Write G1/G5/G6/G7 tests for old-generation selection, invalid pointer refusal, stale PID/boot/start-time leases, explicit publication-sequence retention independent of IDs/mtimes, malformed or missing publication order, protected retention and rollback.
 - [ ] Run focused tests and observe failure.
-- [ ] Implement shared selection, fsynced leases-before-exec, rollback and conservative GC retaining active plus two unleased generations.
+- [ ] Implement shared selection, fsynced leases-before-exec, rollback and conservative GC retaining active plus the two greatest publication-sequence unleased generations, with zero generation deletion when order is missing or malformed.
 - [ ] Run `cargo test -p helm-theme generation::tests`; commit `feat: manage theme generation leases`.
 
 ### Task 4: Integrate and prove no legacy reload leakage

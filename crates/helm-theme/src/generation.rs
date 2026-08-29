@@ -1,7 +1,7 @@
 //! Immutable generation validation, publication and fail-closed recovery.
 
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
@@ -37,6 +37,23 @@ fn validate_owned_mode(
         return Err(format!("{name} has unsafe permissions"));
     }
     Ok(())
+}
+
+fn validate_optional_control(
+    root: &GenerationRoot,
+    name: &str,
+    expected_type: FileType,
+    expected_mode: u32,
+    expected_uid: u32,
+) -> std::result::Result<bool, String> {
+    match statat(&root.fd, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => {
+            validate_owned_mode(name, &stat, expected_type, expected_mode, expected_uid)?;
+            Ok(true)
+        }
+        Err(Errno::NOENT) => Ok(false),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// The descriptor-owned root and persistent lock for generation operations.
@@ -76,6 +93,12 @@ struct LeaseRecord {
     start_time: u64,
     boot_id: String,
     owner_uid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PublicationOrder {
+    next_sequence: u64,
+    sequences: BTreeMap<GenerationId, u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,11 +223,13 @@ impl std::error::Error for GenerationPublicationError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CommitCheckpoint {
     InputsCaptured,
+    PublicationSequenceReserved,
     OutputsSynced,
     ReceiptSynced,
     ManifestSynced,
     SealSynced,
     StagingDirectorySynced,
+    PublicationOrderSynced,
     TreeCommitted,
     GenerationsDirectorySynced,
     PointerFileSynced,
@@ -389,6 +414,20 @@ impl GenerationStore {
             Err(Errno::NOENT) => false,
             Err(error) => return Err(error.to_string()),
         };
+        validate_optional_control(
+            &root,
+            "publication-order",
+            FileType::RegularFile,
+            0o600,
+            current_uid,
+        )?;
+        validate_optional_control(
+            &root,
+            ".publication-order",
+            FileType::RegularFile,
+            0o600,
+            current_uid,
+        )?;
         preflight_checkpoint();
 
         let lock_flags = OFlags::RDWR
@@ -474,6 +513,34 @@ impl GenerationStore {
             0o700,
             current_uid,
         )?;
+        flock(&lock, FlockOperation::LockExclusive).map_err(|error| error.to_string())?;
+        let initialize_order = (|| -> std::result::Result<(), String> {
+            if validate_optional_control(
+                &root,
+                "publication-order",
+                FileType::RegularFile,
+                0o600,
+                current_uid,
+            )? {
+                return Ok(());
+            }
+            let fd = openat(
+                &root.fd,
+                "publication-order",
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )
+            .map_err(|error| error.to_string())?;
+            let mut file = std::fs::File::from(fd);
+            file.write_all(&PublicationOrder::empty().encode())
+                .map_err(|error| error.to_string())?;
+            fsync(&file).map_err(|error| error.to_string())?;
+            fsync(&root.fd).map_err(|error| error.to_string())?;
+            Ok(())
+        })();
+        let unlock = flock(&lock, FlockOperation::Unlock).map_err(|error| error.to_string());
+        initialize_order?;
+        unlock?;
         if !lock_exists || !generations_exists || !leases_exists {
             fsync(&root.fd).map_err(|error| error.to_string())?;
         }
@@ -608,11 +675,15 @@ impl GenerationStore {
         let pointer_inventory = self.inspect_pointer_journals()?;
         self.clean_staging()?;
         self.clean_pointer_staging(pointer_inventory, |_| Ok(()), filesystem)?;
+        self.clean_publication_order_staging(filesystem)?;
         let had_current = self.validate_current_or_pristine()?;
+        let publication_order = self.load_publication_order()?;
+        self.validate_publication_order_complete(&publication_order)?;
         let publication = capture()?;
         self.publish_allocated_locked(
             publication,
             had_current,
+            publication_order,
             checkpoint,
             &mut next_id,
             filesystem,
@@ -684,6 +755,28 @@ impl GenerationStore {
             live_generations.insert(previous);
         }
 
+        let current_uid = rustix::process::getuid().as_raw();
+        match validate_optional_control(
+            &self.root,
+            ".publication-order",
+            FileType::RegularFile,
+            0o600,
+            current_uid,
+        ) {
+            Ok(false) => {}
+            Ok(true) | Err(_) => return Ok(report),
+        }
+        let publication_order = match self.load_publication_order() {
+            Ok(order) => order,
+            Err(_) => return Ok(report),
+        };
+        if self
+            .validate_publication_order_complete(&publication_order)
+            .is_err()
+        {
+            return Ok(report);
+        }
+
         let mut candidates = Vec::new();
         let mut malformed_generation = false;
         let mut generations =
@@ -715,16 +808,18 @@ impl GenerationStore {
             if live_generations.contains(&generation) {
                 continue;
             }
-            candidates.push((stat.st_mtime, stat.st_mtime_nsec, generation));
+            let Some(sequence) = publication_order.sequences.get(&generation).copied() else {
+                malformed_generation = true;
+                continue;
+            };
+            candidates.push((sequence, generation));
         }
         drop(generations);
         if malformed_generation {
             return Ok(report);
         }
-        candidates.sort_by(|left, right| {
-            (right.0, right.1, right.2.as_str()).cmp(&(left.0, left.1, left.2.as_str()))
-        });
-        for (_, _, generation) in candidates.into_iter().skip(2) {
+        candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
+        for (_, generation) in candidates.into_iter().skip(2) {
             remove_tree_at(&self.generations.fd, OsStr::new(generation.as_str()))?;
             fsync(&self.generations.fd).map_err(|error| error.to_string())?;
             report.reclaimed_generations += 1;
@@ -810,6 +905,87 @@ impl GenerationStore {
         Ok((report, live_generations, uncertain_lease))
     }
 
+    fn load_publication_order(&self) -> std::result::Result<PublicationOrder, String> {
+        let current_uid = rustix::process::getuid().as_raw();
+        if !validate_optional_control(
+            &self.root,
+            "publication-order",
+            FileType::RegularFile,
+            0o600,
+            current_uid,
+        )? {
+            return Err("publication order is absent".into());
+        }
+        let raw = read_optional_regular_bytes(&self.root, Path::new("publication-order"))?
+            .ok_or("publication order disappeared while reading")?;
+        PublicationOrder::parse(&raw)
+    }
+
+    fn validate_publication_order_complete(
+        &self,
+        order: &PublicationOrder,
+    ) -> std::result::Result<(), String> {
+        let mut directory =
+            Dir::read_from(&self.generations.fd).map_err(|error| error.to_string())?;
+        while let Some(entry) = directory.read() {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let bytes = entry.file_name().to_bytes();
+            if matches!(bytes, b"." | b"..") {
+                continue;
+            }
+            let name = std::str::from_utf8(bytes)
+                .map_err(|_| "generation name is not UTF-8 while validating publication order")?;
+            let generation = GenerationId::parse(name)?;
+            let stat = statat(&self.generations.fd, name, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|error| error.to_string())?;
+            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
+                return Err("final generation is not a directory".into());
+            }
+            if !order.sequences.contains_key(&generation) {
+                return Err("final generation lacks a publication sequence".into());
+            }
+        }
+        Ok(())
+    }
+
+    fn clean_publication_order_staging<F: PublicationFilesystem>(
+        &self,
+        filesystem: &mut F,
+    ) -> std::result::Result<(), String> {
+        let current_uid = rustix::process::getuid().as_raw();
+        if !validate_optional_control(
+            &self.root,
+            ".publication-order",
+            FileType::RegularFile,
+            0o600,
+            current_uid,
+        )? {
+            return Ok(());
+        }
+        filesystem.unlink(self.root.fd.as_fd(), ".publication-order")?;
+        filesystem.sync(self.root.fd.as_fd())
+    }
+
+    fn replace_publication_order<F: PublicationFilesystem>(
+        &self,
+        order: &PublicationOrder,
+        filesystem: &mut F,
+    ) -> std::result::Result<(), String> {
+        write_synced_file(
+            &self.root.fd,
+            ".publication-order",
+            &order.encode(),
+            filesystem,
+        )?;
+        filesystem.rename(
+            self.root.fd.as_fd(),
+            ".publication-order",
+            self.root.fd.as_fd(),
+            "publication-order",
+        )?;
+        filesystem.sync(self.root.fd.as_fd())
+    }
+
     fn validate_current_or_pristine(&self) -> std::result::Result<bool, String> {
         match self.resolve_current() {
             Ok(_) => Ok(true),
@@ -837,6 +1013,7 @@ impl GenerationStore {
         &self,
         publication: GenerationPublication,
         had_current: bool,
+        mut publication_order: PublicationOrder,
         mut checkpoint: H,
         next_id: &mut I,
         filesystem: &mut F,
@@ -847,9 +1024,15 @@ impl GenerationStore {
         F: PublicationFilesystem,
     {
         checkpoint(CommitCheckpoint::InputsCaptured)?;
+        let publication_sequence = publication_order.reserve()?;
+        self.replace_publication_order(&publication_order, filesystem)?;
+        checkpoint(CommitCheckpoint::PublicationSequenceReserved)?;
         let mut generation = None;
         for _ in 0..64 {
             let candidate = next_id()?;
+            if publication_order.sequences.contains_key(&candidate) {
+                continue;
+            }
             match statat(
                 &self.generations.fd,
                 candidate.as_str(),
@@ -864,13 +1047,28 @@ impl GenerationStore {
             }
         }
         let generation = generation.ok_or("generation id collision retry limit exhausted")?;
-        self.publish_generation_locked(publication, generation, had_current, checkpoint, filesystem)
+        if publication_order
+            .sequences
+            .insert(generation.clone(), publication_sequence)
+            .is_some()
+        {
+            return Err("generation already has a publication sequence".into());
+        }
+        self.publish_generation_locked(
+            publication,
+            generation,
+            publication_order,
+            had_current,
+            checkpoint,
+            filesystem,
+        )
     }
 
     fn publish_generation_locked<H, F>(
         &self,
         publication: GenerationPublication,
         generation: GenerationId,
+        publication_order: PublicationOrder,
         had_current: bool,
         mut checkpoint: H,
         filesystem: &mut F,
@@ -913,6 +1111,9 @@ impl GenerationStore {
         checkpoint(CommitCheckpoint::SealSynced)?;
         filesystem.sync(staging.fd.as_fd())?;
         checkpoint(CommitCheckpoint::StagingDirectorySynced)?;
+
+        self.replace_publication_order(&publication_order, filesystem)?;
+        checkpoint(CommitCheckpoint::PublicationOrderSynced)?;
 
         filesystem.rename(
             self.generations.fd.as_fd(),
@@ -1505,6 +1706,90 @@ impl LeaseRecord {
     }
 }
 
+impl PublicationOrder {
+    fn empty() -> Self {
+        Self {
+            next_sequence: 1,
+            sequences: BTreeMap::new(),
+        }
+    }
+
+    fn parse(raw: &[u8]) -> std::result::Result<Self, String> {
+        let text = std::str::from_utf8(raw).map_err(|_| "publication order is not UTF-8")?;
+        if text.contains('\r') || !text.ends_with('\n') {
+            return Err("publication order must use LF-terminated lines".into());
+        }
+        let mut lines = text[..text.len() - 1].split('\n');
+        if lines.next() != Some("helm-generation-publication-order-v1") {
+            return Err("unsupported publication order version".into());
+        }
+        let next_sequence = canonical_positive_u64(
+            record_value(&mut lines, "next-sequence")?,
+            "publication next sequence",
+        )?;
+        let mut sequences = BTreeMap::new();
+        let mut used_sequences = BTreeSet::new();
+        let mut previous: Option<GenerationId> = None;
+        for line in lines {
+            let mut fields = line.split(' ');
+            if fields.next() != Some("generation") {
+                return Err("expected publication generation record".into());
+            }
+            let generation = GenerationId::parse(
+                fields
+                    .next()
+                    .ok_or("publication generation record lacks an identifier")?,
+            )?;
+            let sequence = canonical_positive_u64(
+                fields
+                    .next()
+                    .ok_or("publication generation record lacks a sequence")?,
+                "publication sequence",
+            )?;
+            if fields.next().is_some() {
+                return Err("publication generation record has extra fields".into());
+            }
+            if previous.as_ref().is_some_and(|prior| prior >= &generation) {
+                return Err("publication generation records are not strictly ordered".into());
+            }
+            if sequence >= next_sequence {
+                return Err("publication sequence is not below next sequence".into());
+            }
+            if !used_sequences.insert(sequence) {
+                return Err("publication sequence is duplicated".into());
+            }
+            previous = Some(generation.clone());
+            if sequences.insert(generation, sequence).is_some() {
+                return Err("publication generation is duplicated".into());
+            }
+        }
+        Ok(Self {
+            next_sequence,
+            sequences,
+        })
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        let mut encoded = format!(
+            "helm-generation-publication-order-v1\nnext-sequence {}\n",
+            self.next_sequence
+        );
+        for (generation, sequence) in &self.sequences {
+            encoded.push_str(&format!("generation {} {sequence}\n", generation.as_str()));
+        }
+        encoded.into_bytes()
+    }
+
+    fn reserve(&mut self) -> std::result::Result<u64, String> {
+        let reserved = self.next_sequence;
+        self.next_sequence = self
+            .next_sequence
+            .checked_add(1)
+            .ok_or("publication sequence space is exhausted")?;
+        Ok(reserved)
+    }
+}
+
 impl GenerationRoot {
     fn open(root: &Path) -> std::result::Result<Self, String> {
         let fd = open_directory_chain(root)?;
@@ -2018,6 +2303,14 @@ fn canonical_u64(value: &str, field: &str) -> std::result::Result<u64, String> {
         .map_err(|_| format!("{field} is not canonical decimal"))
 }
 
+fn canonical_positive_u64(value: &str, field: &str) -> std::result::Result<u64, String> {
+    let value = canonical_u64(value, field)?;
+    if value == 0 {
+        return Err(format!("{field} must be positive"));
+    }
+    Ok(value)
+}
+
 fn canonical_boot_id(value: &str) -> bool {
     value.len() == 36
         && value.bytes().enumerate().all(|(index, byte)| {
@@ -2133,7 +2426,7 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{mpsc, Arc};
-    use std::time::Duration;
+    use std::time::{Duration, UNIX_EPOCH};
 
     #[derive(Debug, PartialEq, Eq)]
     enum ActualFilesystemEvent {
@@ -2164,6 +2457,12 @@ mod tests {
         root_syncs: usize,
         failed: bool,
         fail_unlink: bool,
+    }
+
+    struct FailAfterMappedPublicationOrderFilesystem {
+        root: PathBuf,
+        publication_order_renames: usize,
+        failed: bool,
     }
 
     impl RecordingPublicationFilesystem {
@@ -2289,6 +2588,60 @@ mod tests {
         }
     }
 
+    impl PublicationFilesystem for FailAfterMappedPublicationOrderFilesystem {
+        fn sync(&mut self, fd: BorrowedFd<'_>) -> std::result::Result<(), String> {
+            fsync(fd).map_err(|error| error.to_string())?;
+            if RecordingPublicationFilesystem::descriptor_path(fd)? == self.root
+                && self.publication_order_renames == 2
+                && !self.failed
+            {
+                self.failed = true;
+                return Err("simulated death after mapped publication order became durable".into());
+            }
+            Ok(())
+        }
+
+        fn rename(
+            &mut self,
+            from_directory: BorrowedFd<'_>,
+            from_name: &str,
+            to_directory: BorrowedFd<'_>,
+            to_name: &str,
+        ) -> std::result::Result<(), String> {
+            renameat(from_directory, from_name, to_directory, to_name)
+                .map_err(|error| error.to_string())?;
+            if from_name == ".publication-order" && to_name == "publication-order" {
+                self.publication_order_renames += 1;
+            }
+            Ok(())
+        }
+
+        fn exchange(
+            &mut self,
+            left_directory: BorrowedFd<'_>,
+            left_name: &str,
+            right_directory: BorrowedFd<'_>,
+            right_name: &str,
+        ) -> std::result::Result<(), String> {
+            renameat_with(
+                left_directory,
+                left_name,
+                right_directory,
+                right_name,
+                RenameFlags::EXCHANGE,
+            )
+            .map_err(|error| error.to_string())
+        }
+
+        fn unlink(
+            &mut self,
+            directory: BorrowedFd<'_>,
+            name: &str,
+        ) -> std::result::Result<(), String> {
+            unlinkat(directory, name, AtFlags::empty()).map_err(|error| error.to_string())
+        }
+    }
+
     fn publication(_generation: &str, marker: &str) -> GenerationPublication {
         GenerationPublication::new(
             [
@@ -2332,7 +2685,25 @@ mod tests {
         let old = "00000000000000000000000000000001";
         v1_fixture(&root.join("generations"), old, "theme.ini", b"old");
         std::fs::write(root.join("current"), format!("{old}\n")).unwrap();
+        write_publication_order_fixture(
+            root,
+            "helm-generation-publication-order-v1\nnext-sequence 2\ngeneration 00000000000000000000000000000001 1\n",
+        );
         GenerationStore::open(root).unwrap()
+    }
+
+    fn write_publication_order_fixture(root: &Path, contents: &str) {
+        let path = root.join("publication-order");
+        std::fs::write(&path, contents).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    fn set_generation_modified(root: &Path, generation: &str, seconds: u64) {
+        let directory = std::fs::File::open(root.join("generations").join(generation)).unwrap();
+        let modified = UNIX_EPOCH + Duration::from_secs(seconds);
+        directory
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
     }
 
     fn lease_names(root: &Path) -> Vec<OsString> {
@@ -2664,6 +3035,264 @@ mod tests {
         assert!(root.path().join("generations").join(prior).exists());
         assert_eq!(store.select_current().unwrap().as_str(), current);
         assert_eq!(store.recover().unwrap().as_str(), current);
+    }
+
+    #[test]
+    fn g6_gc_retains_the_two_greatest_publication_sequences_not_mtime_or_id_order() {
+        let root = tempfile::tempdir().unwrap();
+        secure_store_root(root.path());
+        let generations = root.path().join("generations");
+        std::fs::create_dir(&generations).unwrap();
+        std::fs::set_permissions(&generations, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let newest = "00000000000000000000000000000001";
+        let second_newest = "00000000000000000000000000000002";
+        let current = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let oldest_candidate = "ffffffffffffffffffffffffffffffff";
+        for (generation, marker) in [
+            (newest, b"newest".as_slice()),
+            (second_newest, b"second-newest".as_slice()),
+            (current, b"current".as_slice()),
+            (oldest_candidate, b"oldest-candidate".as_slice()),
+        ] {
+            v1_fixture(&generations, generation, "theme.ini", marker);
+        }
+        std::fs::write(root.path().join("current"), format!("{current}\n")).unwrap();
+        write_publication_order_fixture(
+            root.path(),
+            "helm-generation-publication-order-v1\nnext-sequence 5\ngeneration 00000000000000000000000000000001 4\ngeneration 00000000000000000000000000000002 3\ngeneration aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1\ngeneration ffffffffffffffffffffffffffffffff 2\n",
+        );
+        let store = GenerationStore::open(root.path()).unwrap();
+
+        // Make the oldest publication look newest to an mtime-based collector,
+        // while the two newest publications have equal, much older mtimes.
+        set_generation_modified(root.path(), oldest_candidate, 4_000_000_000);
+        set_generation_modified(root.path(), newest, 1);
+        set_generation_modified(root.path(), second_newest, 1);
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_generations, 1);
+        assert!(!generations.join(oldest_candidate).exists());
+        assert!(generations.join(newest).exists());
+        assert!(generations.join(second_newest).exists());
+        assert!(generations.join(current).exists());
+    }
+
+    #[test]
+    fn g6_missing_or_malformed_publication_order_retains_every_generation() {
+        for malformed in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let store = seeded_store(root.path());
+            for number in 2..=4 {
+                let generation = format!("{number:032x}");
+                v1_fixture(
+                    &root.path().join("generations"),
+                    &generation,
+                    "theme.ini",
+                    format!("generation-{number}").as_bytes(),
+                );
+            }
+            write_lease_fixture(
+                root.path(),
+                "00000000000000000000000000000099",
+                "00000000000000000000000000000001",
+                i32::MAX as u32,
+                linux_start_time(std::process::id()),
+                &linux_boot_id(),
+                rustix::process::getuid().as_raw(),
+            );
+            if malformed {
+                write_publication_order_fixture(
+                    root.path(),
+                    "helm-generation-publication-order-v1\nnext-sequence 5\ngeneration out-of-order 4\n",
+                );
+            } else {
+                std::fs::remove_file(root.path().join("publication-order")).unwrap();
+            }
+
+            let report = store.garbage_collect().unwrap();
+
+            assert_eq!(
+                report.reclaimed_generations, 0,
+                "GC reclaimed a generation with malformed={malformed}"
+            );
+            assert_eq!(report.reclaimed_leases, 1);
+            assert_eq!(
+                std::fs::read_dir(root.path().join("generations"))
+                    .unwrap()
+                    .count(),
+                4
+            );
+        }
+    }
+
+    #[test]
+    fn g6_missing_mapping_for_a_present_generation_retains_every_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        for number in 2..=4 {
+            let generation = format!("{number:032x}");
+            v1_fixture(
+                &root.path().join("generations"),
+                &generation,
+                "theme.ini",
+                format!("generation-{number}").as_bytes(),
+            );
+        }
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_generations, 0);
+        assert_eq!(
+            std::fs::read_dir(root.path().join("generations"))
+                .unwrap()
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn g6_lingering_publication_order_staging_retains_every_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        for number in 2..=4 {
+            let generation = format!("{number:032x}");
+            publish_at(
+                &store,
+                &generation,
+                || Ok(publication(&generation, &format!("generation-{number}"))),
+                |_| Ok(()),
+            )
+            .unwrap();
+        }
+        let staged = root.path().join(".publication-order");
+        std::fs::write(&staged, b"interrupted rewrite").unwrap();
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_generations, 0);
+        assert_eq!(
+            std::fs::read_dir(root.path().join("generations"))
+                .unwrap()
+                .count(),
+            4
+        );
+        assert!(staged.exists());
+    }
+
+    #[test]
+    fn publication_order_is_durable_before_a_candidate_can_become_selectable() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let old = "00000000000000000000000000000001";
+        let candidate = "00000000000000000000000000000002";
+        let mut filesystem = FailAfterMappedPublicationOrderFilesystem {
+            root: root.path().into(),
+            publication_order_renames: 0,
+            failed: false,
+        };
+
+        let interrupted = store.publish_with_checkpoint_ids_and_filesystem(
+            || Ok(publication(candidate, "candidate")),
+            |_| Ok(()),
+            || GenerationId::parse(candidate),
+            &mut filesystem,
+        );
+
+        assert!(interrupted.is_err());
+        assert!(filesystem.failed, "test did not reach the injected crash");
+        assert_eq!(filesystem.publication_order_renames, 2);
+        assert_eq!(store.select_current().unwrap().as_str(), old);
+        assert_eq!(store.recover().unwrap().as_str(), old);
+        assert!(!root.path().join("generations").join(candidate).exists());
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("publication-order")).unwrap(),
+            "helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 1\ngeneration 00000000000000000000000000000002 2\n"
+        );
+    }
+
+    #[test]
+    fn interrupted_sequence_reservation_leaves_a_gap_that_a_retry_does_not_fill() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let interrupted = "00000000000000000000000000000002";
+        let fresh = "00000000000000000000000000000003";
+
+        let failed = publish_at(
+            &store,
+            interrupted,
+            || Ok(publication(interrupted, "interrupted")),
+            |checkpoint| {
+                if checkpoint == CommitCheckpoint::PublicationSequenceReserved {
+                    Err("simulated death after sequence reservation".into())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(failed.is_err());
+        assert!(!root.path().join("generations").join(interrupted).exists());
+
+        publish_at(
+            &store,
+            fresh,
+            || Ok(publication(fresh, "fresh")),
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("publication-order")).unwrap(),
+            "helm-generation-publication-order-v1\nnext-sequence 4\ngeneration 00000000000000000000000000000001 1\ngeneration 00000000000000000000000000000003 3\n"
+        );
+        assert_eq!(store.select_current().unwrap().as_str(), fresh);
+    }
+
+    #[test]
+    fn publication_removes_only_safe_lingering_order_staging_before_retrying() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let candidate = "00000000000000000000000000000002";
+        let staged = root.path().join(".publication-order");
+        std::fs::write(&staged, b"interrupted rewrite").unwrap();
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        publish_at(
+            &store,
+            candidate,
+            || Ok(publication(candidate, "candidate")),
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert!(!staged.exists());
+        assert_eq!(store.select_current().unwrap().as_str(), candidate);
+    }
+
+    #[test]
+    fn exhausted_publication_sequence_refuses_without_constructing_a_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let candidate = "00000000000000000000000000000002";
+        write_publication_order_fixture(
+            root.path(),
+            "helm-generation-publication-order-v1\nnext-sequence 18446744073709551615\ngeneration 00000000000000000000000000000001 1\n",
+        );
+
+        let outcome = publish_at(
+            &store,
+            candidate,
+            || Ok(publication(candidate, "candidate")),
+            |_| Ok(()),
+        );
+
+        assert!(outcome.is_err());
+        assert!(!root.path().join("generations").join(candidate).exists());
+        assert_eq!(
+            store.select_current().unwrap().as_str(),
+            "00000000000000000000000000000001"
+        );
     }
 
     #[test]
@@ -3332,6 +3961,14 @@ mod tests {
                 .ino(),
             "store handles did not retain the same lock inode"
         );
+        let order = std::fs::symlink_metadata(root.path().join("publication-order")).unwrap();
+        assert!(order.is_file());
+        assert!(!order.file_type().is_symlink());
+        assert_eq!(order.permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("publication-order")).unwrap(),
+            "helm-generation-publication-order-v1\nnext-sequence 1\n"
+        );
     }
 
     #[test]
@@ -3458,6 +4095,49 @@ mod tests {
         assert!(std::fs::read_dir(victim.path()).unwrap().next().is_none());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn generation_store_rejects_unsafe_publication_order_controls_without_following_them() {
+        for name in ["publication-order", ".publication-order"] {
+            let root = tempfile::tempdir().unwrap();
+            secure_store_root(root.path());
+            let victim = root.path().join("victim");
+            std::fs::write(&victim, "unchanged").unwrap();
+            std::os::unix::fs::symlink(&victim, root.path().join(name)).unwrap();
+
+            assert!(
+                GenerationStore::open(root.path()).is_err(),
+                "accepted {name}"
+            );
+            assert_eq!(std::fs::read_to_string(&victim).unwrap(), "unchanged");
+            assert!(std::fs::symlink_metadata(root.path().join(name))
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            assert!(!root.path().join("activation.lock").exists());
+        }
+
+        let fifo_root = tempfile::tempdir().unwrap();
+        secure_store_root(fifo_root.path());
+        rustix::fs::mkfifoat(
+            CWD,
+            fifo_root.path().join("publication-order"),
+            Mode::RUSR | Mode::WUSR,
+        )
+        .unwrap();
+        assert!(GenerationStore::open(fifo_root.path()).is_err());
+        assert!(!fifo_root.path().join("activation.lock").exists());
+
+        let mode_root = tempfile::tempdir().unwrap();
+        secure_store_root(mode_root.path());
+        let order = mode_root.path().join("publication-order");
+        std::fs::write(&order, "hostile").unwrap();
+        std::fs::set_permissions(&order, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(GenerationStore::open(mode_root.path()).is_err());
+        assert_eq!(std::fs::read_to_string(&order).unwrap(), "hostile");
+        assert!(!mode_root.path().join("activation.lock").exists());
+    }
+
     #[test]
     fn secure_metadata_validation_rejects_a_foreign_owner() {
         let root = tempfile::tempdir().unwrap();
@@ -3497,11 +4177,13 @@ mod tests {
             observed,
             vec![
                 CommitCheckpoint::InputsCaptured,
+                CommitCheckpoint::PublicationSequenceReserved,
                 CommitCheckpoint::OutputsSynced,
                 CommitCheckpoint::ReceiptSynced,
                 CommitCheckpoint::ManifestSynced,
                 CommitCheckpoint::SealSynced,
                 CommitCheckpoint::StagingDirectorySynced,
+                CommitCheckpoint::PublicationOrderSynced,
                 CommitCheckpoint::TreeCommitted,
                 CommitCheckpoint::GenerationsDirectorySynced,
                 CommitCheckpoint::PointerFileSynced,
@@ -3536,12 +4218,28 @@ mod tests {
         assert_eq!(
             filesystem.events,
             vec![
+                ActualFilesystemEvent::Sync(root.path().join(".publication-order")),
+                ActualFilesystemEvent::Rename {
+                    from_directory: root.path().into(),
+                    from_name: ".publication-order".into(),
+                    to_directory: root.path().into(),
+                    to_name: "publication-order".into(),
+                },
+                ActualFilesystemEvent::Sync(root.path().into()),
                 ActualFilesystemEvent::Sync(staging.join("theme.ini")),
                 ActualFilesystemEvent::Sync(staging.clone()),
                 ActualFilesystemEvent::Sync(staging.join("receipt")),
                 ActualFilesystemEvent::Sync(staging.join("manifest")),
                 ActualFilesystemEvent::Sync(staging.join("seal")),
                 ActualFilesystemEvent::Sync(staging.clone()),
+                ActualFilesystemEvent::Sync(root.path().join(".publication-order")),
+                ActualFilesystemEvent::Rename {
+                    from_directory: root.path().into(),
+                    from_name: ".publication-order".into(),
+                    to_directory: root.path().into(),
+                    to_name: "publication-order".into(),
+                },
+                ActualFilesystemEvent::Sync(root.path().into()),
                 ActualFilesystemEvent::Rename {
                     from_directory: root.path().join("generations"),
                     from_name: format!(".staging-{generation}"),
@@ -4001,7 +4699,7 @@ mod tests {
         let candidate = "00000000000000000000000000000002";
         let mut filesystem = FailOnceOnRootSyncFilesystem {
             root: root.path().into(),
-            fail_on: 2,
+            fail_on: 4,
             root_syncs: 0,
             failed: false,
             fail_unlink: false,
@@ -4042,7 +4740,7 @@ mod tests {
         let candidate = "00000000000000000000000000000002";
         let mut filesystem = FailOnceOnRootSyncFilesystem {
             root: root.path().into(),
-            fail_on: 4,
+            fail_on: 6,
             root_syncs: 0,
             failed: false,
             fail_unlink: false,
@@ -4379,6 +5077,49 @@ mod tests {
     fn generation_id_rejects_paths_and_non_ascii() {
         assert!(GenerationId::parse("../old").is_err());
         assert!(GenerationId::parse("génération").is_err());
+    }
+
+    #[test]
+    fn publication_order_v1_accepts_gaps_and_reencodes_in_generation_id_order() {
+        let parsed = PublicationOrder::parse(
+            b"helm-generation-publication-order-v1\nnext-sequence 9\ngeneration 00000000000000000000000000000001 8\ngeneration ffffffffffffffffffffffffffffffff 2\n",
+        )
+        .unwrap();
+
+        assert_eq!(parsed.next_sequence, 9);
+        assert_eq!(
+            parsed.sequences[&GenerationId::parse("00000000000000000000000000000001").unwrap()],
+            8
+        );
+        assert_eq!(
+            parsed.encode(),
+            b"helm-generation-publication-order-v1\nnext-sequence 9\ngeneration 00000000000000000000000000000001 8\ngeneration ffffffffffffffffffffffffffffffff 2\n"
+        );
+    }
+
+    #[test]
+    fn publication_order_v1_rejects_every_noncanonical_or_ambiguous_shape() {
+        for malformed in [
+            b"".as_slice(),
+            b"helm-generation-publication-order-v1\nnext-sequence 1",
+            b"helm-generation-publication-order-v1\r\nnext-sequence 1\r\n",
+            b"helm-generation-publication-order-v2\nnext-sequence 1\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 0\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 01\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 0\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 03\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 3\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 4\ngeneration 00000000000000000000000000000001 2\ngeneration 00000000000000000000000000000002 2\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 4\ngeneration 00000000000000000000000000000002 2\ngeneration 00000000000000000000000000000001 3\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 4\ngeneration 00000000000000000000000000000001 2 extra\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 4\n\n",
+            b"\xff\n",
+        ] {
+            assert!(
+                PublicationOrder::parse(malformed).is_err(),
+                "accepted malformed publication order: {malformed:?}"
+            );
+        }
     }
 
     #[test]
