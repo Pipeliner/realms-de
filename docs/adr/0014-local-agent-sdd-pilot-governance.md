@@ -15,16 +15,19 @@ add a background service to the MVP.
 
 ## Decision
 
-1. Plan a **local, Git-tracked, metadata-only** pilot under
+1. Adopt a **local, Git-tracked, metadata-only** pilot under
    `.agent/work/<github-issue>/`. It covers only `probe → spike → prototype`;
-   it makes no candidate or production claim. The pilot is not implemented
-   until #120 supplies the validator and its fixtures.
-2. Records use the TOML checkpoint and append-only JSONL evidence schemas in
-   [SPEC 0008](../specs/0008-agent-sdd-pilot-governance.md). They describe
-   task state/evidence, never normative requirements or current source files.
-3. Promotion is **report-only**. A future local validator may report met or
-   missing obligations, but never edits maturity, docs, GitHub, memory, or
-   approval metadata.
+   it makes no candidate or production claim. #120 supplies its validator and
+   fixtures.
+2. Records use the TOML checkpoint and refreshable current-snapshot JSONL
+   evidence schemas in [SPEC 0008](../specs/0008-agent-sdd-pilot-governance.md).
+   The current snapshot is replaced only with deliberately recaptured evidence
+   at its new carrier parent; prior snapshots remain in ordinary Git history.
+   Records describe task state/evidence, never normative requirements or
+   current source files.
+3. Promotion is **report-only**. The local validator may report met or missing
+   obligations, but never edits maturity, docs, GitHub, memory, or approval
+   metadata.
 4. Do not add a daemon, scheduler, lifecycle hook, passive transcript/tool
    capture, cloud service, embeddings/vector retrieval, external database,
    OpenSpec, Sphinx-Needs, Serena, or CI change. Beads stays untouched. Basic
@@ -42,10 +45,10 @@ add a background service to the MVP.
 
 ### Good
 
-- If #120 implements and verifies this contract, a fresh agent can recover
-  verified task context without trusting stale source snapshots or model
-  summaries as current truth.
-- The planned records are reviewable in ordinary Git history with deliberately
+- The implemented and verified contract lets a fresh agent recover task
+  context without trusting stale source snapshots or model summaries as
+  current truth.
+- The records are reviewable in ordinary Git history with deliberately
   constrained metadata fields. Git history and existing clones retain prior
   content: deleting a record stops future use but does not reliably erase it.
 - #120 has a deterministic, network-free and service-free validator contract.
@@ -74,10 +77,10 @@ commands, IDs and Git revisions cannot cover.
 
 ## Guard
 
-*Planned (#120):* read-only `helm-sdd gate` and `helm-sdd promote --dry-run`
-fixtures reject malformed records, raw-output-like fields,
-stale evidence and every transition beyond report-only pilot scope. Until then,
-review of this spec is the guard; no tool claims to enforce it yet.
+*Implemented (#120):* read-only `helm-sdd gate` and
+`helm-sdd promote --dry-run` fixtures reject malformed records,
+raw-output-like fields, stale evidence and every transition beyond report-only
+pilot scope.
 
 ## Needs a human
 
