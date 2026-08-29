@@ -141,11 +141,10 @@ on a machine that is not the author's.
   `homeManagerModules.helm`, plus tracked native Debian and Fedora definitions
   with planned consistency checks for overlapping metadata. A NixOS VM test
   that boots the session and asserts the bar appears.
-- A **vendored, pinned river 0.4.x** in every package. Ubuntu and Fedora ship
-  river 0.3.x or river-classic, neither of which speaks the window-management
-  protocol. Vendoring puts Zig in the packaging pipeline only, never in helm's
-  own workspace — and it is an
-  [open `needs-human` question](../README.md#needs-a-human).
+- River `>= 0.4.0` from target-specific packaging. Fedora 44's official native
+  package is the Fedora candidate, but no Helm session has tested that pairing.
+  Ubuntu and Nix retain their independent source and pinning obligations under
+  ADR 0010/0013; Fedora package availability does not settle those choices.
 - `helm ctl doctor`: checks the environment handshake, the portal backend, the
   cursor theme, the font stack and the socket, and says what is wrong in plain
   words before the user has to file a bug.

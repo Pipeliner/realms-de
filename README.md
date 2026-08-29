@@ -52,10 +52,12 @@
   [ADR 0007](docs/adr/0007-reuse-yazi-btop-starship.md) ·
   [ADR 0013](docs/adr/0013-river-window-management-backend.md)
 
-- **Three distributions, all first-class.** NixOS, Ubuntu and Fedora are tested
-  in CI from the outset. The Nix flake is the reference build; the `.deb` and
-  `.rpm` use tracked native definitions under `packaging/`; a mechanical
-  consistency check guards their shared contract. [ADR 0010](docs/adr/0010-nix-flake-as-reference-build.md)
+- **Three intended M3 targets, evidence kept honest.** NixOS, Ubuntu and Fedora
+  remain the installation targets. Today Fedora 44 is the sole Fedora
+  pre-alpha baseline, and its required lane is a **Cargo smoke only** against a
+  pinned base/current packages image; the tracked RPM is still a skeleton and
+  no Fedora graphical session or SELinux acceptance has run.
+  [ADR 0015](docs/adr/0015-fedora-44-pre-alpha-baseline.md)
 
 Behaviour is written down before it is written in Rust: every non-trivial
 component gets a spec in [`docs/specs/`](docs/specs/), and its happy-path tests
@@ -152,7 +154,7 @@ label.
 
 | Question | Why it needs a person | The options, as we see them |
 |---|---|---|
-| **`river-window-management-v1` is an unstable protocol, and no distribution ships a river that speaks it.** river 0.4 is what makes helm's ledger drive real pixels at M2. Ubuntu and Fedora ship river 0.3.x or river-classic. Do we vendor and pin a river 0.4.x in all three packages, and accept a protocol bump as a tracked event? | It is a maintenance commitment, not a technical question: someone has to own a vendored compositor and re-test it on every bump. river's maintainer pledges "we do not break window managers"; the registry still says *unstable*. Both are true. See [ADR 0013](docs/adr/0013-river-window-management-backend.md). | (a) vendor a pinned river 0.4.x in every package and track bumps; (b) wait for distributions to catch up and delay M2; (c) bring `helm-compositor` forward and pay for it with a year. |
+| **Which River source and compatibility policy should Ubuntu and Nix use?** Fedora 44 now has an official `river >= 0.4.0` packaging candidate, but that availability is not a tested Helm session. Ubuntu and Nix retain their independent source and pinning obligations. | It is a maintenance commitment, not a technical question: someone must own each non-Fedora source and re-test compatibility on every bump. See [ADR 0013](docs/adr/0013-river-window-management-backend.md) and [ADR 0015](docs/adr/0015-fedora-44-pre-alpha-baseline.md). | (a) use target-native packages where the accepted protocol floor is available; (b) pin a River source per affected target; (c) bring `helm-compositor` forward and pay for it with a year. |
 | **Which lock screen ships, and what are the idle defaults?** A desktop that does not lock on lid-close is not daily-drivable, and blank/lock timeouts are user-visible security defaults. | Choosing a lock screen is choosing a security posture, and the repository should not pick one silently. See [ADR 0011](docs/adr/0011-session-integration-contract.md). | (a) `gtklock` — `ext-session-lock-v1` is the property that matters; (b) `swaylock-effects` themed from `palette.toml`; (c) write `helm-ward` later and use a stopgap until then. Timeouts: not to be guessed. |
 | **Where do distro packages live, and who holds the signing key?** The tracked native `.deb` and `.rpm` package paths still need a distribution channel and signed artefacts. | Needs an account, a key and a person willing to hold it. Nothing in the repository can decide this. See [ADR 0010](docs/adr/0010-nix-flake-as-reference-build.md). | (a) GitHub Releases only, install by download; (b) a self-hosted apt repo plus a Copr; (c) an OBS project covering both. |
 | **Font licensing for the Nerd Font fallback.** helm's glyph inventory — runes, planetary and alchemical symbols — needs a symbol font present at first boot, and the packages must be able to redistribute it. | A licence call. Redistribution terms differ per family, and getting it wrong is a legal problem, not a bug. See [ADR 0012](docs/adr/0012-font-fallback-is-a-contract.md). | (a) depend on distribution packages and refuse to vendor; (b) vendor Symbols Nerd Font Mono where its licence permits; (c) ship only the ASCII fallbacks and let the user install a symbol font. |

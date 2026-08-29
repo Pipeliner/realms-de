@@ -17,21 +17,21 @@
 > Every section below has a **What this actually installs today** block that says
 > exactly what you get and what you do not.
 
-helm targets three platforms as first-class, tested in CI
-([ARCHITECTURE.md §5](ARCHITECTURE.md)):
+helm intends to support three M3 platforms, but today's evidence differs by
+target ([ARCHITECTURE.md §5](ARCHITECTURE.md)):
 
 | Platform | Delivery | State today |
 |---|---|---|
 | NixOS / Nix | flake: `packages.default`, `nixosModules.helm`, `homeManagerModules.helm` | Reference build. Evaluates; VM test asserts the contract, not the desktop |
 | Ubuntu 24.04 LTS + | `.deb` from `packaging/debian/` | Builds; three runtime dependencies are not in the Ubuntu archive (below) |
-| Fedora 41 + | `.rpm` from `packaging/fedora/helm.spec` | Builds; the vendored river is not written yet |
+| Fedora 44 (pre-alpha) | RPM skeleton at `packaging/fedora/helm.spec` | Cargo smoke only, using a pinned base/current packages image; the RPM and graphical session are unverified |
 
 Anything else is best-effort. The flake is the definition; the deb and the rpm
 follow from the same tree.
 
 ---
 
-## The compositor: a vendored river 0.4.x
+## The compositor: River 0.4 protocol, target-specific sources
 
 helm does not ship its own compositor yet. It runs on **river 0.4.x** and *is*
 river's window manager, driving it over `river-window-management-v1` (ADR 0013).
@@ -46,8 +46,9 @@ Two consequences you will meet immediately:
 - **`river-window-management-v1` is declared *stable* as of river 0.4.0**, with
   a forward-compatibility pledge to 1.0.0. The residual risk is not a protocol
   classification but trust in a single maintainer of a pre-1.0 project. helm
-  pins a tested river and treats a version bump as an event to re-verify, not a
-  surprise to absorb.
+  treats a version bump as an event to re-verify, not a surprise to absorb.
+  Fedora 44 has an official `river >= 0.4.0` package candidate; package
+  availability alone does not prove Helm runtime compatibility.
 
 
 
@@ -160,7 +161,7 @@ against noble's package lists):
 
 | Missing | Effect | What to do |
 |---|---|---|
-| `river` (any version) | No compositor — helm cannot start | Build the vendored `helm-river`, when it exists |
+| `river` (any version) | No compositor — helm cannot start | Ubuntu only: provide a River `>= 0.4.0` package; its source is unresolved |
 | `yazi` | charon (files) is missing | `cargo install --locked yazi-fm yazi-cli`, or a newer Ubuntu |
 | `starship` | thoth's prompt falls back to plain zsh | `cargo install --locked starship` |
 
@@ -182,10 +183,12 @@ build log while they do not.
 
 ---
 
-## Fedora 41 and newer
+## Fedora 44 (pre-alpha)
 
-No repository yet (`NEEDS-HUMAN` in the spec: COPR, dist-git, or release
-tarballs). Build it yourself:
+There is no Helm Fedora repository. The tracked RPM is a pre-alpha skeleton and
+does not install a working desktop; its only current Fedora evidence is the
+Fedora 44 Cargo-smoke lane. The RPM has not been built or installed as
+acceptance evidence. To investigate the skeleton locally:
 
 ```sh
 sudo dnf install rpm-build rust cargo systemd-rpm-macros
@@ -430,7 +433,7 @@ None of them block building from source today.
 
 | Decision | Where | Options |
 |---|---|---|
-| How a pinned river is vendored for deb/rpm | `packaging/debian/rules`, `packaging/fedora/helm.spec` | Build from the upstream tag with zig 0.16 + wlroots 0.20; package an upstream binary; require a PPA/COPR; raise the minimum distro version |
+| How a River 0.4-compatible source is provided for the deb | `packaging/debian/rules` | Build from an upstream tag; package an upstream binary; require a PPA; raise the minimum Ubuntu version |
 | Package hosting | `packaging/debian/control`, spec | PPA / self-hosted apt / GitHub Releases; COPR / dist-git / release tarballs |
 | Maintainer identity | `packaging/debian/control`, `changelog`, spec | List address, `maintainers@` alias, or a named person. The current address uses the reserved `.invalid` domain so it cannot deliver anywhere |
 | `helm` binary name on Fedora | `packaging/fedora/helm.spec` | `helm-ctl`; rename the package to `helm-de`; confirm no collision with Kubernetes helm |
