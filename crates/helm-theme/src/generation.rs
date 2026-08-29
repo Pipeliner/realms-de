@@ -66,6 +66,28 @@ pub struct GenerationStore {
     intra_process_lock: Mutex<()>,
 }
 
+/// Existing generation controls opened without creating or repairing state.
+///
+/// This capability is intentionally narrower than [`GenerationStore`]: the
+/// supported theme diff can take the shared activation lock and compare a
+/// validated current generation, but cannot reach any writer, recovery, lease,
+/// or garbage-collection operation.
+#[derive(Debug)]
+pub(crate) struct GenerationReader {
+    root: GenerationRoot,
+    generations: GenerationRoot,
+    lock: OwnedFd,
+    intra_process_lock: Mutex<()>,
+}
+
+/// How one normalized candidate output differs from the current generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutputDifference {
+    Added,
+    Removed,
+    ByteDifferent,
+}
+
 /// One launcher selection pinned to a validated generation by an on-disk lease.
 #[derive(Debug)]
 pub struct GenerationSelection {
@@ -108,11 +130,11 @@ enum LeaseLiveness {
     Uncertain,
 }
 
-/// An exclusive generation-store operation lock.
+/// One advisory generation-operation lock plus its same-object mutex guard.
 #[derive(Debug)]
-struct GenerationStoreLock<'store> {
-    store: &'store GenerationStore,
-    _intra_process: MutexGuard<'store, ()>,
+struct GenerationOperationLock<'operation> {
+    lock: &'operation OwnedFd,
+    _intra_process: MutexGuard<'operation, ()>,
 }
 
 #[derive(Debug)]
@@ -346,6 +368,169 @@ impl GenerationPublication {
             outputs,
         })
     }
+
+    pub(crate) fn outputs(&self) -> &[(String, Vec<u8>)] {
+        &self.outputs
+    }
+}
+
+impl GenerationReader {
+    /// Open every pre-existing control needed by diff without initializing any
+    /// missing inode or parsing publication order, which selection ignores.
+    pub(crate) fn open_from_fd(fd: OwnedFd) -> std::result::Result<Self, String> {
+        let root = GenerationRoot { fd };
+        let current_uid = rustix::process::getuid().as_raw();
+        let root_stat = rustix::fs::fstat(&root.fd).map_err(|error| error.to_string())?;
+        validate_owned_mode(
+            "generated root",
+            &root_stat,
+            FileType::Directory,
+            0o700,
+            current_uid,
+        )?;
+
+        let lock = openat(
+            &root.fd,
+            "activation.lock",
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| format!("activation lock: {error}"))?;
+        let lock_stat = rustix::fs::fstat(&lock).map_err(|error| error.to_string())?;
+        validate_owned_mode(
+            "activation lock",
+            &lock_stat,
+            FileType::RegularFile,
+            0o600,
+            current_uid,
+        )?;
+
+        let directory_flags =
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let generations = GenerationRoot {
+            fd: openat(&root.fd, "generations", directory_flags, Mode::empty())
+                .map_err(|error| format!("generations directory: {error}"))?,
+        };
+        let generations_stat =
+            rustix::fs::fstat(&generations.fd).map_err(|error| error.to_string())?;
+        validate_owned_mode(
+            "generations directory",
+            &generations_stat,
+            FileType::Directory,
+            0o700,
+            current_uid,
+        )?;
+
+        Ok(Self {
+            root,
+            generations,
+            lock,
+            intra_process_lock: Mutex::new(()),
+        })
+    }
+
+    fn lock_shared(&self) -> std::result::Result<GenerationOperationLock<'_>, String> {
+        let intra_process = self
+            .intra_process_lock
+            .lock()
+            .map_err(|_| "generation reader lock is poisoned")?;
+        flock(&self.lock, FlockOperation::LockShared).map_err(|error| error.to_string())?;
+        Ok(GenerationOperationLock {
+            lock: &self.lock,
+            _intra_process: intra_process,
+        })
+    }
+
+    /// Fully validate current and compare exact output bytes while the shared
+    /// activation lock remains held.
+    pub(crate) fn diff_current(
+        &self,
+        candidate: &[(String, Vec<u8>)],
+    ) -> std::result::Result<Vec<(String, OutputDifference)>, String> {
+        self.diff_current_inner(candidate, || {}, |_| {}, || {})
+    }
+
+    #[cfg(test)]
+    fn diff_current_with_interval_checkpoints<L, R, C>(
+        &self,
+        candidate: &[(String, Vec<u8>)],
+        lock_acquired: L,
+        before_output_read: R,
+        result_constructed: C,
+    ) -> std::result::Result<Vec<(String, OutputDifference)>, String>
+    where
+        L: FnOnce(),
+        R: FnMut(&str),
+        C: FnOnce(),
+    {
+        self.diff_current_inner(
+            candidate,
+            lock_acquired,
+            before_output_read,
+            result_constructed,
+        )
+    }
+
+    fn diff_current_inner<L, R, C>(
+        &self,
+        candidate: &[(String, Vec<u8>)],
+        lock_acquired: L,
+        mut before_output_read: R,
+        result_constructed: C,
+    ) -> std::result::Result<Vec<(String, OutputDifference)>, String>
+    where
+        L: FnOnce(),
+        R: FnMut(&str),
+        C: FnOnce(),
+    {
+        let _lock = self.lock_shared()?;
+        lock_acquired();
+        let inventory =
+            GenerationStore::inspect_pointer_journals_from(&self.root, &self.generations)?;
+        let generation = match inventory.state {
+            PointerJournalState::Clean | PointerJournalState::CleanupCommitted { .. } => inventory
+                .current
+                .ok_or_else(|| "current generation is absent".to_owned()),
+            _ => Err("pointer transaction requires exclusive recovery".into()),
+        }?;
+        let (current_root, manifest) =
+            GenerationStore::open_validated_generation_with_manifest_from(
+                &self.generations,
+                &generation,
+            )?;
+
+        let candidate: BTreeMap<&str, &[u8]> = candidate
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+            .collect();
+        let current: BTreeMap<&str, Vec<u8>> = manifest
+            .entries
+            .iter()
+            .map(|(path, _)| {
+                before_output_read(path);
+                let bytes = read_regular_bytes(&current_root, Path::new(path))?;
+                Ok::<_, String>((path.as_str(), bytes))
+            })
+            .collect::<std::result::Result<_, _>>()?;
+        let paths: BTreeSet<&str> = candidate.keys().chain(current.keys()).copied().collect();
+        let mut changes = Vec::new();
+        for path in paths {
+            let difference = match (candidate.get(path), current.get(path)) {
+                (Some(_), None) => Some(OutputDifference::Added),
+                (None, Some(_)) => Some(OutputDifference::Removed),
+                (Some(candidate), Some(current)) if *candidate != current.as_slice() => {
+                    Some(OutputDifference::ByteDifferent)
+                }
+                (Some(_), Some(_)) => None,
+                (None, None) => unreachable!("path came from the map union"),
+            };
+            if let Some(difference) = difference {
+                changes.push((path.to_owned(), difference));
+            }
+        }
+        result_constructed();
+        Ok(changes)
+    }
 }
 
 impl GenerationStore {
@@ -555,26 +740,26 @@ impl GenerationStore {
         })
     }
 
-    fn lock_exclusive(&self) -> std::result::Result<GenerationStoreLock<'_>, String> {
+    fn lock_exclusive(&self) -> std::result::Result<GenerationOperationLock<'_>, String> {
         let intra_process = self
             .intra_process_lock
             .lock()
             .map_err(|_| "generation store lock is poisoned")?;
         flock(&self.lock, FlockOperation::LockExclusive).map_err(|error| error.to_string())?;
-        Ok(GenerationStoreLock {
-            store: self,
+        Ok(GenerationOperationLock {
+            lock: &self.lock,
             _intra_process: intra_process,
         })
     }
 
-    fn lock_shared(&self) -> std::result::Result<GenerationStoreLock<'_>, String> {
+    fn lock_shared(&self) -> std::result::Result<GenerationOperationLock<'_>, String> {
         let intra_process = self
             .intra_process_lock
             .lock()
             .map_err(|_| "generation store lock is poisoned")?;
         flock(&self.lock, FlockOperation::LockShared).map_err(|error| error.to_string())?;
-        Ok(GenerationStoreLock {
-            store: self,
+        Ok(GenerationOperationLock {
+            lock: &self.lock,
             _intra_process: intra_process,
         })
     }
@@ -1210,7 +1395,7 @@ impl GenerationStore {
             return Ok(GenerationPublicationOutcome::OutcomeAmbiguous {
                 candidate: generation,
                 cause: format!(
-                    "activation is durable but commit-marker transition failed: {cause}"
+                    "commit-marker transition failed after pointer update; outcome is unconfirmed: {cause}"
                 ),
             });
         }
@@ -1278,7 +1463,9 @@ impl GenerationStore {
         {
             return Ok(GenerationPublicationOutcome::OutcomeAmbiguous {
                 candidate: generation,
-                cause: format!("rollback is durable but commit-marker transition failed: {cause}"),
+                cause: format!(
+                    "commit-marker transition failed after pointer update; outcome is unconfirmed: {cause}"
+                ),
             });
         }
         if let Err(cause) = filesystem
@@ -1323,24 +1510,46 @@ impl GenerationStore {
     }
 
     fn validate_generation(&self, generation: &GenerationId) -> std::result::Result<(), String> {
-        self.open_validated_generation(generation).map(|_| ())
+        Self::validate_generation_from(&self.generations, generation)
+    }
+
+    fn validate_generation_from(
+        generations: &GenerationRoot,
+        generation: &GenerationId,
+    ) -> std::result::Result<(), String> {
+        Self::open_validated_generation_with_manifest_from(generations, generation).map(|_| ())
     }
 
     fn open_validated_generation(
         &self,
         generation: &GenerationId,
     ) -> std::result::Result<GenerationRoot, String> {
+        self.open_validated_generation_with_manifest(generation)
+            .map(|(root, _)| root)
+    }
+
+    fn open_validated_generation_with_manifest(
+        &self,
+        generation: &GenerationId,
+    ) -> std::result::Result<(GenerationRoot, Manifest), String> {
+        Self::open_validated_generation_with_manifest_from(&self.generations, generation)
+    }
+
+    fn open_validated_generation_with_manifest_from(
+        generations: &GenerationRoot,
+        generation: &GenerationId,
+    ) -> std::result::Result<(GenerationRoot, Manifest), String> {
         let generation_root = GenerationRoot {
             fd: openat(
-                &self.generations.fd,
+                &generations.fd,
                 generation.as_str(),
                 OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::empty(),
             )
             .map_err(|error| error.to_string())?,
         };
-        verify_opened_generation(&generation_root, generation)?;
-        Ok(generation_root)
+        let manifest = verify_opened_generation(&generation_root, generation)?;
+        Ok((generation_root, manifest))
     }
 
     fn clean_staging(&self) -> std::result::Result<(), String> {
@@ -1419,10 +1628,17 @@ impl GenerationStore {
     }
 
     fn inspect_pointer_journals(&self) -> std::result::Result<PointerJournalInventory, String> {
+        Self::inspect_pointer_journals_from(&self.root, &self.generations)
+    }
+
+    fn inspect_pointer_journals_from(
+        root: &GenerationRoot,
+        generations: &GenerationRoot,
+    ) -> std::result::Result<PointerJournalInventory, String> {
         let mut current_journals = Vec::new();
         let mut absent_journals = Vec::new();
         let mut committed_journals = Vec::new();
-        let mut directory = Dir::read_from(&self.root.fd).map_err(|error| error.to_string())?;
+        let mut directory = Dir::read_from(&root.fd).map_err(|error| error.to_string())?;
         while let Some(entry) = directory.read() {
             let entry = entry.map_err(|error| error.to_string())?;
             let bytes = entry.file_name().to_bytes();
@@ -1433,7 +1649,7 @@ impl GenerationStore {
                     name.strip_prefix(".current-")
                         .expect("byte prefix was checked"),
                 )?;
-                let record = read_optional_regular_bytes(&self.root, Path::new(name))?
+                let record = read_optional_regular_bytes(root, Path::new(name))?
                     .ok_or("current journal disappeared during inventory")?;
                 current_journals.push(PointerJournalEntry {
                     name: name.to_owned(),
@@ -1447,7 +1663,7 @@ impl GenerationStore {
                     name.strip_prefix(".absent-")
                         .expect("byte prefix was checked"),
                 )?;
-                let record = read_optional_regular_bytes(&self.root, Path::new(name))?
+                let record = read_optional_regular_bytes(root, Path::new(name))?
                     .ok_or("absent journal disappeared during inventory")?;
                 if !record.is_empty() {
                     return Err("absent-pointer marker is malformed".into());
@@ -1464,7 +1680,7 @@ impl GenerationStore {
                     name.strip_prefix(".committed-")
                         .expect("byte prefix was checked"),
                 )?;
-                let record = read_optional_regular_bytes(&self.root, Path::new(name))?
+                let record = read_optional_regular_bytes(root, Path::new(name))?
                     .ok_or("committed journal disappeared during inventory")?;
                 let content = if record.is_empty() {
                     None
@@ -1480,11 +1696,11 @@ impl GenerationStore {
         }
         drop(directory);
 
-        let current = read_optional_regular_bytes(&self.root, Path::new("current"))?
+        let current = read_optional_regular_bytes(root, Path::new("current"))?
             .map(|bytes| parse_pointer_record(&bytes, "current"))
             .transpose()?;
         if let Some(current) = &current {
-            self.validate_generation(current)?;
+            Self::validate_generation_from(generations, current)?;
         }
         let state = match (
             current_journals.len(),
@@ -1503,11 +1719,11 @@ impl GenerationStore {
                     staged == &journal.suffix,
                 ) {
                     (false, true) => {
-                        self.validate_generation(&journal.suffix)?;
+                        Self::validate_generation_from(generations, &journal.suffix)?;
                         PointerJournalState::DiscardCurrent { name: journal.name }
                     }
                     (true, false) => {
-                        self.validate_generation(staged)?;
+                        Self::validate_generation_from(generations, staged)?;
                         PointerJournalState::RollbackCurrent { name: journal.name }
                     }
                     _ => return Err("current journal is inconsistent with current".into()),
@@ -1518,7 +1734,7 @@ impl GenerationStore {
                 if current.as_ref() != Some(&journal.suffix) {
                     return Err("absent journal is inconsistent with current".into());
                 }
-                self.validate_generation(&journal.suffix)?;
+                Self::validate_generation_from(generations, &journal.suffix)?;
                 PointerJournalState::RollbackAbsent { name: journal.name }
             }
             (1, 1, 0) => {
@@ -1530,7 +1746,7 @@ impl GenerationStore {
                 {
                     return Err("pristine pointer journals are inconsistent".into());
                 }
-                self.validate_generation(&current_journal.suffix)?;
+                Self::validate_generation_from(generations, &current_journal.suffix)?;
                 PointerJournalState::DiscardPristine {
                     current_name: current_journal.name,
                     absent_name: absent_journal.name,
@@ -1543,9 +1759,9 @@ impl GenerationStore {
                 {
                     return Err("committed journal is inconsistent with current".into());
                 }
-                self.validate_generation(&journal.suffix)?;
+                Self::validate_generation_from(generations, &journal.suffix)?;
                 if let Some(previous) = &journal.content {
-                    self.validate_generation(previous)?;
+                    Self::validate_generation_from(generations, previous)?;
                 }
                 PointerJournalState::CleanupCommitted {
                     name: journal.name,
@@ -1559,9 +1775,9 @@ impl GenerationStore {
     }
 }
 
-impl Drop for GenerationStoreLock<'_> {
+impl Drop for GenerationOperationLock<'_> {
     fn drop(&mut self) {
-        let _ = flock(&self.store.lock, FlockOperation::Unlock);
+        let _ = flock(self.lock, FlockOperation::Unlock);
     }
 }
 
@@ -2249,10 +2465,12 @@ fn verify_v1_metadata(
 fn verify_opened_generation(
     root: &GenerationRoot,
     generation: &GenerationId,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<Manifest, String> {
     let bytes = read_regular_bytes(root, Path::new("manifest"))?;
     let text = std::str::from_utf8(&bytes).map_err(|_| "manifest is not UTF-8")?;
-    Manifest::parse(text)?.verify_opened(root, generation)
+    let manifest = Manifest::parse(text)?;
+    manifest.verify_opened(root, generation)?;
+    Ok(manifest)
 }
 
 fn read_regular_bytes(
@@ -2661,6 +2879,23 @@ mod tests {
         .unwrap()
     }
 
+    fn publication_with_outputs(marker: &str, outputs: &[(&str, &str)]) -> GenerationPublication {
+        GenerationPublication::new(
+            [
+                digest(format!("{marker}-palette").as_bytes()),
+                digest(format!("{marker}-catalogue").as_bytes()),
+                digest(format!("{marker}-templates").as_bytes()),
+                digest(format!("{marker}-renderer").as_bytes()),
+                digest(format!("{marker}-launch-profile").as_bytes()),
+            ],
+            outputs
+                .iter()
+                .map(|(path, bytes)| ((*path).into(), bytes.as_bytes().to_vec()))
+                .collect(),
+        )
+        .unwrap()
+    }
+
     fn publish_at<C, H>(
         store: &GenerationStore,
         generation: &str,
@@ -2852,6 +3087,89 @@ mod tests {
             |_| Ok(()),
         )
         .is_ok());
+    }
+
+    #[test]
+    fn generation_diff_holds_shared_lock_through_validation_and_comparison() {
+        fn assert_writer_is_blocked(lock: &OwnedFd) {
+            let exclusive_attempt = flock(lock, FlockOperation::NonBlockingLockExclusive);
+            if exclusive_attempt.is_ok() {
+                flock(lock, FlockOperation::Unlock).unwrap();
+            }
+            assert_eq!(exclusive_attempt.unwrap_err(), Errno::WOULDBLOCK);
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let publishing_store = seeded_store(root.path());
+        publish_at(
+            &publishing_store,
+            "00000000000000000000000000000002",
+            || {
+                Ok(publication_with_outputs(
+                    "current",
+                    &[("a.ini", "old-a"), ("z.ini", "old-z")],
+                ))
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+        let reader_root = GenerationRoot::open(root.path()).unwrap();
+        let reader = GenerationReader::open_from_fd(reader_root.fd).unwrap();
+        let candidate =
+            publication_with_outputs("candidate", &[("a.ini", "new-a"), ("c.ini", "added")]);
+        let observed = std::cell::RefCell::new(Vec::new());
+        let old_comparison = reader
+            .diff_current_with_interval_checkpoints(
+                candidate.outputs(),
+                || {
+                    observed.borrow_mut().push(String::from("locked"));
+                    assert_writer_is_blocked(&publishing_store.lock);
+                },
+                |path| {
+                    observed.borrow_mut().push(format!("read:{path}"));
+                    assert_writer_is_blocked(&publishing_store.lock);
+                },
+                || {
+                    observed.borrow_mut().push(String::from("result"));
+                    assert_writer_is_blocked(&publishing_store.lock);
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            observed.into_inner(),
+            vec!["locked", "read:a.ini", "read:z.ini", "result"]
+        );
+        assert_eq!(
+            old_comparison,
+            vec![
+                (String::from("a.ini"), OutputDifference::ByteDifferent),
+                (String::from("c.ini"), OutputDifference::Added),
+                (String::from("z.ini"), OutputDifference::Removed),
+            ]
+        );
+        flock(
+            &publishing_store.lock,
+            FlockOperation::NonBlockingLockExclusive,
+        )
+        .unwrap();
+        flock(&publishing_store.lock, FlockOperation::Unlock).unwrap();
+
+        publish_at(
+            &publishing_store,
+            "00000000000000000000000000000003",
+            || {
+                Ok(publication_with_outputs(
+                    "candidate",
+                    &[("a.ini", "new-a"), ("c.ini", "added")],
+                ))
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+        let candidate =
+            publication_with_outputs("candidate", &[("a.ini", "new-a"), ("c.ini", "added")]);
+        assert!(reader.diff_current(candidate.outputs()).unwrap().is_empty());
     }
 
     #[test]
@@ -4909,6 +5227,102 @@ mod tests {
         ));
         assert_eq!(store.select_current().unwrap().as_str(), candidate);
         assert_eq!(store.recover().unwrap().as_str(), candidate);
+    }
+
+    fn assert_unconfirmed_ambiguous_outcome(
+        outcome: GenerationPublicationOutcome,
+        candidate: &str,
+    ) {
+        let GenerationPublicationOutcome::OutcomeAmbiguous {
+            candidate: actual,
+            cause,
+        } = outcome
+        else {
+            panic!("expected an ambiguous outcome, got {outcome:?}");
+        };
+        assert_eq!(actual.as_str(), candidate);
+        let cause = cause.to_ascii_lowercase();
+        for success_claim in [
+            "activated",
+            "selected",
+            "active",
+            "current",
+            "applied",
+            "durable",
+            "successful",
+            "succeeded",
+        ] {
+            assert!(
+                !cause.contains(success_claim),
+                "ambiguous cause made a success-like claim `{success_claim}`: {cause}"
+            );
+        }
+        assert!(
+            cause.contains("unconfirmed"),
+            "ambiguous cause did not describe the outcome as unconfirmed: {cause}"
+        );
+        assert!(
+            cause.contains("injected generated-root fsync failure"),
+            "ambiguous cause omitted the filesystem failure: {cause}"
+        );
+    }
+
+    #[test]
+    fn ambiguous_publication_marker_failure_never_claims_activation_success() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let candidate = "00000000000000000000000000000002";
+        let mut filesystem = FailOnceOnRootSyncFilesystem {
+            root: root.path().into(),
+            fail_on: 5,
+            root_syncs: 0,
+            failed: false,
+            fail_unlink: false,
+        };
+
+        let outcome = store
+            .publish_with_checkpoint_ids_and_filesystem(
+                || Ok(publication(candidate, "candidate")),
+                |_| Ok(()),
+                || GenerationId::parse(candidate),
+                &mut filesystem,
+            )
+            .unwrap();
+
+        assert!(filesystem.failed, "test did not reach the injected failure");
+        assert_unconfirmed_ambiguous_outcome(outcome, candidate);
+    }
+
+    #[test]
+    fn ambiguous_rollback_marker_failure_never_claims_rollback_success() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let current = "00000000000000000000000000000002";
+        publish_at(
+            &store,
+            current,
+            || Ok(publication(current, "current")),
+            |_| Ok(()),
+        )
+        .unwrap();
+        let candidate = "00000000000000000000000000000001";
+        let mut filesystem = FailOnceOnRootSyncFilesystem {
+            root: root.path().into(),
+            fail_on: 3,
+            root_syncs: 0,
+            failed: false,
+            fail_unlink: false,
+        };
+
+        let outcome = store
+            .commit_existing_pointer_locked(
+                GenerationId::parse(candidate).unwrap(),
+                &mut filesystem,
+            )
+            .unwrap();
+
+        assert!(filesystem.failed, "test did not reach the injected failure");
+        assert_unconfirmed_ambiguous_outcome(outcome, candidate);
     }
 
     #[test]

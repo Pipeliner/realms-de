@@ -10,16 +10,13 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::ffi::OsStr;
 use std::ffi::OsString;
-use std::io::Read;
-#[cfg(test)]
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 #[cfg(test)]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use helm_core::palette::Finding;
 use helm_core::Palette;
@@ -29,7 +26,10 @@ use rustix::fs::{renameat, unlinkat, AtFlags, CWD};
 use rustix::io::Errno;
 use sha2::{Digest, Sha256};
 
-use crate::generation::{GenerationPublication, GenerationPublicationOutcome, GenerationStore};
+use crate::generation::{
+    GenerationPublication, GenerationPublicationOutcome, GenerationReader, GenerationStore,
+    OutputDifference,
+};
 use crate::render::render_derived;
 #[cfg(test)]
 use crate::Reloader;
@@ -79,6 +79,7 @@ struct StagedOutput {
 /// `GenerationPublicationOutcome`; written/unchanged/reloaded compatibility is
 /// not promised.
 #[derive(Debug)]
+#[cfg(test)]
 pub struct Applied {
     /// Legacy mutable files whose contents changed and were renamed into place.
     pub written: Vec<PathBuf>,
@@ -90,9 +91,12 @@ pub struct Applied {
     pub elapsed: Duration,
 }
 
-/// Immutable theme inputs captured while a generation-store publication lock is
-/// held.  The raw bytes, rather than a serialised [`Palette`], are what the
-/// generation receipt commits to.
+/// Immutable theme inputs used by generation apply and diff.
+///
+/// Apply captures this snapshot while holding the exclusive publication lock;
+/// diff captures and renders it before taking the shared lock used to validate
+/// and compare current. The raw bytes, rather than a serialised [`Palette`],
+/// are what a published generation receipt commits to.
 #[derive(Debug)]
 pub struct ThemeSnapshot {
     palette: Vec<u8>,
@@ -151,18 +155,24 @@ impl ThemeSnapshot {
     }
 }
 
-/// One result from the legacy mutable-target diff.
-///
-/// This does not describe the supported generation-aware diff, whose result is
-/// a sorted added/removed/byte-different normalized output path.
+/// One result from the test-only legacy mutable-target diff.
 #[derive(Debug)]
-pub struct Change {
-    /// Template id.
-    pub id: &'static str,
-    /// Absolute legacy mutable target path.
-    pub target: PathBuf,
+#[cfg(test)]
+struct LegacyChange {
     /// True when rendered bytes differ from that legacy mutable target.
     pub changed: bool,
+}
+
+/// A difference between candidate normalized outputs and the fully validated
+/// generation selected by `current`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThemeOutputChange {
+    /// The candidate contains this path and current does not.
+    Added(PathBuf),
+    /// Current contains this path and the candidate does not.
+    Removed(PathBuf),
+    /// Both contain this path, but their exact bytes differ.
+    ByteDifferent(PathBuf),
 }
 
 /// Hue distance between two accents, in OKLab degrees.
@@ -259,7 +269,7 @@ pub fn apply(root: &Path) -> Result<GenerationPublicationOutcome> {
         .map_err(|error| Error::Generation(error.to_string()))?;
     apply_with_inner(config, || {
         ThemeSnapshot::new(
-            read_raw_palette(&input_root)?,
+            read_or_seed_raw_palette(&input_root)?,
             built_in_launch_profile().to_vec(),
             BTreeMap::new(),
             templates(),
@@ -292,6 +302,57 @@ where
                 .map_err(|error| error.to_string())
         })
         .map_err(|error| Error::Generation(error.to_string()))
+}
+
+/// Compare the built-in candidate inputs with the fully validated current
+/// generation without initializing or mutating generation state.
+pub fn diff(root: &Path) -> Result<Vec<ThemeOutputChange>> {
+    let config = ConfigRoot::open(root)?;
+    let input_root = config
+        .fd
+        .try_clone()
+        .map_err(|error| Error::Generation(error.to_string()))?;
+    diff_with_inner(config, || {
+        ThemeSnapshot::new(
+            read_raw_palette(&input_root)?,
+            built_in_launch_profile().to_vec(),
+            BTreeMap::new(),
+            templates(),
+        )
+    })
+}
+
+/// Compare a captured candidate snapshot with current without creating a
+/// generation root, control inode, lease, publication, or recovery mutation.
+pub fn diff_with_snapshot<C>(root: &Path, capture: C) -> Result<Vec<ThemeOutputChange>>
+where
+    C: FnOnce() -> Result<ThemeSnapshot>,
+{
+    diff_with_inner(ConfigRoot::open(root)?, capture)
+}
+
+fn diff_with_inner<C>(config: ConfigRoot, capture: C) -> Result<Vec<ThemeOutputChange>>
+where
+    C: FnOnce() -> Result<ThemeSnapshot>,
+{
+    let candidate = capture()?.publication()?;
+    let generated = config.open_existing_generated_root()?;
+    let reader = GenerationReader::open_from_fd(generated).map_err(Error::Generation)?;
+    reader
+        .diff_current(candidate.outputs())
+        .map(|changes| {
+            changes
+                .into_iter()
+                .map(|(path, difference)| match difference {
+                    OutputDifference::Added => ThemeOutputChange::Added(path.into()),
+                    OutputDifference::Removed => ThemeOutputChange::Removed(path.into()),
+                    OutputDifference::ByteDifferent => {
+                        ThemeOutputChange::ByteDifferent(path.into())
+                    }
+                })
+                .collect()
+        })
+        .map_err(Error::Generation)
 }
 
 /// Run the legacy mutable-target writer and reload fan-out.
@@ -470,6 +531,25 @@ impl ConfigRoot {
         Ok(generated)
     }
 
+    fn open_existing_generated_root(&self) -> Result<OwnedFd> {
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let helm = openat(&self.fd, "helm", flags, Mode::empty())
+            .map_err(|error| Error::Generation(format!("helm: {error}")))?;
+        let generated = openat(&helm, "generated", flags, Mode::empty())
+            .map_err(|error| Error::Generation(format!("helm/generated: {error}")))?;
+        let stat = fstat(&generated).map_err(|error| Error::Generation(error.to_string()))?;
+        let current_uid = rustix::process::getuid().as_raw();
+        if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+            || stat.st_uid != current_uid
+            || Mode::from_raw_mode(stat.st_mode).bits() != 0o700
+        {
+            return Err(Error::Generation(
+                "helm/generated must be a current-UID mode-0700 directory".into(),
+            ));
+        }
+        Ok(generated)
+    }
+
     fn open_or_create_directory(
         &self,
         parent: &OwnedFd,
@@ -524,6 +604,46 @@ fn read_raw_palette(config: &OwnedFd) -> Result<Vec<u8>> {
         Mode::empty(),
     )
     .map_err(|error| Error::Generation(format!("helm palette: {error}")))?;
+    read_open_palette(palette)
+}
+
+fn read_or_seed_raw_palette(config: &OwnedFd) -> Result<Vec<u8>> {
+    let directory_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let helm = openat(config, "helm", directory_flags, Mode::empty())
+        .map_err(|error| Error::Generation(format!("helm palette directory: {error}")))?;
+    let read_flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let palette = match openat(&helm, "palette.toml", read_flags, Mode::empty()) {
+        Ok(palette) => palette,
+        Err(Errno::NOENT) => {
+            let create_flags =
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+            match openat(&helm, "palette.toml", create_flags, Mode::RUSR | Mode::WUSR) {
+                Ok(palette) => {
+                    let mut palette = std::fs::File::from(palette);
+                    palette
+                        .write_all(SHIPPED_PALETTE.as_bytes())
+                        .map_err(|error| {
+                            Error::Generation(format!("helm palette seed: {error}"))
+                        })?;
+                    fsync(&palette).map_err(|error| {
+                        Error::Generation(format!("helm palette seed: {error}"))
+                    })?;
+                    fsync(&helm).map_err(|error| {
+                        Error::Generation(format!("helm palette directory: {error}"))
+                    })?;
+                    return Ok(SHIPPED_PALETTE.as_bytes().to_vec());
+                }
+                Err(Errno::EXIST) => openat(&helm, "palette.toml", read_flags, Mode::empty())
+                    .map_err(|error| Error::Generation(format!("helm palette: {error}")))?,
+                Err(error) => return Err(Error::Generation(format!("helm palette seed: {error}"))),
+            }
+        }
+        Err(error) => return Err(Error::Generation(format!("helm palette: {error}"))),
+    };
+    read_open_palette(palette)
+}
+
+fn read_open_palette(palette: OwnedFd) -> Result<Vec<u8>> {
     let stat = fstat(&palette).map_err(|error| Error::Generation(error.to_string()))?;
     if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
         return Err(Error::Generation(
@@ -659,7 +779,8 @@ fn renderer_preimage(options: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>> {
 /// This is not the supported `theme diff`: it does not validate or compare the
 /// generation selected by `current` and must not be presented as satisfying
 /// SPEC 0011's read-only generation-aware diff contract.
-pub fn diff(palette: &Palette, root: &Path) -> Result<Vec<Change>> {
+#[cfg(test)]
+fn legacy_diff(palette: &Palette, root: &Path) -> Result<Vec<LegacyChange>> {
     let templates = templates();
     validate_targets(&templates)?;
     let derived = palette.derived();
@@ -668,11 +789,7 @@ pub fn diff(palette: &Palette, root: &Path) -> Result<Vec<Change>> {
         let target = root.join(&t.target);
         let text = render_derived(&derived, t.id, t.source)?;
         let changed = !std::fs::read(&target).is_ok_and(|old| old == text.as_bytes());
-        out.push(Change {
-            id: t.id,
-            target,
-            changed,
-        });
+        out.push(LegacyChange { changed });
     }
     Ok(out)
 }
@@ -942,10 +1059,26 @@ mod tests {
     use crate::generation::{GenerationPublicationOutcome, GenerationStore};
     use crate::{templates, Reload, Template};
     use std::collections::BTreeMap;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::PathBuf;
 
     fn shipped() -> Palette {
         Palette::from_toml(SHIPPED_PALETTE).expect("shipped palette must parse")
+    }
+
+    fn one_output_snapshot(palette: &Palette) -> Result<ThemeSnapshot> {
+        ThemeSnapshot::new(
+            palette.to_toml().into_bytes(),
+            built_in_launch_profile().to_vec(),
+            BTreeMap::new(),
+            vec![Template {
+                id: "theme",
+                source: "accent = {{ accent.violet }}\n",
+                target: PathBuf::from("theme.conf"),
+                reload: Reload::None,
+            }],
+        )
     }
 
     /// A reloader that fires nothing and remembers everything, so a test can
@@ -976,6 +1109,69 @@ mod tests {
                     out.insert(rel, std::fs::read(&path).unwrap());
                 }
             }
+        }
+        out
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum InventoryKind {
+        Directory,
+        Regular(Vec<u8>),
+        Symlink(Vec<u8>),
+        Other,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct InventoryEntry {
+        kind: InventoryKind,
+        mode: u32,
+        uid: u32,
+    }
+
+    /// A no-follow inventory of every path, including directories and control
+    /// metadata. This is the write oracle for generation diff: unlike `tree`,
+    /// it detects forbidden empty-directory/control initialization.
+    fn inventory(root: &Path) -> BTreeMap<PathBuf, InventoryEntry> {
+        let mut out = BTreeMap::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(path) = stack.pop() {
+            let metadata = std::fs::symlink_metadata(&path).unwrap();
+            let relative = path.strip_prefix(root).unwrap().to_path_buf();
+            let relative = if relative.as_os_str().is_empty() {
+                PathBuf::from(".")
+            } else {
+                relative
+            };
+            let file_type = metadata.file_type();
+            let kind = if file_type.is_dir() {
+                let mut children = std::fs::read_dir(&path)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect::<Vec<_>>();
+                children.sort();
+                stack.extend(children.into_iter().rev());
+                InventoryKind::Directory
+            } else if file_type.is_file() {
+                InventoryKind::Regular(std::fs::read(&path).unwrap())
+            } else if file_type.is_symlink() {
+                InventoryKind::Symlink(
+                    std::fs::read_link(&path)
+                        .unwrap()
+                        .as_os_str()
+                        .as_bytes()
+                        .to_vec(),
+                )
+            } else {
+                InventoryKind::Other
+            };
+            out.insert(
+                relative,
+                InventoryEntry {
+                    kind,
+                    mode: metadata.mode() & 0o7777,
+                    uid: metadata.uid(),
+                },
+            );
         }
         out
     }
@@ -1040,6 +1236,367 @@ mod tests {
             "the selected generation did not contain the changed rendering"
         );
         selected.release().unwrap();
+    }
+
+    #[test]
+    fn public_apply_seeds_a_fresh_config_and_publishes_a_valid_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let palette_path = root.path().join(USER_PALETTE);
+        assert!(!palette_path.exists());
+
+        let outcome = apply(root.path()).unwrap();
+
+        assert_eq!(
+            std::fs::read(&palette_path).unwrap(),
+            SHIPPED_PALETTE.as_bytes()
+        );
+        let GenerationPublicationOutcome::Committed(generation) = outcome else {
+            panic!("first apply did not commit cleanly: {outcome:?}");
+        };
+        let store = GenerationStore::open(&root.path().join("helm/generated")).unwrap();
+        let selected = store.select_current().unwrap();
+        assert_eq!(selected.as_str(), generation.as_str());
+        let templates = templates();
+        assert!(!templates.is_empty());
+        for template in templates {
+            let target = normalized_generation_target(&template.target).unwrap();
+            let bytes = selected.read_output(&target).unwrap();
+            assert!(
+                !bytes.windows(2).any(|window| window == b"{{"),
+                "{} retained an unexpanded placeholder",
+                template.id
+            );
+        }
+        selected.release().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn public_apply_refuses_a_palette_symlink_without_seeding_its_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let victim = tempfile::tempdir().unwrap();
+        let helm = root.path().join("helm");
+        std::fs::create_dir(&helm).unwrap();
+        let destination = victim.path().join("palette.toml");
+        std::os::unix::fs::symlink(&destination, helm.join("palette.toml")).unwrap();
+
+        let result = apply(root.path());
+
+        assert!(
+            result.is_err(),
+            "a palette symlink was accepted: {result:?}"
+        );
+        assert!(
+            !destination.exists(),
+            "public apply seeded through the palette symlink"
+        );
+    }
+
+    #[test]
+    fn supported_apply_then_diff_is_empty_and_diff_writes_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        apply(root.path()).unwrap();
+        let before = inventory(root.path());
+
+        let changes = diff(root.path()).unwrap();
+
+        assert!(
+            changes.is_empty(),
+            "unchanged output was reported: {changes:?}"
+        );
+        assert_eq!(
+            inventory(root.path()),
+            before,
+            "generation diff wrote to disk"
+        );
+    }
+
+    #[test]
+    fn generation_diff_reports_only_outputs_affected_by_a_palette_change() {
+        let root = tempfile::tempdir().unwrap();
+        let templates = || {
+            vec![
+                Template {
+                    id: "teal",
+                    source: "accent = {{ accent.teal }}\n",
+                    target: PathBuf::from("teal.conf"),
+                    reload: Reload::None,
+                },
+                Template {
+                    id: "violet",
+                    source: "accent = {{ accent.violet }}\n",
+                    target: PathBuf::from("violet.conf"),
+                    reload: Reload::None,
+                },
+            ]
+        };
+        apply_with_snapshot(root.path(), || {
+            ThemeSnapshot::new(
+                shipped().to_toml().into_bytes(),
+                built_in_launch_profile().to_vec(),
+                BTreeMap::new(),
+                templates(),
+            )
+        })
+        .unwrap();
+        let before = inventory(root.path());
+        let mut candidate = shipped();
+        candidate.accent.violet = helm_core::color::Rgb::new(0xb0, 0x7a, 0xff);
+
+        let changes = diff_with_snapshot(root.path(), || {
+            ThemeSnapshot::new(
+                candidate.to_toml().into_bytes(),
+                built_in_launch_profile().to_vec(),
+                BTreeMap::new(),
+                templates(),
+            )
+        })
+        .unwrap();
+
+        assert_eq!(
+            changes,
+            vec![ThemeOutputChange::ByteDifferent(PathBuf::from(
+                "violet.conf"
+            ))]
+        );
+        assert_eq!(
+            inventory(root.path()),
+            before,
+            "generation diff wrote to disk"
+        );
+    }
+
+    #[test]
+    fn generation_diff_reports_sorted_added_removed_and_byte_different_paths() {
+        let root = tempfile::tempdir().unwrap();
+        apply_with_snapshot(root.path(), || {
+            ThemeSnapshot::new(
+                shipped().to_toml().into_bytes(),
+                built_in_launch_profile().to_vec(),
+                BTreeMap::new(),
+                vec![
+                    Template {
+                        id: "changed",
+                        source: "old literal\n",
+                        target: PathBuf::from("middle.conf"),
+                        reload: Reload::None,
+                    },
+                    Template {
+                        id: "removed",
+                        source: "removed\n",
+                        target: PathBuf::from("z-removed.conf"),
+                        reload: Reload::None,
+                    },
+                ],
+            )
+        })
+        .unwrap();
+        let before = inventory(root.path());
+
+        let changes = diff_with_snapshot(root.path(), || {
+            ThemeSnapshot::new(
+                shipped().to_toml().into_bytes(),
+                built_in_launch_profile().to_vec(),
+                BTreeMap::new(),
+                vec![
+                    Template {
+                        id: "added",
+                        source: "added\n",
+                        target: PathBuf::from("a-added.conf"),
+                        reload: Reload::None,
+                    },
+                    Template {
+                        id: "changed",
+                        source: "new literal\n",
+                        target: PathBuf::from("middle.conf"),
+                        reload: Reload::None,
+                    },
+                ],
+            )
+        })
+        .unwrap();
+
+        assert_eq!(
+            changes,
+            vec![
+                ThemeOutputChange::Added(PathBuf::from("a-added.conf")),
+                ThemeOutputChange::ByteDifferent(PathBuf::from("middle.conf")),
+                ThemeOutputChange::Removed(PathBuf::from("z-removed.conf")),
+            ]
+        );
+        assert_eq!(
+            inventory(root.path()),
+            before,
+            "generation diff wrote to disk"
+        );
+    }
+
+    #[test]
+    fn generation_diff_refuses_clean_absence_without_initializing_state() {
+        let root = tempfile::tempdir().unwrap();
+        let before = inventory(root.path());
+
+        let result = diff_with_snapshot(root.path(), || one_output_snapshot(&shipped()));
+
+        assert!(result.is_err(), "absent current state was accepted");
+        assert_eq!(
+            inventory(root.path()),
+            before,
+            "generation diff initialized state"
+        );
+
+        apply_with_snapshot(root.path(), || one_output_snapshot(&shipped())).unwrap();
+        std::fs::remove_file(root.path().join("helm/generated/current")).unwrap();
+        let before = inventory(root.path());
+
+        let result = diff_with_snapshot(root.path(), || one_output_snapshot(&shipped()));
+
+        assert!(result.is_err(), "absent current pointer was accepted");
+        assert_eq!(
+            inventory(root.path()),
+            before,
+            "generation diff mutated clean absent-current state"
+        );
+    }
+
+    #[test]
+    fn generation_diff_refuses_malformed_pending_and_invalid_state_without_writing() {
+        for case in ["malformed", "pending", "invalid"] {
+            let root = tempfile::tempdir().unwrap();
+            let first =
+                apply_with_snapshot(root.path(), || one_output_snapshot(&shipped())).unwrap();
+            let GenerationPublicationOutcome::Committed(first_generation) = first else {
+                panic!("first apply did not commit cleanly: {first:?}");
+            };
+            let generated = root.path().join("helm/generated");
+            match case {
+                "malformed" => {
+                    std::fs::write(generated.join("current"), b"not-a-generation\n").unwrap();
+                }
+                "pending" => {
+                    let mut changed = shipped();
+                    changed.accent.violet = helm_core::color::Rgb::new(0xb0, 0x7a, 0xff);
+                    let second =
+                        apply_with_snapshot(root.path(), || one_output_snapshot(&changed)).unwrap();
+                    let GenerationPublicationOutcome::Committed(second_generation) = second else {
+                        panic!("second apply did not commit cleanly: {second:?}");
+                    };
+                    std::fs::write(
+                        generated.join(format!(".current-{}", second_generation.as_str())),
+                        format!("{}\n", first_generation.as_str()),
+                    )
+                    .unwrap();
+                }
+                "invalid" => {
+                    std::fs::write(
+                        generated
+                            .join("generations")
+                            .join(first_generation.as_str())
+                            .join("theme.conf"),
+                        b"tampered\n",
+                    )
+                    .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let before = inventory(root.path());
+
+            let result = diff_with_snapshot(root.path(), || one_output_snapshot(&shipped()));
+
+            assert!(result.is_err(), "{case} current state was accepted");
+            assert_eq!(
+                inventory(root.path()),
+                before,
+                "generation diff mutated {case} state"
+            );
+        }
+    }
+
+    #[test]
+    fn generation_diff_refuses_missing_or_unsafe_required_controls_without_mutation() {
+        for case in [
+            "missing-lock",
+            "unsafe-lock-mode",
+            "lock-symlink",
+            "missing-generations",
+            "unsafe-generations-mode",
+            "generations-symlink",
+            "unsafe-generated-mode",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            apply_with_snapshot(root.path(), || one_output_snapshot(&shipped())).unwrap();
+            let generated = root.path().join("helm/generated");
+            let outside = tempfile::tempdir().unwrap();
+            match case {
+                "missing-lock" => std::fs::remove_file(generated.join("activation.lock")).unwrap(),
+                "unsafe-lock-mode" => std::fs::set_permissions(
+                    generated.join("activation.lock"),
+                    std::fs::Permissions::from_mode(0o644),
+                )
+                .unwrap(),
+                "lock-symlink" => {
+                    std::fs::remove_file(generated.join("activation.lock")).unwrap();
+                    std::os::unix::fs::symlink(
+                        outside.path().join("lock"),
+                        generated.join("activation.lock"),
+                    )
+                    .unwrap();
+                }
+                "missing-generations" => {
+                    std::fs::rename(
+                        generated.join("generations"),
+                        generated.join("generations-missing"),
+                    )
+                    .unwrap();
+                }
+                "unsafe-generations-mode" => std::fs::set_permissions(
+                    generated.join("generations"),
+                    std::fs::Permissions::from_mode(0o755),
+                )
+                .unwrap(),
+                "generations-symlink" => {
+                    std::fs::rename(
+                        generated.join("generations"),
+                        generated.join("generations-real"),
+                    )
+                    .unwrap();
+                    std::os::unix::fs::symlink("generations-real", generated.join("generations"))
+                        .unwrap();
+                }
+                "unsafe-generated-mode" => {
+                    std::fs::set_permissions(&generated, std::fs::Permissions::from_mode(0o755))
+                        .unwrap()
+                }
+                _ => unreachable!(),
+            }
+            let before = inventory(root.path());
+
+            let result = diff_with_snapshot(root.path(), || one_output_snapshot(&shipped()));
+
+            assert!(result.is_err(), "{case} was accepted");
+            assert_eq!(
+                inventory(root.path()),
+                before,
+                "generation diff mutated {case} state"
+            );
+        }
+    }
+
+    #[test]
+    fn generation_diff_does_not_require_or_recreate_a_leases_directory() {
+        let root = tempfile::tempdir().unwrap();
+        apply_with_snapshot(root.path(), || one_output_snapshot(&shipped())).unwrap();
+        std::fs::remove_dir(root.path().join("helm/generated/leases")).unwrap();
+        let before = inventory(root.path());
+
+        let changes = diff_with_snapshot(root.path(), || one_output_snapshot(&shipped())).unwrap();
+
+        assert!(changes.is_empty());
+        assert_eq!(
+            inventory(root.path()),
+            before,
+            "generation diff recreated the unused leases directory"
+        );
     }
 
     #[cfg(unix)]
@@ -1681,7 +2238,7 @@ mod tests {
     }
 
     #[test]
-    fn diff_reports_what_would_change_and_writes_nothing() {
+    fn legacy_diff_reports_what_would_change_and_writes_nothing() {
         let root = tempfile::tempdir().unwrap();
         let set = templates();
         apply_with(&shipped(), root.path(), &set, &mut Recorder::default()).unwrap();
@@ -1689,7 +2246,7 @@ mod tests {
 
         let mut p = shipped();
         p.accent.violet = helm_core::color::Rgb::new(0xb0, 0x7a, 0xff);
-        let changes = diff(&p, root.path()).unwrap();
+        let changes = legacy_diff(&p, root.path()).unwrap();
 
         assert_eq!(changes.len(), set.len());
         assert!(

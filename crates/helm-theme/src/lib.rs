@@ -45,8 +45,8 @@ pub use reload::{Reloader, SystemReloader};
 pub use render::render;
 pub use template::{templates, Reload, Template};
 pub use theme::{
-    apply, apply_with_snapshot, diff, lint, load_palette, Applied, Change, HueSeparation,
-    LintReport, ThemeSnapshot, SHIPPED_PALETTE, USER_PALETTE,
+    apply, apply_with_snapshot, diff, diff_with_snapshot, lint, load_palette, HueSeparation,
+    LintReport, ThemeOutputChange, ThemeSnapshot, SHIPPED_PALETTE, USER_PALETTE,
 };
 
 use std::path::PathBuf;

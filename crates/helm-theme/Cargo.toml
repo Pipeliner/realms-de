@@ -1,6 +1,6 @@
 [package]
 name = "helm-theme"
-description = "Renders every themed file in the desktop from palette.toml and swaps them in atomically."
+description = "Renders every themed file from palette.toml and publishes one sealed immutable generation."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
