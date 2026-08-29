@@ -34,6 +34,40 @@ may make a generation active for future launches. It must not signal or reload
 an existing process. A direct launch outside a verified Helm profile is not
 generation-selected.
 
+Pointer recovery recognizes only these producer-reachable journal inventories,
+after validating the complete inventory before any mutation. For candidate `C`
+and prior current `A`: `.current-C` contains `C` while `current` is `A` (or is
+absent on a pristine apply) before replacement; `.current-C` contains `A` while
+`current` is `C` after an existing-current exchange; `.absent-C` is empty while
+`current` is `C` after a pristine rename; and `.committed-C` is empty for a
+pristine committed activation or contains `A` for an existing-current committed
+activation, in both cases while `current` is `C`. The sole permitted two-journal
+inventory is pristine pre-rename `.current-C` containing `C` plus empty
+`.absent-C`, with `current` absent. Every basename beginning `.current-`,
+`.absent-`, or `.committed-` is reserved: invalid UTF-8, an invalid identifier
+suffix, a non-regular or symlink entry, malformed or inconsistent content,
+multiple/contradictory markers, or any other inventory fails closed in both
+selection and recovery. Shared selection refuses every rollback-required
+`.current-`/`.absent-` inventory; it may accept a valid `.committed-` cleanup
+inventory only after validating `current`. Recovery never mutates any journal or
+pointer until the whole inventory and every referenced generation validate.
+When recovering a pristine post-rename `.absent-C` state, it first atomically
+renames `current` to `.current-C` and fsyncs the generated root, producing the
+permitted pristine two-journal inventory. It then removes `.absent-C` before
+`.current-C` and fsyncs the root again. Thus process death at every recovery
+boundary leaves either the permitted two-journal inventory, the permitted lone
+`.current-C` inventory with no `current`, or the clean absent state.
+After recovery reaches clean absence, valid sealed unpointed generation trees
+are harmless orphans and do not prevent a later pristine publication. Before
+accepting that publication, the writer validates every final entry below
+`generations/` as a no-follow directory whose canonical manifest identity,
+seal, receipt, membership and output digests match its valid generation-id
+basename. It preserves those orphans and allocates a fresh non-colliding id.
+Recovery first discards only recognized `.staging-<generation-id>` entries as
+required above. Any malformed final name or tree, special entry, unrecognized
+staging-like entry, or remaining pointer journal then keeps the absent-current
+state fail closed rather than being ignored or guessed away.
+
 ## Generation manifest v1 (L4)
 
 Each sealed generation directory contains exactly the regular files named by
