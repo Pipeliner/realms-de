@@ -32,8 +32,8 @@
 ### Task 2: Preserve and verify the supplied research
 
 **Files:**
-- Create: `docs/research/2026-08-28-graduated-agentic-sdd-source.md`
-- Create: `docs/research/2026-08-28-graduated-agentic-sdd-verified.md`
+- Create: `docs/research/2026-08-28-graduated-agentic-sdd-operational-memory-source.md`
+- Create: `docs/research/2026-08-28-graduated-agentic-sdd-operational-memory-verified.md`
 
 - [ ] Preserve the supplied source verbatim with a non-normative/archive notice.
 - [ ] Produce a concise verified companion using primary-source links and record corrections.

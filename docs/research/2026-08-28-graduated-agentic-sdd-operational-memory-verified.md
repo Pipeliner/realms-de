@@ -1,7 +1,7 @@
 # Graduated agentic SDD and operational memory: verification companion
 
-**Verified:** 2026-08-28  
-**Status:** non-normative research record  
+**Verified:** 2026-08-28<br>
+**Status:** non-normative research record<br>
 **Scope:** tool capabilities and implementation constraints only; no tool is
 installed, initialized, configured, or enabled by this record.
 
