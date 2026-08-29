@@ -87,18 +87,26 @@ recognized current-UID mode-0600 regular staging file under the exclusive lock,
 then fsync the root before retrying. Selection ignores publication order and
 continues to validate only the pointer transaction and selected sealed tree.
 
-`publication-order` and `.publication-order` are reserved control names. They
-are opened descriptor-relatively with `O_NOFOLLOW`; an existing entry must be a
-current-UID regular file with mode 0600. A symlink, special file, foreign owner,
-unsafe mode, missing `publication-order`, lingering staging file during GC, or
-malformed record is uncertain state and causes GC to delete zero generations.
-It does not prevent GC from first removing independently provable stale leases.
-On a new empty generated root, the first opener serializes control creation with
-the exclusive persistent lock, creates `publication-order` once with
+`publication-order` and `.publication-order` are reserved control names.
+Operations which consume or mutate either name open it descriptor-relatively
+with `O_NOFOLLOW` and require a current-UID regular file with mode 0600. Store
+open and launcher selection intentionally do not parse or reject an existing
+order entry: order state controls only publication and generation deletion, not
+selection of an otherwise valid pointer and sealed tree. A publisher fails
+closed without using or mutating a symlink, special file, foreign-owner entry,
+unsafe-mode entry or malformed official record. GC first removes independently
+provable stale leases, then treats any such entry, missing `publication-order`,
+lingering staging file or malformed record as uncertain and deletes zero
+generations.
+
+When `publication-order` is absent, the first opener serializes control creation
+with the exclusive persistent lock, creates it once with
 `O_CREAT|O_EXCL|O_NOFOLLOW` at mode 0600, writes and fsyncs the canonical empty
-record, and fsyncs the generated root before releasing the lock. It never
-synthesizes ordering for pre-existing final generations: if the record was lost
-or created after such generations, their missing mappings remain fail-closed.
+record, and fsyncs the generated root before releasing the lock. Any existing
+entry at that name, including an unsafe or malformed entry, is left untouched
+and does not prevent the store from opening. Initialization never synthesizes
+ordering for pre-existing final generations: if the record was lost and is
+recreated after such generations, their missing mappings remain fail-closed.
 
 ## Publication order v1 (L4 refinement)
 
@@ -113,8 +121,9 @@ generation <generation-id> <positive-decimal-publication-sequence>\n
 ```
 
 Each generation identifier has the same lowercase 128-bit grammar as `current`.
-Sequences are positive `u64` decimal values with no leading zeroes, are unique
-within the generation records, and need not be contiguous. `next-sequence` is
+Sequences are positive `u64` decimal values containing only ASCII bytes `0` to
+`9`, with no sign, whitespace or leading zeroes; they are unique within the
+generation records and need not be contiguous. `next-sequence` is
 also positive, appears exactly once immediately after the header, and is
 strictly greater than every mapped sequence. Record ordering is only by the
 unsigned byte order of generation identifiers; publication recency is defined

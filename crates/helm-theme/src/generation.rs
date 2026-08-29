@@ -414,20 +414,6 @@ impl GenerationStore {
             Err(Errno::NOENT) => false,
             Err(error) => return Err(error.to_string()),
         };
-        validate_optional_control(
-            &root,
-            "publication-order",
-            FileType::RegularFile,
-            0o600,
-            current_uid,
-        )?;
-        validate_optional_control(
-            &root,
-            ".publication-order",
-            FileType::RegularFile,
-            0o600,
-            current_uid,
-        )?;
         preflight_checkpoint();
 
         let lock_flags = OFlags::RDWR
@@ -515,22 +501,21 @@ impl GenerationStore {
         )?;
         flock(&lock, FlockOperation::LockExclusive).map_err(|error| error.to_string())?;
         let initialize_order = (|| -> std::result::Result<(), String> {
-            if validate_optional_control(
-                &root,
-                "publication-order",
-                FileType::RegularFile,
-                0o600,
-                current_uid,
-            )? {
-                return Ok(());
+            match statat(&root.fd, "publication-order", AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(_) => return Ok(()),
+                Err(Errno::NOENT) => {}
+                Err(error) => return Err(error.to_string()),
             }
-            let fd = openat(
+            let fd = match openat(
                 &root.fd,
                 "publication-order",
                 OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::RUSR | Mode::WUSR,
-            )
-            .map_err(|error| error.to_string())?;
+            ) {
+                Ok(fd) => fd,
+                Err(Errno::EXIST) => return Ok(()),
+                Err(error) => return Err(error.to_string()),
+            };
             let mut file = std::fs::File::from(fd);
             file.write_all(&PublicationOrder::empty().encode())
                 .map_err(|error| error.to_string())?;
@@ -2295,7 +2280,10 @@ fn canonical_u32(value: &str, field: &str) -> std::result::Result<u32, String> {
 }
 
 fn canonical_u64(value: &str, field: &str) -> std::result::Result<u64, String> {
-    if value.is_empty() || (value.len() > 1 && value.starts_with('0')) {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
         return Err(format!("{field} is not canonical decimal"));
     }
     value
@@ -2421,7 +2409,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::io::BufRead;
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -3117,6 +3105,37 @@ mod tests {
                 "GC reclaimed a generation with malformed={malformed}"
             );
             assert_eq!(report.reclaimed_leases, 1);
+            assert_eq!(
+                std::fs::read_dir(root.path().join("generations"))
+                    .unwrap()
+                    .count(),
+                4
+            );
+        }
+    }
+
+    #[test]
+    fn g6_signed_publication_sequences_are_malformed_and_retain_every_generation() {
+        for signed_order in [
+            "helm-generation-publication-order-v1\nnext-sequence +5\ngeneration 00000000000000000000000000000001 1\ngeneration 00000000000000000000000000000002 2\ngeneration 00000000000000000000000000000003 3\ngeneration 00000000000000000000000000000004 4\n",
+            "helm-generation-publication-order-v1\nnext-sequence 5\ngeneration 00000000000000000000000000000001 1\ngeneration 00000000000000000000000000000002 +2\ngeneration 00000000000000000000000000000003 3\ngeneration 00000000000000000000000000000004 4\n",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let store = seeded_store(root.path());
+            for number in 2..=4 {
+                let generation = format!("{number:032x}");
+                v1_fixture(
+                    &root.path().join("generations"),
+                    &generation,
+                    "theme.ini",
+                    format!("generation-{number}").as_bytes(),
+                );
+            }
+            write_publication_order_fixture(root.path(), signed_order);
+
+            let report = store.garbage_collect().unwrap();
+
+            assert_eq!(report.reclaimed_generations, 0);
             assert_eq!(
                 std::fs::read_dir(root.path().join("generations"))
                     .unwrap()
@@ -4097,45 +4116,117 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn generation_store_rejects_unsafe_publication_order_controls_without_following_them() {
-        for name in ["publication-order", ".publication-order"] {
+    fn unsafe_or_malformed_order_does_not_block_restart_selection_or_stale_lease_cleanup() {
+        for state in [
+            "official-symlink",
+            "official-fifo",
+            "official-unsafe-mode",
+            "staging-symlink",
+            "malformed-official",
+        ] {
             let root = tempfile::tempdir().unwrap();
-            secure_store_root(root.path());
+            let store = seeded_store(root.path());
+            for number in 2..=4 {
+                let generation = format!("{number:032x}");
+                publish_at(
+                    &store,
+                    &generation,
+                    || Ok(publication(&generation, &format!("generation-{number}"))),
+                    |_| Ok(()),
+                )
+                .unwrap();
+            }
+            drop(store);
+
             let victim = root.path().join("victim");
             std::fs::write(&victim, "unchanged").unwrap();
-            std::os::unix::fs::symlink(&victim, root.path().join(name)).unwrap();
+            let official = root.path().join("publication-order");
+            let staging = root.path().join(".publication-order");
+            match state {
+                "official-symlink" => {
+                    std::fs::remove_file(&official).unwrap();
+                    std::os::unix::fs::symlink(&victim, &official).unwrap();
+                }
+                "official-fifo" => {
+                    std::fs::remove_file(&official).unwrap();
+                    rustix::fs::mkfifoat(CWD, &official, Mode::RUSR | Mode::WUSR).unwrap();
+                }
+                "official-unsafe-mode" => {
+                    std::fs::set_permissions(&official, std::fs::Permissions::from_mode(0o666))
+                        .unwrap();
+                }
+                "staging-symlink" => {
+                    std::os::unix::fs::symlink(&victim, &staging).unwrap();
+                }
+                "malformed-official" => {
+                    std::fs::write(&official, "not publication order v1\n").unwrap();
+                }
+                _ => unreachable!(),
+            }
 
-            assert!(
-                GenerationStore::open(root.path()).is_err(),
-                "accepted {name}"
+            let reopened = GenerationStore::open(root.path())
+                .unwrap_or_else(|error| panic!("restart rejected {state}: {error}"));
+            let selected = reopened.select_current().unwrap();
+            assert_eq!(selected.as_str(), "00000000000000000000000000000004");
+            selected.release().unwrap();
+            write_lease_fixture(
+                root.path(),
+                "00000000000000000000000000000099",
+                "00000000000000000000000000000001",
+                i32::MAX as u32,
+                linux_start_time(std::process::id()),
+                &linux_boot_id(),
+                rustix::process::getuid().as_raw(),
+            );
+
+            let report = reopened.garbage_collect().unwrap();
+
+            assert_eq!(report.reclaimed_leases, 1, "state={state}");
+            assert_eq!(report.reclaimed_generations, 0, "state={state}");
+            assert_eq!(
+                std::fs::read_dir(root.path().join("generations"))
+                    .unwrap()
+                    .count(),
+                4
+            );
+            let candidate = "00000000000000000000000000000005";
+            assert!(publish_at(
+                &reopened,
+                candidate,
+                || Ok(publication(candidate, "must-fail-closed")),
+                |_| Ok(()),
+            )
+            .is_err());
+            assert!(!root.path().join("generations").join(candidate).exists());
+            assert_eq!(
+                reopened.select_current().unwrap().as_str(),
+                "00000000000000000000000000000004"
             );
             assert_eq!(std::fs::read_to_string(&victim).unwrap(), "unchanged");
-            assert!(std::fs::symlink_metadata(root.path().join(name))
-                .unwrap()
-                .file_type()
-                .is_symlink());
-            assert!(!root.path().join("activation.lock").exists());
+            match state {
+                "official-symlink" => assert!(std::fs::symlink_metadata(&official)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()),
+                "official-fifo" => assert!(std::fs::symlink_metadata(&official)
+                    .unwrap()
+                    .file_type()
+                    .is_fifo()),
+                "official-unsafe-mode" => assert_eq!(
+                    std::fs::metadata(&official).unwrap().permissions().mode() & 0o777,
+                    0o666
+                ),
+                "staging-symlink" => assert!(std::fs::symlink_metadata(&staging)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()),
+                "malformed-official" => assert_eq!(
+                    std::fs::read_to_string(&official).unwrap(),
+                    "not publication order v1\n"
+                ),
+                _ => unreachable!(),
+            }
         }
-
-        let fifo_root = tempfile::tempdir().unwrap();
-        secure_store_root(fifo_root.path());
-        rustix::fs::mkfifoat(
-            CWD,
-            fifo_root.path().join("publication-order"),
-            Mode::RUSR | Mode::WUSR,
-        )
-        .unwrap();
-        assert!(GenerationStore::open(fifo_root.path()).is_err());
-        assert!(!fifo_root.path().join("activation.lock").exists());
-
-        let mode_root = tempfile::tempdir().unwrap();
-        secure_store_root(mode_root.path());
-        let order = mode_root.path().join("publication-order");
-        std::fs::write(&order, "hostile").unwrap();
-        std::fs::set_permissions(&order, std::fs::Permissions::from_mode(0o666)).unwrap();
-        assert!(GenerationStore::open(mode_root.path()).is_err());
-        assert_eq!(std::fs::read_to_string(&order).unwrap(), "hostile");
-        assert!(!mode_root.path().join("activation.lock").exists());
     }
 
     #[test]
@@ -5106,8 +5197,14 @@ mod tests {
             b"helm-generation-publication-order-v2\nnext-sequence 1\n",
             b"helm-generation-publication-order-v1\nnext-sequence 0\n",
             b"helm-generation-publication-order-v1\nnext-sequence 01\n",
+            b"helm-generation-publication-order-v1\nnext-sequence +1\n",
+            b"helm-generation-publication-order-v1\nnext-sequence -1\n",
+            b"helm-generation-publication-order-v1\nnext-sequence \t1\n",
             b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 0\n",
             b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 03\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 +1\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 -1\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 1\t\n",
             b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 3\n",
             b"helm-generation-publication-order-v1\nnext-sequence 4\ngeneration 00000000000000000000000000000001 2\ngeneration 00000000000000000000000000000002 2\n",
             b"helm-generation-publication-order-v1\nnext-sequence 4\ngeneration 00000000000000000000000000000002 2\ngeneration 00000000000000000000000000000001 3\n",
