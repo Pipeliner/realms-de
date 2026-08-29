@@ -1,0 +1,5 @@
+schema = "helm-fedora-baseline/v1"
+status = "pre-alpha"
+release = 44
+eol = "2027-06-02"
+image = "registry.fedoraproject.org/fedora:44@sha256:df52038ff64ee61affa188d78beb85cf6eecfe4e9f6042238269ccdc8e944392"
