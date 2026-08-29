@@ -31,10 +31,12 @@ licences already present in the graph. Do not add an advisory ignore or licence
 allowlist entry casually: the dependency change must explain why it is needed,
 who owns its review, and when a temporary exception will be removed.
 
-The MSRV is **1.85** (edition 2024), declared in [`Cargo.toml`](Cargo.toml) and
-checked by its own CI job. It is not a matter of taste: Ubuntu 24.04's glibc
-sets the floor for what we can link against, and the dependency set pins it
-harder still. Raising it is a decision, not a convenience — say so in the PR.
+The MSRV is **1.85**, declared in [`Cargo.toml`](Cargo.toml) and checked by its
+own CI job. It is not a matter of taste: the locked dependency graph contains
+Rust-2024-edition packages whose parser floor is 1.85. Ubuntu 24.04's glibc
+would constrain distributed prebuilt binaries separately; it does not set the
+source-build MSRV. Raising the floor is a dependency decision, not a
+convenience — say so in the PR.
 
 Crates join the workspace only when they gain a real implementation, so a fresh
 clone always builds. If a crate is not in `Cargo.toml`, it does not exist yet.

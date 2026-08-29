@@ -52,8 +52,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Oldest supported glibc — ARCHITECTURE.md §5 makes this the platform
-          # that pins the MSRV story.
+          # Ubuntu's glibc would constrain distributed prebuilt binaries; this
+          # source-build lane does not test that future boundary. The
+          # dependency-pinned MSRV is tested separately by ci.yml's `msrv` job.
           - name: ubuntu-24.04
             runs-on: ubuntu-24.04
             container: ''

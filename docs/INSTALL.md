@@ -154,6 +154,9 @@ Ubuntu 24.04's default rustc is 1.75, which is below helm's MSRV of 1.85. The
 archive carries versioned toolchain packages — `rustc-1.85`/`cargo-1.85` are
 there (1.85.1) — and `debian/rules` puts the newest one it finds on PATH,
 failing with a clear message rather than building with the wrong compiler.
+For a source-workspace build where those versioned packages are unavailable,
+install the declared floor or newer with `rustup` instead; the MSRV comes from
+the locked dependency graph, not Ubuntu's glibc.
 
 **Three runtime dependencies are not in the Ubuntu 24.04 archive** (checked
 against noble's package lists):
@@ -197,6 +200,14 @@ git archive --format=tar.gz --prefix=helm-0.1.0/ -o ~/rpmbuild/SOURCES/helm-0.1.
 rpmbuild -bb packaging/fedora/helm.spec
 sudo dnf install ~/rpmbuild/RPMS/*/helm-0.1.0-*.rpm
 ```
+
+Fedora 44's official package listing reported `rust` and `cargo` 1.97.1 on
+2026-08-29, above the current Rust 1.85 MSRV. Fedora repositories float, so
+check `rustc --version` when building from source. On an older Fedora release,
+use `rustup` to install Rust 1.85 or newer for a source-workspace build; do not
+lower `rust-version` to match a distro toolchain, because the locked dependency
+graph would still fail to parse. RPM builds remain governed by the toolchain
+requirement in `packaging/fedora/helm.spec`.
 
 **Name collision, settled:** Fedora ships a `helm` package for the Kubernetes
 package manager, which owns `/usr/bin/helm` — and rpm refuses an install that

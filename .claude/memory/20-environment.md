@@ -9,10 +9,11 @@ belong here.
 
 - Rust stable via rustup; `rust-toolchain.toml` pins the channel and requests
   `rustfmt` + `clippy`.
-- **MSRV is 1.85 and cannot go lower.** `toml` 0.9 pulls in `serde_spanned`,
-  `toml_parser` and (via `indexmap`) `hashbrown` 0.17, all at edition 2024,
-  which cargo cannot parse before 1.85. Pinning one down just moves the failure
-  to the next. Verified: 1.82 fails, 1.85 builds clean. *(2026-08-26: corrected
+- **MSRV is 1.85 and is set by dependencies, not glibc.** `toml` 1.1 pulls in
+  `serde_spanned`, `toml_parser` and (via `indexmap`) `hashbrown` 0.17, all at
+  edition 2024, which cargo cannot parse before 1.85. Pinning one down just
+  moves the failure to the next. Glibc constrains prebuilt-binary compatibility
+  separately. Verified: 1.82 fails, 1.85 builds clean. *(2026-08-26: corrected
   from an earlier declared 1.82, which was never buildable.)*
 - **`rust-toolchain.toml` outranks whatever a CI action installs.** A directory
   toolchain file beats `dtolnay/rust-toolchain`; only `RUSTUP_TOOLCHAIN` beats

@@ -47,8 +47,11 @@ tell you whether a session starts. Only booting one does.
 4. **CI builds and installs all three once each package path is buildable.** A
    job per distro installs its native package into a clean container and runs
    `helmctl doctor`.
-5. **The MSRV is pinned by the oldest supported target.** `rust-version` in the
-   workspace manifest is currently 1.85 and moves only with a stated reason.
+5. **The MSRV is pinned by the locked dependency graph.** `rust-version` in the
+   workspace manifest is currently 1.85 because its dependencies require the
+   Rust 2024-edition parser floor; it moves only with a stated dependency
+   reason. If Helm distributes prebuilt binaries, the oldest supported glibc
+   will constrain their compatibility; it does not set this source-build floor.
 6. **Nothing distro-specific may live outside `packaging/`.** No `#[cfg]` on a
    distro, no path that assumes a filesystem layout.
 7. **A pinned river 0.4.x is vendored**, per
@@ -135,8 +138,10 @@ someone else is paying it.
   Debian control files, and Fedora spec agree where the targets overlap. This
   is the guard for the decision itself; it does not claim a nonexistent shared
   generator.
-- *Planned (M3):* an MSRV job pinned to the `rust-version` floor, so raising it
-  is a deliberate change rather than an accident.
+- *Implemented:* the `msrv` CI job reads `rust-version`, selects that exact
+  toolchain through `RUSTUP_TOOLCHAIN`, and builds the locked workspace. A
+  dependency update that raises the compiler floor fails before it can claim
+  support for the old one.
 - *Planned (M3):* a Fedora job with SELinux enforcing, which is what turns the
   "SELinux-clean" claim from an assumption into a tested fact.
 
