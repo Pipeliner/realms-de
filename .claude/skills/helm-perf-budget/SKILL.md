@@ -25,7 +25,13 @@ budget.
 | State change → bar redraw | **< 8 ms** | damage tracking; `HelmState::renders_same_as` drops no-op frames |
 | Bar idle CPU | **~0%** | event-driven modules; the clock schedules the next minute boundary and one shared 1 Hz sampler runs off the input path |
 | Cold session start → usable | **< 900 ms** | no GPU context for the bar, no icon-cache scan, no thumbnailer |
-| `helm ctl theme apply` | **< 150 ms** | templates rendered serially, replaced atomically per file, then one reload fan-out |
+| `helm ctl theme apply` | **< 150 ms** | one captured input set is rendered, validated, sealed, made durable, and selected as an immutable generation for future launches; no pointer-switch reload |
+
+For this row, SPEC 0011 and ADR 0017 supersede ADR 0009's historical
+per-target replacement and reload-fan-out mechanism. The budget does not permit
+an equality shortcut that weakens validation: identical inputs may publish a
+new generation, and apply still proves the complete generation before selecting
+it.
 
 ## Rendering is event-driven, never polled
 

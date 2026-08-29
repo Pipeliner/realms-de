@@ -67,7 +67,7 @@ counts.
 │  owns HelmState│                                                │   → templates  │
 │  WmBackend ────┼──▶ RiverBackend  (phase 1: helm IS the WM)     └───────┬────────┘
 │                │    NativeBackend (phase 3)                             │
-└───────┬────────┘                                                        │ renders
+└───────┬────────┘                                                        │ publishes
         │ broadcasts HelmState                                            ▼
         │                                              gtk.css · kvantum · ANSI ·
         ├──────────────┬──────────────┐                yazi · btop · starship · fuzzel
@@ -86,7 +86,7 @@ counts.
 | Crate | Kind | Owns | Lands in |
 |---|---|---|---|
 | `helm-core` | lib | Ledger, layout projection, palette, keymap, IPC types, glyph inventory | **M0 — done** |
-| `helm-theme` | lib | `palette.toml` → every themed file. Serial template engine, per-file atomic writes, reload signalling | M1 |
+| `helm-theme` | lib | `palette.toml` → normalized outputs in one sealed immutable generation. Serial rendering, validation, future-launch pointer publication, and read-only generation diff; no pointer-switch reload | M1 |
 | `helm-ctl` | bin (`helmctl`) | `helmctl theme/orbit/ledger/doctor/run`. The scriptable surface | M1–M2 |
 | `helm-session` | bin (`helm-wm`) | Holds `HelmState`, drives a `WmBackend`, serves the control socket, launches clients. Under river it *is* the window manager, hence the binary name | M2 |
 | `helm-bar` | bin | Layer-shell bar, which-key strip, mode badge, chord echo | M2 |
@@ -110,7 +110,8 @@ Each row links to its ADR. "Reversal" is the honest cost of changing our mind.
 | [0013](adr/0013-river-window-management-backend.md) | Be the window manager for **river 0.4** | river 0.4 removed window management from the compositor; `river-window-management-v1` gives exact position, dimensions, node ordering, hide/show and borders — helm's ledger model exactly | Low — hidden behind `WmBackend` |
 | [0003](adr/0003-session-daemon-owns-state.md) | A session daemon owns state; clients subscribe | Bar/launcher stay dumb; swapping the compositor changes one file | Low |
 | [0004](adr/0004-ndjson-control-socket.md) | Newline-delimited JSON over a unix socket | Scriptable with `socat`; partial frames can't be misread | Low |
-| [0005](adr/0005-palette-toml-single-source.md) | One `palette.toml` → generated themes | No colour is written down twice; contrast is derived, not filtered | Low |
+| [0005](adr/0005-palette-toml-single-source.md) | One `palette.toml` → generated themes | No colour is written down twice; contrast is derived, not filtered. Its mutable activation clauses are superseded by 0017 | Low |
+| [0017](adr/0017-immutable-theme-activation-generations.md) | Publish sealed immutable theme generations | Launches pin a validated digest-bound tree; pointer commits affect future launches only and never reload | Medium |
 | [0006](adr/0006-oklab-contrast-not-filters.md) | Perceptual contrast derivation, gamut-capped | A `contrast()` filter costs a fullscreen pass and rotates hues | Low |
 | [0007](adr/0007-reuse-yazi-btop-starship.md) | Reuse yazi / btop / zsh+starship rather than rewrite | charon and horus are ~90% theme + keymap. Rewrites cost years and lose features | Low |
 | [0008](adr/0008-layer-shell-rendering-stack.md) | `smithay-client-toolkit` + `tiny-skia` + `cosmic-text` | Pure Rust, no GPU context for a 32px bar, real font fallback | Medium |
@@ -182,7 +183,7 @@ Neither word is allowed to stay an adjective. Both are tests.
 | Bar idle CPU | ~0% | The bar owns no timer and redraws only on a state change |
 | Sampler wakeups | 1 Hz, one thread, in `helm-session` | cpu, mem, gpu and net throughput are rates over counters with no kernel event behind them. One shared sampler off the input path is the single documented exception to the no-timers rule; the clock ticks to the next minute boundary, not every second |
 | Cold session start → usable | < 900 ms | No GPU context for the bar, no icon-cache scan, no thumbnailer |
-| `helm ctl theme apply` | < 150 ms | Templates rendered serially, replaced atomically per file, then one reload fan-out |
+| `helm ctl theme apply` | < 150 ms | Templates rendered serially, then one complete generation is validated, sealed, fsynced, and selected for future launches; no mutable-target shortcut or reload |
 
 **Robust — the failure modes we refuse to ship** (see
 [docs/PITFALLS.md](PITFALLS.md) for the full register):
@@ -191,9 +192,9 @@ Neither word is allowed to stay an adjective. Both are tests.
 - Tofu glyphs on a machine without Nerd Fonts — *closed by the glyph probe.*
 - Portals that hang because `WAYLAND_DISPLAY` never reached the D-Bus
   activation environment — *closed by the session contract (ADR 0011).*
-- Torn generated files during a theme apply — *closed by per-file atomic writes
-  plus a single reload fan-out.* Cross-file all-or-nothing publication is not
-  claimed.
+- A partial or mismatched theme becoming selectable — *closed by sealed
+  manifest validation and an atomic `current` commit.* Existing processes remain
+  pinned; the pointer switch changes future launches only.
 - A crashed bar taking the session with it — *clients are restartable units; the
   session daemon outlives them.*
 - An unreadable palette after a contrast tweak — *closed by `palette lint` in CI.*

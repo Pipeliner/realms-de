@@ -1,8 +1,18 @@
 # ADR 0005 — One `palette.toml`, and everything themed is generated from it
 
-- **Status:** Accepted (ratified 2026-08-28); see Reversal
+- **Status:** Accepted (ratified 2026-08-28); activation clauses partially
+  superseded by [ADR 0017](0017-immutable-theme-activation-generations.md)
 - **Deciders:** helm maintainers
-- **Supersedes / Superseded by:** —
+- **Supersedes / Superseded by:** Decision 3 and its mutable publication,
+  mixed-generation, no-op, and reload consequences/guards are superseded by
+  [ADR 0017](0017-immutable-theme-activation-generations.md). The single-palette,
+  derivation, rendering, lint, placeholder, and reach decisions remain active.
+
+> **Supersession notice (2026-08-29):** Decision 3 and later references to
+> per-file replacement, mixed-generation publication, or reload fan-out are
+> retained below as historical rationale only. The supported path publishes one
+> sealed immutable generation for future launches and never reloads on a
+> `current` pointer switch. SPEC 0011 is the governing apply/diff contract.
 
 ## Context
 

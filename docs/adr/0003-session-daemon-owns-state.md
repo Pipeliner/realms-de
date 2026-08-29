@@ -1,8 +1,16 @@
 # ADR 0003 — A session daemon owns the state; clients subscribe
 
-- **Status:** Accepted (ratified 2026-08-28); see Reversal
+- **Status:** Accepted (ratified 2026-08-28); theme-reload consequence
+  superseded by [ADR 0017](0017-immutable-theme-activation-generations.md)
 - **Deciders:** helm maintainers
-- **Supersedes / Superseded by:** —
+- **Supersedes / Superseded by:** The state/subscriber decision remains active.
+  ADR 0017 supersedes the historical consequence assigning theme reload fan-out
+  to the daemon.
+
+> **Supersession notice (2026-08-29):** The Neutral reference to daemon-owned
+> reload fan-out is historical only. Supported theme apply publishes a sealed
+> generation in the CLI process, sends no session request or notification, and
+> affects future launches only.
 
 ## Context
 

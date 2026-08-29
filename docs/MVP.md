@@ -46,7 +46,7 @@ does not serve it waits — however good it would look in a screenshot.
 | | Milestone | Ships | Done when |
 |---|---|---|---|
 | **M0** | Foundations | `helm-core`, CI, docs, ADRs, repo furniture | `cargo test` green in CI; architecture reviewed |
-| **M1** | Theming pipeline | `helm-theme`, templates, `helm ctl theme apply/lint` | One palette edit visibly retints GTK, terminal, yazi and btop |
+| **M1** | Theming pipeline | `helm-theme`, templates, `helm ctl theme apply/lint` | One palette edit publishes a coherent sealed generation selected by future GTK, terminal, yazi and btop launches |
 | **M2** | Session and bar | `helm-session` + `RiverBackend`, and the five protocols helm must *serve* under river (`river-layer-shell-v1`, `river-xkb-bindings-v1`, `river-input-management-v1`, `river-xkb-config-v1`, `river-libinput-config-v1` — the last two are why a laptop has a working touchpad and a switchable keyboard layout), plus `helm-bar` | Bar reflects live orbit/focus/mode changes, and the reference triptych geometry is pixel-exact on river |
 | **M3** | **Daily-drivable** | Session entry, portals, packaging, install docs | A fresh NixOS/Ubuntu/Fedora box logs into helm and passes `doctor` |
 | **M4** | Native clients | `helm-hecate`, `helm-odin`, urania, charon portal | The stopgaps are retired |

@@ -1,6 +1,7 @@
 # SPEC 0006 — helm ctl
 
-- **Status:** Accepted (2026-08-26) — not yet implemented
+- **Status:** Accepted (2026-08-26; generation contract reconciled by #159) —
+  not yet implemented
 - **Milestone:** M3, with `theme` and the argument surface in M1 and
   `orbit` / `ledger` in M2
 - **Decisions:** [ADR 0004](../adr/0004-ndjson-control-socket.md),
@@ -9,7 +10,8 @@
   [ADR 0012](../adr/0012-font-fallback-is-a-contract.md),
   [ADR 0013](../adr/0013-river-window-management-backend.md)
 - **Implements:** [INTERFACES.md §4](../INTERFACES.md)
-- **Supersedes / Superseded by:** —
+- **Supersedes / Superseded by:** Theme apply/diff behavior is refined and
+  superseded by [SPEC 0011](0011-theme-activation-generations.md).
 
 > Written before the code, as S14 requires. The **Test** column below is
 > deliberately empty: those tests get written next, watched to fail, and only
@@ -45,9 +47,11 @@ issue.
 every `doctor` check with its probe, its verdict and its remedy text; behaviour
 with no session, and with no session bus.
 
-**Out:** rendering templates and writing them atomically — that is `helm-theme`
-and [SPEC 0002](0002-theme-pipeline.md); `helm ctl` calls it in-process and
-reports what it did. Serving the socket, owning `HelmState`, and everything
+**Out:** rendering templates and publishing or comparing immutable generations
+— that is `helm-theme`, [SPEC 0002](0002-theme-pipeline.md), and
+[SPEC 0011](0011-theme-activation-generations.md); `helm ctl` calls those
+boundaries in-process and reports their generation-aware results. Serving the
+socket, owning `HelmState`, and everything
 `Capabilities` describes (`helm-session`). Drawing anything ([SPEC
 0004](0004-helm-bar.md)). Deciding what a healthy session *is* — that is
 ADR 0011's checklist, which this spec turns into checks rather than restates.
@@ -83,19 +87,20 @@ a real `FileChooser.OpenFile` call, which opens a dialog, so it is opt-in.
 
 | Command | Request sent | Response consumed |
 |---|---|---|
-| `theme apply` | none for the work itself — `helm_theme::apply` runs in this process; `ReloadTheme` afterwards, **notify only** — see below | `Ok` |
+| `theme apply` | none — generation-only `helm_theme::apply` runs in this process and reports `GenerationPublicationOutcome`; no post-apply notification | — |
 | `theme lint` | none — `helm_theme::lint` | — |
-| `theme diff` | none — `helm_theme::diff` | — |
+| `theme diff` | none — generation-aware, read-only `helm_theme::diff` | — |
 | `orbit list` | `ShowLedger(None)` | `Ledger(Vec<OrbitLedger>)` |
 | `orbit switch N` | `SwitchOrbit(N)` | `Ok` \| `Error` |
 | `ledger show [N]` | `ShowLedger(Some(N))` or `ShowLedger(None)` | `Ledger(Vec<OrbitLedger>)` |
 | `run ARGV…` | `Spawn(argv)` | `Ok` \| `Error` |
 | `doctor` | `Hello`, then `GetHealth` (new); skipped entirely when no session is running | `Hello`, `Health` (new) |
 
-Every command opens the socket and completes the `Hello` handshake first, as
-[INTERFACES.md §4](../INTERFACES.md) requires: `Client::connect()` refuses on a
-version mismatch rather than guessing at field meanings. `theme lint`,
-`theme diff` and `doctor` do not require the socket at all (§4).
+Every socket-backed command opens the socket and completes the `Hello`
+handshake first, as [INTERFACES.md §4](../INTERFACES.md) requires:
+`Client::connect()` refuses on a version mismatch rather than guessing at field
+meanings. `theme apply`, `theme lint`, `theme diff`, and `doctor` do not require
+the socket at all (§4).
 
 `run` is fire-and-forget by construction. `Response::Ok` means the session
 accepted the argv, not that the program started — `execve` fails after the fork
@@ -111,12 +116,12 @@ Four of these are additions and one is a correction. Each is a revision of
 Two things worth correcting first, because they are easy to misremember.
 `Response::Ledger` is **not** orphaned: `Request::ShowLedger(Option<usize>)`
 produces it, and `ipc::tests::responses_round_trip` exercises it. And there
-*is* a theme-adjacent request, `Request::ReloadTheme` — the problem with it is
-not that it is missing but that its documented meaning is wrong.
+*is* a theme-adjacent request, `Request::ReloadTheme`; its old apply/reload
+meaning is retired and it is not sent by the supported theme path.
 
 | # | Gap | Addition |
 |---|---|---|
-| 1 | `Request::ReloadTheme` is documented as "re-read `palette.toml`, re-render templates, hot-reload clients". Rendering the template set has a 150 ms budget ([ARCHITECTURE.md §4](../ARCHITECTURE.md)) and would run **inside `helm-session`**, which sits on river's input path where nothing may block — ADR 0013 names a theme apply as the example of what may not happen there | Narrow it to **notify only**: re-read the palette, fan out `Reload::HelmClients`, broadcast `Event::State`. The rendering and the atomic writes happen in the `helm ctl` process, which is allowed to take 150 ms because nothing depends on it answering. `Action::ReloadTheme` (`mod+p`) therefore *spawns* `helm ctl theme apply` rather than doing the work in-process. Correct the doc comment in the same commit |
+| 1 | `Request::ReloadTheme` is documented as "re-read `palette.toml`, re-render templates, hot-reload clients", which conflicts with generation-only future-launch activation | Retire that meaning. The supported `theme apply` neither sends this request nor preserves a notify-only replacement. Any later wire compatibility or live upgrade is a separate #22 design and must be generation-aware; it cannot reload on pointer switch. A key action may spawn `helm ctl theme apply`, whose effect is still future-launch-only |
 | 2 | No request reports the session's health. `WmBackend::name()` is documented "shown by `helm ctl doctor`" and `Capabilities` "`helm ctl doctor` prints this" ([INTERFACES.md §1](../INTERFACES.md)) — and neither is reachable over the wire | `Request::GetHealth` → `Response::Health(Box<SessionHealth>)` carrying: session build version, `PROTOCOL_VERSION`, backend `name()`, `Capabilities`, the bound compositor interface names and versions, whether `river-layer-shell-v1` is being served, the palette path in use, the session's own `glyphs::Probe`, and uptime |
 | 3 | `Capabilities` lives in `docs/INTERFACES.md` as a sketch, not in `helm-core`, and its `unsupported: Vec<&'static str>` cannot be deserialised into an owned value — yet it is exactly what `doctor` must print, entries like `"unclipped-dimension-quantisation"` included | Move it into `helm_core::ipc` with `Serialize`/`Deserialize`, and make `unsupported` a `Vec<String>`. It is a wire type now, not just a trait's return |
 | 4 | `Response::Error { message }` carries prose only, so a caller can map a refusal to an exit code only by matching on English | Add `kind`, a kebab-case enum: `unknown-request`, `bad-argument`, `no-such-orbit`, `no-focused-window`, `backend-refused`, `internal`. Exit codes come from data, not from a string |
@@ -156,7 +161,7 @@ theme for free and no colour is written down twice
 | 3 | No session: the fixed endpoint remains absent or refused after SPEC 0007's bounded startup retry |
 | 4 | Protocol version mismatch at the handshake |
 | 5 | The session refused the command; derived from `Response::Error::kind` |
-| 6 | A filesystem or I/O failure while applying a theme. Nothing was renamed, so the desktop is untouched (SPEC 0002) |
+| 6 | A filesystem or I/O failure while applying or diffing a theme, including `OutcomeAmbiguous`. An apply not known to have committed is not reported as activated; diff never mutates state (SPEC 0011) |
 
 Code 1 is deliberately the same for "your palette is unreadable", "a doctor
 check failed" and "the theme is stale": all three mean *the command worked and
@@ -166,6 +171,41 @@ surprises people otherwise.
 
 `doctor` never exits 3. A missing session is one of the things it is there to
 report, not a reason for it to fail.
+
+#### `theme apply` publication outcomes
+
+The CLI uses the `GenerationPublicationOutcome` variant directly. It does not
+probe `current`, recover, retry, or translate an ambiguous result into success:
+
+| Outcome | Human stdout | Human stderr | Exit |
+|---|---|---|---|
+| `Committed(generation)` | `generation <id> selected for future launches` | empty | 0 |
+| `CommittedWithCleanupPending { generation, cause }` | `generation <id> selected for future launches` | `warning: generation <id> is durably selected for future launches; committed cleanup is pending: <cause>` | 0 |
+| `OutcomeAmbiguous { candidate, cause }` | empty | `theme apply failed: activation is unconfirmed for candidate <id>; inspect generation state before retrying: <cause>` | 6 |
+
+`<id>` is the validated lowercase generation identifier. In human output,
+`<cause>` is one JSON string literal produced by the same serializer as
+`--json`; this escapes quotes, backslashes, newlines, carriage returns, tabs,
+and other control characters and therefore cannot inject another diagnostic
+line. The cleanup-pending warning says the pointer is durably selected and only
+journal cleanup is uncertain. The ambiguous diagnostic deliberately uses
+`candidate` and `unconfirmed`, never `selected`, `active`, `current`, `applied`,
+or another success word.
+
+With `--json`, stdout is exactly one object in the field order shown and stderr
+is empty. The exit codes remain those above:
+
+```json
+{"status":"committed","generation":"<id>"}
+{"status":"committed-cleanup-pending","generation":"<id>","cause":"<cause>"}
+{"status":"outcome-ambiguous","candidate":"<id>","cause":"<cause>","activated":false}
+```
+
+Only the object matching the returned variant is emitted. JSON encoding, not
+string concatenation, supplies `<cause>`. `OutcomeAmbiguous` is a CLI failure
+even though it is an outcome variant: the filesystem state does not justify an
+activation claim. This mapping is local result handling, not a live-upgrade or
+wire-compatibility protocol.
 
 ### 3. `doctor`
 
@@ -245,7 +285,7 @@ the tool's absence *is* the finding.
 | `session/protocol-version` | the session's version equals `ipc::PROTOCOL_VERSION` | `Response::Hello` | *"The CLI and the session are from different builds and would misread each other's frames."* Both versions printed |
 | `session/degraded` | every `DEGRADED <CODE>` in force for this session | the session log's stable codes (SPEC 0005 §6) | any code present is a `warn` reprinting the entry's own sentence. *"A degraded session pretending to be healthy."* This is the check that stops a session that started with no cursor theme from reading as clean |
 | `palette/lint` | the palette parses and passes `Palette::lint` | `Palette::load` on the resolved path, then `lint()`; names the file used, user or shipped, and prints the accent hue separations | `FAIL` on any fatal `Finding`, `warn` otherwise. Prints every finding through its `Display` impl — `error text.normal: contrast 1.02:1 on background.pane is below 4.5:1` — not the first |
-| `theme/outputs` | the generated files are current for the palette | the comparison `theme diff` makes | `warn`: *"Some apps are showing the previous theme."* Remedy: `helm ctl theme apply` |
+| `theme/outputs` | the fully validated current generation matches the candidate rendered from the palette | the generation-aware comparison `theme diff` makes | `warn`: *"Future launches still select the previous generated theme."* Remedy: `helm ctl theme apply` |
 | `fonts/glyphs` | the glyph inventory against the chain in `palette.toml` | build the database from `typography.family` + `typography.fallback`, then `glyphs::Probe::run`; print `Probe::summary()` verbatim | **`warn`**, never `FAIL`: the runes are non-essential by ADR 0012 and helm degrades to digits rather than tofu. *"Orbit runes draw as the digits 1–6 and the bar looks plain."* Prints `substituting for ᚠᚢᚦ…` and the package to install |
 | `fonts/attribution` | **which** family supplied each at-risk glyph — the six runes and `𓂃` | the resolved chain, per codepoint | `warn` when a family outside `typography.fallback` supplied one. *"Runes render in colour at the wrong size."* This is how an emoji font hijacking the symbol range becomes visible instead of merely puzzling |
 | `tools/floors` | the reused tools are installed and at their version floors | each tool's own `--version` | `warn` naming the tool and the package. *"charon, horus or thoth will be missing or unthemed"* (ADR 0007) |
@@ -372,7 +412,10 @@ SSH into a machine that will not start, or from a TTY after a failed session.
   (`--palette`, then `$XDG_CONFIG_HOME/helm/palette.toml`, then the shipped
   file), parses it, lints it, and prints every finding. It works on a machine
   with no Wayland, no D-Bus and no helm installed beyond the binary itself.
-  `theme diff` is the same, plus a read of the existing outputs.
+  `theme diff` is the same, plus read-only resolution and complete validation of
+  `current` followed by comparison with its manifest-listed normalized outputs.
+  It does not initialize or recover generation control state, create a lease,
+  publish, write an output, or reload a process.
 - **`doctor`** runs every check that does not need the socket, marks the rest
   `skip` with `no helm session is running`, and prints a banner saying so:
   `no helm session is running — 19 of 32 checks skipped`. It exits 0 if nothing
@@ -380,10 +423,10 @@ SSH into a machine that will not start, or from a TTY after a failed session.
   backend presence, cursor theme resolution, theme staleness and tool versions
   all still run and are all still worth having: they are precisely the checks
   that predict whether the *next* login will work.
-- **`theme apply`** does need to notify running clients, but does not need
-  them to exist. With no session it renders, writes atomically and reports
-  `session not running; no clients notified` — the files on disk are correct
-  and the next login picks them up. This is the first-run path.
+- **`theme apply`** is session-independent. It publishes a sealed generation,
+  reports its `GenerationPublicationOutcome`, and sends no notification whether
+  or not a session is running. A committed pointer affects future launches
+  only; existing processes remain pinned to their selected generation.
 
 A missing session is never spelled as a crash. `helm ctl orbit switch` with no
 session prints the socket path it tried and how to start a session, and exits
@@ -397,7 +440,7 @@ Each row is one happy path and becomes one test.
 |---|---|---|
 | B1 | Given the shipped palette and no session running, when `theme lint` runs, then it exits 0 and prints the six accents' hue separations | |
 | B2 | Given a palette with a fatal finding, when `theme lint` runs, then it exits 1 and prints every finding, not only the first | |
-| B3 | Given a rendered theme and one edited accent, when `theme diff` runs, then it exits 1, names only the outputs that would change, and writes no file | |
+| B3 | Given a fully validated current generation and one edited accent, when `theme diff` runs, then it exits 1, reports only lexicographically sorted `added`, `removed`, and `byte-different` normalized outputs, and performs no control initialization, recovery, lease, publication, pointer change, output write, or reload | |
 | B4 | Given a session with windows in orbits 1 and 3, when `orbit list` runs, then it prints six rows carrying rune, name, window count and layout, with orbit 1 marked active | |
 | B5 | Given a running session, when `orbit switch 3` runs, then it sends `Request::SwitchOrbit(3)`, prints the new orbit and exits 0 | |
 | B6 | Given a session whose backend has disconnected, when `orbit switch 2` runs and the session answers `Error { kind: backend-refused }`, then the CLI prints the session's message and exits 5 | |
@@ -409,6 +452,9 @@ Each row is one happy path and becomes one test.
 | B12 | Given `WAYLAND_DISPLAY` absent from the D-Bus activation environment, when `doctor` runs, then `env/wayland-display/dbus` fails within its 2 s deadline, prints the 25-second-hang symptom and the `dbus-update-activation-environment` remedy, and the command exits 1 | |
 | B13 | Given no session running and a font stack that covers ASCII only, when `doctor` runs, then the session checks are `skip` with a banner, `fonts/glyphs` warns with `Probe::summary()`'s wording, and it exits 0 | |
 | B14 | Given no session bus and no session running, when `doctor` runs, then the D-Bus and portal checks are `skip` and not `fail`, and it exits 0 | |
+| B15 | Given `theme apply` returns `Committed(generation)`, when the CLI reports it, then it exits 0 and reports exactly that generation as selected for future launches | |
+| B16 | Given `theme apply` returns `CommittedWithCleanupPending { generation, cause }`, when the CLI reports it, then it exits 0, reports exactly that generation as selected for future launches, and emits the safely escaped committed-cleanup warning | |
+| B17 | Given `theme apply` returns `OutcomeAmbiguous { candidate, cause }`, when the CLI reports it, then it exits 6, emits no human stdout, safely reports the candidate and unconfirmed activation, claims no success, and performs no recovery or retry | |
 
 ## Budgets
 
@@ -416,7 +462,7 @@ From [ARCHITECTURE.md §4](../ARCHITECTURE.md):
 
 | Path | Budget | How it is held |
 |---|---|---|
-| `helm ctl theme apply` | **< 150 ms** | templates rendered serially, byte-identical outputs skipped entirely, then replaced atomically per file (SPEC 0002) |
+| `helm ctl theme apply` | **< 150 ms** | templates rendered serially, then one complete generation is validated, sealed, fsynced, and published (SPEC 0011); no mutable-target equality shortcut is promised |
 
 Two budgets belong to this component alone:
 
@@ -445,9 +491,9 @@ holds river's global", "protocol version drift after a river bump", "version
 skew between components", and — via the three distro CI jobs whose gate is
 `doctor` exiting 0 — "works on the author's distro only".
 
-`theme lint` guards "unreadable palette after a tweak"; `theme diff` guards
-"half-applied theme" after the fact, where SPEC 0002's atomic writes guard it
-before.
+`theme lint` guards "unreadable palette after a tweak"; `theme diff` reports
+candidate/current generation drift, while SPEC 0011's validation and pointer
+commit rules prevent a partial generation from becoming selectable.
 
 The failure this component must not cause itself: **a diagnostic that lies**. A
 check that reports `ok` because its probe silently failed is worse than no

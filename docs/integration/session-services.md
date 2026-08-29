@@ -161,9 +161,11 @@ in the stack will. There is no fallback.
   neither win on maintenance nor on toolkit.
 
 **Integration cost.** `config + generated template`. One `fnott.ini.tmpl` or
-`mako/config.tmpl` in `configs/templates/`, one systemd user unit, one entry in
-the reload fan-out (`fnottctl reload` / `makoctl reload`), two which-key
-bindings. Half a day.
+`mako/config.tmpl` in `configs/templates/`, one systemd user unit, one catalogue
+entry, two which-key bindings. The supported generation path affects future
+launches only; `fnottctl reload` / `makoctl reload` would require #22's future
+generation-aware owned-process protocol and is not part of this estimate. Half
+a day.
 
 **Priority: MVP. Milestone: M3.** A desktop where Slack is silent for a week
 fails the week test on the second day.

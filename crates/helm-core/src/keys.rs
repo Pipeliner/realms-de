@@ -65,7 +65,8 @@ pub enum Action {
     ToggleWhichKey,
     /// Show the full keybinding sheet.
     Grimoire,
-    /// Reload the palette and hot-reload every client.
+    /// Legacy action name for publishing a theme generation for future launches.
+    /// It does not hot-reload clients on pointer switch.
     ReloadTheme,
     /// End the session.
     Quit,

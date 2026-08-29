@@ -76,13 +76,12 @@ pub enum Request {
     SetLayout(Layout),
     /// Restore the previous ledger.
     Undo,
-    /// Tell subscribers a new theme is already on disk, so they re-read it.
+    /// Retired theme-reload request retained in the current wire enum.
     ///
-    /// Deliberately **not** "render the templates". Rendering is a ~150 ms job
-    /// and `helm-session` sits on river's input path, where a stall is a
-    /// session failure rather than a slow frame (ADR 0013). So `helmctl` does
-    /// the rendering in its own process and sends this only once every file is
-    /// in place; the session's whole job is to fan out the notification.
+    /// Supported theme apply does not send this request and does not assign it
+    /// notify-only semantics. It publishes a sealed generation in the CLI
+    /// process for future launches and never reloads on pointer switch. No wire
+    /// compatibility behavior is promised for this legacy variant.
     ReloadTheme,
     /// Launch a program.
     Spawn(Vec<String>),

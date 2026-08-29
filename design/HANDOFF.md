@@ -1,5 +1,10 @@
 # Handoff: helm — a minimal, feature-rich Linux DE
 
+> **Historical input notice:** This handoff preserves the original product
+> direction. Its theme hot-reload mechanics are superseded by ADR 0017 and SPEC
+> 0011: supported apply publishes a sealed generation for future launches and
+> never reloads on a `current` pointer switch.
+
 ## Overview
 "helm" is a keyboard-centric, gapless-tiling desktop environment with a space + magic aesthetic (subtle — starfield bar, rune workspaces, arcane violet focus, gold accents). Tools are named after gods and lightly styled to their pantheons. No wasted space, power-user first. **Rust-first. Snappy: zero animations in v1** (a minimal-motion pass may come later — design for instant state changes now).
 

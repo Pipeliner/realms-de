@@ -1,4 +1,10 @@
-//! Apply, diff and lint: the three things `helm ctl theme` does.
+//! Palette loading and lint, plus the legacy mutable apply/diff implementation.
+//!
+//! The public mutable writer items in this module are retained for implementation
+//! migration and historical tests. They are not the supported `helm ctl theme
+//! apply|diff` contract. Supported apply publishes a sealed generation and
+//! supported diff compares against a fully validated current generation as
+//! specified by SPEC 0011.
 
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
@@ -46,27 +52,34 @@ struct StagedOutput {
     final_name: OsString,
 }
 
-/// What one apply did.
+/// Result of the legacy mutable writer.
+///
+/// This is not the supported apply result. Generation-only apply returns
+/// `GenerationPublicationOutcome`; written/unchanged/reloaded compatibility is
+/// not promised.
 #[derive(Debug)]
 pub struct Applied {
-    /// Files whose contents changed and were renamed into place.
+    /// Legacy mutable files whose contents changed and were renamed into place.
     pub written: Vec<PathBuf>,
-    /// Byte-identical files: not rewritten, not reloaded.
+    /// Legacy mutable files found byte-identical.
     pub unchanged: Vec<PathBuf>,
-    /// Reload mechanisms that fired, named by the first template owning each.
+    /// Legacy reload mechanisms fired by the mutable writer.
     pub reloaded: Vec<&'static str>,
-    /// Wall time for the whole apply. Budget: < 150 ms (ARCHITECTURE.md §4).
+    /// Wall time for the legacy mutable operation.
     pub elapsed: Duration,
 }
 
-/// What one template would do to disk, without doing it.
+/// One result from the legacy mutable-target diff.
+///
+/// This does not describe the supported generation-aware diff, whose result is
+/// a sorted added/removed/byte-different normalized output path.
 #[derive(Debug)]
 pub struct Change {
     /// Template id.
     pub id: &'static str,
-    /// Absolute target path.
+    /// Absolute legacy mutable target path.
     pub target: PathBuf,
-    /// True when the rendered bytes differ from what is on disk.
+    /// True when rendered bytes differ from that legacy mutable target.
     pub changed: bool,
 }
 
@@ -150,16 +163,20 @@ fn reject_symlinked_palette_path(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Render every shipped template and swap them in as one step.
+/// Run the legacy mutable target writer and reload fan-out.
+///
+/// This is not the supported theme-apply boundary. Supported apply captures
+/// inputs once, publishes a sealed immutable generation, returns
+/// `GenerationPublicationOutcome`, and never reloads on pointer switch.
 pub fn apply(palette: &Palette, root: &Path) -> Result<Applied> {
     apply_with(palette, root, &templates(), &mut SystemReloader)
 }
 
-/// [`apply`], with the template set and the reload fan-out injected.
+/// Legacy [`apply`] with its mutable template set and reload fan-out injected.
 ///
 /// The seam exists for the tests: counting reloads and pointing a whole apply
 /// at a temporary directory is the only way to assert atomicity without a
-/// desktop underneath it.
+/// desktop underneath it. It is not an alternative supported activation seam.
 pub fn apply_with(
     palette: &Palette,
     root: &Path,
@@ -242,9 +259,9 @@ fn apply_with_inner(
         written.push(output_root.display.join(&template.target));
     }
 
-    // Phase 4: and only now, one reload per distinct mechanism. Reloading per
-    // file would show the desktop a half-applied theme, which is the whole
-    // reason for the three phases above.
+    // Legacy mutable phase 4: one reload per distinct mechanism. This ordering
+    // is retained for historical behavior; supported generation apply never
+    // reaches this path.
     let mut fired: Vec<&Reload> = Vec::new();
     let mut reloaded = Vec::new();
     for (t, _) in &staged {
@@ -305,7 +322,11 @@ fn normalized_root_spelling(root: &Path) -> PathBuf {
     PathBuf::from(OsString::from_vec(bytes[..end].to_vec()))
 }
 
-/// Report what an apply would change, writing nothing.
+/// Compare rendered bytes with legacy mutable targets without writing them.
+///
+/// This is not the supported `theme diff`: it does not validate or compare the
+/// generation selected by `current` and must not be presented as satisfying
+/// SPEC 0011's read-only generation-aware diff contract.
 pub fn diff(palette: &Palette, root: &Path) -> Result<Vec<Change>> {
     let templates = templates();
     validate_targets(&templates)?;

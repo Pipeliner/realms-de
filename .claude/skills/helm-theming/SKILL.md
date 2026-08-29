@@ -5,14 +5,17 @@ description: Use when anything about helm's colour or generated theme files is i
 
 # helm theming
 
-One palette file, many generated files, applied atomically. Two rules carry the
-whole design and both are easy to break by accident.
+One palette file, many generated files, published as one sealed immutable
+generation. Three rules carry the whole design and are easy to break by
+accident.
 
 **Start in the spec** (S14). `docs/specs/0002-theme-pipeline.md` is the M1
-contract for `helm-theme` and is *Accepted with an empty Test column* — the
-happy-path tests for A1–A10 are the next thing to be written, watched to fail,
-and implemented against. The palette format itself is SPEC 0001; the decisions
-are ADR 0005 (one palette file) and ADR 0006 (derive, do not filter).
+contract for palette initialization, derivation, rendering, placeholder
+validation and linting. `docs/specs/0011-theme-activation-generations.md` is the
+Accepted governing contract for apply and diff; it supersedes SPEC 0002's former
+mutable-target, equality/no-op and reload-fan-out claims. The palette format
+itself is SPEC 0001; the decisions are ADR 0005 (one palette file), ADR 0006
+(derive, do not filter), and ADR 0017 (immutable activation generations).
 
 ## Rule 1 — no colour is written outside `palette.toml`
 
@@ -67,27 +70,32 @@ Related trap from `.claude/memory/30-gotchas.md`: hue angle is meaningless below
 about 0.02 chroma, so gate any hue assertion on `Rgb::chroma()` and test greys
 for lightness instead.
 
-## Rule 3 — application is atomic
+## Rule 3 — application publishes a sealed generation
 
-A half-applied theme (new terminal colours against an old GTK stylesheet, until
-relogin) is a failure mode listed in `docs/PITFALLS.md`. The contract in
-`docs/INTERFACES.md` §2 is: render every file to `<target>.helm-tmp`, `rename(2)`
-each into place, and **only then** fan out reloads once. Never reload per file,
-never reload before every file is in place, and never leave a partial write
-behind if the process is killed mid-apply. Byte-identical files are reported as
-`unchanged` and are neither rewritten nor reloaded — that is what keeps
-`helm ctl theme apply` inside its 150 ms budget.
+A half-applied theme is a failure mode listed in `docs/PITFALLS.md`. The
+supported contract in `docs/INTERFACES.md` §2 and SPEC 0011 is generation-only:
+capture inputs once under the exclusive generation lock, render and validate the
+complete normalized output set, write and seal one immutable generation, make
+it durable, and atomically replace `current`. The selected generation affects
+**future launches only**. A pointer switch sends no reload, signal, command, or
+session notification, and already-running processes remain on the generation
+they selected.
+
+The old per-target temporary-file writer, `Reloader` fan-out, and
+`written`/`unchanged`/`reloaded` result are retired from the supported path.
+Identical inputs may publish another generation; there is no promised no-op
+result. `theme diff` is read-only and compares candidate normalized outputs only
+with a **fully validated current generation**, returning sorted `added`,
+`removed`, and `byte-different` paths without initialization, recovery,
+publication, pointer replacement, output writes, or reloads. Live upgrade and
+wire compatibility remain outside this contract.
 
 ## Adding a template
 
-`helm-theme` and `configs/templates/` do not exist yet — they land in **M1**.
-Until then, adding a template means extending the design, not writing code
-against an imaginary API. When M1 is under way:
-
-1. Add a `Template` (`docs/INTERFACES.md` §2) with a stable `id`, the source
-   text, a `target` relative to `$XDG_CONFIG_HOME`, and a `Reload` variant:
-   `None` (read at next start), `Signal { process, signal }`, `Command(..)` for
-   things like `gsettings set`, or `HelmClients` for helm's own bar and launcher.
+1. Add a `Template` (`docs/INTERFACES.md` §2) with a stable `id`, source text,
+   and normalized `target` path within the sealed generation. Its `Reload`
+   value is canonical catalogue metadata included in the generation digest; the
+   supported apply path does not execute it.
 2. Write the source with `{{ path.to.value }}` placeholders only. An unknown
    placeholder must be a hard render error — a silently blank colour is the
    exact bug this design exists to prevent.
@@ -97,8 +105,9 @@ against an imaginary API. When M1 is under way:
 4. Check the app against the reach-and-limits table before promising anything —
    see `reference.md`. Some things are simply not reachable and the honest
    answer is to document the limit rather than fight it.
-5. Verify with `cargo test -p helm-core palette` plus a real before/after look
-   at the generated file.
+5. Verify with `cargo test -p helm-core palette` and `cargo test -p helm-theme`
+   plus a real before/after look at the generated file selected for a new
+   launch.
 
 ## Changing a colour
 
