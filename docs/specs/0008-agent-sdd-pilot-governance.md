@@ -57,7 +57,7 @@ unknown keys fail. The permitted string classes are:
 | command | 1–512 characters matching `^[A-Za-z0-9_./:@%+, -]+$`; it may not start with `-`, contain `..` or contain `/`, and no whitespace-delimited token may equal `fn`, `struct`, `enum`, `const`, `let`, `impl`, `use`, `pub` or `mod` |
 | repository path | 1–240 characters matching `^[A-Za-z0-9][A-Za-z0-9._/-]*$`, with no empty, `.` or `..` segment and no leading `/` |
 | branch | 1–128 characters matching `^[A-Za-z0-9][A-Za-z0-9._/-]*$`, with no `..` or trailing `.` or `/` |
-| evidence ID | `^ev-(?:0[0-9]{2,}|[1-9][0-9]*)$` |
+| evidence ID | `^ev-0*[1-9][0-9]*$` (a decimal suffix containing at least one nonzero digit; padded IDs such as `ev-001` are valid) |
 | document reference | `^(ADR|SPEC)-[0-9]{4}$` |
 | commit ID | `^[0-9a-f]{40}$` and resolves to a commit |
 | timestamp | UTC RFC 3339 in `YYYY-MM-DDTHH:MM:SSZ` form |
@@ -174,7 +174,8 @@ All evidence references name sibling JSONL IDs.
 `evidence.jsonl` is UTF-8 JSON Lines: one object per line, no blank lines and
 unique IDs. Absent optional fields are omitted, never `null`. Every evidence
 object, including a decision, requires `id`, `ts`, `kind` and `git_head`; its
-Git ID must resolve to a commit. IDs are `ev-` plus a positive decimal number;
+Git ID must resolve to a commit. IDs are `ev-` plus a decimal suffix containing
+at least one nonzero digit;
 timestamps/Git IDs use the checkpoint forms; kind is exactly `command`,
 `file-observation` or `decision`.
 
@@ -310,7 +311,7 @@ requirements, not existing-tool claims.
 | # | Given / When / Then | Planned verification |
 |---|---|---|
 | A1 | A valid `probe → spike` record is assessed from a clean record-carrier commit with initial regular-blob record files | Exit 0 and exact pass JSON without tracked-file changes | #120 temporary-Git fixture + clean `git diff --exit-code` |
-| A2 | Every scalar/table/array boundary, unknown field, duplicate ID, bad reference/timestamp/Git object, mismatched issue directory, cross-revision decision or decision cycle is supplied | Exit 3 identifies only safe metadata | #120 fixtures |
+| A2 | Every scalar/table/array boundary, unknown field, duplicate or zero-only evidence ID, bad reference/timestamp/Git object, mismatched issue directory, cross-revision decision or decision cycle is supplied | Exit 3 identifies only safe metadata | #120 fixtures |
 | A3 | A forbidden raw-output-like field, environment-like assignment, credential-like value, source delimiter/snapshot, disallowed command syntax or unknown file/field is supplied | Hygiene/evidence validation fails without echoing it | positive and negative #120 fixtures covering every permitted field class and detector pattern |
 | A4 | Evidence or checkpoint not at the record-carrier parent, a root/merge/non-regular carrier, a carrier diff that touches another path or changes an outside-path mode, a non-ancestor workspace base, or dirty/index/untracked workspace is assessed | Exit 2 with the exact `fresh_evidence`, `fresh_checkpoint`, `transition_evidence` and/or `clean_workspace` obligation vector | #120 temporary-Git fixture |
 | A5 | A permitted transition is assessed with a selected issue and matching maturity fields | Stable complete JSON and no writes | #120 fixture + clean diff |

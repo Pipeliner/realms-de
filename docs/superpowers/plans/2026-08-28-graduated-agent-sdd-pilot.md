@@ -57,7 +57,7 @@
 - Create: `crates/helm-agent-sdd/` with library, `helm-sdd` binary, and tests.
 - Create: crate-local record templates materialized into temporary clean Git repositories by tests.
 
-- [ ] Write failing tests for duplicate evidence IDs, invalid lifecycle transition, an initial regular-blob metadata-only record-carrier commit, stale/non-carrier/root/merge commit evidence, prohibited evidence fields, and exact report output.
+- [ ] Write failing tests for duplicate and zero-only evidence IDs, invalid lifecycle transition, an initial regular-blob metadata-only record-carrier commit, stale/non-carrier/root/merge commit evidence, prohibited evidence fields, and exact report output.
 - [ ] Implement only read-only `gate` and `promote --dry-run`; their validation subsumes schema, evidence and hygiene checks.
 - [ ] Run focused tests, then the workspace trio, and record test names in the governance specification.
 - [ ] Commit the crate and fixtures.
