@@ -216,7 +216,7 @@ Target plan and current evidence:
 
 | Platform | Delivery | Notes |
 |---|---|---|
-| **NixOS / Nix** | Root flake imports packages, `nixosModules.helm`, `homeManagerModules.helm` | Reference build after a reviewed `flake.lock` is committed. A NixOS VM test boots the session and asserts the bar appears |
+| **NixOS / Nix** | Root flake imports packages, `nixosModules.helm`, `homeManagerModules.helm` | Reference build with committed `flake.lock`; lock updates are reviewed dependency changes. A NixOS VM test boots the session and asserts the bar appears |
 | **Ubuntu** 24.04 LTS + | tracked native `packaging/debian/` files | Oldest supported glibc. Note the MSRV is pinned harder by the dependency set (1.85, edition 2024) than by glibc |
 | **Compositor** | River `>= 0.4.0`, with a source selected per target | Fedora 44 has an official native candidate; availability is not compatibility evidence. Ubuntu and Nix remain governed by ADR 0010/0013 |
 | **Fedora 44 (pre-alpha)** | tracked RPM skeleton plus a pinned base/current packages Cargo-smoke lane | The RPM, graphical login and SELinux behavior remain unverified |
