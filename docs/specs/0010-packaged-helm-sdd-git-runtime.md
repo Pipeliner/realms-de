@@ -32,9 +32,9 @@ the host, network access, or any automatic memory/record capture.
 
 | # | Given / When / Then | Verification |
 |---|---|---|
-| A1 | Given the Nix `helm` output and a valid, clean local record-carrier fixture, when the installed `helm-sdd gate --issue 120 --from probe --to spike` is invoked with an otherwise unusable caller `PATH`, then it exits 0 and emits the canonical SPEC 0008 pass JSON | Planned #146 Nix package regression |
-| A2 | Given the installed `helm-sdd` wrapper, when it runs A1, then Git is resolved from the package closure rather than the caller environment | Planned #146 Nix package regression's empty-PATH invocation |
-| A3 | Given the Nix output, when its generated `helm-session` wrapper is inspected, then it does not include the pinned Git store bin directory | Planned #146 Nix package regression |
+| A1 | Given the Nix `helm` output and a valid, clean local record-carrier fixture, when the installed `helm-sdd gate --issue 120 --from probe --to spike` is invoked with an otherwise unusable caller `PATH`, then it exits 0 and emits the canonical SPEC 0008 pass JSON | `checks.<system>.helm-sdd-git-runtime` |
+| A2 | Given the installed `helm-sdd` wrapper, when it runs A1, then Git is resolved from the package closure rather than the caller environment | `checks.<system>.helm-sdd-git-runtime` empty-PATH invocation |
+| A3 | Given the Nix output, when its generated `helm-session` wrapper is inspected, then it does not include the pinned Git store bin directory | `checks.<system>.helm-sdd-git-runtime` |
 | A4 | Given a normal source-workspace validation, when the existing gate fixtures run, then its established Git-backed and read-only semantics remain unchanged | `crates/helm-agent-sdd/tests/gate.rs` (47 fixtures at acceptance) |
 
 ## Open questions

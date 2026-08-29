@@ -44,7 +44,7 @@ existing Rust `helm-sdd` fixture contract.
   successfully only when the installed wrapper supplies Git and the session
   wrapper omits Git's store bin path.
 
-- [ ] **Step 1: Add the regression before the wrapper change**
+- [x] **Step 1: Add the regression before the wrapper change**
 
   Add a `runCommand` check which creates a base commit, writes a minimal valid
   `.agent/work/120` checkpoint/evidence carrier in a second commit, then runs:
@@ -62,7 +62,7 @@ existing Rust `helm-sdd` fixture contract.
   `${pkgs.git}/bin/git` for every fixture operation so fixture construction does
   not accidentally prove host `PATH` availability.
 
-- [ ] **Step 2: Establish the red condition without pushing a red branch**
+- [x] **Step 2: Establish the red condition without pushing a red branch**
 
   Run the check with the current unwrapped package using a Nix version capable
   of evaluating the locked nixpkgs. It must fail at the installed
@@ -70,18 +70,20 @@ existing Rust `helm-sdd` fixture contract.
   host cannot evaluate the lock, retain the test locally and do not push until
   Task 2 supplies the wrapper; remote CI is the required green proof.
 
-- [ ] **Step 3: Verify the check is not a workflow change**
+- [x] **Step 3: Verify CI executes the check on every runner path**
 
   Run:
 
   ```bash
-  git diff -- .github/workflows
+  python3 -c 'from pathlib import Path; text = Path(".github/workflows/distro.yml").read_text(); start = text.index("nix build --print-build-logs"); block = text[start:text.index("fi", start)]; assert ".#checks.$system.helm-sdd-git-runtime" in block'
   nix-instantiate --parse packaging/nix/checks.nix >/dev/null
   ```
 
-  Expected: no workflow diff; Nix source parses.
+  Expected: `distro.yml` builds the check in its no-KVM fallback; Nix source
+  parses. This scope correction followed adversarial review, which found that
+  merely evaluating the check would not execute the runtime regression.
 
-- [ ] **Step 4: Commit only after Task 2 produces a passing runtime check**
+- [x] **Step 4: Commit only after Task 2 produces a passing runtime check**
 
   The red test and production wrapper belong to one non-red-push increment.
 
@@ -96,7 +98,7 @@ existing Rust `helm-sdd` fixture contract.
 - Produces: `$out/bin/helm-sdd` whose wrapper prefixes the Git store bin path;
   `$out/bin/helm-session` keeps its existing `support.wrapperRuntime` path.
 
-- [ ] **Step 1: Add the minimal runtime wrapper**
+- [x] **Step 1: Add the minimal runtime wrapper**
 
   Immediately after the existing session wrapper, add:
 
@@ -107,13 +109,13 @@ existing Rust `helm-sdd` fixture contract.
 
   Do not alter `support.wrapperRuntime`.
 
-- [ ] **Step 2: Correct stale pre-alpha comments**
+- [x] **Step 2: Correct stale pre-alpha comments**
 
   In `package.nix` and `flake.nix`, replace the claim that the workspace only
   has `helm-core` and installs no Helm binaries. State precisely that desktop
   binaries remain pending while the local `helm-sdd` validator is installed.
 
-- [ ] **Step 3: Run green verification**
+- [x] **Step 3: Run green verification**
 
   Run:
 
@@ -128,7 +130,7 @@ existing Rust `helm-sdd` fixture contract.
   version cannot evaluate the lock. Require `helm-sdd-git-runtime` and the
   existing package/session checks to pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
   ```bash
   git add packaging/nix/checks.nix packaging/nix/package.nix flake.nix \
@@ -147,12 +149,12 @@ existing Rust `helm-sdd` fixture contract.
 - Produces: implemented acceptance references and a closed, accurately labeled
   GitHub issue.
 
-- [ ] **Step 1: Request adversarial review**
+- [x] **Step 1: Request adversarial review**
 
   Review the exact package closure claim, the empty-PATH fixture, the session
-  wrapper assertion, and the absence of `.github/workflows` changes.
+  wrapper assertion, and execution of the check on both CI runner paths.
 
-- [ ] **Step 2: Record the real guard**
+- [x] **Step 2: Record the real guard**
 
   Replace the planned verification text for A1–A3 with the exact Nix check
   attribute after it passes. Do not claim completion from a derivation diff.
