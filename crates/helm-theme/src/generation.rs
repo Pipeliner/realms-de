@@ -110,6 +110,7 @@ enum PointerJournalState {
     },
     CleanupCommitted {
         name: String,
+        previous: Option<GenerationId>,
     },
 }
 
@@ -660,14 +661,80 @@ impl GenerationStore {
     /// Remove only provably stale leases and old valid unleased generations.
     pub fn garbage_collect(&self) -> std::result::Result<GenerationGcReport, String> {
         let _lock = self.lock_exclusive()?;
-        let inventory = self.inspect_pointer_journals()?;
-        let current = match inventory.state {
-            PointerJournalState::Clean | PointerJournalState::CleanupCommitted { .. } => inventory
-                .current
-                .ok_or_else(|| "current generation is absent".to_owned())?,
-            _ => return Err("pointer transaction requires exclusive recovery".into()),
+        let (mut report, mut live_generations, uncertain_lease) =
+            self.reclaim_stale_leases_locked()?;
+        if uncertain_lease {
+            return Ok(report);
+        }
+        let inventory = match self.inspect_pointer_journals() {
+            Ok(inventory) => inventory,
+            Err(_) => return Ok(report),
+        };
+        let journal_previous = match inventory.state {
+            PointerJournalState::Clean => None,
+            PointerJournalState::CleanupCommitted { previous, .. } => previous,
+            _ => return Ok(report),
+        };
+        let Some(current) = inventory.current else {
+            return Ok(report);
         };
 
+        live_generations.insert(current.clone());
+        if let Some(previous) = journal_previous {
+            live_generations.insert(previous);
+        }
+
+        let mut candidates = Vec::new();
+        let mut malformed_generation = false;
+        let mut generations =
+            Dir::read_from(&self.generations.fd).map_err(|error| error.to_string())?;
+        while let Some(entry) = generations.read() {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let bytes = entry.file_name().to_bytes();
+            if matches!(bytes, b"." | b"..") {
+                continue;
+            }
+            let Ok(name) = std::str::from_utf8(bytes) else {
+                malformed_generation = true;
+                continue;
+            };
+            let Ok(generation) = GenerationId::parse(name) else {
+                malformed_generation = true;
+                continue;
+            };
+            let Ok(stat) = statat(&self.generations.fd, name, AtFlags::SYMLINK_NOFOLLOW) else {
+                malformed_generation = true;
+                continue;
+            };
+            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+                || self.validate_generation(&generation).is_err()
+            {
+                malformed_generation = true;
+                continue;
+            }
+            if live_generations.contains(&generation) {
+                continue;
+            }
+            candidates.push((stat.st_mtime, stat.st_mtime_nsec, generation));
+        }
+        drop(generations);
+        if malformed_generation {
+            return Ok(report);
+        }
+        candidates.sort_by(|left, right| {
+            (right.0, right.1, right.2.as_str()).cmp(&(left.0, left.1, left.2.as_str()))
+        });
+        for (_, _, generation) in candidates.into_iter().skip(2) {
+            remove_tree_at(&self.generations.fd, OsStr::new(generation.as_str()))?;
+            fsync(&self.generations.fd).map_err(|error| error.to_string())?;
+            report.reclaimed_generations += 1;
+        }
+        Ok(report)
+    }
+
+    fn reclaim_stale_leases_locked(
+        &self,
+    ) -> std::result::Result<(GenerationGcReport, BTreeSet<GenerationId>, bool), String> {
         let mut report = GenerationGcReport::default();
         let mut live_generations = BTreeSet::new();
         let mut uncertain_lease = false;
@@ -740,56 +807,7 @@ impl GenerationStore {
                 Err(error) => return Err(error.to_string()),
             }
         }
-        if uncertain_lease {
-            return Ok(report);
-        }
-
-        let mut candidates = Vec::new();
-        let mut malformed_generation = false;
-        let mut generations =
-            Dir::read_from(&self.generations.fd).map_err(|error| error.to_string())?;
-        while let Some(entry) = generations.read() {
-            let entry = entry.map_err(|error| error.to_string())?;
-            let bytes = entry.file_name().to_bytes();
-            if matches!(bytes, b"." | b"..") {
-                continue;
-            }
-            let Ok(name) = std::str::from_utf8(bytes) else {
-                malformed_generation = true;
-                continue;
-            };
-            let Ok(generation) = GenerationId::parse(name) else {
-                malformed_generation = true;
-                continue;
-            };
-            let Ok(stat) = statat(&self.generations.fd, name, AtFlags::SYMLINK_NOFOLLOW) else {
-                malformed_generation = true;
-                continue;
-            };
-            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
-                || self.validate_generation(&generation).is_err()
-            {
-                malformed_generation = true;
-                continue;
-            }
-            if generation == current || live_generations.contains(&generation) {
-                continue;
-            }
-            candidates.push((stat.st_mtime, stat.st_mtime_nsec, generation));
-        }
-        drop(generations);
-        if malformed_generation {
-            return Ok(report);
-        }
-        candidates.sort_by(|left, right| {
-            (right.0, right.1, right.2.as_str()).cmp(&(left.0, left.1, left.2.as_str()))
-        });
-        for (_, _, generation) in candidates.into_iter().skip(2) {
-            remove_tree_at(&self.generations.fd, OsStr::new(generation.as_str()))?;
-            fsync(&self.generations.fd).map_err(|error| error.to_string())?;
-            report.reclaimed_generations += 1;
-        }
-        Ok(report)
+        Ok((report, live_generations, uncertain_lease))
     }
 
     fn validate_current_or_pristine(&self) -> std::result::Result<bool, String> {
@@ -1190,7 +1208,7 @@ impl GenerationStore {
                 filesystem.unlink(self.root.fd.as_fd(), absent_name.as_str())?;
                 filesystem.unlink(self.root.fd.as_fd(), current_name.as_str())?;
             }
-            PointerJournalState::CleanupCommitted { name } => {
+            PointerJournalState::CleanupCommitted { name, .. } => {
                 filesystem.unlink(self.root.fd.as_fd(), name.as_str())?;
             }
         }
@@ -1326,7 +1344,10 @@ impl GenerationStore {
                 if let Some(previous) = &journal.content {
                     self.validate_generation(previous)?;
                 }
-                PointerJournalState::CleanupCommitted { name: journal.name }
+                PointerJournalState::CleanupCommitted {
+                    name: journal.name,
+                    previous: journal.content,
+                }
             }
             _ => return Err("pointer journal inventory is contradictory".into()),
         };
@@ -2412,14 +2433,15 @@ mod tests {
     }
 
     #[test]
-    fn selector_holds_shared_lock_through_durable_lease_creation() {
+    fn os_advisory_shared_lock_blocks_separately_opened_writer_through_durable_lease_creation() {
         use std::sync::Barrier;
 
         let root = tempfile::tempdir().unwrap();
-        let store = Arc::new(seeded_store(root.path()));
+        let selecting_store = Arc::new(seeded_store(root.path()));
+        let publishing_store = Arc::new(GenerationStore::open(root.path()).unwrap());
         let lease_synced = Arc::new(Barrier::new(2));
         let release_selector = Arc::new(Barrier::new(2));
-        let selecting_store = Arc::clone(&store);
+        let selecting_store = Arc::clone(&selecting_store);
         let selecting_lease_synced = Arc::clone(&lease_synced);
         let selecting_release = Arc::clone(&release_selector);
         let selecting = std::thread::spawn(move || {
@@ -2434,8 +2456,10 @@ mod tests {
         assert_eq!(lease_names(root.path()).len(), 1);
 
         let (published_tx, published_rx) = mpsc::channel();
-        let publishing_store = Arc::clone(&store);
+        let writer_started = Arc::new(Barrier::new(2));
+        let publishing_writer_started = Arc::clone(&writer_started);
         let publishing = std::thread::spawn(move || {
+            publishing_writer_started.wait();
             let candidate = "00000000000000000000000000000002";
             let outcome = publish_at(
                 &publishing_store,
@@ -2445,18 +2469,25 @@ mod tests {
             );
             published_tx.send(outcome).unwrap();
         });
-        assert!(published_rx
+        writer_started.wait();
+        // This timeout tests a negative concurrency property after the writer
+        // has reached the publish call: it must not acquire the OS lock while
+        // the separately opened selector still holds its shared lock.
+        let writer_was_blocked = published_rx
             .recv_timeout(Duration::from_millis(150))
-            .is_err());
+            .is_err();
 
         release_selector.wait();
         let selected = selecting.join().unwrap();
         assert_eq!(selected.as_str(), "00000000000000000000000000000001");
-        assert!(published_rx
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap()
-            .is_ok());
+        if writer_was_blocked {
+            assert!(published_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .is_ok());
+        }
         publishing.join().unwrap();
+        assert!(writer_was_blocked);
     }
 
     #[test]
@@ -2549,6 +2580,102 @@ mod tests {
         assert_eq!(report.reclaimed_leases, 3);
         assert!(lease_names(root.path()).is_empty());
         assert!(root.path().join("generations").join(generation).exists());
+    }
+
+    #[test]
+    fn g6_gc_reclaims_provably_stale_lease_even_when_current_is_malformed() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let old = "00000000000000000000000000000001";
+        let candidate = "00000000000000000000000000000002";
+        v1_fixture(
+            &root.path().join("generations"),
+            candidate,
+            "theme.ini",
+            b"candidate",
+        );
+        write_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000011",
+            old,
+            i32::MAX as u32,
+            linux_start_time(std::process::id()),
+            &linux_boot_id(),
+            rustix::process::getuid().as_raw(),
+        );
+        std::fs::write(root.path().join("current"), b"corrupt\n").unwrap();
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_leases, 1);
+        assert_eq!(report.reclaimed_generations, 0);
+        assert!(lease_names(root.path()).is_empty());
+        assert!(root.path().join("generations").join(old).exists());
+        assert!(root.path().join("generations").join(candidate).exists());
+        assert_eq!(
+            std::fs::read(root.path().join("current")).unwrap(),
+            b"corrupt\n"
+        );
+    }
+
+    #[test]
+    fn g6_gc_reclaims_provably_stale_lease_when_current_is_absent() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let old = "00000000000000000000000000000001";
+        write_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000011",
+            old,
+            i32::MAX as u32,
+            linux_start_time(std::process::id()),
+            &linux_boot_id(),
+            rustix::process::getuid().as_raw(),
+        );
+        std::fs::remove_file(root.path().join("current")).unwrap();
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_leases, 1);
+        assert_eq!(report.reclaimed_generations, 0);
+        assert!(lease_names(root.path()).is_empty());
+        assert!(root.path().join("generations").join(old).exists());
+    }
+
+    #[test]
+    fn g6_committed_journal_prior_generation_is_protected_from_gc_candidates() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let prior = "00000000000000000000000000000001";
+        let current = "00000000000000000000000000000002";
+        publish_at(
+            &store,
+            current,
+            || Ok(publication(current, "current")),
+            |_| Ok(()),
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join(format!(".committed-{current}")),
+            format!("{prior}\n"),
+        )
+        .unwrap();
+        for number in 3..=4 {
+            let generation = format!("{number:032x}");
+            v1_fixture(
+                &root.path().join("generations"),
+                &generation,
+                "theme.ini",
+                format!("orphan-{number}").as_bytes(),
+            );
+        }
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_generations, 0);
+        assert!(root.path().join("generations").join(prior).exists());
+        assert_eq!(store.select_current().unwrap().as_str(), current);
+        assert_eq!(store.recover().unwrap().as_str(), current);
     }
 
     #[test]
