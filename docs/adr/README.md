@@ -33,6 +33,7 @@ Copy [`template.md`](template.md) to start a new one.
 | [0014](0014-local-agent-sdd-pilot-governance.md) | Local agent-SDD pilot records are tracked but non-authoritative | Accepted | Metadata-only checkpoints/evidence aid handoff; docs, GitHub and tests retain their existing authority | Low — remove pilot records and validator |
 | [0015](0015-fedora-44-pre-alpha-baseline.md) | Fedora 44 is the sole explicit pre-alpha Fedora baseline | Accepted — partially supersedes [0010](0010-nix-flake-as-reference-build.md) and [0013](0013-river-window-management-backend.md) for Fedora | One exact Fedora release and native River candidate, without implying RPM/session support | Low — accept a successor baseline and replace the single lane |
 | [0016](0016-packaged-helm-sdd-carries-git.md) | The Nix-installed `helm-sdd` carries Git in its own runtime closure | Accepted | Git is wrapped only for the local Git-backed validator, never the desktop session | Low — replace with a separately specified interface |
+| [0017](0017-immutable-theme-activation-generations.md) | Theme activation uses sealed immutable generations | Accepted | Launches pin a digest-bound sealed tree; pointer commits change future launches only | Medium — changes #22/#132 launcher and lifecycle seams |
 
 All active decisions through 0013 were **ratified by the owner on 2026-08-28**,
 after the correction set tracked by #3. ADR 0015 was authorized by the owner
