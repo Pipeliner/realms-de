@@ -29,11 +29,12 @@ have shipped the signature triptych as an approximation with no stow at all —
 proves untenable on Ubuntu or Fedora. See ADR 0013, and ADR 0002 for the
 evidence that moved us.
 
-**2026-08-26 — Vendor a pinned river rather than depending on the distro's** —
+~~**2026-08-26 — Vendor a pinned river rather than depending on the distro's** —
 because Ubuntu 24.04 and Fedora 41 ship river 0.3.x or river-classic, neither of
 which speaks the WM protocol, and waiting for them would break the MVP on two of
 three first-class targets. Puts Zig in the packaging pipeline only — *revisit if*
-the distros catch up.
+the distros catch up.~~ **Partially superseded for Fedora on 2026-08-29 by ADR
+0015; the Ubuntu premise remains open.**
 
 **2026-08-26 — Contrast capped at the sRGB gamut boundary instead of
 desaturating** — because pushing an accent past the boundary and clamping
@@ -65,11 +66,12 @@ because Fedora ships Kubernetes Helm at `/usr/bin/helm`, where two owners of one
 path make rpm refuse the install outright — *revisit if* the branding question
 (shipping a `helm` alias where the name is free) is answered differently.
 
-**2026-08-26 — Packaging vendors river 0.4.8 specifically** — because that is
+~~**2026-08-26 — Packaging vendors river 0.4.8 specifically** — because that is
 what nixpkgs carries at the revision the flake evaluates against, and Ubuntu
 noble has no river, no zig and only wlroots 0.17, so nothing can be borrowed
 from the distro — *revisit if* the distros catch up, which would let the
-vendoring be dropped entirely.
+vendoring be dropped entirely.~~ **Partially superseded for Fedora on
+2026-08-29 by ADR 0015; Nix and Ubuntu remain under ADR 0010/0013.**
 
 **2026-08-26 — The systemd unit for the window manager is `helm-wm.service`,
 matching the binary.** *(Briefly instructed as `helm-sessiond.service` before
@@ -85,3 +87,13 @@ where a stall is a session failure, so `Request::ReloadTheme` notifies that file
 are already on disk rather than asking for them to be written — *revisit if*
 rendering ever becomes cheap enough to be non-blocking, which would still not
 make it a good idea.
+
+**2026-08-29 — Fedora 44 is the sole explicit Fedora pre-alpha baseline and
+uses Fedora's native `river >= 0.4.0` package as its packaging candidate** —
+because Fedora's lifecycle service marked F44 current through 2027-06-02 and
+its official repositories exposed River 0.4.8, the protocol generation Helm
+requires. This is package-availability evidence, not a tested Helm/River
+pairing or complete Fedora support. Ubuntu and Nix River sourcing remain under
+ADR 0010/0013 — *revisit if* Fedora 44 reaches EOL, removes the compatible
+package, or M2 integration evidence finds an incompatibility. See ADR 0015 and
+SPEC 0009.
