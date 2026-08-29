@@ -2,7 +2,9 @@
 
 - **Status:** Accepted (ratified 2026-08-28); see Reversal
 - **Deciders:** helm maintainers, repo owner
-- **Supersedes / Superseded by:** **Supersedes [ADR 0002](0002-borrow-a-compositor-first.md)**
+- **Supersedes / Superseded by:** **Supersedes [ADR 0002](0002-borrow-a-compositor-first.md)**;
+  Decision 4 is superseded only for Fedora by
+  [ADR 0015](0015-fedora-44-pre-alpha-baseline.md)
 
 ## Context
 

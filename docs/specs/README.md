@@ -60,3 +60,4 @@ Sequential, never reused. A superseded spec keeps its number and gains a
 | [0002](0002-theme-pipeline.md) | Theme pipeline | Implemented |
 | [0007](0007-control-socket-security.md) | Control-socket security amendment | Accepted |
 | [0008](0008-agent-sdd-pilot-governance.md) | Local agent-SDD pilot governance | Accepted |
+| [0009](0009-fedora-44-pre-alpha-baseline.md) | Fedora 44 pre-alpha packaging and CI baseline | Accepted |
