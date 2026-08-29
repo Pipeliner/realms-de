@@ -65,11 +65,10 @@ nix build            # the helm package
 nix flake check      # shellcheck + package; the VM test needs /dev/kvm
 ```
 
-> **No `flake.lock` is committed yet.** Without it the build is not reproducible,
-> which is the whole claim ADR 0010 makes for the flake. Run `nix flake lock`
-> once and commit the result. It could not be generated in the container this
-> packaging was written in: `nix flake lock` resolves `github:` inputs through
-> `api.github.com`, which that container's egress policy refuses.
+> **`flake.lock` is committed.** It pins the Nix inputs used by this reference
+> build. Refresh it only deliberately with `nix flake update` or `nix flake
+> lock`, review the revision/hash diff, and run `nix flake check` before
+> committing the update.
 
 ### As a NixOS module
 

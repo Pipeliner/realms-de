@@ -28,11 +28,11 @@ tell you whether a session starts. Only booting one does.
 
 ## Decision
 
-1. **The root `flake.nix` is the Nix reference build definition.** It imports
-   `packaging/nix/` for the derivation, checks, and modules; `flake.lock` is
-   intentionally not committed yet, so the current Nix build is evaluable but
-   not reproducible until a reviewed lock file is committed. It is the build a
-   maintainer runs to reproduce a user's report once locked.
+1. **The root `flake.nix` and committed `flake.lock` are the Nix reference
+   build definition.** `flake.nix` imports `packaging/nix/` for the derivation,
+   checks, and modules; the lock pins its declared inputs. It is the build a
+   maintainer runs to reproduce a user's report. Lock updates are deliberate
+   reviewed dependency changes, not incidental evaluation side effects.
 2. **The NixOS VM test is the acceptance test for the session.** It boots a
    VM, logs into helm, and asserts the bar appears and `helm ctl doctor` passes.
    This is the only test that exercises the session contract (ADR 0011) end to
@@ -54,8 +54,8 @@ tell you whether a session starts. Only booting one does.
 7. **A pinned river 0.4.x is vendored**, per
    [ADR 0013](0013-river-window-management-backend.md). The target distros ship
    0.3.x or river-classic, neither of which speaks
-   `river-window-management-v1`. Nix currently constrains river through its
-   unlocked `nixpkgs` input; Debian and Fedora record alternative/runtime
+   `river-window-management-v1`. Nix constrains river through its locked
+   `nixpkgs` input; Debian and Fedora record alternative/runtime
    requirements but do not yet build or bundle a verified `helm-river` package.
    Treat that as an unsatisfied packaging obligation, not as a shared pin. It
    must be resolved and tested before a distributable session is claimed.
@@ -75,7 +75,7 @@ tell you whether a session starts. Only booting one does.
 ### Good
 
 - One reviewable Nix definition of what helm *should* be, including runtime
-  dependencies. It becomes reproducible only when `flake.lock` is committed.
+  dependencies, with a committed lock pinning its inputs.
 - The VM test catches the session contract failures (portals, environment
   import, unit ordering) before a user does. Nothing else can.
 - Adding a fourth target means adding a native package definition and extending

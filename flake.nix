@@ -12,25 +12,10 @@
 #   packaging/nix/checks.nix               shellcheck + the NixOS VM test
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# NO flake.lock IS COMMITTED, and that matters: without it this is not a
-# reproducible build, which is the entire claim ADR 0010 makes for it. It could
-# not be generated here — `nix flake lock` resolves `github:` inputs through
-# api.github.com, which this container's egress policy answers with 403. Run
-#
-#     nix flake lock
-#
-# once on any machine with network access and commit the result.
-#
-# What *was* verified, rather than assumed: a nix 2.24.9 binary was fetched and
-# this flake was evaluated end to end with
-#
-#     nix flake check --no-build \
-#       --override-input nixpkgs tarball+https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz
-#
-# against nixos-unstable (nixos-26.11pre1060451.56c02bc00adc, 2026-08-23).
-# packages, devShells, both module evaluations, the shellcheck check and the VM
-# test derivation all evaluate. Nothing was *built*: no rustc, no VM boot.
-# Evaluation catches typos and dead attribute names, not runtime behaviour.
+# `flake.lock` is committed: it pins the declared flake inputs.
+# Update it only through a deliberate `nix flake update` or `nix flake lock`,
+# review the resulting revision/hash diff, and run the full flake checks. The
+# lock is the reproducibility boundary, not a substitute for runtime evidence.
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # COMPOSITOR: river 0.4.x, not niri (ADR 0013 supersedes ADR 0002). river 0.4
