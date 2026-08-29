@@ -1,41 +1,43 @@
 # SPEC 0002 — Theme pipeline
 
-- **Status:** Accepted; implemented through A14 (2026-08-27), including A11's
-  equivalent-spelling configuration-root correction, A13's matching palette
-  containment rule, and #110's A12/A14 descriptor-relative writer
-  protections. Multi-file all-or-nothing publication remains #22's boundary;
-  SPEC 0011 supersedes this document's mixed-generation interruption allowance
-  when immutable activation generations are implemented.
+- **Status:** Accepted; renderer, lint, palette initialization, and the retired
+  mutable writer were implemented through A14 (2026-08-27). As reconciled by
+  #159, [SPEC 0011](0011-theme-activation-generations.md) supersedes mutable
+  target publication, equality/no-op reporting, reload fan-out, and mutable
+  output diff for the supported apply/diff path.
 - **Milestone:** M1
 - **Decisions:** [ADR 0005](../adr/0005-palette-toml-single-source.md),
-  [ADR 0006](../adr/0006-oklab-contrast-not-filters.md)
+  [ADR 0006](../adr/0006-oklab-contrast-not-filters.md),
+  [ADR 0017](../adr/0017-immutable-theme-activation-generations.md)
 - **Implements:** [INTERFACES.md §2](../INTERFACES.md)
 
-> Written before the code, as S14 requires. The tests below were written from
-> these criteria, watched to fail against an unimplemented `helm-theme`, and
-> only then implemented against. All of them live in `crates/helm-theme`; run
-> them with `cargo test -p helm-theme`.
+> Written before the code, as S14 requires. Existing `theme::tests` mappings
+> prove the preserved palette/rendering/lint behavior or record the retired
+> mutable implementation; generation publication and generation-aware diff are
+> governed by SPEC 0011 and need their own acceptance implementation.
 
 ## Purpose
 
-One palette file must retint the entire desktop — GTK apps, Qt apps, the
-terminal, yazi, btop, the shell prompt and helm's own clients — in a single
-step, fast enough that a user tweaking a colour sees the result immediately.
+One palette file must render a coherent theme for GTK apps, Qt apps, the
+terminal, yazi, btop, the shell prompt and Helm's own clients, then publish that
+complete result for future launches as one immutable generation.
 
 This is the difference between a desktop environment and a collection of
 programs that happen to be running at the same time. It is also the component
 most likely to produce a visibly broken desktop if it gets it half right, which
-is why atomicity is a hard requirement rather than a nicety.
+is why generation atomicity is a hard requirement rather than a nicety.
 
 ## Scope
 
 **In:** reading `palette.toml`; deriving the contrast variant; rendering every
-template; writing outputs atomically; fanning out reloads exactly once; the
-`helm ctl theme apply|lint|diff` surface.
+template; linting; publishing an immutable generation for future launches; and
+the generation-aware `helm ctl theme apply|lint|diff` surface.
 
 **Out:** the palette *format* and its validation (SPEC 0001, `helm-core`);
 deciding which colour goes where (that is `palette.toml` itself); anything that
-draws (`helm-bar`).
+draws (`helm-bar`); live upgrade of an existing process; no-op apply
+optimization; and compatibility with the retired mutable apply result or a
+control-socket wire message.
 
 ## Behaviour
 
@@ -43,8 +45,8 @@ draws (`helm-bar`).
 
 `~/.config/helm/palette.toml`, falling back to the shipped `palette.toml`.
 Parsed and validated by `helm_core::Palette`. A palette with any **fatal** lint
-finding is refused: nothing is written, the previous theme stays live, and the
-findings are printed. Non-fatal findings are printed and applied.
+finding is refused: no generation is published, `current` stays unchanged, and
+the findings are printed. Non-fatal findings are printed and may be published.
 
 ### Derivation
 
@@ -66,62 +68,47 @@ once, beside the colours they belong to; and because `.over(...)` yields a
 colour it may be followed by `.bare` or `.rgba(...)`, which is what lets an
 alpha-less bare-hex format like fuzzel's express a translucent seam.
 
-### Atomic application
+### Generation application
 
-The ordering is not negotiable, because a half-applied theme — a new terminal
-palette against an old GTK stylesheet — is both ugly and hard to diagnose:
+The supported path renders every template from one captured input snapshot and
+publishes the complete output set through SPEC 0011. It never compares or
+writes the retired mutable targets and never invokes `Reloader`,
+`SystemReloader`, a process signal/command, or session notification. Its public
+result is `GenerationPublicationOutcome`, not
+`Applied { written, unchanged, reloaded }`.
 
-1. Render every template to memory.
-2. For each output whose bytes differ from what is on disk, write a unique
-   no-follow staging sibling named from `<target>.helm-tmp`, and `fsync` it.
-3. `rename(2)` every temp file into place. (Same filesystem, so the rename is
-   atomic per file.)
-4. Only then, fan out reloads — once each, deduplicated.
-
-If any step before 3 fails, nothing is renamed and the desktop is untouched.
-Outputs that are byte-identical are neither rewritten nor reloaded, so a
-no-op apply costs nothing and does not flash the desktop.
-
-Until SPEC 0011 is implemented this is an individual-file writer, not an
-activation-generation publisher. Its reload fan-out must not be used to claim a
-live generation upgrade or to retheme an old-generation process.
+A successful `current` commit activates the sealed generation only for future
+launches. Existing processes remain pinned to the generation they selected and
+are not reloaded by apply or rollback. Applying byte-identical inputs may still
+publish a fresh generation; equality short-circuiting and a no-op outcome are
+not part of the supported contract.
 
 ### Output containment
 
-Template targets are normalized relative paths below the caller-supplied
-configuration root. Empty, absolute, traversal, duplicate, and symlinked
-targets are refused before rendering or writing. The configuration root itself
-must not be a symlink under any equivalent terminal spelling, including one or
-more trailing separators, terminal `.` components, or both. Root spelling is
-normalized lexically without resolving components; `/` and `.` retain their
-existing behavior. Staging files are created exclusively and without following
-links, so an existing `<target>.helm-tmp` cannot redirect or clobber another
-file. Descriptor-relative operations own the remaining replacement-race
-protection for the final writer. The writer opens the configuration root once
-with `NOFOLLOW`, opens or creates every normalized parent relative to that
-descriptor with `NOFOLLOW`, and performs comparison, staging, rename, cleanup,
-and directory `fsync` through the held descriptor. A later pathname replacement
-may prevent the requested update from becoming visible, but must never redirect
-a read, write, cleanup, or rename outside the originally opened directory.
-Palette lookup and first-run initialization apply the same lexical root
+Template targets become normalized relative output paths inside one staged
+generation. Empty, absolute, traversal, duplicate, symlinked, or prefix-
+colliding outputs are refused before publication. All generated-tree access is
+descriptor-relative and no-follow as specified by SPEC 0011.
+
+Palette lookup and first-run initialization retain the established lexical root
 handling: a symlinked configuration root must be refused under trailing-
 separator and terminal-`.` spellings, and the root's `helm` directory and
 `palette.toml` must be real children rather than symlinks before a copy or read
-occurs. These per-file containment guarantees do not add multi-file
-all-or-nothing publication, which remains #22's boundary.
+occurs. The former direct-target staging, rename, cleanup, comparison, and
+reload rules are retained only as historical implementation provenance; they
+are not an alternative supported apply path.
 
-### Reload fan-out
+### Reload metadata and future live upgrade
 
-| Target | Mechanism |
-|---|---|
-| GTK 3/4, libadwaita | `gsettings set org.gnome.desktop.interface ...`, then GTK re-reads its stylesheet |
-| Qt (qt6ct) | rewrite the colour scheme; running apps pick it up on next start |
-| foot / terminals | `SIGUSR1` to the process |
-| yazi, btop, starship | read on next start; no signal available |
-| helm's own clients | session notification is planned; its IPC event/ordering contract is deferred until accepted and test-first implemented |
+Template reload metadata remains part of the canonical catalogue digest so a
+future protocol can bind its decision to the exact generation inputs. It is
+descriptive metadata only on the supported apply path. A pointer switch never
+runs it.
 
-Where a target genuinely cannot hot-reload, `apply` says so in its report rather
-than pretending. Users should never wonder whether it worked.
+Any live upgrade belongs to #22 and must be a future generation-aware
+owned-process protocol which proves the process's selected generation. It
+cannot restore direct reload on pointer switch, cannot target foreign/direct
+launches, and is not a commitment to preserve the current wire protocol.
 
 ### First-run
 
@@ -130,38 +117,41 @@ If no user palette exists, `apply` copies the shipped one to
 
 ## Acceptance criteria
 
-Each row is one happy path and becomes one test.
+Rows A1-A10 are the current theme-pipeline criteria. Their generation storage,
+publication, and diff details are acceptance criteria G1-G11 in SPEC 0011.
+Rows A11-A14 retain palette/input-containment guarantees; direct mutable-writer
+tests with similar names are historical evidence, not a second apply contract.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| A1 | Given the shipped palette, when `apply` runs against an empty config root, then every template's output file exists and contains no unexpanded `{{` | `theme::tests::apply_writes_every_template_with_no_unexpanded_placeholders` |
-| A2 | Given a rendered theme, when `apply` runs again with the same palette, then every output is reported `unchanged` and nothing is reloaded | `theme::tests::a_second_apply_changes_nothing_and_reloads_nothing` |
-| A3 | Given a palette with `accent.violet` changed, when `apply` runs, then only the outputs referencing violet are rewritten | `theme::tests::only_outputs_referencing_the_changed_colour_are_rewritten` |
+| A1 | Given the shipped palette, when `apply` runs against an empty config root, then one sealed generation contains every normalized template output with no unexpanded `{{`, and a successful publication selects it for future launches | renderer coverage retained; publication: SPEC 0011 |
+| A2 | Given a current generation, when `apply` runs again with the same inputs, then it publishes according to SPEC 0011, reports a generation publication outcome, and sends no reload; it need not report `unchanged` or optimize the apply away | SPEC 0011 G11 |
+| A3 | Given a palette with `accent.violet` changed, when the candidate is rendered, then only outputs referencing violet have different bytes; apply publishes the complete candidate generation rather than rewriting mutable targets selectively | `theme::tests::only_outputs_referencing_the_changed_colour_are_rewritten` (rendering relation only) |
 | A4 | Given `contrast = 1.30`, when `apply` runs, then output colours match `Palette::derived()` and no template contains the literal source colour | `theme::tests::outputs_carry_derived_colours_not_source_literals`, `render::tests::every_template_renders_across_the_whole_contrast_range` |
-| A5 | Given a template with an unknown placeholder, when `apply` runs, then it fails with the placeholder name and writes no file | `theme::tests::an_unknown_placeholder_aborts_the_apply_and_writes_nothing`, `render::tests::unknown_paths_and_transforms_are_errors_not_empty_strings` |
-| A6 | Given a palette with a fatal lint finding, when `apply` runs, then it refuses, prints the findings, and leaves existing outputs untouched | `theme::tests::a_fatally_linted_palette_is_refused_and_leaves_the_theme_live` |
-| A7 | Given a successful apply, when the reload fan-out runs, then each implemented reload mechanism fires exactly once regardless of how many templates share it | `theme::tests::each_reload_mechanism_fires_exactly_once` |
+| A5 | Given a template with an unknown placeholder, when `apply` runs, then it fails with the placeholder name and leaves `current` unchanged | `render::tests::unknown_paths_and_transforms_are_errors_not_empty_strings`; publication: SPEC 0011 |
+| A6 | Given a palette with a fatal lint finding, when `apply` runs, then it refuses, prints the findings, and leaves `current` unchanged | lint behavior retained; publication: SPEC 0011 |
+| A7 | Given a successful apply or rollback, when its pointer commit completes, then it invokes no reload mechanism and existing processes remain pinned to their selected generation | SPEC 0011 G11 |
 | A8 | Given no user palette, when `apply` runs, then the shipped palette is copied to the user config path first | `theme::tests::first_run_copies_the_shipped_palette_to_the_user_config` |
 | A9 | Given the shipped palette, when `helm ctl theme lint` runs, then it exits 0 and prints the accent hue separations | `theme::tests::lint_report_is_clean_for_the_shipped_palette_and_lists_hue_separations` |
-| A10 | Given a modified palette, when `helm ctl theme diff` runs, then it prints which outputs would change without writing any | `theme::tests::diff_reports_what_would_change_and_writes_nothing` |
-| A11 | Given an empty, escaping, duplicate, or symlinked output path, or a symlinked configuration root spelled directly, with trailing separators, with terminal `.` components, or both, when `apply` runs, then it refuses before touching an output outside the configuration root | `theme::tests::unsafe_or_duplicate_targets_abort_before_any_output_is_written`, `theme::tests::a_symlinked_output_parent_is_refused_without_touching_its_destination`, `theme::tests::a_symlinked_configuration_root_is_refused`, `theme::tests::a_symlinked_configuration_root_with_a_trailing_separator_is_refused`, `theme::tests::a_symlinked_configuration_root_with_terminal_dot_is_refused` |
-| A12 | Given an attacker-planted predictable staging symlink, when `apply` runs, then it does not modify that symlink's destination and stages only through a unique no-follow sibling | `theme::tests::a_symlinked_staging_file_is_not_touched` |
+| A10 | Given a fully validated current generation and a modified candidate, when `helm ctl theme diff` runs, then it reports only sorted `added`, `removed`, and `byte-different` normalized outputs and performs no control initialization, recovery, lease, publication, pointer change, output write, or reload | SPEC 0011 G10 |
+| A11 | Given an empty, escaping, duplicate, symlinked, or prefix-colliding output path, or an unsafe configuration/generated root, when `apply` runs, then it refuses before publishing a generation or touching anything outside Helm's owned subtree | SPEC 0011 |
+| A12 | Given an attacker-controlled staging or generation entry, when `apply` runs, then descriptor-relative no-follow validation refuses it without modifying its destination | SPEC 0011 |
 | A13 | Given a symlinked configuration root spelled directly, with trailing separators, with terminal `.` components, or both, or a symlinked `helm` palette directory or `palette.toml`, when palette loading or first-run initialization runs, then it refuses without reading or writing the link destination | `theme::tests::a_symlinked_palette_path_is_refused_without_touching_its_destination`, `theme::tests::a_symlinked_palette_root_with_a_trailing_separator_is_refused_without_initializing_its_destination`, `theme::tests::a_symlinked_palette_root_with_terminal_dot_is_refused_without_reading_its_destination` |
-| A14 | Given an output parent is replaced with a symlink after its directory descriptor is acquired, when staging, cleanup, or commit proceeds, then no operation reaches the symlink destination | `theme::tests::a_replaced_output_parent_cannot_redirect_descriptor_relative_writes` |
+| A14 | Given a generation output parent is replaced after its directory descriptor is acquired, when staging, validation, cleanup, or commit proceeds, then no operation follows the replacement outside the held generation tree | SPEC 0011 |
 
 A9 and A10 name `helm ctl` subcommands, but the CLI is a separate M1 slice and
-does not exist yet. Both are tested at the library boundary the subcommands will
-print — `helm_theme::lint` and `helm_theme::diff` — so "exits 0" is asserted as
-"reports no fatal finding". The tests move to `ctl::tests::` when the CLI lands.
+does not exist yet. A9 is exercised at the existing library boundary. A10 now
+requires the generation-aware read-only boundary from SPEC 0011; the legacy
+mutable-output diff test does not satisfy it.
 
 ## Budgets
 
-`apply` completes in **< 150 ms** for the full template set on a warm cache
-([ARCHITECTURE.md §4](../ARCHITECTURE.md)). Rendering is serial: the whole
+`apply` retains the **< 150 ms** budget for the full template set on a warm
+cache ([ARCHITECTURE.md §4](../ARCHITECTURE.md)). Rendering is serial: the whole
 shipped set is a few tens of kilobytes of string scanning and lands in
-single-digit milliseconds, which is less than the thread-spawn overhead that
-parallelism would add. The rename phase is serial and cheap. The budget is a CI gate, not
-a goal.
+single-digit milliseconds. Generation validation, sealing, fsync, and pointer
+publication are included; skipping byte-identical mutable targets is not an
+available optimization.
 
 ## Failure modes
 
@@ -172,29 +162,21 @@ theme", which is documented as a limit rather than fought.
 
 ## Generated-file ownership and activation
 
-Helm owns **only** `$XDG_CONFIG_HOME/helm/generated/**`. Every file that
-`theme apply` may replace, remove, or compare lives below that subtree. A
-template for a program with a user-owned configuration file renders to a
-tool-specific file below that subtree; it never writes into the program's
-ordinary configuration directory.
+Helm owns **only** `$XDG_CONFIG_HOME/helm/generated/**`. Every generated file
+that `theme apply` publishes or `theme diff` compares is a manifest-listed
+output below one generation in that subtree. Apply never writes a program's
+ordinary configuration or a mutable compatibility target.
 
-For an activation file that the program reads by default (for example GTK's
-`gtk.css`), `theme apply` may create the user-side file *only when it is
-absent*. That first-run file contains only the documented Helm import and is
-thereafter user-owned. If the activation file already exists, Helm must not
-modify, replace, append to, or delete it. `helmctl doctor` reports the exact
-import line and target file when the existing configuration does not activate
-the generated theme.
-
-This rule keeps the writer's atomicity boundary wholly inside an owned
-subtree. It does not grant Helm ownership of a configuration merely because
-that configuration currently imports Helm, and it does not change #22's
-multi-file-publication boundary.
+Any import, wrapper, or launch-profile integration which points a program at
+its selected generation is provisioning outside theme apply. It must not grant
+Helm ownership of an existing user configuration. `helmctl doctor` may report
+missing integration, but apply does not repair it as a side effect.
 
 ## Open questions
 
 - **Kvantum SVG generation.** Generating a Kvantum theme means emitting SVG, not
   just a colour list. Worth it in M1, or is a qt6ct colour scheme enough until
   M6? *Recommendation: qt6ct only in M1.*
-- **Reload for Qt.** No reliable hot-reload path for running Qt apps was found.
-  Accepting "applies on next start" for M1 unless someone knows better.
+- **Live upgrade, including Qt.** Deliberately out of scope here. #22 may
+  specify a generation-aware owned-process protocol; direct reload on pointer
+  switch remains forbidden.

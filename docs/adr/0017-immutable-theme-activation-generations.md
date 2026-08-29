@@ -2,10 +2,10 @@
 
 - **Status:** Accepted (2026-08-29)
 - **Deciders:** helm maintainers, repo owner
-- **Supersedes / Superseded by:** Supplements ADR 0005; #22 owns the physical
-  publication transaction and #132 owns session/scope lifecycle. Supersedes
-  ADR 0005's mixed-generation interruption allowance when activation
-  generations are implemented.
+- **Supersedes / Superseded by:** Supplements ADR 0005; #132 owns session/scope
+  lifecycle. Supersedes ADR 0005's mutable target publication, no-op result,
+  reload fan-out, and mixed-generation interruption contracts for the supported
+  apply path. #22 may own only a future generation-aware live-upgrade protocol.
 
 ## Context
 
@@ -37,8 +37,9 @@ cannot prove which palette, target catalogue, or output bytes a process used.
    steals a lock from a live owner. Writers take the exclusive lock. They render and fsync the complete staged
    tree, fsync its manifest, rename the staged directory to its final immutable
    name, fsync `generations/`, atomically replace `current` with a fsynced
-   no-follow sibling, then fsync the parent. No reload/activation occurs until
-   this record/tree pair is durable. Recovery discards unsealed staging and
+   no-follow sibling, then fsync the parent. No generation becomes selectable
+   until this record/tree pair is durable; pointer commit never reloads an
+   existing process. Recovery discards unsealed staging and
    rejects a `current` record whose tree or manifest fails validation. It never
    promotes a partial/staging tree, and preserves an invalid sealed tree for
    explicit diagnosis rather than guessing which bytes are safe to delete.
@@ -68,13 +69,19 @@ cannot prove which palette, target catalogue, or output bytes a process used.
   before use; it does not claim protection from another same-UID actor.
 - The contract does not promise atomic live upgrade across clients, automatic
   session/scope cleanup, or a cross-file transaction outside the generation
-  publication protocol. Those remain #22 and #132 work.
+  publication protocol. It also does not promise a no-op apply optimization or
+  compatibility with the retired mutable result or existing wire messages.
+  Session/scope cleanup remains #132 work; any #22 live upgrade is a new
+  generation-aware owned-process protocol, not pointer-switch reload.
 
 ## Guard
 
 - *Planned (#131):* hostile fixtures for mismatched manifests, crash points,
   concurrent writers, stale lease identity reuse, and old-generation launch.
-- *Planned (#22):* end-to-end transaction and exactly-once reload fan-out.
+- *Future (#22):* a generation-aware owned-process live-upgrade protocol which
+  proves each process's selected generation. It must not signal, command, or
+  notify processes merely because `current` changed, and cannot make
+  foreign/direct launches generation-selected.
 - *Planned (#132):* session/scope lifecycle ownership and logout/restart rules.
 
 ## Needs a human

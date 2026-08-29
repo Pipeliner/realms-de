@@ -185,9 +185,11 @@ argued us out of it — worth reading before anyone proposes going back.
 
 ---
 
-## 2. Template contract — `helm-theme` (ADR 0005)
+## 2. Theme generation contract — `helm-theme` (ADR 0005, ADR 0017)
 
-One palette in, many themed files out, atomically.
+One captured input set in, one sealed immutable generation selected for future
+launches. [SPEC 0011](specs/0011-theme-activation-generations.md) supersedes the
+former mutable target and reload interface for the supported path.
 
 ```rust
 /// A file helm generates from the palette.
@@ -196,39 +198,62 @@ pub struct Template {
     pub id: &'static str,
     /// Source text with `{{ path.to.value }}` placeholders.
     pub source: &'static str,
-    /// Where the rendered file lands, relative to $XDG_CONFIG_HOME.
+    /// Normalized output path within a sealed generation.
     pub target: PathBuf,
-    /// How live consumers are told to re-read it.
+    /// Catalogue metadata for a possible future generation-aware live upgrade.
+    /// The supported apply path does not execute it.
     pub reload: Reload,
 }
 
-/// How a themed program is told the theme changed.
+/// Canonical catalogue metadata. A current-pointer switch never executes this.
 pub enum Reload {
-    /// Nothing to do: read at next start.
+    /// Catalogue declares that the consumer reads only at next start.
     None,
-    /// Send a signal to every process matching this name.
+    /// Catalogue records a possible signal for a future owned-process protocol.
     Signal { process: &'static str, signal: i32 },
-    /// Run a command, e.g. `gsettings set ...`.
+    /// Catalogue records a possible command for that future protocol.
     Command(Vec<String>),
-    /// Notify helm's own clients over the control socket.
+    /// Catalogue identifies Helm-owned clients; apply sends no notification.
     HelmClients,
 }
 
-/// Render every template and swap them in as one step.
-///
-/// Contract: each file is written to `<target>.helm-tmp` and `rename(2)`d into
-/// place, then reloads are fanned out once, after every file is in place. A
-/// half-applied theme — new terminal colours against an old GTK stylesheet —
-/// must never be observable, even if the process is killed mid-apply.
-pub fn apply(palette: &Palette, root: &Path) -> Result<Applied>;
+/// Publication result returned directly by the supported apply boundary.
+pub enum GenerationPublicationOutcome {
+    Committed(GenerationId),
+    CommittedWithCleanupPending { generation: GenerationId, cause: String },
+    OutcomeAmbiguous { candidate: GenerationId, cause: String },
+}
 
-pub struct Applied {
-    pub written: Vec<PathBuf>,
-    pub unchanged: Vec<PathBuf>,   // byte-identical; not rewritten, not reloaded
-    pub reloaded: Vec<&'static str>,
-    pub elapsed: Duration,         // budget: < 150 ms (ARCHITECTURE.md §4)
+/// A difference between candidate normalized outputs and a validated current
+/// generation. Results are sorted by path and omit unchanged outputs.
+pub enum ThemeOutputChange {
+    Added(PathBuf),
+    Removed(PathBuf),
+    ByteDifferent(PathBuf),
 }
 ```
+
+The supported apply seam accepts safe input locators (or a test-only snapshot
+builder), captures and renders them once under the exclusive generation lock,
+and returns `GenerationPublicationOutcome` directly. It does not accept a
+`Reloader`, inspect or write mutable target files, report `written` /
+`unchanged` / `reloaded` lists, or notify a process. `Committed` and
+`CommittedWithCleanupPending` identify the generation selected for future
+launches; `OutcomeAmbiguous` is not reported as activated. Applying identical
+inputs may publish a new generation; no no-op result is promised.
+
+The supported diff seam captures and renders the same inputs, then compares
+their normalized output set with the manifest-listed bytes of a fully validated
+`current` generation. It returns only sorted `Added`, `Removed`, and
+`ByteDifferent` paths. It is read-only: no generated-root or lock
+initialization, recovery, lease, GC, staging, publication, pointer replacement,
+output write, signal, command, or session notification is permitted. Missing or
+invalid current state is an error, not an empty baseline.
+
+These names describe the public semantic contract, not a wire-compatibility
+promise. Live upgrade and wire protocol design remain outside this interface.
+Any future #22 upgrade must prove the selected generation of an owned process;
+it cannot restore direct reload on pointer switch.
 
 **Placeholder vocabulary.** Templates address the *derived* palette, so
 `contrast` is already folded in and no template ever applies it itself:

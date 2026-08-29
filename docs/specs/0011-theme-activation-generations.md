@@ -4,6 +4,7 @@
 - **Milestone:** M1
 - **Decision:** [ADR 0017](../adr/0017-immutable-theme-activation-generations.md)
 - **Issue:** [#131](https://github.com/Pipeliner/realms-de/issues/131)
+- **Contract reconciliation:** [#159](https://github.com/Pipeliner/realms-de/issues/159)
 - **Implementation refinement:** publication-order record v1 (2026-08-29)
 
 ## Purpose
@@ -270,6 +271,33 @@ formation.  The public apply seam accepts input locators/snapshot builders
 (rather than a reserialized `Palette`) and has no reloader argument; test-only
 fixtures may supply deterministic snapshot builders directly.
 
+## Theme-diff integration (L4 refinement)
+
+`theme diff` is a read-only comparison between one captured candidate input set
+and the fully validated generation selected by `current`. It uses the same
+snapshot, lint, derivation, catalogue validation, rendering, normalization, and
+digest rules as apply. Before comparing any output, it resolves `current` and
+validates the pointer transaction, generation identity, manifest, seal, receipt,
+tree membership, and every listed output digest exactly as a launcher does.
+Absent or invalid current state is an error, never an empty baseline.
+
+The result is the lexicographically path-sorted union of candidate and current
+normalized output paths, containing only `added`, `removed`, and
+`byte-different` entries. `added` means the path exists only in the candidate;
+`removed` means it exists only in the current manifest; `byte-different` means
+both list the path and their exact bytes differ. Manifest, receipt, seal, and
+other generation-control files are not outputs and never appear in the diff.
+
+Diff does not create or initialize `helm/generated`, `activation.lock`,
+`publication-order`, `generations/`, `leases/`, or any journal. It does not take
+the exclusive writer lock, run recovery or GC, create a lease, stage or publish
+a generation, replace `current`, write an output, or signal/notify a process.
+If the generated root or required control state is absent, unsafe, malformed,
+or inconsistent, diff reports that error without mutation. Concurrent pointer
+change is handled by holding the existing shared activation lock through
+current resolution, full validation, and comparison; diff never compares a
+candidate with a partially validated or mixed generation.
+
 ## Acceptance criteria
 
 | # | Given / When / Then |
@@ -283,10 +311,20 @@ fixtures may supply deterministic snapshot builders directly.
 | G7 | Given rollback to a retained generation, when it commits, then future launches select it and already-running launches remain unchanged. |
 | G8 | Given a corrupt pointer, missing tree, or digest mismatch, when recovery or launch runs, then it fails closed and never selects an arbitrary/newest generation. |
 | G9 | Given concurrent applies, when both are accepted, then they serialize from input capture through pointer durability and each receipt identifies its committed generation. |
+| G10 | Given a valid current generation and a candidate whose normalized output set differs, when `theme diff` runs, then it reports only lexicographically sorted `added`, `removed`, and `byte-different` output paths after fully validating current, and performs no control initialization, recovery, lease, GC, publication, output write, pointer switch, or reload. |
+| G11 | Given a successful apply or rollback pointer commit, when existing processes continue running, then Helm sends no signal, command, or notification and only later launches may select the newly current generation. |
 
 ## Boundaries
 
-This specification does not make arbitrary user configuration Helm-owned, does
-not promise a live process upgrade, and does not settle systemd/no-systemd
-teardown, scope adoption, D-Bus ownership, or target package sources. Those are
-#117, #132, #133 and #134. #22 supplies the broader apply/reload transaction.
+This specification does not make arbitrary user configuration Helm-owned and
+does not settle systemd/no-systemd teardown, scope adoption, D-Bus ownership,
+or target package sources. Those are #117, #132, #133 and #134. A no-op apply
+optimization and compatibility with the retired mutable apply result or any
+existing control-socket wire message are not promised.
+
+Live upgrade is also outside this specification. #22 may define only a future
+generation-aware owned-process protocol which proves the generation selected by
+each process before coordinating an upgrade. It cannot restore direct
+signal/command fan-out, session notification, or any other reload as a side
+effect of a `current` pointer switch, and it cannot make foreign or direct
+launches generation-selected retroactively.

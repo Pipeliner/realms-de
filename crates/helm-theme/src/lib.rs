@@ -1,24 +1,36 @@
-//! Render every themed file in the desktop from one palette, atomically.
+//! Render a complete desktop theme from one palette and publish it as a sealed
+//! immutable generation.
 //!
 //! `palette.toml` is the only place a colour is written down (ADR 0005). This
 //! crate is what makes that affordable: it turns the palette into a GTK
 //! stylesheet, a Qt colour scheme, a terminal's ANSI table and four TUI configs,
-//! and swaps them all in as one step so no user ever sees a new terminal palette
-//! against an old GTK stylesheet.
+//! then binds the complete normalized output set to one validated generation
+//! for future launches (ADR 0017 and SPEC 0011).
 //!
-//! Three things carry the design, and all three are specified in
-//! `docs/specs/0002-theme-pipeline.md`:
+//! Four things carry the supported contract, specified in
+//! `docs/specs/0002-theme-pipeline.md` and
+//! `docs/specs/0011-theme-activation-generations.md`:
 //!
 //! 1. **Templates address the derived palette.** [`helm_core::Palette::derived`]
 //!    folds `contrast` in exactly once, here, at this boundary. No template
 //!    applies contrast itself and nothing downstream filters (ADR 0006).
 //! 2. **An unknown placeholder is a hard error.** A silently blank colour is the
 //!    bug the whole design exists to prevent, so [`render()`] names the offending
-//!    placeholder and aborts the apply before anything is written.
-//! 3. **Application is atomic.** Everything is rendered to memory, written to
-//!    a unique no-follow `.<final>.helm-tmp.<pid>.<sequence>` staging sibling,
-//!    `fsync`ed, `rename(2)`d into place, and only then are reloads fanned out —
-//!    once each.
+//!    placeholder and aborts before a generation is published.
+//! 3. **Application is generation-only.** One captured input set is rendered,
+//!    sealed and durably selected. The supported path does not compare or write
+//!    mutable target files and does not return written/unchanged/reloaded lists.
+//!    A pointer switch affects future launches only and never reloads, signals,
+//!    commands or notifies an existing process.
+//! 4. **Diff is read-only and generation-aware.** Candidate normalized outputs
+//!    are compared with the manifest-listed bytes of a fully validated current
+//!    generation as added, removed or byte-different paths. Diff performs no
+//!    control initialization, recovery, lease, publication or output write.
+//!
+//! The mutable writer and reload modules remain implementation history while
+//! callers migrate; they are not an alternative supported activation contract.
+//! No-op optimization, future live upgrade and wire compatibility are outside
+//! this crate-level contract.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
