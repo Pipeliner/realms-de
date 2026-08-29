@@ -217,6 +217,59 @@ regular file descriptor. Validation retains the opened root/parents while it
 reads each listed output. This protects Helm from pathname races and symlink
 redirection, but does not expand ADR 0017's same-UID threat model.
 
+## Theme-apply integration (L4 refinement)
+
+The supported theme-apply path is generation-only.  It does not use
+`OutputRoot`, direct target staging/rename, `Reloader`, `SystemReloader`, or
+any process signal/command fan-out.  Its result reports the
+`GenerationPublicationOutcome` directly: `Committed` and
+`CommittedWithCleanupPending` identify the selected generation, while
+`OutcomeAmbiguous` is not reported as an activated theme.  Existing mutable
+target files are neither consulted for equality nor written by this path.
+
+Before publication, the apply boundary holds only safe input locators and opens
+the configuration root.  It creates or opens `helm/generated` only
+descriptor-relatively: each existing component is opened with `O_NOFOLLOW`,
+the final generated root is current-UID mode 0700, and an absent `helm` or
+`generated` component is created with `mkdirat` mode 0700 then reopened and
+validated before use.  Every successful revalidation—whether this process
+created the component, received `EEXIST`, or first observed it as
+existing—fsyncs the configuration root after `helm` and the opened `helm`
+directory after `generated`.  A symlink, special file, foreign owner, unsafe
+final root mode, or failed revalidation refuses before any output write.
+Path-based recursive creation is forbidden.
+
+After `GenerationStore` has acquired its exclusive lock, its publication
+callback copies and validates the input locators into one immutable snapshot:
+the exact raw palette bytes, selected launch-profile bytes, complete
+renderer-option map, and template catalogue fields.  It parses those snapshot
+palette bytes, performs palette linting, derives colours, validates the
+catalogue, and renders every output into memory.  The callback creates every
+byte-exact preimage specified above, calculates its SHA-256, and passes only
+the resulting five lowercase digests plus rendered `(normalized-target, bytes)`
+pairs to `GenerationPublication`.  It never rereads a palette, template,
+profile, option, or target path.  Thus concurrent applies serialize from input
+capture through pointer durability, and every receipt describes one whole input
+set.
+
+The current built-in profile has no external launch-profile file.  Its selected
+raw bytes are exactly `helm-theme-launch-profile-v1\nnone\n`; any later
+profile selection supplies its own raw bytes instead.  The current renderer
+option map is empty, so its renderer preimage is exactly
+`helm-theme-renderer-v1\n`.  Empty is a value, not an omitted preimage.
+
+For the catalogue preimage, `reload-kind-bytes` use this canonical UTF-8
+encoding with no trailing newline: `none`; `helm-clients`; or
+`signal:<decimal-process-byte-length>:<process-bytes><decimal-signal>`.  A
+command uses `command:<decimal-argument-count>:` followed by one
+`<decimal-byte-length>:<argument-bytes>` record for each argument in argument
+order.  Decimal values are ASCII, canonical and unsigned; the process name and
+all command arguments are valid UTF-8 without NUL, CR or LF.  Targets, template
+IDs and option names meet the existing manifest character rules before receipt
+formation.  The public apply seam accepts input locators/snapshot builders
+(rather than a reserialized `Palette`) and has no reloader argument; test-only
+fixtures may supply deterministic snapshot builders directly.
+
 ## Acceptance criteria
 
 | # | Given / When / Then |
