@@ -62,7 +62,7 @@ body:
     attributes:
       label: Distribution and version
       description: And how helm was installed — flake, .deb, .rpm, or built from source.
-      placeholder: "Fedora 41, built from source"
+      placeholder: "Fedora 44, built from source"
     validations:
       required: true
 
@@ -70,8 +70,8 @@ body:
     id: compositor
     attributes:
       label: Compositor and version
-      description: "`river --version`, or the compositor you are actually running under if it is not river. Note whether it is the vendored, pinned river that ships with helm."
-      placeholder: "river 0.4.1 (vendored)"
+      description: "`river --version`, or the compositor you are actually running under if it is not river. Include the package or source used; availability does not imply a tested Helm pairing."
+      placeholder: "river 0.4.8 (Fedora package)"
     validations:
       required: true
 

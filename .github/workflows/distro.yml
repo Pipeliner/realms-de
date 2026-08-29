@@ -1,11 +1,10 @@
-# The three first-class targets from ARCHITECTURE.md §5 and standing order S6.
-# PITFALLS.md names "works on the author's distro only" as a packaging failure
-# mode whose guard is "three distro jobs in CI" — this is that guard, wired up
-# now so it is already there when packaging/ lands in M3 rather than being
-# bolted on under deadline.
+# NixOS, Ubuntu and Fedora remain the intended M3 targets, but this workflow's
+# Fedora evidence is deliberately narrower: Fedora 44 is the sole pre-alpha
+# baseline and its lane is a Cargo smoke only. It does not build or install the
+# RPM, start a graphical session, exercise SELinux, or establish architecture
+# support.
 #
-# Today these jobs build and test helm-core, which is pure Rust with no system
-# dependencies, so all three are expected to agree. The point is the scaffolding:
+# Today these jobs build and test the Rust workspace. The point is scaffolding:
 # when helm-session pulls in Wayland, D-Bus and systemd, the distro that
 # disagrees will say so on the commit that broke it.
 name: distro
@@ -28,6 +27,19 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  fedora-baseline-contract:
+    name: Fedora baseline contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate the local Fedora baseline contract
+        run: |
+          set -euo pipefail
+          ./packaging/fedora/check-baseline.sh --date "$(date -u +%F)"
+          ./packaging/fedora/check-projections.sh
+          ./packaging/fedora/test-check-baseline.sh
+          ./packaging/fedora/test-check-projections.sh
+
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runs-on }}
@@ -45,11 +57,11 @@ jobs:
           - name: ubuntu-24.04
             runs-on: ubuntu-24.04
             container: ''
-          # Fedora 41 is the floor from §5. SELinux-clean is a packaging
-          # property, not a build one, so it is checked in M3, not here.
-          - name: fedora-41
+          # Fedora 44 Cargo smoke: pinned base/current packages. The manifest
+          # digest pins the base image; enabled Fedora repositories still float.
+          - name: fedora-44-cargo-smoke
             runs-on: ubuntu-24.04
-            container: fedora:41
+            container: registry.fedoraproject.org/fedora:44@sha256:df52038ff64ee61affa188d78beb85cf6eecfe4e9f6042238269ccdc8e944392
     steps:
       # The container image is bare: actions/checkout needs git or it silently
       # degrades to a tarball download with no history, and rustup needs curl.

@@ -141,8 +141,9 @@ in the stack will. There is no fallback.
   hex — the alpha-beside-the-colour convention `palette.toml` already uses. No
   animation.
   The one cost: **not packaged in Fedora** as far as I could find (it *is* in
-  Debian trixie at 1.7.1 and sid/forky at 1.8.0, and in nixpkgs), and Fedora 41+
-  is a stated target platform.
+  Debian trixie at 1.7.1 and sid/forky at 1.8.0, and in nixpkgs). Fedora 44 is
+  the sole pre-alpha Fedora packaging target; this is a dated package search,
+  not evidence that a Helm Fedora session works.
 - **`mako` — 4/5.** Same shape, wider reach: packaged in Fedora, Debian, Ubuntu
   and nixpkgs. Costs pango and cairo, and `gdk-pixbuf` if icons are on — turn
   icons off and the dependency is optional. Pango font descriptions are a second
@@ -168,10 +169,11 @@ bindings. Half a day.
 fails the week test on the second day.
 
 **Recommendation.** `fnott` if the Fedora packaging gap can be closed by
-building it in helm's own RPM (it is a small meson C project; helm already
-vendors a whole compositor, so this is not a new class of burden). `mako`
-otherwise. Put the choice behind the template name so it is a one-file swap,
-per [ADR 0007](../adr/0007-reuse-yazi-btop-starship.md)'s seam rule.
+building it in helm's own RPM (it is a small meson C project); Fedora's native
+River candidate removes the earlier compositor-vendoring comparison, so this
+remains its own maintenance choice. Use `mako` otherwise. Put the choice behind
+the template name so it is a one-file swap, per
+[ADR 0007](../adr/0007-reuse-yazi-btop-starship.md)'s seam rule.
 
 **Two things neither daemon gives us**, worth recording now: notifications never
 appear in `helm-bar` (there is no notification indicator in
@@ -224,9 +226,10 @@ session by default rather than documenting it —
   [ADR 0011](../adr/0011-session-integration-contract.md). The ADR rejected
   waylock on the grounds that it is "Zig, a toolchain we otherwise do not have
   (see ADR 0002)". That objection was written before
-  [ADR 0013](../adr/0013-river-window-management-backend.md), which vendors a
-  pinned **river 0.4.x — itself Zig — in every helm package**. The Zig toolchain
-  is already in the packaging pipeline. waylock is by Isaac Freund, the same
+  [ADR 0013](../adr/0013-river-window-management-backend.md), but ADR 0015 now
+  makes River sourcing target-specific and gives Fedora 44 a native candidate.
+  A Zig toolchain cost therefore has to be evaluated per target rather than
+  assumed universal. waylock is by Isaac Freund, the same
   maintainer as river, so it is the locker most likely to keep working against
   the compositor helm ships. It has three colours, settable on the command line,
   which is the cheapest possible template. It draws no widgets, has no font
@@ -1194,12 +1197,12 @@ rather than edited into their files, because those files belong to other work.
 2. **[ADR 0011](../adr/0011-session-integration-contract.md), *Needs a human*,
    option 3** rejects waylock partly because it is "Zig, a toolchain we
    otherwise do not have (see ADR 0002)". That was true when written and was
-   superseded four ADRs later: [ADR 0013](../adr/0013-river-window-management-backend.md)
-   and [ARCHITECTURE §5](../ARCHITECTURE.md#5-target-platforms) commit helm to
-   **vendoring a pinned river 0.4.x — written in Zig — in every package on every
-   target platform**. Zig is already in the packaging pipeline. The objection no
-   longer holds, and waylock has the additional property of sharing a maintainer
-   with the compositor helm ships.
+   later revisited by [ADR 0013](../adr/0013-river-window-management-backend.md).
+   [ADR 0015](../adr/0015-fedora-44-pre-alpha-baseline.md) then selected Fedora
+   44's native River candidate and made compositor sourcing target-specific.
+   Zig is therefore not automatically present in every packaging pipeline; the
+   objection must be assessed per target. waylock still shares a maintainer
+   with River, but that fact does not decide the lock-screen question.
 
 ---
 
@@ -1214,14 +1217,14 @@ the answer.
 
 | Option | For | Against |
 |---|---|---|
-| **`waylock`** | `ext-session-lock-v1`; smallest attack surface; three colours settable on the command line, so the cheapest possible template; **same maintainer as river**, so it tracks the compositor helm ships; actively developed (last commit 2026-05-21) | Zig — but see §20.2: helm already vendors Zig. Version is `1.7.0-dev`, i.e. no recent tag |
+| **`waylock`** | `ext-session-lock-v1`; smallest attack surface; three colours settable on the command line, so the cheapest possible template; **same maintainer as river**; actively developed (last commit 2026-05-21) | Zig must be accounted for per target; Fedora's native River candidate does not supply that toolchain. Version is `1.7.0-dev`, i.e. no recent tag |
 | `gtklock` | ADR 0011's current pick; themeable from the `gtk.css` helm already generates | GTK3 in the lock path; slow cadence (v4.0.0, translation commits since) |
 | `swaylock` | Packaged on all three target distributions; richest config; `ext-session-lock-v1` since 1.7 | Larger; cadence has slowed (1.8.6) |
 
-**Recommendation: `waylock`**, changed from ADR 0011's `gtklock`, on the grounds
-that the Zig objection has been overtaken by ADR 0013 and that a lock screen is
-the one component where "smallest thing that does the job, by the compositor's
-own maintainer" beats "most themeable".
+**Research preference: `waylock`**, changed from ADR 0011's `gtklock`, because
+a lock screen is the one component where "smallest thing that does the job, by
+River's maintainer" may beat "most themeable". The independent lock-screen
+decision remains human-gated, and its per-target Zig cost is not resolved here.
 
 **Also still needed from a human:** the idle policy numbers. A defensible
 starting proposal, offered so there is something to argue with rather than a
@@ -1260,17 +1263,18 @@ legible.**
 
 `fnott` is the best technical fit on this page and appears not to be in Fedora's
 repositories (verified present in Debian trixie/sid and nixpkgs; not found for
-Fedora). Fedora 41+ is a stated target.
+Fedora). Fedora 44 is the sole pre-alpha Fedora packaging target; this dated
+search is not Fedora runtime evidence.
 
 | Option | Consequence |
 |---|---|
 | (a) `mako` everywhere | One daemon, packaged everywhere, slightly worse fit (pango/cairo, a second font-selection path) |
-| (b) `fnott` everywhere, building it in helm's own RPM | Best fit; adds one small meson C package to Fedora packaging — a smaller burden than the river vendoring already accepted |
+| (b) `fnott` everywhere, building it in helm's own RPM | Best fit; adds one small meson C package to Fedora packaging as an independent maintenance burden |
 | (c) `fnott` where packaged, `mako` on Fedora | Two theme templates and two behaviours to support; rejected |
 
-**Recommendation: (b)**, on the grounds that helm already vendors a compositor
-and one small C daemon is not a new class of commitment — but this is a
-packaging-maintenance commitment and packaging maintenance is a person's time.
+**Recommendation: (b)** on technical fit, while recognizing it as a new Fedora
+packaging-maintenance commitment. Fedora's native River candidate does not
+remove that cost, and packaging maintenance is a person's time.
 
 ---
 
