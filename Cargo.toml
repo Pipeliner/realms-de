@@ -6,6 +6,7 @@ resolver = "2"
 members = [
     "crates/helm-core",
     "crates/helm-theme",
+    "crates/helm-agent-sdd",
 ]
 
 [workspace.package]
