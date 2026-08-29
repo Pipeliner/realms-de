@@ -214,11 +214,11 @@ cargo test --release --locked --workspace
 # that is the guard that would fail if this claim regressed.
 
 %changelog
-* Sat Aug 29 2026 helm contributors <helm-maintainers@helm.invalid> - 0.1.0-1
+* Sat Aug 29 2026 helm contributors <vadim.evard@gmail.com> - 0.1.0-1
 - Correct the pre-alpha baseline to Fedora 44 and use Fedora's native
   river >= 0.4.0 candidate; runtime/session compatibility remains unverified.
 
-* Wed Aug 26 2026 helm contributors <helm-maintainers@helm.invalid> - 0.1.0-1
+* Wed Aug 26 2026 helm contributors <vadim.evard@gmail.com> - 0.1.0-1
 - Initial packaging skeleton: session entry, systemd user units, portal policy
   and palette. No helm binaries yet (M1-M2).
 - Depends on a vendored river 0.4.x; helm is river's window manager.

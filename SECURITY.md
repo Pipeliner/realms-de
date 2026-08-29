@@ -43,9 +43,9 @@ issue**.
    **[Report a vulnerability](https://github.com/Pipeliner/realms-de/security/advisories/new)**
    (Security → Advisories on the repository). This creates a private advisory
    visible only to maintainers.
-2. If private reporting is unavailable to you, open an issue that says only
-   *"I would like to report a security issue privately"* — no detail — and a
-   maintainer will arrange a channel before you disclose anything.
+2. If private reporting is unavailable, email
+   [`vadim.evard@gmail.com`](mailto:vadim.evard@gmail.com). Do not disclose
+   vulnerability details in a public issue.
 
 Please include, as far as you can: what you did, what happened, what you
 expected, the distribution and compositor, and whether `helm ctl doctor` had
