@@ -23,6 +23,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod generation;
 pub mod reload;
 pub mod render;
 pub mod template;
