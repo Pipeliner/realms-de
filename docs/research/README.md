@@ -8,8 +8,8 @@ Normative repository intent remains in [`docs/specs/`](../specs/), accepted
 ADRs in [`docs/adr/`](../adr/), and executable checks.
 
 * [`2026-08-28-graduated-agentic-sdd-operational-memory-source.md`](2026-08-28-graduated-agentic-sdd-operational-memory-source.md)
-  preserves the owner-supplied research record, including its inaccessible
-  conversation citation tokens.
+  preserves the recoverable operative source material and citation caveat; it
+  explicitly awaits the complete verbatim owner-supplied artifact.
 * [`2026-08-28-graduated-agentic-sdd-operational-memory-verified.md`](2026-08-28-graduated-agentic-sdd-operational-memory-verified.md)
   is a dated verification companion.  It distinguishes primary-source facts
   from proposals and repository decisions.

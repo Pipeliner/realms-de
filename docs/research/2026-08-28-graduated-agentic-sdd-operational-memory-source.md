@@ -1,9 +1,13 @@
 # Designing and Validating a Graduated Agentic SDD and Operational-Memory System
 
-> **Source-preservation record — 2026-08-28.** This is a non-normative
-> archival transcription of the owner-supplied report.  Conversation-local
-> citations such as `turn21search0` are preserved as supplied; they are not
-> resolvable repository citations and must not be used as verification.
+> **Partial source-preservation record — 2026-08-28.** This is a
+> non-normative preservation of the operative material recoverable from the
+> owner-supplied report. It is **not a complete verbatim transcript**: the full
+> conversation payload was not available as a repository artifact when this
+> record was created. Conversation-local citations such as `turn21search0` are
+> preserved where available; they are not resolvable repository citations and
+> must not be used as verification. Replace this record with the complete
+> verbatim source when the owner supplies it as an importable artifact.
 
 ## Executive summary
 
