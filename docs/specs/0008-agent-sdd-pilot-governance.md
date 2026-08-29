@@ -87,9 +87,10 @@ bare identifier or a plain English sentence that happens to resemble a comment
 is not source-code material and is governed by the metadata limits instead.
 The pilot deliberately does not claim content-similarity detection across
 fields or a general source snapshot classifier. The command grammar excludes
-shell syntax capable of embedding a source fragment. The future detector
-reports only record path, line and field name, never the rejected value. It is
-a deterministic best-effort guard, **not proof that a record is secret-free**:
+shell syntax capable of embedding a source fragment. The validator reports
+only the prescribed safe obligation code/status on stdout, never a rejected
+value, path, line or field name. It is a deterministic best-effort guard,
+**not proof that a record is secret-free**:
 sensitive or customer material must never be recorded.
 
 ```toml
@@ -159,10 +160,12 @@ optional; no other field or table is permitted.
 | `next_actions.items` | array of 1–3 prose strings |
 
 `affected_specs` values resolve at assessment `HEAD`, not the historic record
-commit. `ADR-0014` maps to the one `docs/adr/0014-*.md` file whose heading is
-exactly `# ADR 0014` followed by a title; `SPEC-0008` maps equivalently under
-`docs/specs/`. The referenced file must have a `Status: Accepted` metadata
-line at `HEAD`. ADR and SPEC references are both allowed. An empty
+commit. `ADR-0014` maps to exactly one `docs/adr/0014-*.md` whose first line
+matches Rust regex `^# ADR 0014 — .+$`. The file must contain exactly one line matching Rust regex
+`^- \*\*Status:\*\* Accepted(?: \([0-9]{4}-[0-9]{2}-[0-9]{2}\))?$` at HEAD.
+`SPEC-0008` maps to exactly one `docs/specs/0008-*.md` whose first line matches
+Rust regex `^# SPEC 0008 — .+$`; it uses the same exact-one status-line rule.
+ADR and SPEC references are both allowed. An empty
 `affected_specs` explicitly means no accepted document is known to be affected.
 All evidence references name sibling JSONL IDs.
 
@@ -187,17 +190,19 @@ timestamps/Git IDs use the checkpoint forms; kind is exactly `command`,
 | `file-observation` | `path`, `lines`, `claim` | `summary` |
 | `decision` | `claim`, `reason`, `derived_from` | `summary` |
 
-`derived_from` contains one or more earlier, non-decision evidence IDs at the
+`derived_from` contains one or more earlier (strictly smaller JSONL line
+number), non-decision evidence IDs at the
 same `git_head`; it may not refer to itself. This makes provenance acyclic and
 single-revision. `command` is an invoked command line, never stdout, stderr,
 environment, shell history, an absolute working directory or a substituted
 secret. Every JSON object has exactly its common fields plus its required and
-optional kind fields; `id`, `summary`, `command`, `purpose`, `path`, `lines`,
-`claim` and `reason` use their corresponding string class; `ts` is a timestamp;
+optional kind fields; `id` uses evidence-ID; `summary`, `purpose`, `claim` and
+`reason` use prose; `command`, `path` and `lines` use their named string
+classes; `ts` is a timestamp;
 `exit_code` is an integer `0..=255`; and `derived_from` is an array of 1–16
 evidence IDs. JSON numbers must be integral and arrays may contain only the
-declared element type. A validation failure names record/field but never echoes
-prohibited content.
+declared element type. A validation failure is represented only by the
+prescribed safe obligation code/status report.
 
 Tracked records are retained in ordinary Git history. Deleting a record stops
 future use but does not reliably erase historical commits or clones; therefore
