@@ -101,15 +101,19 @@ image = "registry.fedoraproject.org/fedora:44@sha256:df52038ff64ee61affa188d78be
 The record is a reviewed projection of this accepted contract, not live Fedora
 metadata. Its fields and enum values are closed: `status` is `pre-alpha` or
 `unsupported`; the date is a real ISO `YYYY-MM-DD` calendar date; no unknown
-field is allowed. While SPEC 0009 is active, a `pre-alpha` record must match the
-release, EOL and image above. A later Fedora release requires a superseding
-accepted contract before those values change.
+field is allowed. Every record has exactly these five fields: the fixed
+`helm-fedora-baseline/v1` schema, one of the two allowed `status` values, and
+the exact release, EOL and image above. Thus an `unsupported` record retains
+the canonical identity of the last admitted Fedora baseline; `status` is the
+only field that changes whether it is current. A later Fedora release requires
+a superseding accepted contract before those identity values change.
 
 The lifecycle validator is local and network-free. Its core operation receives
 an explicit evaluation date. For `pre-alpha`, it passes only when
 `evaluation_date < eol`; equality and later dates fail. For `unsupported`, the
-lifecycle comparison passes, while the support-claim guard separately requires
-that no required Fedora lane or current-support statement remains. The normal
+same canonical identity is parsed and validated but the lifecycle comparison
+passes; the support-claim guard separately requires that no required Fedora lane
+or current-support statement remains. The normal
 repository check supplies the current UTC calendar date explicitly; unit
 fixtures inject fixed dates immediately before, on, and after EOL. Thus the
 result is reproducible for an input date and begins failing at the recorded EOL
