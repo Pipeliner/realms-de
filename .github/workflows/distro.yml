@@ -31,7 +31,7 @@ jobs:
     name: Fedora baseline contract
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate the local Fedora baseline contract
         run: |
           set -euo pipefail
@@ -69,7 +69,7 @@ jobs:
         if: matrix.container != ''
         run: dnf -y install --setopt=install_weak_deps=False git curl gcc findutils
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # rustup rather than the distro's rust package: Fedora's rustc floats with
       # the release and would silently test a different compiler than the one
@@ -97,7 +97,7 @@ jobs:
     name: nix flake check
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # ADR 0010 makes the flake the reference build; deb/rpm use tracked native
       # definitions with planned overlap consistency checks. This job is
