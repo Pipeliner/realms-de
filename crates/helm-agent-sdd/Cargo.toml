@@ -1,0 +1,21 @@
+[package]
+name = "helm-agent-sdd"
+description = "Read-only local validation for helm agent-SDD pilot records."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+[[bin]]
+name = "helm-sdd"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3"
