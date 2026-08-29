@@ -51,6 +51,20 @@ impl Manifest {
     pub fn verify(&self, root: &Path) -> std::result::Result<(), String> {
         for (path, expected) in &self.entries {
             let candidate = root.join(path);
+            let mut ancestor = root.to_path_buf();
+            for component in Path::new(path).components() {
+                let Component::Normal(component) = component else {
+                    return Err("unsafe manifest path".into());
+                };
+                ancestor.push(component);
+                if std::fs::symlink_metadata(&ancestor)
+                    .map_err(|e| e.to_string())?
+                    .file_type()
+                    .is_symlink()
+                {
+                    return Err("manifest path traverses a symlink".into());
+                }
+            }
             let metadata = std::fs::symlink_metadata(&candidate).map_err(|e| e.to_string())?;
             if metadata.file_type().is_symlink() || !metadata.is_file() {
                 return Err("manifest target is not a regular file".into());
@@ -67,6 +81,9 @@ impl Manifest {
 
 fn safe_relative(path: &str) -> bool {
     !path.is_empty()
+        && !path.contains("//")
+        && !path.starts_with("./")
+        && !path.ends_with('/')
         && Path::new(path)
             .components()
             .all(|part| matches!(part, Component::Normal(_)))
@@ -87,6 +104,7 @@ mod tests {
         assert!(Manifest::parse("b 00\na 00\n").is_err());
         assert!(Manifest::parse("a 00\na 00\n").is_err());
         assert!(Manifest::parse("../a 00\n").is_err());
+        assert!(Manifest::parse("a//b 00\n").is_err());
     }
 
     #[test]
@@ -109,6 +127,21 @@ mod tests {
         symlink("actual", directory.path().join("theme.ini")).unwrap();
         let manifest = Manifest::parse(
             "theme.ini 277089d91c0bdf4f2e6862ba7e4a07605119431f5d13f726dd352b06f1b206a9\n",
+        )
+        .unwrap();
+        assert!(manifest.verify(directory.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manifest_verification_rejects_symlinked_parent() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("outside")).unwrap();
+        std::fs::write(directory.path().join("outside/theme.ini"), "bytes").unwrap();
+        symlink("outside", directory.path().join("themes")).unwrap();
+        let manifest = Manifest::parse(
+            "themes/theme.ini 277089d91c0bdf4f2e6862ba7e4a07605119431f5d13f726dd352b06f1b206a9\n",
         )
         .unwrap();
         assert!(manifest.verify(directory.path()).is_err());
