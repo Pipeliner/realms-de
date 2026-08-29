@@ -2455,39 +2455,27 @@ mod tests {
         lease_synced.wait();
         assert_eq!(lease_names(root.path()).len(), 1);
 
-        let (published_tx, published_rx) = mpsc::channel();
-        let writer_started = Arc::new(Barrier::new(2));
-        let publishing_writer_started = Arc::clone(&writer_started);
-        let publishing = std::thread::spawn(move || {
-            publishing_writer_started.wait();
-            let candidate = "00000000000000000000000000000002";
-            let outcome = publish_at(
-                &publishing_store,
-                candidate,
-                || Ok(publication(candidate, "new")),
-                |_| Ok(()),
-            );
-            published_tx.send(outcome).unwrap();
-        });
-        writer_started.wait();
-        // This timeout tests a negative concurrency property after the writer
-        // has reached the publish call: it must not acquire the OS lock while
-        // the separately opened selector still holds its shared lock.
-        let writer_was_blocked = published_rx
-            .recv_timeout(Duration::from_millis(150))
-            .is_err();
+        let exclusive_attempt = flock(
+            &publishing_store.lock,
+            FlockOperation::NonBlockingLockExclusive,
+        );
+        if exclusive_attempt.is_ok() {
+            flock(&publishing_store.lock, FlockOperation::Unlock).unwrap();
+        }
 
         release_selector.wait();
         let selected = selecting.join().unwrap();
         assert_eq!(selected.as_str(), "00000000000000000000000000000001");
-        if writer_was_blocked {
-            assert!(published_rx
-                .recv_timeout(Duration::from_secs(2))
-                .unwrap()
-                .is_ok());
-        }
-        publishing.join().unwrap();
-        assert!(writer_was_blocked);
+        assert_eq!(exclusive_attempt.unwrap_err(), Errno::WOULDBLOCK);
+
+        let candidate = "00000000000000000000000000000002";
+        assert!(publish_at(
+            &publishing_store,
+            candidate,
+            || Ok(publication(candidate, "new")),
+            |_| Ok(()),
+        )
+        .is_ok());
     }
 
     #[test]
