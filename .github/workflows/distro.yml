@@ -164,7 +164,7 @@ jobs:
 
       # KVM availability is detected, not assumed. A KVM-capable runner executes
       # the NixOS VM; a runner without KVM still evaluates the flake and builds the
-      # independent ShellCheck and package checks.
+      # independent ShellCheck, package, and runtime-validator checks.
       - name: Run the reference build
         if: steps.flake.outputs.present == 'true'
         run: |
@@ -179,5 +179,6 @@ jobs:
             nix flake check --print-build-logs --no-build
             nix build --print-build-logs \
               ".#checks.$system.shellcheck" \
-              ".#checks.$system.package"
+              ".#checks.$system.package" \
+              ".#checks.$system.helm-sdd-git-runtime"
           fi

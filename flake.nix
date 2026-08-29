@@ -24,10 +24,10 @@
 # it. river is pinned and carried in helm's runtime closure — see
 # packaging/nix/support.nix for the version guard and the pinning decision.
 #
-# PRE-ALPHA (0.1.0). The Cargo workspace contains one crate, helm-core, and it
-# is a *library*: this package installs no helm binaries, because none exist
-# yet. What it does install is real and testable today — the session wrapper,
-# the wayland-session entry, the systemd user units and the palette. helm-bar,
+# PRE-ALPHA (0.1.0). Desktop binaries remain pending, but the Cargo workspace
+# already installs the metadata-only local validator as helm-sdd. The package's
+# real, testable contents today are that validator, the session wrapper, the
+# wayland-session entry, the systemd user units and the palette. helm-bar,
 # helm-wm and helm land in M1–M2 and will appear in $out/bin without any
 # change to this file.
 {
@@ -142,9 +142,10 @@
       };
 
       # `checks.session-boots` is a NixOS VM test and needs a KVM-capable
-      # builder; `shellcheck` and `package` build anywhere. CI (distro.yml)
-      # falls back to `nix flake check --no-build` plus those two when /dev/kvm
-      # is absent, so keep them independently buildable.
+      # builder; `shellcheck`, `package`, and `helm-sdd-git-runtime` build
+      # anywhere. CI (distro.yml) falls back to `nix flake check --no-build`
+      # plus those three when /dev/kvm is absent, so keep them independently
+      # buildable.
       checks = forAllSystems (
         pkgs:
         import ./packaging/nix/checks.nix {

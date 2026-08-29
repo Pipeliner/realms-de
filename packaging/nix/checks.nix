@@ -23,6 +23,71 @@
 
   package = helm;
 
+  # The local agent-SDD validator reads Git objects at runtime.  Its package
+  # wrapper must supply Git without adding it to the desktop session wrapper.
+  helm-sdd-git-runtime =
+    pkgs.runCommand "helm-sdd-git-runtime" {
+      nativeBuildInputs = [
+        pkgs.coreutils
+        pkgs.git
+        pkgs.gnugrep
+      ];
+    }
+      ''
+        repo="$TMPDIR/repo"
+        mkdir "$repo"
+        cd "$repo"
+
+        git init --initial-branch=main
+        git config user.email test@example.invalid
+        git config user.name test
+        printf 'fixture\n' > README
+        git add README
+        git commit --no-gpg-sign --message initial
+        parent="$(git rev-parse HEAD)"
+
+        mkdir -p .agent/work/120
+        cat > .agent/work/120/checkpoint.toml <<EOF
+schema = "helm-agent-sdd/checkpoint/v1"
+issue = 120
+reason = "handoff"
+created_at = "2026-08-29T12:00:00Z"
+current_maturity = "probe"
+requested_maturity = "spike"
+git_head = "$parent"
+question = "Can the focused check reproduce the result?"
+success_condition = "One reproducible command exists."
+limitations = []
+affected_specs = []
+
+[goal]
+statement = "State one durable task goal."
+
+[acceptance]
+criteria = ["A concrete condition exists."]
+
+[workspace]
+branch = "main"
+base = "$parent"
+dirty = false
+
+[next_actions]
+items = ["Rerun the focused check."]
+EOF
+        cat > .agent/work/120/evidence.jsonl <<EOF
+{"id":"ev-001","ts":"2026-08-29T12:00:00Z","kind":"command","summary":"Ran focused check","command":"cargo test -p helm-core","exit_code":0,"git_head":"$parent","purpose":"reproduce result"}
+EOF
+        git add .agent/work/120
+        git commit --no-gpg-sign --message record
+
+        ${pkgs.coreutils}/bin/env -i PATH=/nonexistent \
+          ${helm}/bin/helm-sdd gate --issue 120 --from probe --to spike > "$TMPDIR/actual.json"
+        printf '%s\n' '{"issue":120,"from":"probe","to":"spike","outcome":"pass","obligations":[{"code":"accepted_refs","status":"met"},{"code":"clean_workspace","status":"met"},{"code":"decision_provenance","status":"met"},{"code":"fresh_checkpoint","status":"met"},{"code":"fresh_evidence","status":"met"},{"code":"git_objects","status":"met"},{"code":"hygiene","status":"met"},{"code":"issue_directory","status":"met"},{"code":"schema","status":"met"},{"code":"transition","status":"met"},{"code":"transition_evidence","status":"met"},{"code":"transition_fields","status":"met"}]}' > "$TMPDIR/expected.json"
+        cmp --silent "$TMPDIR/expected.json" "$TMPDIR/actual.json"
+        ! grep -F '${pkgs.git}/bin' ${helm}/bin/helm-session
+        touch $out
+      '';
+
   # `pkgs.testers.nixosTest`, not the old top-level `nixosTest` alias, which
   # nixpkgs now refuses.
   session-boots = pkgs.testers.nixosTest {

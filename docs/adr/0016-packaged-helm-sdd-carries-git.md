@@ -75,10 +75,11 @@ coverage.
 
 ## Guard
 
-*Planned (#146):* the existing Nix package/check path creates a valid
+*Implemented (#146):* `checks.<system>.helm-sdd-git-runtime` creates a valid
 record-carrier fixture and runs the installed `helm-sdd` under an empty caller
-`PATH`. It must exit zero with canonical pass JSON; removing the wrapper or
-falling back to host `PATH` makes the guard fail.
+`PATH`. It exits zero with canonical pass JSON; removing the wrapper or falling
+back to host `PATH` makes the guard fail. The existing CI runs this check in
+both its full-KVM and no-KVM fallback paths.
 
 ## Needs a human
 
