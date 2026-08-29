@@ -3,7 +3,9 @@
 - **Status:** Accepted; implemented through A14 (2026-08-27), including A11's
   equivalent-spelling configuration-root correction, A13's matching palette
   containment rule, and #110's A12/A14 descriptor-relative writer
-  protections. Multi-file all-or-nothing publication remains #22's boundary.
+  protections. Multi-file all-or-nothing publication remains #22's boundary;
+  SPEC 0011 supersedes this document's mixed-generation interruption allowance
+  when immutable activation generations are implemented.
 - **Milestone:** M1
 - **Decisions:** [ADR 0005](../adr/0005-palette-toml-single-source.md),
   [ADR 0006](../adr/0006-oklab-contrast-not-filters.md)
@@ -79,6 +81,10 @@ palette against an old GTK stylesheet — is both ugly and hard to diagnose:
 If any step before 3 fails, nothing is renamed and the desktop is untouched.
 Outputs that are byte-identical are neither rewritten nor reloaded, so a
 no-op apply costs nothing and does not flash the desktop.
+
+Until SPEC 0011 is implemented this is an individual-file writer, not an
+activation-generation publisher. Its reload fan-out must not be used to claim a
+live generation upgrade or to retheme an old-generation process.
 
 ### Output containment
 
