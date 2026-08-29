@@ -112,9 +112,15 @@ implementation detail.
 
 Everything in this document that has a TUI — `wiremix`, `impala`, `bluetui`,
 `nmtui`, `btop`, `yazi` — renders through the terminal's 16-colour ANSI scheme,
-which helm already generates from `palette.toml` at M1. A TUI picker in a
-floating foot window is *already* helm-coloured with no additional template. The
-GTK equivalents (`pavucontrol`, `blueman`, `nm-connection-editor`,
+which helm generates from `palette.toml`. Under SPEC 0011, apply publishes that
+scheme inside one sealed immutable generation and selects it for **future
+launches only**. It sends no reload, signal, command, or session notification
+when `current` changes, so an existing terminal or TUI remains on the generation
+it selected. This supersedes the former reload-fan-out assumption throughout
+this integration survey; live upgrade and wire compatibility remain out of
+scope. A newly launched TUI picker in a floating foot window is helm-coloured
+with no additional template. The GTK equivalents (`pavucontrol`, `blueman`,
+`nm-connection-editor`,
 `gnome-control-center`) need the `gtk.css` template, will still show libadwaita
 geometry helm cannot change ([`HANDOFF.md`](../../design/HANDOFF.md) says so
 explicitly), and drag a toolkit into a session that otherwise has none.
@@ -1034,7 +1040,7 @@ seriously, because the mockup's own bar contains modules that cannot honour it.
 | Timezone changed | `timedate1` `PropertiesChanged` on `Timezone` | yes — timedate1 manual |
 | Backlight changed by firmware | udev `change` on the `backlight` subsystem | **assumed — test on real hardware** |
 | Idle / active | `ext-idle-notify-v1` (river creates `wlr.IdleNotifierV1`) | yes — river source |
-| Theme reload | helm's own fan-out | n/a |
+| Theme generation selection | SPEC 0011 `current` pointer commit; no reload or notification, future launches only | yes — accepted Helm contract |
 
 ### Cannot be pushed — the bar's design has a problem here
 

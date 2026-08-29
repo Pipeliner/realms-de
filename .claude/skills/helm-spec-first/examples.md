@@ -1,47 +1,47 @@
 # Worked examples: acceptance criteria into tests
 
-Two examples. The first is SPEC 0002, whose `Test` column is still empty — this
-is the work waiting to be done. The second is SPEC 0001, retro-fitted, which
-shows what a finished table looks like.
+Two examples. The first shows how SPEC 0002's preserved rendering and lint
+criteria combine with SPEC 0011's governing generation contract. The second is
+SPEC 0001, retro-fitted, which shows what a finished table looks like.
 
 The rules live in `SKILL.md`.
 
-## SPEC 0002 — the theme pipeline, criteria into test names
+## SPEC 0002 + SPEC 0011 — theme criteria after supersession
 
-`docs/specs/0002-theme-pipeline.md` is Accepted for M1 with an empty `Test`
-column. Each row below is one happy path, one test, written and watched to fail
-before `helm-theme` exists in any working form. **None of these test functions
-exists yet** — they are what the criteria should turn into, named here so the
-shape is clear before anyone starts typing.
+SPEC 0002 remains Accepted for palette initialization, derivation, rendering,
+placeholder validation, and linting. SPEC 0011 and ADR 0017 explicitly
+supersede its historical mutable-target publication, equality/no-op reporting,
+mutable diff, and reload fan-out. New apply/diff work starts from SPEC 0011's
+generation acceptance criteria, not from the retired mechanics below.
 
-| # | The criterion | The test it becomes | What "watch it fail" looks like |
+| # | Current criterion | Governing acceptance row | What "watch it fail" must expose |
 |---|---|---|---|
-| A1 | Apply against an empty config root writes every output, with no unexpanded `{{` | `theme::tests::apply_writes_every_template_with_no_unexpanded_placeholders` | fails to compile — `apply` does not exist. That is a legitimate red |
-| A2 | A second apply with the same palette reports everything `unchanged` and reloads nothing | `theme::tests::a_second_apply_changes_nothing_and_reloads_nothing` | fails because `Applied::unchanged` is empty and reloads fire regardless |
-| A3 | Changing `accent.violet` rewrites only the outputs that reference violet | `theme::tests::only_outputs_referencing_the_changed_colour_are_rewritten` | fails because every file is rewritten |
-| A4 | At `contrast = 1.30` outputs match `Palette::derived()` and contain no source literal | `theme::tests::outputs_carry_derived_colours_not_source_literals` | fails while contrast is applied late, or not at all |
-| A5 | An unknown placeholder fails with its name and writes nothing | `theme::tests::an_unknown_placeholder_aborts_the_apply_and_writes_nothing` | fails while unknown placeholders render as empty strings — the exact bug the design exists to prevent |
-| A6 | A fatally linted palette is refused and existing outputs are untouched | `theme::tests::a_fatally_linted_palette_is_refused_and_leaves_the_theme_live` | fails while `apply` writes first and lints later |
-| A7 | Each reload mechanism fires exactly once regardless of how many templates share it | `theme::tests::each_reload_mechanism_fires_exactly_once` | fails while reloads fan out per template |
-| A8 | With no user palette, the shipped one is copied to the user config path first | `theme::tests::first_run_copies_the_shipped_palette_to_the_user_config` | fails while `apply` reads the shipped palette in place |
-| A9 | `helm ctl theme lint` exits 0 on the shipped palette and prints hue separations | `ctl::tests::theme_lint_exits_zero_on_the_shipped_palette` | fails until the subcommand exists |
-| A10 | `helm ctl theme diff` prints what would change and writes nothing | `ctl::tests::theme_diff_writes_nothing` | fails until the subcommand exists |
+| A1 | Apply renders every normalized output with no unexpanded `{{`, publishes one sealed generation, and selects it for future launches | SPEC 0002 A1; SPEC 0011 G1–G5, G9 | a partial, unsealed, or mixed generation becomes selectable |
+| A2 | Applying identical inputs still returns a generation publication outcome and sends no reload; no `unchanged` no-op is promised | SPEC 0002 A2; SPEC 0011 G11–G12 | apply exposes the retired mutable result or notifies a running process |
+| A3 | Changing `accent.violet` changes only candidate output bytes that depend on violet, while apply publishes the complete generation | SPEC 0002 A3; SPEC 0011 G4 | publication selectively mutates current targets or mixes input snapshots |
+| A4 | At `contrast = 1.30`, outputs match `Palette::derived()` and contain no source literal | SPEC 0002 A4 | contrast is applied late, omitted, or changes hue unexpectedly |
+| A5 | An unknown placeholder fails with its name and leaves `current` unchanged | SPEC 0002 A5; SPEC 0011 G2–G5 | a blank placeholder or partial generation is selected |
+| A6 | Fatal lint findings refuse publication and leave `current` unchanged | SPEC 0002 A6; SPEC 0011 G2–G5 | invalid palette output reaches a selectable generation |
+| A7 | Pointer commit sends no signal, command, notification, or reload; existing processes remain on their selected generation | SPEC 0002 A7; SPEC 0011 G7, G11 | a pointer switch changes or notifies an already-running process |
+| A8 | With no user palette, initialization copies the shipped palette safely before capture | SPEC 0002 A8 | initialization reads in place or follows an unsafe path |
+| A9 | `theme lint` accepts the shipped palette and prints hue separations | SPEC 0002 A9 | the shipped palette fails its own lint contract |
+| A10 | `theme diff` compares candidate outputs with a fully validated `current` generation, reports sorted `added`/`removed`/`byte-different` paths, and mutates nothing | SPEC 0002 A10; SPEC 0011 G10 | diff treats missing/invalid current as empty, writes state, or reports control files |
 
 Notes on the shape of these:
 
-- **Atomicity is testable without a compositor.** A5 and A6 are the atomicity
-  criteria in disguise: both assert that a failure leaves the filesystem exactly
-  as it was. Point them at a temporary config root and compare the whole tree
-  before and after.
-- **A7 needs a seam.** Counting reloads means `Reload` execution has to be
-  injectable — a `FnMut(&Reload)` or a small trait. The test is what forces that
-  design, which is the point of writing it first.
+- **Atomicity is testable without a compositor.** A5 and A6 assert that a
+  failure leaves `current` naming the previous fully validated generation. Use
+  a temporary generated root and compare the pointer plus sealed inventory.
+- **A7 forbids a reload seam in supported apply.** `Reload` remains canonical
+  catalogue metadata, but pointer commit does not execute it. Live upgrade and
+  wire compatibility are out of scope; a future protocol must be
+  generation-aware and cannot restore reload as a pointer-switch side effect.
 - **None of these needs a live desktop.** That is deliberate: the agent
   container has no Wayland display and no D-Bus session, so anything requiring
   one is `needs-human` and belongs in a different slice.
-- **What is *not* on this list** is as important. There is no test for a
-  read-only target directory, a full disk, or a palette with a byte-order mark.
-  Those are edge cases; they earn tests when they turn up as bugs.
+- **What is *not* on this list** is as important. It does not promise a no-op
+  apply, compatibility with the retired mutable result or wire messages, or a
+  live upgrade path.
 
 ## SPEC 0001 — a finished table
 

@@ -83,10 +83,12 @@ unit named after its binary is the one convention nobody has to look up —
 
 **2026-08-26 — Theme rendering happens in `helmctl`, never in `helm-session`** —
 because rendering is a ~150 ms job and the session sits on river's input path
-where a stall is a session failure, so `Request::ReloadTheme` notifies that files
-are already on disk rather than asking for them to be written — *revisit if*
-rendering ever becomes cheap enough to be non-blocking, which would still not
-make it a good idea.
+where a stall is a session failure. **The former `Request::ReloadTheme`
+notification is superseded by ADR 0017 and SPEC 0011:** apply publishes one
+sealed immutable generation, selects it only for future launches, and sends no
+reload, signal, command, or session notification when `current` changes. A
+future live-upgrade or wire-compatibility protocol remains out of scope and
+must not restore reload as a pointer-switch side effect.
 
 **2026-08-29 — Fedora 44 is the sole explicit Fedora pre-alpha baseline and
 uses Fedora's native `river >= 0.4.0` package as its packaging candidate** —

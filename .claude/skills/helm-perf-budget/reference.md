@@ -18,7 +18,12 @@ banned list live in `SKILL.md`.
 | State change → bar redraw < 8 ms | The bar lags behind the thing it is describing | `HelmState` is a plain data struct; `renders_same_as` gates the frame before any drawing |
 | Idle CPU ~0% | Fans spin on a laptop doing nothing; battery life drops for no benefit | event-driven modules, one shared 1 Hz sampler for interval-derived rates, minute-aligned clock, damage-tracked repaint |
 | Cold start < 900 ms | Login feels like a workstation booting | no GPU context for a 32px bar (ADR 0008), no icon-cache scan, no thumbnailer |
-| `theme apply` < 150 ms | A colour tweak feels like a recompile, so nobody tweaks colours | templates render serially, are replaced atomically per file, then trigger one reload fan-out (ADR 0009) |
+| `theme apply` < 150 ms | A colour tweak feels like a recompile, so nobody tweaks colours | one captured input set is rendered, fully validated, sealed, made durable, and selected as an immutable generation for future launches, with no pointer-switch reload (SPEC 0011, ADR 0017) |
+
+SPEC 0011 supersedes ADR 0009's historical per-file replacement and reload
+fan-out for this row. Identical inputs may publish a new generation; the budget
+does not create a supported equality/no-op shortcut or weaken full-generation
+validation.
 
 ## Deciding whether a timer is justified
 
