@@ -351,9 +351,16 @@ impl GenerationPublication {
 impl GenerationStore {
     /// Open an existing generated root and create its one persistent lock inode.
     pub fn open(path: &Path) -> std::result::Result<Self, String> {
-        Self::open_with_preflight_checkpoint(path, || {})
+        Self::open_with_root_and_preflight(GenerationRoot::open(path)?, || {})
     }
 
+    /// Open a generated root already reached through a descriptor-safe parent
+    /// chain. The descriptor must name the generated root itself.
+    pub fn open_from_fd(fd: OwnedFd) -> std::result::Result<Self, String> {
+        Self::open_with_root_and_preflight(GenerationRoot { fd }, || {})
+    }
+
+    #[cfg(test)]
     fn open_with_preflight_checkpoint<H>(
         path: &Path,
         preflight_checkpoint: H,
@@ -362,6 +369,16 @@ impl GenerationStore {
         H: FnOnce(),
     {
         let root = GenerationRoot::open(path)?;
+        Self::open_with_root_and_preflight(root, preflight_checkpoint)
+    }
+
+    fn open_with_root_and_preflight<H>(
+        root: GenerationRoot,
+        preflight_checkpoint: H,
+    ) -> std::result::Result<Self, String>
+    where
+        H: FnOnce(),
+    {
         let current_uid = rustix::process::getuid().as_raw();
         let root_stat = rustix::fs::fstat(&root.fd).map_err(|error| error.to_string())?;
         validate_owned_mode(

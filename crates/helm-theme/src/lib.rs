@@ -45,8 +45,8 @@ pub use reload::{Reloader, SystemReloader};
 pub use render::render;
 pub use template::{templates, Reload, Template};
 pub use theme::{
-    apply, apply_with, diff, lint, load_palette, Applied, Change, HueSeparation, LintReport,
-    SHIPPED_PALETTE, USER_PALETTE,
+    apply, apply_with_snapshot, diff, lint, load_palette, Applied, Change, HueSeparation,
+    LintReport, ThemeSnapshot, SHIPPED_PALETTE, USER_PALETTE,
 };
 
 use std::path::PathBuf;
@@ -89,6 +89,9 @@ pub enum Error {
     /// A reload mechanism ran and failed.
     #[error("reload failed: {0}")]
     Reload(String),
+    /// A generation input, bootstrap or publication operation was refused.
+    #[error("theme generation: {0}")]
+    Generation(String),
     /// A template target could escape or collide within the configuration root.
     #[error("unsafe template target {target}: {reason}")]
     UnsafeTarget {

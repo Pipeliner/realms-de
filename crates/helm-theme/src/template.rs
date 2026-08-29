@@ -11,6 +11,7 @@ use std::path::PathBuf;
 const SIGUSR1: i32 = rustix::process::Signal::USR1.as_raw();
 
 /// One generated output and its catalogue metadata.
+#[derive(Debug)]
 pub struct Template {
     /// Stable id, e.g. `"gtk4"`, `"foot"`, `"yazi"`.
     pub id: &'static str,

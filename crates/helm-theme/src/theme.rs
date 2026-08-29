@@ -6,21 +6,34 @@
 //! supported diff compares against a fully validated current generation as
 //! specified by SPEC 0011.
 
-use std::collections::BTreeSet;
-use std::ffi::{OsStr, OsString};
-use std::io::{Read, Write};
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::ffi::OsStr;
+use std::ffi::OsString;
+use std::io::Read;
+#[cfg(test)]
+use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
 use helm_core::palette::Finding;
 use helm_core::Palette;
-use rustix::fs::{fsync, mkdirat, openat, renameat, unlinkat, AtFlags, Mode, OFlags, CWD};
+use rustix::fs::{fchmod, fstat, fsync, mkdirat, openat, FileType, Mode, OFlags, CWD};
+#[cfg(test)]
+use rustix::fs::{renameat, unlinkat, AtFlags};
 use rustix::io::Errno;
+use sha2::{Digest, Sha256};
 
+use crate::generation::{GenerationPublication, GenerationPublicationOutcome, GenerationStore};
 use crate::render::render_derived;
-use crate::{templates, Error, Reload, Reloader, Result, SystemReloader, Template};
+#[cfg(test)]
+use crate::Reloader;
+use crate::{templates, Error, Reload, Result, Template};
 
 /// The palette helm ships, embedded so a first run has something to copy.
 pub const SHIPPED_PALETTE: &str = include_str!("../../../palette.toml");
@@ -28,16 +41,23 @@ pub const SHIPPED_PALETTE: &str = include_str!("../../../palette.toml");
 /// Where the user's palette lives, relative to `$XDG_CONFIG_HOME`.
 pub const USER_PALETTE: &str = "helm/palette.toml";
 
+/// The byte-exact built-in launch profile selected by the current apply path.
+const BUILT_IN_LAUNCH_PROFILE: &[u8] = b"helm-theme-launch-profile-v1\nnone\n";
+
 /// Suffix of the file each output is staged in before it is renamed into place.
+#[cfg(test)]
 const STAGING_SUFFIX: &str = ".helm-tmp";
 
 /// Bound stale-name retries without making one collision an availability bug.
+#[cfg(test)]
 const MAX_STAGING_ATTEMPTS: usize = 64;
 
 /// Makes staging basenames unique within this process.
+#[cfg(test)]
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// The opened configuration root and its reporting-only pathname.
+#[cfg(test)]
 #[derive(Debug)]
 struct OutputRoot {
     fd: OwnedFd,
@@ -45,6 +65,7 @@ struct OutputRoot {
 }
 
 /// A staged output whose remaining operations are relative to its parent.
+#[cfg(test)]
 #[derive(Debug)]
 struct StagedOutput {
     parent_fd: OwnedFd,
@@ -67,6 +88,67 @@ pub struct Applied {
     pub reloaded: Vec<&'static str>,
     /// Wall time for the legacy mutable operation.
     pub elapsed: Duration,
+}
+
+/// Immutable theme inputs captured while a generation-store publication lock is
+/// held.  The raw bytes, rather than a serialised [`Palette`], are what the
+/// generation receipt commits to.
+#[derive(Debug)]
+pub struct ThemeSnapshot {
+    palette: Vec<u8>,
+    launch_profile: Vec<u8>,
+    renderer_options: BTreeMap<String, Vec<u8>>,
+    templates: Vec<Template>,
+}
+
+impl ThemeSnapshot {
+    /// Construct one complete, immutable apply snapshot.
+    pub fn new(
+        palette: Vec<u8>,
+        launch_profile: Vec<u8>,
+        renderer_options: BTreeMap<String, Vec<u8>>,
+        templates: Vec<Template>,
+    ) -> Result<Self> {
+        Ok(Self {
+            palette,
+            launch_profile,
+            renderer_options,
+            templates,
+        })
+    }
+
+    fn publication(self) -> Result<GenerationPublication> {
+        let palette_text = std::str::from_utf8(&self.palette)
+            .map_err(|_| Error::Generation("palette input is not UTF-8".into()))?;
+        let palette = Palette::from_toml(palette_text)?;
+        let findings = palette.lint();
+        if findings.iter().any(|finding| finding.fatal) {
+            return Err(Error::PaletteRefused(findings));
+        }
+        validate_targets(&self.templates)?;
+
+        let catalogue = catalogue_preimage(&self.templates)?;
+        let templates = templates_preimage(&self.templates)?;
+        let renderer = renderer_preimage(&self.renderer_options)?;
+        let derived = palette.derived();
+        let mut outputs = Vec::with_capacity(self.templates.len());
+        for template in self.templates {
+            let target = normalized_generation_target(&template.target)?;
+            let rendered = render_derived(&derived, template.id, template.source)?;
+            outputs.push((target, rendered.into_bytes()));
+        }
+        GenerationPublication::new(
+            [
+                digest_hex(&self.palette),
+                digest_hex(&catalogue),
+                digest_hex(&templates),
+                digest_hex(&renderer),
+                digest_hex(&self.launch_profile),
+            ],
+            outputs,
+        )
+        .map_err(Error::Generation)
+    }
 }
 
 /// One result from the legacy mutable-target diff.
@@ -163,30 +245,75 @@ fn reject_symlinked_palette_path(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Run the legacy mutable target writer and reload fan-out.
+/// Capture the built-in theme inputs and activate them as one sealed generation.
 ///
-/// This is not the supported theme-apply boundary. Supported apply captures
-/// inputs once, publishes a sealed immutable generation, returns
-/// `GenerationPublicationOutcome`, and never reloads on pointer switch.
-pub fn apply(palette: &Palette, root: &Path) -> Result<Applied> {
-    apply_with(palette, root, &templates(), &mut SystemReloader)
+/// This path never writes mutable template targets or reloads an existing
+/// process.  A successful result names the generation selected for future
+/// launches; an ambiguous filesystem result is deliberately not converted into
+/// an activation claim.
+pub fn apply(root: &Path) -> Result<GenerationPublicationOutcome> {
+    let config = ConfigRoot::open(root)?;
+    let input_root = config
+        .fd
+        .try_clone()
+        .map_err(|error| Error::Generation(error.to_string()))?;
+    apply_with_inner(config, || {
+        ThemeSnapshot::new(
+            read_raw_palette(&input_root)?,
+            built_in_launch_profile().to_vec(),
+            BTreeMap::new(),
+            templates(),
+        )
+    })
 }
 
-/// Legacy [`apply`] with its mutable template set and reload fan-out injected.
+/// Activate a generation from a snapshot builder.
 ///
-/// The seam exists for the tests: counting reloads and pointing a whole apply
-/// at a temporary directory is the only way to assert atomicity without a
-/// desktop underneath it. It is not an alternative supported activation seam.
-pub fn apply_with(
+/// The builder runs only after the generation store has acquired its exclusive
+/// lock, so every raw input and rendered output belongs to one serialised
+/// publication.  It deliberately has no reloader argument.
+pub fn apply_with_snapshot<C>(root: &Path, capture: C) -> Result<GenerationPublicationOutcome>
+where
+    C: FnOnce() -> Result<ThemeSnapshot>,
+{
+    apply_with_inner(ConfigRoot::open(root)?, capture)
+}
+
+fn apply_with_inner<C>(config: ConfigRoot, capture: C) -> Result<GenerationPublicationOutcome>
+where
+    C: FnOnce() -> Result<ThemeSnapshot>,
+{
+    let generated = config.open_generated_root()?;
+    let store = GenerationStore::open_from_fd(generated).map_err(Error::Generation)?;
+    store
+        .publish(|| {
+            capture()
+                .and_then(ThemeSnapshot::publication)
+                .map_err(|error| error.to_string())
+        })
+        .map_err(|error| Error::Generation(error.to_string()))
+}
+
+/// Run the legacy mutable-target writer and reload fan-out.
+///
+/// This is retained only for focused unit coverage of the descriptor writer.
+/// It is not the supported theme-apply boundary: supported [`apply`] captures
+/// inputs once, publishes a sealed immutable generation, returns
+/// `GenerationPublicationOutcome`, and never reloads on pointer switch. The
+/// injected mutable template set and reloader are a test seam, not an
+/// alternative supported activation seam.
+#[cfg(test)]
+fn apply_with(
     palette: &Palette,
     root: &Path,
     templates: &[Template],
     reloader: &mut dyn Reloader,
 ) -> Result<Applied> {
-    apply_with_inner(palette, root, templates, reloader)
+    legacy_apply_with_inner(palette, root, templates, reloader)
 }
 
-fn apply_with_inner(
+#[cfg(test)]
+fn legacy_apply_with_inner(
     palette: &Palette,
     root: &Path,
     templates: &[Template],
@@ -322,6 +449,201 @@ fn normalized_root_spelling(root: &Path) -> PathBuf {
     PathBuf::from(OsString::from_vec(bytes[..end].to_vec()))
 }
 
+/// An opened configuration root used to bootstrap the Helm-owned generated
+/// subtree without returning to path-based recursive creation.
+#[derive(Debug)]
+struct ConfigRoot {
+    fd: OwnedFd,
+}
+
+impl ConfigRoot {
+    fn open(root: &Path) -> Result<Self> {
+        let root = normalized_root_spelling(root);
+        let fd = openat(
+            CWD,
+            &root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| Error::io(root, error.into()))?;
+        Ok(Self { fd })
+    }
+
+    fn open_generated_root(&self) -> Result<OwnedFd> {
+        let helm = self.open_or_create_directory(&self.fd, "helm", "helm", false)?;
+        let generated =
+            self.open_or_create_directory(&helm, "generated", "helm/generated", true)?;
+        Ok(generated)
+    }
+
+    fn open_or_create_directory(
+        &self,
+        parent: &OwnedFd,
+        name: &str,
+        display: &str,
+        owned_mode_0700: bool,
+    ) -> Result<OwnedFd> {
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let mut created = false;
+        let fd = match openat(parent, name, flags, Mode::empty()) {
+            Ok(fd) => fd,
+            Err(Errno::NOENT) => {
+                match mkdirat(parent, name, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+                    Ok(()) => created = true,
+                    Err(Errno::EXIST) => {}
+                    Err(error) => return Err(Error::Generation(format!("{display}: {error}"))),
+                }
+                openat(parent, name, flags, Mode::empty())
+                    .map_err(|error| Error::Generation(format!("{display}: {error}")))?
+            }
+            Err(error) => return Err(Error::Generation(format!("{display}: {error}"))),
+        };
+        if created {
+            fchmod(&fd, Mode::RUSR | Mode::WUSR | Mode::XUSR)
+                .map_err(|error| Error::Generation(format!("{display}: {error}")))?;
+        }
+        if owned_mode_0700 {
+            let stat = fstat(&fd).map_err(|error| Error::Generation(error.to_string()))?;
+            let current_uid = rustix::process::getuid().as_raw();
+            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+                || stat.st_uid != current_uid
+                || Mode::from_raw_mode(stat.st_mode).bits() != 0o700
+            {
+                return Err(Error::Generation(
+                    "helm/generated must be a current-UID mode-0700 directory".into(),
+                ));
+            }
+        }
+        fsync(parent).map_err(|error| Error::Generation(format!("{display}: {error}")))?;
+        Ok(fd)
+    }
+}
+
+fn read_raw_palette(config: &OwnedFd) -> Result<Vec<u8>> {
+    let directory_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let helm = openat(config, "helm", directory_flags, Mode::empty())
+        .map_err(|error| Error::Generation(format!("helm palette directory: {error}")))?;
+    let palette = openat(
+        &helm,
+        "palette.toml",
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| Error::Generation(format!("helm palette: {error}")))?;
+    let stat = fstat(&palette).map_err(|error| Error::Generation(error.to_string()))?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+        return Err(Error::Generation(
+            "helm palette must be a regular file".into(),
+        ));
+    }
+    let mut raw = Vec::new();
+    std::fs::File::from(palette)
+        .read_to_end(&mut raw)
+        .map_err(|error| Error::Generation(error.to_string()))?;
+    Ok(raw)
+}
+
+fn built_in_launch_profile() -> &'static [u8] {
+    BUILT_IN_LAUNCH_PROFILE
+}
+
+fn digest_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn canonical_length_prefixed(out: &mut Vec<u8>, value: &[u8]) {
+    out.extend_from_slice(value.len().to_string().as_bytes());
+    out.push(b':');
+    out.extend_from_slice(value);
+}
+
+fn validate_catalogue_text(value: &str, description: &str) -> Result<()> {
+    if value.contains(['\0', '\r', '\n']) {
+        return Err(Error::Generation(format!(
+            "{description} contains a forbidden control byte"
+        )));
+    }
+    Ok(())
+}
+
+fn normalized_generation_target(target: &Path) -> Result<String> {
+    let target = target
+        .to_str()
+        .ok_or_else(|| Error::Generation("template target is not UTF-8".into()))?;
+    if target.is_empty()
+        || !target.bytes().all(|byte| {
+            matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b'/')
+        })
+    {
+        return Err(Error::Generation("template target is not a manifest-safe path".into()));
+    }
+    Ok(target.into())
+}
+
+fn reload_kind(reload: &Reload) -> Result<Vec<u8>> {
+    match reload {
+        Reload::None => Ok(b"none".to_vec()),
+        Reload::HelmClients => Ok(b"helm-clients".to_vec()),
+        Reload::Signal { process, signal } => {
+            validate_catalogue_text(process, "reload process")?;
+            Ok(format!("signal:{}:{process}{signal}", process.len()).into_bytes())
+        }
+        Reload::Command(argv) => {
+            let mut encoded = format!("command:{}:", argv.len()).into_bytes();
+            for argument in argv {
+                validate_catalogue_text(argument, "reload command argument")?;
+                canonical_length_prefixed(&mut encoded, argument.as_bytes());
+            }
+            Ok(encoded)
+        }
+    }
+}
+
+fn catalogue_preimage(templates: &[Template]) -> Result<Vec<u8>> {
+    let mut templates: Vec<&Template> = templates.iter().collect();
+    templates.sort_by(|left, right| left.id.as_bytes().cmp(right.id.as_bytes()));
+    if templates.windows(2).any(|pair| pair[0].id == pair[1].id) {
+        return Err(Error::Generation("template IDs must be unique".into()));
+    }
+    let mut encoded = Vec::new();
+    for template in templates {
+        validate_catalogue_text(template.id, "template ID")?;
+        let target = normalized_generation_target(&template.target)?;
+        let reload = reload_kind(&template.reload)?;
+        canonical_length_prefixed(&mut encoded, template.id.as_bytes());
+        canonical_length_prefixed(&mut encoded, target.as_bytes());
+        canonical_length_prefixed(&mut encoded, &reload);
+        encoded.push(b'\n');
+    }
+    Ok(encoded)
+}
+
+fn templates_preimage(templates: &[Template]) -> Result<Vec<u8>> {
+    let mut templates: Vec<&Template> = templates.iter().collect();
+    templates.sort_by(|left, right| left.id.as_bytes().cmp(right.id.as_bytes()));
+    let mut encoded = Vec::new();
+    for template in templates {
+        validate_catalogue_text(template.id, "template ID")?;
+        canonical_length_prefixed(&mut encoded, template.id.as_bytes());
+        canonical_length_prefixed(&mut encoded, template.source.as_bytes());
+        encoded.push(b'\n');
+    }
+    Ok(encoded)
+}
+
+fn renderer_preimage(options: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>> {
+    let mut entries: Vec<_> = options.iter().collect();
+    entries.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    let mut encoded = b"helm-theme-renderer-v1\n".to_vec();
+    for (name, value) in entries {
+        validate_catalogue_text(name, "renderer option name")?;
+        canonical_length_prefixed(&mut encoded, name.as_bytes());
+        canonical_length_prefixed(&mut encoded, value);
+        encoded.push(b'\n');
+    }
+    Ok(encoded)
+}
+
 /// Compare rendered bytes with legacy mutable targets without writing them.
 ///
 /// This is not the supported `theme diff`: it does not validate or compare the
@@ -384,6 +706,7 @@ fn validate_targets(templates: &[Template]) -> Result<()> {
 /// Refuse a pre-existing link anywhere in an output path. This closes the
 /// ordinary user-config symlink escape before staging; descriptor-relative
 /// operations provide the remaining race protection in the writer itself.
+#[cfg(test)]
 fn reject_symlinked_targets(root: &Path, templates: &[Template]) -> Result<()> {
     if std::fs::symlink_metadata(root)
         .map_err(|error| Error::io(root, error))?
@@ -444,6 +767,7 @@ pub fn lint(palette: &Palette) -> LintReport {
     }
 }
 
+#[cfg(test)]
 impl OutputRoot {
     /// Open the configuration root once so later operations cannot be
     /// redirected by replacing its pathname.
@@ -503,6 +827,7 @@ impl OutputRoot {
 }
 
 /// Compare the final file through its already-opened parent descriptor.
+#[cfg(test)]
 fn contents_match(parent_fd: &OwnedFd, final_name: &OsStr, expected: &[u8]) -> Result<bool> {
     let fd = match openat(
         parent_fd,
@@ -522,6 +847,7 @@ fn contents_match(parent_fd: &OwnedFd, final_name: &OsStr, expected: &[u8]) -> R
 }
 
 /// Write `text` to a unique sibling through the held parent and flush it.
+#[cfg(test)]
 fn stage(parent_fd: OwnedFd, final_name: OsString, text: &str) -> Result<StagedOutput> {
     for attempt in 0..MAX_STAGING_ATTEMPTS {
         let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -564,6 +890,7 @@ fn stage(parent_fd: OwnedFd, final_name: OsString, text: &str) -> Result<StagedO
 }
 
 /// Atomically publish one staged file and make its directory entry durable.
+#[cfg(test)]
 fn commit(output: &StagedOutput) -> Result<()> {
     renameat(
         &output.parent_fd,
@@ -576,6 +903,7 @@ fn commit(output: &StagedOutput) -> Result<()> {
 }
 
 /// Remove one staging basename through its held parent descriptor.
+#[cfg(test)]
 fn cleanup(output: &StagedOutput) -> Result<()> {
     match unlinkat(&output.parent_fd, &output.temporary, AtFlags::empty()) {
         Ok(()) | Err(Errno::NOENT) => Ok(()),
@@ -584,6 +912,7 @@ fn cleanup(output: &StagedOutput) -> Result<()> {
 }
 
 /// Remove every still-staged file, ignoring only names already absent.
+#[cfg(test)]
 fn discard(staged: &[(&Template, StagedOutput)]) -> Result<()> {
     let mut first_error = None;
     for (_, output) in staged {
@@ -600,6 +929,7 @@ fn discard(staged: &[(&Template, StagedOutput)]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generation::{GenerationPublicationOutcome, GenerationStore};
     use crate::{templates, Reload, Template};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
@@ -638,6 +968,68 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn generation_apply_publishes_changed_bytes_without_writing_mutable_targets_or_a_reloader() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("theme.conf");
+        std::fs::write(&target, "mutable target sentinel\n").unwrap();
+
+        let first = apply_with_snapshot(root.path(), || {
+            ThemeSnapshot::new(
+                SHIPPED_PALETTE.as_bytes().to_vec(),
+                built_in_launch_profile().to_vec(),
+                BTreeMap::new(),
+                vec![Template {
+                    id: "theme",
+                    source: "accent = {{ accent.violet }}\n",
+                    target: PathBuf::from("theme.conf"),
+                    reload: Reload::Command(vec!["must-not-run".into()]),
+                }],
+            )
+        })
+        .unwrap();
+
+        let mut changed_palette = shipped();
+        changed_palette.accent.violet = helm_core::color::Rgb::new(0xb0, 0x7a, 0xff);
+        let second = apply_with_snapshot(root.path(), || {
+            ThemeSnapshot::new(
+                changed_palette.to_toml().into_bytes(),
+                built_in_launch_profile().to_vec(),
+                BTreeMap::new(),
+                vec![Template {
+                    id: "theme",
+                    source: "accent = {{ accent.violet }}\n",
+                    target: PathBuf::from("theme.conf"),
+                    reload: Reload::Command(vec!["must-not-run".into()]),
+                }],
+            )
+        })
+        .unwrap();
+
+        let GenerationPublicationOutcome::Committed(first_generation) = first else {
+            panic!("first generation did not commit cleanly: {first:?}");
+        };
+        let GenerationPublicationOutcome::Committed(second_generation) = second else {
+            panic!("second generation did not commit cleanly: {second:?}");
+        };
+        assert_ne!(first_generation.as_str(), second_generation.as_str());
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "mutable target sentinel\n",
+            "generation apply wrote the mutable template target"
+        );
+
+        let store = GenerationStore::open(&root.path().join("helm/generated")).unwrap();
+        let selected = store.select_current().unwrap();
+        assert_eq!(selected.as_str(), second_generation.as_str());
+        assert_eq!(
+            selected.read_output("theme.conf").unwrap(),
+            b"accent = #b07aff\n",
+            "the selected generation did not contain the changed rendering"
+        );
+        selected.release().unwrap();
     }
 
     #[test]
