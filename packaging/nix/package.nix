@@ -31,7 +31,14 @@
 
   cargoLock.lockFile = src + "/Cargo.lock";
 
-  nativeBuildInputs = [ pkgs.makeWrapper ];
+  # The complete workspace test suite includes helm-sdd integration fixtures
+  # and invokes Git to construct and inspect fixture repositories.  Git is a
+  # check-time tool here, not an implicit runtime-closure decision for the
+  # installed helm-sdd binary (tracked separately from this package gate).
+  nativeBuildInputs = [
+    pkgs.makeWrapper
+    pkgs.git
+  ];
 
   # helm-core's tests include the palette lint, so a palette that fails its
   # WCAG floors fails the build. That is the intended behaviour (ADR 0005).
