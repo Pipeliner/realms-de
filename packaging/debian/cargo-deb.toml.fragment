@@ -20,7 +20,7 @@
 
 [package.metadata.deb]
 name = "helm"
-maintainer = "helm contributors <helm-maintainers@helm.invalid>"  # NEEDS-HUMAN: see debian/control
+maintainer = "helm contributors <vadim.evard@gmail.com>"  # Keep synchronized with debian/control.
 copyright = "2026 the helm contributors"
 license-file = ["LICENSE-MIT", "0"]
 extended-description = """

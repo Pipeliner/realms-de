@@ -8,7 +8,7 @@ helm (0.1.0) UNRELEASED; urgency=medium
     yet (M1-M2). debian/rules installs them automatically once they do.
   * Depends on a vendored river 0.4.x (helm-river); river 0.4 is the compositor
     helm drives over river-window-management-v1.
-  * NEEDS-HUMAN: the maintainer address below uses the reserved .invalid domain
-    and must be replaced before any upload. See debian/control.
+  * Package and security correspondence use the reachable maintainer contact
+    declared in debian/control.
 
- -- helm contributors <helm-maintainers@helm.invalid>  Wed, 26 Aug 2026 00:00:00 +0000
+ -- helm contributors <vadim.evard@gmail.com>  Wed, 26 Aug 2026 00:00:00 +0000

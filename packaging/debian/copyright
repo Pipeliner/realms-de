@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: helm
-Upstream-Contact: helm contributors <helm-maintainers@helm.invalid>
+Upstream-Contact: helm contributors <vadim.evard@gmail.com>
 Source: https://github.com/pipeliner/realms-de
 Comment: helm is dual-licensed MIT OR Apache-2.0, at the recipient's option —
  the Rust ecosystem's convention. Debian's copyright format expresses the

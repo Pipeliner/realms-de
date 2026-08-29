@@ -434,7 +434,7 @@ None of them block building from source today.
 |---|---|---|
 | How a River 0.4-compatible source is provided for the deb | `packaging/debian/rules` | Build from an upstream tag; package an upstream binary; require a PPA; raise the minimum Ubuntu version |
 | Package hosting | `packaging/debian/control`, spec | PPA / self-hosted apt / GitHub Releases; COPR / dist-git / release tarballs |
-| Maintainer identity | `packaging/debian/control`, `changelog`, spec | List address, `maintainers@` alias, or a named person. The current address uses the reserved `.invalid` domain so it cannot deliver anywhere |
+| Maintainer identity | `packaging/debian/control`, `changelog`, spec, `SECURITY.md` | `vadim.evard@gmail.com` is the reachable package and private-security fallback contact |
 | `helm` binary name on Fedora | `packaging/fedora/helm.spec` | `helm-ctl`; rename the package to `helm-de`; confirm no collision with Kubernetes helm |
 | Idle and lock | `packaging/systemd/helm-session.target` | SPEC 0005 OQ-1: river 0.4 speaks `ext-session-lock-v1`, so the locker must too — gtklock (recommended), waylock (Zig), a new-enough swaylock, or `helm-ward` in M6. The idle defaults are a user-visible security decision and are not guessed |
 | ScreenCast actually working under river | `configs/portal/helm-portals.conf` | SPEC 0005 OQ-2: whether river 0.4.8 exports `wlr-screencopy-unstable-v1` and whether xdpw works with external window management. Routed to `wlr`; **unverified**, and screen sharing stays unproven until someone tests it on hardware |
