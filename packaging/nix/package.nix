@@ -1,8 +1,8 @@
 # The helm derivation.
 #
-# PRE-ALPHA (0.1.0): the workspace contains one crate, helm-core, and it is a
-# library — so this installs no helm binaries, because none exist. What it does
-# install is real: the session wrapper (wrapped so it can find river, systemctl,
+# PRE-ALPHA (0.1.0): desktop binaries remain pending, but the workspace's
+# metadata-only local validator is installed as helm-sdd. This derivation also
+# installs the session wrapper (wrapped so it can find river, systemctl,
 # dbus-update-activation-environment and gsettings), the wayland-session entry,
 # the systemd user units and the palette. helm-bar, helm-wm and helm land
 # in M1–M2 and appear in $out/bin with no change here.
@@ -83,6 +83,12 @@
 
     wrapProgram $out/bin/helm-session \
       --prefix PATH : ${lib.makeBinPath (support.wrapperRuntime pkgs)}
+
+    # SPEC 0010: helm-sdd reads local Git objects. Keep Git out of the desktop
+    # wrapper path while making the installed validator independent of caller
+    # PATH inheritance.
+    wrapProgram $out/bin/helm-sdd \
+      --prefix PATH : ${lib.makeBinPath [ pkgs.git ]}
   '';
 
   meta = {
