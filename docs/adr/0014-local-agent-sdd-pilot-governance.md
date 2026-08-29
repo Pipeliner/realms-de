@@ -15,9 +15,10 @@ add a background service to the MVP.
 
 ## Decision
 
-1. Run a **local, Git-tracked, metadata-only** pilot under
+1. Plan a **local, Git-tracked, metadata-only** pilot under
    `.agent/work/<github-issue>/`. It covers only `probe → spike → prototype`;
-   it makes no candidate or production claim.
+   it makes no candidate or production claim. The pilot is not implemented
+   until #120 supplies the validator and its fixtures.
 2. Records use the TOML checkpoint and append-only JSONL evidence schemas in
    [SPEC 0008](../specs/0008-agent-sdd-pilot-governance.md). They describe
    task state/evidence, never normative requirements or current source files.
@@ -41,15 +42,17 @@ add a background service to the MVP.
 
 ### Good
 
-- A fresh agent can recover verified task context without trusting stale source
-  snapshots or model summaries as current truth.
-- Records are reviewable in ordinary Git history with a deliberately small
-  privacy and retention surface.
-- #120 can implement a deterministic validator without network or a service.
+- If #120 implements and verifies this contract, a fresh agent can recover
+  verified task context without trusting stale source snapshots or model
+  summaries as current truth.
+- The planned records are reviewable in ordinary Git history with deliberately
+  constrained metadata fields. Git history and existing clones retain prior
+  content: deleting a record stops future use but does not reliably erase it.
+- #120 has a deterministic, network-free and service-free validator contract.
 
 ### Bad
 
-- Evidence selection remains deliberate work; no automatic recall/search is
+- Evidence selection will remain deliberate work; no automatic recall/search is
   promised.
 - Records can be stale, so observations and commands are commit-scoped and
   live Git/files/tests always win.
@@ -62,10 +65,12 @@ add a background service to the MVP.
 
 ## Reversal
 
-Low. Remove pilot records, the future validator and its routing documentation;
-no production component or external account depends on them. Reconsider only
-after two real iterations show no handoff value or a deterministic retrieval
-gap that paths, commands, IDs and Git revisions cannot cover.
+Low. If implemented, remove pilot records, the validator and its routing
+documentation; no production component or external account depends on them.
+Historical Git objects and clones may still retain removed record content, so
+sensitive material must never be recorded. Reconsider only after two real
+iterations show no handoff value or a deterministic retrieval gap that paths,
+commands, IDs and Git revisions cannot cover.
 
 ## Guard
 
@@ -79,4 +84,3 @@ review of this spec is the guard; no tool claims to enforce it yet.
 None. Candidate/production promotion, L0–L6 graphs, automatic capture,
 semantic retrieval, external memory, hooks and CI enforcement need new ADRs
 and accepted specifications.
-
