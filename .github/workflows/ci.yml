@@ -1,8 +1,9 @@
 # The trio gate from CLAUDE.md: fmt, clippy, test — plus the two guards that
 # only bite on a repo like this one. `docs` exists because helm-core is
 # #![warn(missing_docs)] and a warning nobody reads is not a contract; `msrv`
-# exists because ARCHITECTURE.md §5 makes Ubuntu 24.04's glibc the floor, and a
-# floor that is never tested drifts upward silently.
+# exists because the locked dependency graph sets the source-build MSRV, and a
+# floor that is never tested drifts upward silently. Ubuntu's glibc would be a
+# separate compatibility boundary if Helm later distributes prebuilt binaries.
 name: ci
 
 on:
