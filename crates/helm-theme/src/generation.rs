@@ -4,8 +4,8 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
-use std::path::{Component, Path};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use rustix::fs::{
@@ -44,8 +44,45 @@ fn validate_owned_mode(
 pub struct GenerationStore {
     root: GenerationRoot,
     generations: GenerationRoot,
+    leases: GenerationRoot,
     lock: OwnedFd,
     intra_process_lock: Mutex<()>,
+}
+
+/// One launcher selection pinned to a validated generation by an on-disk lease.
+#[derive(Debug)]
+pub struct GenerationSelection {
+    generation: GenerationId,
+    root: GenerationRoot,
+    path: PathBuf,
+    lease_directory: OwnedFd,
+    lease_name: String,
+    released: bool,
+}
+
+/// The mutations performed by one conservative garbage-collection pass.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GenerationGcReport {
+    /// Leases whose recorded process identity was provably stale.
+    pub reclaimed_leases: usize,
+    /// Valid, unleased generations older than the two retained candidates.
+    pub reclaimed_generations: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LeaseRecord {
+    generation: GenerationId,
+    pid: u32,
+    start_time: u64,
+    boot_id: String,
+    owner_uid: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeaseLiveness {
+    Live,
+    Stale,
+    Uncertain,
 }
 
 /// An exclusive generation-store operation lock.
@@ -337,6 +374,20 @@ impl GenerationStore {
             Err(Errno::NOENT) => false,
             Err(error) => return Err(error.to_string()),
         };
+        let leases_exists = match statat(&root.fd, "leases", AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => {
+                validate_owned_mode(
+                    "leases directory",
+                    &stat,
+                    FileType::Directory,
+                    0o700,
+                    current_uid,
+                )?;
+                true
+            }
+            Err(Errno::NOENT) => false,
+            Err(error) => return Err(error.to_string()),
+        };
         preflight_checkpoint();
 
         let lock_flags = OFlags::RDWR
@@ -381,6 +432,12 @@ impl GenerationStore {
                 Err(error) => return Err(error.to_string()),
             }
         }
+        if !leases_exists {
+            match mkdirat(&root.fd, "leases", Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+                Ok(()) | Err(Errno::EXIST) => {}
+                Err(error) => return Err(error.to_string()),
+            }
+        }
         let generations = GenerationRoot {
             fd: openat(
                 &root.fd,
@@ -399,12 +456,30 @@ impl GenerationStore {
             0o700,
             current_uid,
         )?;
-        if !lock_exists || !generations_exists {
+        let leases = GenerationRoot {
+            fd: openat(
+                &root.fd,
+                "leases",
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| error.to_string())?,
+        };
+        let leases_stat = rustix::fs::fstat(&leases.fd).map_err(|error| error.to_string())?;
+        validate_owned_mode(
+            "leases directory",
+            &leases_stat,
+            FileType::Directory,
+            0o700,
+            current_uid,
+        )?;
+        if !lock_exists || !generations_exists || !leases_exists {
             fsync(&root.fd).map_err(|error| error.to_string())?;
         }
         Ok(Self {
             root,
             generations,
+            leases,
             lock,
             intra_process_lock: Mutex::new(()),
         })
@@ -435,15 +510,53 @@ impl GenerationStore {
     }
 
     /// Resolve and validate current while holding the persistent shared lock.
-    pub fn select_current(&self) -> std::result::Result<GenerationId, String> {
+    pub fn select_current(&self) -> std::result::Result<GenerationSelection, String> {
+        self.select_current_with_checkpoint(std::process::id(), || {})
+    }
+
+    /// Resolve current and lease it to an already-created, not-yet-executing target.
+    pub fn select_current_for_process(
+        &self,
+        pid: u32,
+    ) -> std::result::Result<GenerationSelection, String> {
+        self.select_current_with_checkpoint(pid, || {})
+    }
+
+    fn select_current_with_checkpoint<H>(
+        &self,
+        pid: u32,
+        lease_synced: H,
+    ) -> std::result::Result<GenerationSelection, String>
+    where
+        H: FnOnce(),
+    {
         let _lock = self.lock_shared()?;
         let inventory = self.inspect_pointer_journals()?;
-        match inventory.state {
+        let generation = match inventory.state {
             PointerJournalState::Clean | PointerJournalState::CleanupCommitted { .. } => inventory
                 .current
-                .ok_or_else(|| "current generation is absent".into()),
+                .ok_or_else(|| "current generation is absent".to_owned()),
             _ => Err("pointer transaction requires exclusive recovery".into()),
-        }
+        }?;
+        let generation_root = self.open_validated_generation(&generation)?;
+        let path = std::fs::read_link(format!("/proc/self/fd/{}", generation_root.fd.as_raw_fd()))
+            .map_err(|error| error.to_string())?;
+        let identity = LeaseRecord::for_process(generation.clone(), pid)?;
+        let lease_directory = self
+            .leases
+            .fd
+            .try_clone()
+            .map_err(|error| error.to_string())?;
+        let lease_name = self.create_lease_locked(&identity)?;
+        lease_synced();
+        Ok(GenerationSelection {
+            generation,
+            root: generation_root,
+            path,
+            lease_directory,
+            lease_name,
+            released: false,
+        })
     }
 
     /// Publish one captured generation while holding the store's exclusive lock.
@@ -525,6 +638,158 @@ impl GenerationStore {
         self.clean_staging()?;
         self.clean_pointer_staging(pointer_inventory, checkpoint, filesystem)?;
         self.resolve_current()
+    }
+
+    /// Validate a retained generation and durably select it for future launches.
+    pub fn rollback(
+        &self,
+        generation: &GenerationId,
+    ) -> std::result::Result<GenerationPublicationOutcome, GenerationPublicationError> {
+        let _lock = self.lock_exclusive()?;
+        let mut filesystem = RealPublicationFilesystem;
+        let inventory = self.inspect_pointer_journals()?;
+        self.validate_generation(generation)?;
+        self.clean_pointer_staging(inventory, |_| Ok(()), &mut filesystem)?;
+        let current = self.resolve_current()?;
+        if &current == generation {
+            return Ok(GenerationPublicationOutcome::Committed(generation.clone()));
+        }
+        self.commit_existing_pointer_locked(generation.clone(), &mut filesystem)
+    }
+
+    /// Remove only provably stale leases and old valid unleased generations.
+    pub fn garbage_collect(&self) -> std::result::Result<GenerationGcReport, String> {
+        let _lock = self.lock_exclusive()?;
+        let inventory = self.inspect_pointer_journals()?;
+        let current = match inventory.state {
+            PointerJournalState::Clean | PointerJournalState::CleanupCommitted { .. } => inventory
+                .current
+                .ok_or_else(|| "current generation is absent".to_owned())?,
+            _ => return Err("pointer transaction requires exclusive recovery".into()),
+        };
+
+        let mut report = GenerationGcReport::default();
+        let mut live_generations = BTreeSet::new();
+        let mut uncertain_lease = false;
+        let mut stale_leases = Vec::new();
+        let current_uid = rustix::process::getuid().as_raw();
+        let mut leases = Dir::read_from(&self.leases.fd).map_err(|error| error.to_string())?;
+        while let Some(entry) = leases.read() {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let bytes = entry.file_name().to_bytes();
+            if matches!(bytes, b"." | b"..") {
+                continue;
+            }
+            let Ok(name) = std::str::from_utf8(bytes) else {
+                uncertain_lease = true;
+                continue;
+            };
+            if GenerationId::parse(name).is_err() {
+                uncertain_lease = true;
+                continue;
+            }
+            let stat = match statat(&self.leases.fd, name, AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat) => stat,
+                Err(_) => {
+                    uncertain_lease = true;
+                    continue;
+                }
+            };
+            if validate_owned_mode(
+                "generation lease",
+                &stat,
+                FileType::RegularFile,
+                0o600,
+                current_uid,
+            )
+            .is_err()
+            {
+                uncertain_lease = true;
+                continue;
+            }
+            let raw = match read_optional_regular_bytes(&self.leases, Path::new(name)) {
+                Ok(Some(raw)) => raw,
+                Ok(None) | Err(_) => {
+                    uncertain_lease = true;
+                    continue;
+                }
+            };
+            let Ok(record) = LeaseRecord::parse(&raw) else {
+                uncertain_lease = true;
+                continue;
+            };
+            match record.liveness() {
+                LeaseLiveness::Live => {
+                    live_generations.insert(record.generation);
+                }
+                LeaseLiveness::Stale => stale_leases.push(name.to_owned()),
+                LeaseLiveness::Uncertain => {
+                    uncertain_lease = true;
+                    live_generations.insert(record.generation);
+                }
+            }
+        }
+        drop(leases);
+        for lease in stale_leases {
+            match unlinkat(&self.leases.fd, lease.as_str(), AtFlags::empty()) {
+                Ok(()) => {
+                    fsync(&self.leases.fd).map_err(|error| error.to_string())?;
+                    report.reclaimed_leases += 1;
+                }
+                Err(Errno::NOENT) => {}
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        if uncertain_lease {
+            return Ok(report);
+        }
+
+        let mut candidates = Vec::new();
+        let mut malformed_generation = false;
+        let mut generations =
+            Dir::read_from(&self.generations.fd).map_err(|error| error.to_string())?;
+        while let Some(entry) = generations.read() {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let bytes = entry.file_name().to_bytes();
+            if matches!(bytes, b"." | b"..") {
+                continue;
+            }
+            let Ok(name) = std::str::from_utf8(bytes) else {
+                malformed_generation = true;
+                continue;
+            };
+            let Ok(generation) = GenerationId::parse(name) else {
+                malformed_generation = true;
+                continue;
+            };
+            let Ok(stat) = statat(&self.generations.fd, name, AtFlags::SYMLINK_NOFOLLOW) else {
+                malformed_generation = true;
+                continue;
+            };
+            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+                || self.validate_generation(&generation).is_err()
+            {
+                malformed_generation = true;
+                continue;
+            }
+            if generation == current || live_generations.contains(&generation) {
+                continue;
+            }
+            candidates.push((stat.st_mtime, stat.st_mtime_nsec, generation));
+        }
+        drop(generations);
+        if malformed_generation {
+            return Ok(report);
+        }
+        candidates.sort_by(|left, right| {
+            (right.0, right.1, right.2.as_str()).cmp(&(left.0, left.1, left.2.as_str()))
+        });
+        for (_, _, generation) in candidates.into_iter().skip(2) {
+            remove_tree_at(&self.generations.fd, OsStr::new(generation.as_str()))?;
+            fsync(&self.generations.fd).map_err(|error| error.to_string())?;
+            report.reclaimed_generations += 1;
+        }
+        Ok(report)
     }
 
     fn validate_current_or_pristine(&self) -> std::result::Result<bool, String> {
@@ -741,6 +1006,92 @@ impl GenerationStore {
         Ok(GenerationPublicationOutcome::Committed(generation))
     }
 
+    fn commit_existing_pointer_locked<F: PublicationFilesystem>(
+        &self,
+        generation: GenerationId,
+        filesystem: &mut F,
+    ) -> std::result::Result<GenerationPublicationOutcome, GenerationPublicationError> {
+        let generation_name = generation.as_str();
+        let pointer_staging = format!(".current-{generation_name}");
+        write_synced_file(
+            &self.root.fd,
+            pointer_staging.as_str(),
+            format!("{generation_name}\n").as_bytes(),
+            filesystem,
+        )?;
+        filesystem.sync(self.root.fd.as_fd())?;
+        filesystem.exchange(
+            self.root.fd.as_fd(),
+            pointer_staging.as_str(),
+            self.root.fd.as_fd(),
+            "current",
+        )?;
+        if let Err(commit_error) = filesystem.sync(self.root.fd.as_fd()) {
+            let rollback = filesystem
+                .exchange(
+                    self.root.fd.as_fd(),
+                    pointer_staging.as_str(),
+                    self.root.fd.as_fd(),
+                    "current",
+                )
+                .and_then(|()| filesystem.sync(self.root.fd.as_fd()));
+            return match rollback {
+                Ok(()) => Err(commit_error.into()),
+                Err(rollback_error) => Ok(GenerationPublicationOutcome::OutcomeAmbiguous {
+                    candidate: generation,
+                    cause: format!(
+                        "pointer sync failed ({commit_error}) and rollback failed ({rollback_error})"
+                    ),
+                }),
+            };
+        }
+        let committed_marker = format!(".committed-{generation_name}");
+        if let Err(cause) = filesystem
+            .rename(
+                self.root.fd.as_fd(),
+                pointer_staging.as_str(),
+                self.root.fd.as_fd(),
+                committed_marker.as_str(),
+            )
+            .and_then(|()| filesystem.sync(self.root.fd.as_fd()))
+        {
+            return Ok(GenerationPublicationOutcome::OutcomeAmbiguous {
+                candidate: generation,
+                cause: format!("rollback is durable but commit-marker transition failed: {cause}"),
+            });
+        }
+        if let Err(cause) = filesystem
+            .unlink(self.root.fd.as_fd(), committed_marker.as_str())
+            .and_then(|()| filesystem.sync(self.root.fd.as_fd()))
+        {
+            return Ok(GenerationPublicationOutcome::CommittedWithCleanupPending {
+                generation,
+                cause,
+            });
+        }
+        Ok(GenerationPublicationOutcome::Committed(generation))
+    }
+
+    fn create_lease_locked(&self, record: &LeaseRecord) -> std::result::Result<String, String> {
+        let mut filesystem = RealPublicationFilesystem;
+        for _ in 0..64 {
+            let name = random_generation_id()?.0;
+            match write_synced_file(&self.leases.fd, &name, &record.encode(), &mut filesystem) {
+                Ok(()) => {
+                    if let Err(error) = filesystem.sync(self.leases.fd.as_fd()) {
+                        let _ = unlinkat(&self.leases.fd, name.as_str(), AtFlags::empty());
+                        let _ = fsync(&self.leases.fd);
+                        return Err(error);
+                    }
+                    return Ok(name);
+                }
+                Err(error) if error == Errno::EXIST.to_string() => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err("lease id collision retry limit exhausted".into())
+    }
+
     fn resolve_current(&self) -> std::result::Result<GenerationId, String> {
         let Some(bytes) = read_optional_regular_bytes(&self.root, Path::new("current"))? else {
             return Err("current generation is absent".into());
@@ -751,6 +1102,13 @@ impl GenerationStore {
     }
 
     fn validate_generation(&self, generation: &GenerationId) -> std::result::Result<(), String> {
+        self.open_validated_generation(generation).map(|_| ())
+    }
+
+    fn open_validated_generation(
+        &self,
+        generation: &GenerationId,
+    ) -> std::result::Result<GenerationRoot, String> {
         let generation_root = GenerationRoot {
             fd: openat(
                 &self.generations.fd,
@@ -760,7 +1118,8 @@ impl GenerationStore {
             )
             .map_err(|error| error.to_string())?,
         };
-        verify_opened_generation(&generation_root, generation)
+        verify_opened_generation(&generation_root, generation)?;
+        Ok(generation_root)
     }
 
     fn clean_staging(&self) -> std::result::Result<(), String> {
@@ -982,6 +1341,149 @@ impl Drop for GenerationStoreLock<'_> {
     }
 }
 
+impl GenerationSelection {
+    /// Return the immutable generation identity selected for this launch.
+    pub fn as_str(&self) -> &str {
+        self.generation.as_str()
+    }
+
+    /// Read one normalized manifest output through the held generation descriptor.
+    pub fn read_output(&self, path: &str) -> std::result::Result<Vec<u8>, String> {
+        if !safe_output_path(path) {
+            return Err("unsafe generation output path".into());
+        }
+        read_regular_bytes(&self.root, Path::new(path))
+    }
+
+    /// Return the validated generation path to pass to target dependency evaluation.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Durably release this launch's lease after its target has exited.
+    pub fn release(mut self) -> std::result::Result<(), String> {
+        self.release_inner()
+    }
+
+    fn release_inner(&mut self) -> std::result::Result<(), String> {
+        if self.released {
+            return Ok(());
+        }
+        match unlinkat(
+            &self.lease_directory,
+            self.lease_name.as_str(),
+            AtFlags::empty(),
+        ) {
+            Ok(()) | Err(Errno::NOENT) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        fsync(&self.lease_directory).map_err(|error| error.to_string())?;
+        self.released = true;
+        Ok(())
+    }
+}
+
+impl Drop for GenerationSelection {
+    fn drop(&mut self) {
+        let _ = self.release_inner();
+    }
+}
+
+impl LeaseRecord {
+    fn for_process(generation: GenerationId, pid: u32) -> std::result::Result<Self, String> {
+        let (start_time, owner_uid) = linux_process_identity(pid)?;
+        if owner_uid != rustix::process::getuid().as_raw() {
+            return Err("lease target is not owned by the current user".into());
+        }
+        Ok(Self {
+            generation,
+            pid,
+            start_time,
+            boot_id: linux_boot_id()?,
+            owner_uid,
+        })
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        format!(
+            "helm-generation-lease-v1\ngeneration {}\npid {}\nstart-time {}\nboot-id {}\nowner-uid {}\n",
+            self.generation.as_str(),
+            self.pid,
+            self.start_time,
+            self.boot_id,
+            self.owner_uid,
+        )
+        .into_bytes()
+    }
+
+    fn parse(raw: &[u8]) -> std::result::Result<Self, String> {
+        let text = std::str::from_utf8(raw).map_err(|_| "generation lease is not UTF-8")?;
+        if text.contains('\r') || !text.ends_with('\n') {
+            return Err("generation lease must use LF-terminated lines".into());
+        }
+        let mut lines = text[..text.len() - 1].split('\n');
+        if lines.next() != Some("helm-generation-lease-v1") {
+            return Err("unsupported generation lease version".into());
+        }
+        let generation = GenerationId::parse(record_value(&mut lines, "generation")?)?;
+        let pid = canonical_u32(record_value(&mut lines, "pid")?, "lease PID")?;
+        let start_time =
+            canonical_u64(record_value(&mut lines, "start-time")?, "lease start time")?;
+        let boot_id = record_value(&mut lines, "boot-id")?;
+        if !canonical_boot_id(boot_id) {
+            return Err("lease boot ID is malformed".into());
+        }
+        let owner_uid = canonical_u32(record_value(&mut lines, "owner-uid")?, "lease owner UID")?;
+        if lines.next().is_some() {
+            return Err("generation lease has extra records".into());
+        }
+        Ok(Self {
+            generation,
+            pid,
+            start_time,
+            boot_id: boot_id.into(),
+            owner_uid,
+        })
+    }
+
+    fn liveness(&self) -> LeaseLiveness {
+        let boot_id = match linux_boot_id() {
+            Ok(boot_id) => boot_id,
+            Err(_) => return LeaseLiveness::Uncertain,
+        };
+        if self.boot_id != boot_id {
+            return LeaseLiveness::Stale;
+        }
+        let proc_root = match open_directory_chain(Path::new("/proc")) {
+            Ok(proc_root) => proc_root,
+            Err(_) => return LeaseLiveness::Uncertain,
+        };
+        let process = match openat(
+            &proc_root,
+            self.pid.to_string(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(process) => process,
+            Err(Errno::NOENT) => return LeaseLiveness::Stale,
+            Err(_) => return LeaseLiveness::Uncertain,
+        };
+        let stat = match rustix::fs::fstat(&process) {
+            Ok(stat) => stat,
+            Err(_) => return LeaseLiveness::Uncertain,
+        };
+        if stat.st_uid != self.owner_uid {
+            return LeaseLiveness::Uncertain;
+        }
+        match linux_process_start_time_from(&process) {
+            Ok(start_time) if start_time == self.start_time => LeaseLiveness::Live,
+            Ok(_) => LeaseLiveness::Stale,
+            Err(error) if error == Errno::NOENT.to_string() => LeaseLiveness::Stale,
+            Err(_) => LeaseLiveness::Uncertain,
+        }
+    }
+}
+
 impl GenerationRoot {
     fn open(root: &Path) -> std::result::Result<Self, String> {
         let fd = open_directory_chain(root)?;
@@ -1156,7 +1658,7 @@ fn remove_tree_at(parent: &OwnedFd, name: &OsStr) -> std::result::Result<(), Str
 }
 
 /// An opaque, filesystem-safe generation identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GenerationId(String);
 
 impl GenerationId {
@@ -1477,6 +1979,79 @@ fn parse_pointer_record(bytes: &[u8], name: &str) -> std::result::Result<Generat
     GenerationId::parse(value)
 }
 
+fn canonical_u32(value: &str, field: &str) -> std::result::Result<u32, String> {
+    if value.is_empty() || (value.len() > 1 && value.starts_with('0')) {
+        return Err(format!("{field} is not canonical decimal"));
+    }
+    value
+        .parse()
+        .map_err(|_| format!("{field} is not canonical decimal"))
+}
+
+fn canonical_u64(value: &str, field: &str) -> std::result::Result<u64, String> {
+    if value.is_empty() || (value.len() > 1 && value.starts_with('0')) {
+        return Err(format!("{field} is not canonical decimal"));
+    }
+    value
+        .parse()
+        .map_err(|_| format!("{field} is not canonical decimal"))
+}
+
+fn canonical_boot_id(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                matches!(byte, b'0'..=b'9' | b'a'..=b'f')
+            }
+        })
+}
+
+fn linux_boot_id() -> std::result::Result<String, String> {
+    let root = GenerationRoot::open(Path::new("/proc/sys/kernel/random"))?;
+    let raw = read_regular_bytes(&root, Path::new("boot_id"))?;
+    let text = std::str::from_utf8(&raw).map_err(|_| "Linux boot ID is not UTF-8")?;
+    let value = text
+        .strip_suffix('\n')
+        .ok_or("Linux boot ID is not LF-terminated")?;
+    if !canonical_boot_id(value) {
+        return Err("Linux boot ID is malformed".into());
+    }
+    Ok(value.into())
+}
+
+fn linux_process_identity(pid: u32) -> std::result::Result<(u64, u32), String> {
+    let proc_root = open_directory_chain(Path::new("/proc"))?;
+    let process = openat(
+        &proc_root,
+        pid.to_string(),
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| error.to_string())?;
+    let stat = rustix::fs::fstat(&process).map_err(|error| error.to_string())?;
+    Ok((linux_process_start_time_from(&process)?, stat.st_uid))
+}
+
+fn linux_process_start_time_from(process: &OwnedFd) -> std::result::Result<u64, String> {
+    let root = GenerationRoot {
+        fd: process.try_clone().map_err(|error| error.to_string())?,
+    };
+    let raw = read_regular_bytes(&root, Path::new("stat"))?;
+    let text = std::str::from_utf8(&raw).map_err(|_| "Linux process stat is not UTF-8")?;
+    let fields = text
+        .rsplit_once(") ")
+        .ok_or("Linux process stat lacks a command terminator")?
+        .1;
+    fields
+        .split_ascii_whitespace()
+        .nth(19)
+        .ok_or("Linux process stat lacks start time")?
+        .parse()
+        .map_err(|_| "Linux process start time is malformed".into())
+}
+
 fn digest_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -1737,6 +2312,396 @@ mod tests {
         v1_fixture(&root.join("generations"), old, "theme.ini", b"old");
         std::fs::write(root.join("current"), format!("{old}\n")).unwrap();
         GenerationStore::open(root).unwrap()
+    }
+
+    fn lease_names(root: &Path) -> Vec<OsString> {
+        let mut names: Vec<_> = std::fs::read_dir(root.join("leases"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn linux_boot_id() -> String {
+        std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .unwrap()
+            .trim_end()
+            .to_owned()
+    }
+
+    fn linux_start_time(pid: u32) -> u64 {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let after_comm = stat.rsplit_once(") ").unwrap().1;
+        after_comm
+            .split_ascii_whitespace()
+            .nth(19)
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    fn write_lease_fixture(
+        root: &Path,
+        name: &str,
+        generation: &str,
+        pid: u32,
+        start_time: u64,
+        boot_id: &str,
+        owner_uid: u32,
+    ) {
+        let path = root.join("leases").join(name);
+        std::fs::write(
+            &path,
+            format!(
+                "helm-generation-lease-v1\ngeneration {generation}\npid {pid}\nstart-time {start_time}\nboot-id {boot_id}\nowner-uid {owner_uid}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn g1_selected_old_generation_keeps_descriptor_pinned_bytes_after_new_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let old = store.select_current().unwrap();
+        assert_eq!(old.read_output("theme.ini").unwrap(), b"old");
+        let leases = lease_names(root.path());
+        assert_eq!(leases.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("leases").join(&leases[0])).unwrap(),
+            format!(
+                "helm-generation-lease-v1\ngeneration 00000000000000000000000000000001\npid {}\nstart-time {}\nboot-id {}\nowner-uid {}\n",
+                std::process::id(),
+                linux_start_time(std::process::id()),
+                linux_boot_id(),
+                rustix::process::getuid().as_raw(),
+            )
+        );
+
+        let candidate = "00000000000000000000000000000002";
+        publish_at(
+            &store,
+            candidate,
+            || Ok(publication(candidate, "new")),
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(old.as_str(), "00000000000000000000000000000001");
+        assert_eq!(old.read_output("theme.ini").unwrap(), b"old");
+        assert_eq!(store.select_current().unwrap().as_str(), candidate);
+        drop(old);
+        assert!(lease_names(root.path()).is_empty());
+    }
+
+    #[test]
+    fn g5_invalid_current_refuses_without_creating_a_lease() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        std::fs::write(
+            root.path()
+                .join("generations/00000000000000000000000000000001/theme.ini"),
+            b"tampered",
+        )
+        .unwrap();
+
+        assert!(store.select_current().is_err());
+        assert!(lease_names(root.path()).is_empty());
+    }
+
+    #[test]
+    fn selector_holds_shared_lock_through_durable_lease_creation() {
+        use std::sync::Barrier;
+
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(seeded_store(root.path()));
+        let lease_synced = Arc::new(Barrier::new(2));
+        let release_selector = Arc::new(Barrier::new(2));
+        let selecting_store = Arc::clone(&store);
+        let selecting_lease_synced = Arc::clone(&lease_synced);
+        let selecting_release = Arc::clone(&release_selector);
+        let selecting = std::thread::spawn(move || {
+            selecting_store
+                .select_current_with_checkpoint(std::process::id(), || {
+                    selecting_lease_synced.wait();
+                    selecting_release.wait();
+                })
+                .unwrap()
+        });
+        lease_synced.wait();
+        assert_eq!(lease_names(root.path()).len(), 1);
+
+        let (published_tx, published_rx) = mpsc::channel();
+        let publishing_store = Arc::clone(&store);
+        let publishing = std::thread::spawn(move || {
+            let candidate = "00000000000000000000000000000002";
+            let outcome = publish_at(
+                &publishing_store,
+                candidate,
+                || Ok(publication(candidate, "new")),
+                |_| Ok(()),
+            );
+            published_tx.send(outcome).unwrap();
+        });
+        assert!(published_rx
+            .recv_timeout(Duration::from_millis(150))
+            .is_err());
+
+        release_selector.wait();
+        let selected = selecting.join().unwrap();
+        assert_eq!(selected.as_str(), "00000000000000000000000000000001");
+        assert!(published_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .is_ok());
+        publishing.join().unwrap();
+    }
+
+    #[test]
+    fn g7_rollback_changes_future_selection_without_changing_running_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let old = GenerationId::parse("00000000000000000000000000000001").unwrap();
+        let candidate = "00000000000000000000000000000002";
+        publish_at(
+            &store,
+            candidate,
+            || Ok(publication(candidate, "new")),
+            |_| Ok(()),
+        )
+        .unwrap();
+        let running = store.select_current().unwrap();
+
+        store.rollback(&old).unwrap();
+
+        assert_eq!(running.as_str(), candidate);
+        assert_eq!(running.read_output("theme.ini").unwrap(), b"new");
+        assert_eq!(store.select_current().unwrap().as_str(), old.as_str());
+    }
+
+    #[test]
+    fn g7_rollback_refuses_a_malformed_retained_generation_without_changing_current() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let old = GenerationId::parse("00000000000000000000000000000001").unwrap();
+        let candidate = "00000000000000000000000000000002";
+        publish_at(
+            &store,
+            candidate,
+            || Ok(publication(candidate, "new")),
+            |_| Ok(()),
+        )
+        .unwrap();
+        std::fs::write(
+            root.path()
+                .join("generations")
+                .join(old.as_str())
+                .join("theme.ini"),
+            b"tampered",
+        )
+        .unwrap();
+
+        assert!(store.rollback(&old).is_err());
+        assert_eq!(store.select_current().unwrap().as_str(), candidate);
+    }
+
+    #[test]
+    fn g6_gc_removes_actual_pid_boot_and_start_time_mismatch_leases() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let generation = "00000000000000000000000000000001";
+        let pid = std::process::id();
+        let start_time = linux_start_time(pid);
+        let boot_id = linux_boot_id();
+        let owner_uid = rustix::process::getuid().as_raw();
+        write_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000011",
+            generation,
+            i32::MAX as u32,
+            start_time,
+            &boot_id,
+            owner_uid,
+        );
+        write_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000012",
+            generation,
+            pid,
+            start_time,
+            "00000000-0000-0000-0000-000000000000",
+            owner_uid,
+        );
+        write_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000013",
+            generation,
+            pid,
+            start_time + 1,
+            &boot_id,
+            owner_uid,
+        );
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_leases, 3);
+        assert!(lease_names(root.path()).is_empty());
+        assert!(root.path().join("generations").join(generation).exists());
+    }
+
+    #[test]
+    fn g6_live_old_generation_is_pinned_while_only_oldest_unleased_candidate_is_collected() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let pinned = store.select_current().unwrap();
+        for number in 2..=5 {
+            let generation = format!("{number:032x}");
+            publish_at(
+                &store,
+                &generation,
+                || Ok(publication(&generation, &format!("generation-{number}"))),
+                |_| Ok(()),
+            )
+            .unwrap();
+        }
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_generations, 1);
+        assert!(root
+            .path()
+            .join("generations/00000000000000000000000000000001")
+            .exists());
+        assert!(!root
+            .path()
+            .join("generations/00000000000000000000000000000002")
+            .exists());
+        for number in 3..=5 {
+            assert!(root
+                .path()
+                .join("generations")
+                .join(format!("{number:032x}"))
+                .exists());
+        }
+        assert_eq!(pinned.read_output("theme.ini").unwrap(), b"old");
+    }
+
+    #[test]
+    fn g6_malformed_lease_keeps_all_generations_and_is_not_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        for number in 2..=4 {
+            let generation = format!("{number:032x}");
+            publish_at(
+                &store,
+                &generation,
+                || Ok(publication(&generation, &format!("generation-{number}"))),
+                |_| Ok(()),
+            )
+            .unwrap();
+        }
+        let malformed = root.path().join("leases/00000000000000000000000000000099");
+        std::fs::write(&malformed, b"not a canonical lease\n").unwrap();
+        std::fs::set_permissions(&malformed, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_leases, 0);
+        assert_eq!(report.reclaimed_generations, 0);
+        assert!(malformed.exists());
+        assert_eq!(
+            std::fs::read_dir(root.path().join("generations"))
+                .unwrap()
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn g6_malformed_sealed_generation_blocks_all_generation_collection() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        for number in 2..=5 {
+            let generation = format!("{number:032x}");
+            publish_at(
+                &store,
+                &generation,
+                || Ok(publication(&generation, &format!("generation-{number}"))),
+                |_| Ok(()),
+            )
+            .unwrap();
+        }
+        let malformed = root
+            .path()
+            .join("generations/00000000000000000000000000000001");
+        std::fs::write(malformed.join("unlisted"), b"diagnostic evidence").unwrap();
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_generations, 0);
+        assert!(malformed.exists());
+        assert!(root
+            .path()
+            .join("generations/00000000000000000000000000000002")
+            .exists());
+    }
+
+    #[test]
+    fn selection_can_lease_a_distinct_paused_target_process_and_expose_its_generation_path() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        let start_time = linux_start_time(pid);
+
+        let selected = store.select_current_for_process(pid).unwrap();
+
+        let leases = lease_names(root.path());
+        assert_eq!(leases.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("leases").join(&leases[0])).unwrap(),
+            format!(
+                "helm-generation-lease-v1\ngeneration 00000000000000000000000000000001\npid {pid}\nstart-time {start_time}\nboot-id {}\nowner-uid {}\n",
+                linux_boot_id(),
+                rustix::process::getuid().as_raw(),
+            )
+        );
+        assert_eq!(
+            selected.path(),
+            root.path()
+                .join("generations/00000000000000000000000000000001")
+        );
+
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(store.garbage_collect().unwrap().reclaimed_leases, 1);
+        assert!(lease_names(root.path()).is_empty());
+    }
+
+    #[test]
+    fn apply_id_exhaustion_refuses_without_reclaiming_a_protected_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let protected = store.select_current().unwrap();
+        let collision = GenerationId::parse("00000000000000000000000000000001").unwrap();
+        let outcome = store.publish_with_checkpoint_and_ids(
+            || Ok(publication(collision.as_str(), "candidate")),
+            |_| Ok(()),
+            || Ok(collision.clone()),
+        );
+
+        assert!(outcome.is_err());
+        assert_eq!(protected.read_output("theme.ini").unwrap(), b"old");
+        assert!(root
+            .path()
+            .join("generations/00000000000000000000000000000001")
+            .exists());
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("current")).unwrap(),
+            format!("{}\n", protected.as_str())
+        );
     }
 
     #[test]
@@ -2366,6 +3331,16 @@ mod tests {
                 & 0o777,
             0o777
         );
+
+        let leases_root = tempfile::tempdir().unwrap();
+        secure_store_root(leases_root.path());
+        let victim = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(victim.path(), leases_root.path().join("leases")).unwrap();
+
+        assert!(GenerationStore::open(leases_root.path()).is_err());
+        assert!(!leases_root.path().join("activation.lock").exists());
+        assert!(!leases_root.path().join("generations").exists());
+        assert!(std::fs::read_dir(victim.path()).unwrap().next().is_none());
     }
 
     #[test]
