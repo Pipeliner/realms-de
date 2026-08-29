@@ -23,9 +23,9 @@ use std::time::Instant;
 
 use helm_core::palette::Finding;
 use helm_core::Palette;
-use rustix::fs::{fchmod, fstat, fsync, mkdirat, openat, FileType, Mode, OFlags, CWD};
+use rustix::fs::{fchmod, fstat, fsync, mkdirat, openat, FileType, Mode, OFlags};
 #[cfg(test)]
-use rustix::fs::{renameat, unlinkat, AtFlags};
+use rustix::fs::{renameat, unlinkat, AtFlags, CWD};
 use rustix::io::Errno;
 use sha2::{Digest, Sha256};
 
@@ -459,13 +459,7 @@ struct ConfigRoot {
 impl ConfigRoot {
     fn open(root: &Path) -> Result<Self> {
         let root = normalized_root_spelling(root);
-        let fd = openat(
-            CWD,
-            &root,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(|error| Error::io(root, error.into()))?;
+        let fd = crate::generation::open_directory_chain(&root).map_err(Error::Generation)?;
         Ok(Self { fd })
     }
 
@@ -558,6 +552,19 @@ fn canonical_length_prefixed(out: &mut Vec<u8>, value: &[u8]) {
 }
 
 fn validate_catalogue_text(value: &str, description: &str) -> Result<()> {
+    if value.is_empty()
+        || !value.bytes().all(|byte| {
+            matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b'/')
+        })
+    {
+        return Err(Error::Generation(format!(
+            "{description} is not manifest-safe"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_reload_text(value: &str, description: &str) -> Result<()> {
     if value.contains(['\0', '\r', '\n']) {
         return Err(Error::Generation(format!(
             "{description} contains a forbidden control byte"
@@ -585,13 +592,16 @@ fn reload_kind(reload: &Reload) -> Result<Vec<u8>> {
         Reload::None => Ok(b"none".to_vec()),
         Reload::HelmClients => Ok(b"helm-clients".to_vec()),
         Reload::Signal { process, signal } => {
-            validate_catalogue_text(process, "reload process")?;
+            validate_reload_text(process, "reload process")?;
+            if *signal < 0 {
+                return Err(Error::Generation("reload signal must be unsigned".into()));
+            }
             Ok(format!("signal:{}:{process}{signal}", process.len()).into_bytes())
         }
         Reload::Command(argv) => {
             let mut encoded = format!("command:{}:", argv.len()).into_bytes();
             for argument in argv {
-                validate_catalogue_text(argument, "reload command argument")?;
+                validate_reload_text(argument, "reload command argument")?;
                 canonical_length_prefixed(&mut encoded, argument.as_bytes());
             }
             Ok(encoded)
@@ -1030,6 +1040,91 @@ mod tests {
             "the selected generation did not contain the changed rendering"
         );
         selected.release().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generation_apply_refuses_a_symlinked_configuration_root_ancestor_before_bootstrap() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let root = parent.path().join("linked-config");
+        symlink(destination.path(), &root).unwrap();
+        let nested_root = root.join("config");
+        std::fs::create_dir(destination.path().join("config")).unwrap();
+
+        let result = apply_with_snapshot(&nested_root, || {
+            ThemeSnapshot::new(
+                SHIPPED_PALETTE.as_bytes().to_vec(),
+                built_in_launch_profile().to_vec(),
+                BTreeMap::new(),
+                vec![Template {
+                    id: "theme",
+                    source: "accent = {{ accent.violet }}\n",
+                    target: PathBuf::from("theme.conf"),
+                    reload: Reload::None,
+                }],
+            )
+        });
+
+        assert!(
+            result.is_err(),
+            "a root ancestor symlink was accepted: {result:?}"
+        );
+        assert!(
+            !destination.path().join("config/helm/generated").exists(),
+            "generation bootstrap wrote through the root ancestor symlink"
+        );
+    }
+
+    #[test]
+    fn generation_apply_rejects_unsafe_catalogue_fields_before_publication() {
+        let cases = [
+            (
+                "unsafe template identifier",
+                "unsafe id",
+                BTreeMap::new(),
+                Reload::None,
+            ),
+            (
+                "unsafe renderer option name",
+                "theme",
+                BTreeMap::from([("unsafe option".into(), b"value".to_vec())]),
+                Reload::None,
+            ),
+            (
+                "negative signal",
+                "theme",
+                BTreeMap::new(),
+                Reload::Signal {
+                    process: "theme-client",
+                    signal: -1,
+                },
+            ),
+        ];
+
+        for (description, id, renderer_options, reload) in cases {
+            let root = tempfile::tempdir().unwrap();
+            let result = apply_with_snapshot(root.path(), || {
+                ThemeSnapshot::new(
+                    SHIPPED_PALETTE.as_bytes().to_vec(),
+                    built_in_launch_profile().to_vec(),
+                    renderer_options,
+                    vec![Template {
+                        id,
+                        source: "accent = {{ accent.violet }}\n",
+                        target: PathBuf::from("theme.conf"),
+                        reload,
+                    }],
+                )
+            });
+            assert!(result.is_err(), "{description} was accepted: {result:?}");
+            assert!(
+                !root.path().join("helm/generated/current").exists(),
+                "{description} published a generation"
+            );
+        }
     }
 
     #[test]

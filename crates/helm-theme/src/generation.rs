@@ -1823,7 +1823,7 @@ impl GenerationRoot {
 }
 
 /// Open a directory pathname a component at a time, never following a symlink.
-fn open_directory_chain(path: &Path) -> std::result::Result<OwnedFd, String> {
+pub(crate) fn open_directory_chain(path: &Path) -> std::result::Result<OwnedFd, String> {
     let directory_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let mut fd = match path.components().next() {
         Some(Component::RootDir) => openat(CWD, "/", directory_flags, Mode::empty()),
