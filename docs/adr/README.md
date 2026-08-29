@@ -30,9 +30,10 @@ Copy [`template.md`](template.md) to start a new one.
 | [0011](0011-session-integration-contract.md) | The session entry owns the environment handshake | Accepted | Import into systemd **and** D-Bus before starting anything, or portals hang | Low — the requirement is not reversible |
 | [0012](0012-font-fallback-is-a-contract.md) | Font fallback is a contract | Accepted — guard pending | Glyph inventory, a startup probe, and an ASCII fallback for all 37 glyphs | Low |
 | [0013](0013-river-window-management-backend.md) | helm **is** the window manager, on river's protocol | Accepted — supersedes [0002](0002-borrow-a-compositor-first.md) | river 0.4 moved window management out of the compositor; every row 0002 marked lossy becomes faithful | **Medium** — back to niri is an architecture change, not a module swap |
+| [0014](0014-local-agent-sdd-pilot-governance.md) | Local agent-SDD pilot records are tracked but non-authoritative | Accepted | Planned metadata-only checkpoints/evidence may aid handoff after #120; docs, GitHub and tests retain their existing authority | Low — remove pilot records and future validator |
 
-All active decisions were **ratified by the owner on 2026-08-28**, after the
-correction set tracked by #3. "Accepted" means we are building on it, not that it is settled forever —
+All active decisions through 0013 were **ratified by the owner on 2026-08-28**,
+after the correction set tracked by #3. "Accepted" means we are building on it, not that it is settled forever —
 0002 is the worked example, superseded within a day of being written and kept
 intact because the trail is the point.
 
