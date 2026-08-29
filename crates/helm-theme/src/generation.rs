@@ -1,11 +1,11 @@
 //! Immutable generation validation, publication and fail-closed recovery.
 
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
-use std::path::{Component, Path};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use rustix::fs::{
@@ -39,13 +39,73 @@ fn validate_owned_mode(
     Ok(())
 }
 
+fn validate_optional_control(
+    root: &GenerationRoot,
+    name: &str,
+    expected_type: FileType,
+    expected_mode: u32,
+    expected_uid: u32,
+) -> std::result::Result<bool, String> {
+    match statat(&root.fd, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => {
+            validate_owned_mode(name, &stat, expected_type, expected_mode, expected_uid)?;
+            Ok(true)
+        }
+        Err(Errno::NOENT) => Ok(false),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 /// The descriptor-owned root and persistent lock for generation operations.
 #[derive(Debug)]
 pub struct GenerationStore {
     root: GenerationRoot,
     generations: GenerationRoot,
+    leases: GenerationRoot,
     lock: OwnedFd,
     intra_process_lock: Mutex<()>,
+}
+
+/// One launcher selection pinned to a validated generation by an on-disk lease.
+#[derive(Debug)]
+pub struct GenerationSelection {
+    generation: GenerationId,
+    root: GenerationRoot,
+    path: PathBuf,
+    lease_directory: OwnedFd,
+    lease_name: String,
+    released: bool,
+}
+
+/// The mutations performed by one conservative garbage-collection pass.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GenerationGcReport {
+    /// Leases whose recorded process identity was provably stale.
+    pub reclaimed_leases: usize,
+    /// Valid, unleased generations older than the two retained candidates.
+    pub reclaimed_generations: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LeaseRecord {
+    generation: GenerationId,
+    pid: u32,
+    start_time: u64,
+    boot_id: String,
+    owner_uid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PublicationOrder {
+    next_sequence: u64,
+    sequences: BTreeMap<GenerationId, u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeaseLiveness {
+    Live,
+    Stale,
+    Uncertain,
 }
 
 /// An exclusive generation-store operation lock.
@@ -73,6 +133,7 @@ enum PointerJournalState {
     },
     CleanupCommitted {
         name: String,
+        previous: Option<GenerationId>,
     },
 }
 
@@ -162,11 +223,13 @@ impl std::error::Error for GenerationPublicationError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CommitCheckpoint {
     InputsCaptured,
+    PublicationSequenceReserved,
     OutputsSynced,
     ReceiptSynced,
     ManifestSynced,
     SealSynced,
     StagingDirectorySynced,
+    PublicationOrderSynced,
     TreeCommitted,
     GenerationsDirectorySynced,
     PointerFileSynced,
@@ -337,6 +400,20 @@ impl GenerationStore {
             Err(Errno::NOENT) => false,
             Err(error) => return Err(error.to_string()),
         };
+        let leases_exists = match statat(&root.fd, "leases", AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => {
+                validate_owned_mode(
+                    "leases directory",
+                    &stat,
+                    FileType::Directory,
+                    0o700,
+                    current_uid,
+                )?;
+                true
+            }
+            Err(Errno::NOENT) => false,
+            Err(error) => return Err(error.to_string()),
+        };
         preflight_checkpoint();
 
         let lock_flags = OFlags::RDWR
@@ -381,6 +458,12 @@ impl GenerationStore {
                 Err(error) => return Err(error.to_string()),
             }
         }
+        if !leases_exists {
+            match mkdirat(&root.fd, "leases", Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+                Ok(()) | Err(Errno::EXIST) => {}
+                Err(error) => return Err(error.to_string()),
+            }
+        }
         let generations = GenerationRoot {
             fd: openat(
                 &root.fd,
@@ -399,12 +482,57 @@ impl GenerationStore {
             0o700,
             current_uid,
         )?;
-        if !lock_exists || !generations_exists {
+        let leases = GenerationRoot {
+            fd: openat(
+                &root.fd,
+                "leases",
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| error.to_string())?,
+        };
+        let leases_stat = rustix::fs::fstat(&leases.fd).map_err(|error| error.to_string())?;
+        validate_owned_mode(
+            "leases directory",
+            &leases_stat,
+            FileType::Directory,
+            0o700,
+            current_uid,
+        )?;
+        flock(&lock, FlockOperation::LockExclusive).map_err(|error| error.to_string())?;
+        let initialize_order = (|| -> std::result::Result<(), String> {
+            match statat(&root.fd, "publication-order", AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(_) => return Ok(()),
+                Err(Errno::NOENT) => {}
+                Err(error) => return Err(error.to_string()),
+            }
+            let fd = match openat(
+                &root.fd,
+                "publication-order",
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            ) {
+                Ok(fd) => fd,
+                Err(Errno::EXIST) => return Ok(()),
+                Err(error) => return Err(error.to_string()),
+            };
+            let mut file = std::fs::File::from(fd);
+            file.write_all(&PublicationOrder::empty().encode())
+                .map_err(|error| error.to_string())?;
+            fsync(&file).map_err(|error| error.to_string())?;
+            fsync(&root.fd).map_err(|error| error.to_string())?;
+            Ok(())
+        })();
+        let unlock = flock(&lock, FlockOperation::Unlock).map_err(|error| error.to_string());
+        initialize_order?;
+        unlock?;
+        if !lock_exists || !generations_exists || !leases_exists {
             fsync(&root.fd).map_err(|error| error.to_string())?;
         }
         Ok(Self {
             root,
             generations,
+            leases,
             lock,
             intra_process_lock: Mutex::new(()),
         })
@@ -435,15 +563,53 @@ impl GenerationStore {
     }
 
     /// Resolve and validate current while holding the persistent shared lock.
-    pub fn select_current(&self) -> std::result::Result<GenerationId, String> {
+    pub fn select_current(&self) -> std::result::Result<GenerationSelection, String> {
+        self.select_current_with_checkpoint(std::process::id(), || {})
+    }
+
+    /// Resolve current and lease it to an already-created, not-yet-executing target.
+    pub fn select_current_for_process(
+        &self,
+        pid: u32,
+    ) -> std::result::Result<GenerationSelection, String> {
+        self.select_current_with_checkpoint(pid, || {})
+    }
+
+    fn select_current_with_checkpoint<H>(
+        &self,
+        pid: u32,
+        lease_synced: H,
+    ) -> std::result::Result<GenerationSelection, String>
+    where
+        H: FnOnce(),
+    {
         let _lock = self.lock_shared()?;
         let inventory = self.inspect_pointer_journals()?;
-        match inventory.state {
+        let generation = match inventory.state {
             PointerJournalState::Clean | PointerJournalState::CleanupCommitted { .. } => inventory
                 .current
-                .ok_or_else(|| "current generation is absent".into()),
+                .ok_or_else(|| "current generation is absent".to_owned()),
             _ => Err("pointer transaction requires exclusive recovery".into()),
-        }
+        }?;
+        let generation_root = self.open_validated_generation(&generation)?;
+        let path = std::fs::read_link(format!("/proc/self/fd/{}", generation_root.fd.as_raw_fd()))
+            .map_err(|error| error.to_string())?;
+        let identity = LeaseRecord::for_process(generation.clone(), pid)?;
+        let lease_directory = self
+            .leases
+            .fd
+            .try_clone()
+            .map_err(|error| error.to_string())?;
+        let lease_name = self.create_lease_locked(&identity)?;
+        lease_synced();
+        Ok(GenerationSelection {
+            generation,
+            root: generation_root,
+            path,
+            lease_directory,
+            lease_name,
+            released: false,
+        })
     }
 
     /// Publish one captured generation while holding the store's exclusive lock.
@@ -494,11 +660,15 @@ impl GenerationStore {
         let pointer_inventory = self.inspect_pointer_journals()?;
         self.clean_staging()?;
         self.clean_pointer_staging(pointer_inventory, |_| Ok(()), filesystem)?;
+        self.clean_publication_order_staging(filesystem)?;
         let had_current = self.validate_current_or_pristine()?;
+        let publication_order = self.load_publication_order()?;
+        self.validate_publication_order_complete(&publication_order)?;
         let publication = capture()?;
         self.publish_allocated_locked(
             publication,
             had_current,
+            publication_order,
             checkpoint,
             &mut next_id,
             filesystem,
@@ -525,6 +695,280 @@ impl GenerationStore {
         self.clean_staging()?;
         self.clean_pointer_staging(pointer_inventory, checkpoint, filesystem)?;
         self.resolve_current()
+    }
+
+    /// Validate a retained generation and durably select it for future launches.
+    pub fn rollback(
+        &self,
+        generation: &GenerationId,
+    ) -> std::result::Result<GenerationPublicationOutcome, GenerationPublicationError> {
+        let _lock = self.lock_exclusive()?;
+        let mut filesystem = RealPublicationFilesystem;
+        let inventory = self.inspect_pointer_journals()?;
+        self.validate_generation(generation)?;
+        self.clean_pointer_staging(inventory, |_| Ok(()), &mut filesystem)?;
+        let current = self.resolve_current()?;
+        if &current == generation {
+            return Ok(GenerationPublicationOutcome::Committed(generation.clone()));
+        }
+        self.commit_existing_pointer_locked(generation.clone(), &mut filesystem)
+    }
+
+    /// Remove only provably stale leases and old valid unleased generations.
+    pub fn garbage_collect(&self) -> std::result::Result<GenerationGcReport, String> {
+        let _lock = self.lock_exclusive()?;
+        let (mut report, mut live_generations, uncertain_lease) =
+            self.reclaim_stale_leases_locked()?;
+        if uncertain_lease {
+            return Ok(report);
+        }
+        let inventory = match self.inspect_pointer_journals() {
+            Ok(inventory) => inventory,
+            Err(_) => return Ok(report),
+        };
+        let journal_previous = match inventory.state {
+            PointerJournalState::Clean => None,
+            PointerJournalState::CleanupCommitted { previous, .. } => previous,
+            _ => return Ok(report),
+        };
+        let Some(current) = inventory.current else {
+            return Ok(report);
+        };
+
+        live_generations.insert(current.clone());
+        if let Some(previous) = journal_previous {
+            live_generations.insert(previous);
+        }
+
+        let current_uid = rustix::process::getuid().as_raw();
+        match validate_optional_control(
+            &self.root,
+            ".publication-order",
+            FileType::RegularFile,
+            0o600,
+            current_uid,
+        ) {
+            Ok(false) => {}
+            Ok(true) | Err(_) => return Ok(report),
+        }
+        let publication_order = match self.load_publication_order() {
+            Ok(order) => order,
+            Err(_) => return Ok(report),
+        };
+        if self
+            .validate_publication_order_complete(&publication_order)
+            .is_err()
+        {
+            return Ok(report);
+        }
+
+        let mut candidates = Vec::new();
+        let mut malformed_generation = false;
+        let mut generations =
+            Dir::read_from(&self.generations.fd).map_err(|error| error.to_string())?;
+        while let Some(entry) = generations.read() {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let bytes = entry.file_name().to_bytes();
+            if matches!(bytes, b"." | b"..") {
+                continue;
+            }
+            let Ok(name) = std::str::from_utf8(bytes) else {
+                malformed_generation = true;
+                continue;
+            };
+            let Ok(generation) = GenerationId::parse(name) else {
+                malformed_generation = true;
+                continue;
+            };
+            let Ok(stat) = statat(&self.generations.fd, name, AtFlags::SYMLINK_NOFOLLOW) else {
+                malformed_generation = true;
+                continue;
+            };
+            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+                || self.validate_generation(&generation).is_err()
+            {
+                malformed_generation = true;
+                continue;
+            }
+            if live_generations.contains(&generation) {
+                continue;
+            }
+            let Some(sequence) = publication_order.sequences.get(&generation).copied() else {
+                malformed_generation = true;
+                continue;
+            };
+            candidates.push((sequence, generation));
+        }
+        drop(generations);
+        if malformed_generation {
+            return Ok(report);
+        }
+        candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
+        for (_, generation) in candidates.into_iter().skip(2) {
+            remove_tree_at(&self.generations.fd, OsStr::new(generation.as_str()))?;
+            fsync(&self.generations.fd).map_err(|error| error.to_string())?;
+            report.reclaimed_generations += 1;
+        }
+        Ok(report)
+    }
+
+    fn reclaim_stale_leases_locked(
+        &self,
+    ) -> std::result::Result<(GenerationGcReport, BTreeSet<GenerationId>, bool), String> {
+        let mut report = GenerationGcReport::default();
+        let mut live_generations = BTreeSet::new();
+        let mut uncertain_lease = false;
+        let mut stale_leases = Vec::new();
+        let current_uid = rustix::process::getuid().as_raw();
+        let mut leases = Dir::read_from(&self.leases.fd).map_err(|error| error.to_string())?;
+        while let Some(entry) = leases.read() {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let bytes = entry.file_name().to_bytes();
+            if matches!(bytes, b"." | b"..") {
+                continue;
+            }
+            let Ok(name) = std::str::from_utf8(bytes) else {
+                uncertain_lease = true;
+                continue;
+            };
+            if GenerationId::parse(name).is_err() {
+                uncertain_lease = true;
+                continue;
+            }
+            let stat = match statat(&self.leases.fd, name, AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat) => stat,
+                Err(_) => {
+                    uncertain_lease = true;
+                    continue;
+                }
+            };
+            if validate_owned_mode(
+                "generation lease",
+                &stat,
+                FileType::RegularFile,
+                0o600,
+                current_uid,
+            )
+            .is_err()
+            {
+                uncertain_lease = true;
+                continue;
+            }
+            let raw = match read_optional_regular_bytes(&self.leases, Path::new(name)) {
+                Ok(Some(raw)) => raw,
+                Ok(None) | Err(_) => {
+                    uncertain_lease = true;
+                    continue;
+                }
+            };
+            let Ok(record) = LeaseRecord::parse(&raw) else {
+                uncertain_lease = true;
+                continue;
+            };
+            match record.liveness() {
+                LeaseLiveness::Live => {
+                    live_generations.insert(record.generation);
+                }
+                LeaseLiveness::Stale => stale_leases.push(name.to_owned()),
+                LeaseLiveness::Uncertain => {
+                    uncertain_lease = true;
+                    live_generations.insert(record.generation);
+                }
+            }
+        }
+        drop(leases);
+        for lease in stale_leases {
+            match unlinkat(&self.leases.fd, lease.as_str(), AtFlags::empty()) {
+                Ok(()) => {
+                    fsync(&self.leases.fd).map_err(|error| error.to_string())?;
+                    report.reclaimed_leases += 1;
+                }
+                Err(Errno::NOENT) => {}
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        Ok((report, live_generations, uncertain_lease))
+    }
+
+    fn load_publication_order(&self) -> std::result::Result<PublicationOrder, String> {
+        let current_uid = rustix::process::getuid().as_raw();
+        if !validate_optional_control(
+            &self.root,
+            "publication-order",
+            FileType::RegularFile,
+            0o600,
+            current_uid,
+        )? {
+            return Err("publication order is absent".into());
+        }
+        let raw = read_optional_regular_bytes(&self.root, Path::new("publication-order"))?
+            .ok_or("publication order disappeared while reading")?;
+        PublicationOrder::parse(&raw)
+    }
+
+    fn validate_publication_order_complete(
+        &self,
+        order: &PublicationOrder,
+    ) -> std::result::Result<(), String> {
+        let mut directory =
+            Dir::read_from(&self.generations.fd).map_err(|error| error.to_string())?;
+        while let Some(entry) = directory.read() {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let bytes = entry.file_name().to_bytes();
+            if matches!(bytes, b"." | b"..") {
+                continue;
+            }
+            let name = std::str::from_utf8(bytes)
+                .map_err(|_| "generation name is not UTF-8 while validating publication order")?;
+            let generation = GenerationId::parse(name)?;
+            let stat = statat(&self.generations.fd, name, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|error| error.to_string())?;
+            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
+                return Err("final generation is not a directory".into());
+            }
+            if !order.sequences.contains_key(&generation) {
+                return Err("final generation lacks a publication sequence".into());
+            }
+        }
+        Ok(())
+    }
+
+    fn clean_publication_order_staging<F: PublicationFilesystem>(
+        &self,
+        filesystem: &mut F,
+    ) -> std::result::Result<(), String> {
+        let current_uid = rustix::process::getuid().as_raw();
+        if !validate_optional_control(
+            &self.root,
+            ".publication-order",
+            FileType::RegularFile,
+            0o600,
+            current_uid,
+        )? {
+            return Ok(());
+        }
+        filesystem.unlink(self.root.fd.as_fd(), ".publication-order")?;
+        filesystem.sync(self.root.fd.as_fd())
+    }
+
+    fn replace_publication_order<F: PublicationFilesystem>(
+        &self,
+        order: &PublicationOrder,
+        filesystem: &mut F,
+    ) -> std::result::Result<(), String> {
+        write_synced_file(
+            &self.root.fd,
+            ".publication-order",
+            &order.encode(),
+            filesystem,
+        )?;
+        filesystem.rename(
+            self.root.fd.as_fd(),
+            ".publication-order",
+            self.root.fd.as_fd(),
+            "publication-order",
+        )?;
+        filesystem.sync(self.root.fd.as_fd())
     }
 
     fn validate_current_or_pristine(&self) -> std::result::Result<bool, String> {
@@ -554,6 +998,7 @@ impl GenerationStore {
         &self,
         publication: GenerationPublication,
         had_current: bool,
+        mut publication_order: PublicationOrder,
         mut checkpoint: H,
         next_id: &mut I,
         filesystem: &mut F,
@@ -564,9 +1009,15 @@ impl GenerationStore {
         F: PublicationFilesystem,
     {
         checkpoint(CommitCheckpoint::InputsCaptured)?;
+        let publication_sequence = publication_order.reserve()?;
+        self.replace_publication_order(&publication_order, filesystem)?;
+        checkpoint(CommitCheckpoint::PublicationSequenceReserved)?;
         let mut generation = None;
         for _ in 0..64 {
             let candidate = next_id()?;
+            if publication_order.sequences.contains_key(&candidate) {
+                continue;
+            }
             match statat(
                 &self.generations.fd,
                 candidate.as_str(),
@@ -581,13 +1032,28 @@ impl GenerationStore {
             }
         }
         let generation = generation.ok_or("generation id collision retry limit exhausted")?;
-        self.publish_generation_locked(publication, generation, had_current, checkpoint, filesystem)
+        if publication_order
+            .sequences
+            .insert(generation.clone(), publication_sequence)
+            .is_some()
+        {
+            return Err("generation already has a publication sequence".into());
+        }
+        self.publish_generation_locked(
+            publication,
+            generation,
+            publication_order,
+            had_current,
+            checkpoint,
+            filesystem,
+        )
     }
 
     fn publish_generation_locked<H, F>(
         &self,
         publication: GenerationPublication,
         generation: GenerationId,
+        publication_order: PublicationOrder,
         had_current: bool,
         mut checkpoint: H,
         filesystem: &mut F,
@@ -630,6 +1096,9 @@ impl GenerationStore {
         checkpoint(CommitCheckpoint::SealSynced)?;
         filesystem.sync(staging.fd.as_fd())?;
         checkpoint(CommitCheckpoint::StagingDirectorySynced)?;
+
+        self.replace_publication_order(&publication_order, filesystem)?;
+        checkpoint(CommitCheckpoint::PublicationOrderSynced)?;
 
         filesystem.rename(
             self.generations.fd.as_fd(),
@@ -741,6 +1210,92 @@ impl GenerationStore {
         Ok(GenerationPublicationOutcome::Committed(generation))
     }
 
+    fn commit_existing_pointer_locked<F: PublicationFilesystem>(
+        &self,
+        generation: GenerationId,
+        filesystem: &mut F,
+    ) -> std::result::Result<GenerationPublicationOutcome, GenerationPublicationError> {
+        let generation_name = generation.as_str();
+        let pointer_staging = format!(".current-{generation_name}");
+        write_synced_file(
+            &self.root.fd,
+            pointer_staging.as_str(),
+            format!("{generation_name}\n").as_bytes(),
+            filesystem,
+        )?;
+        filesystem.sync(self.root.fd.as_fd())?;
+        filesystem.exchange(
+            self.root.fd.as_fd(),
+            pointer_staging.as_str(),
+            self.root.fd.as_fd(),
+            "current",
+        )?;
+        if let Err(commit_error) = filesystem.sync(self.root.fd.as_fd()) {
+            let rollback = filesystem
+                .exchange(
+                    self.root.fd.as_fd(),
+                    pointer_staging.as_str(),
+                    self.root.fd.as_fd(),
+                    "current",
+                )
+                .and_then(|()| filesystem.sync(self.root.fd.as_fd()));
+            return match rollback {
+                Ok(()) => Err(commit_error.into()),
+                Err(rollback_error) => Ok(GenerationPublicationOutcome::OutcomeAmbiguous {
+                    candidate: generation,
+                    cause: format!(
+                        "pointer sync failed ({commit_error}) and rollback failed ({rollback_error})"
+                    ),
+                }),
+            };
+        }
+        let committed_marker = format!(".committed-{generation_name}");
+        if let Err(cause) = filesystem
+            .rename(
+                self.root.fd.as_fd(),
+                pointer_staging.as_str(),
+                self.root.fd.as_fd(),
+                committed_marker.as_str(),
+            )
+            .and_then(|()| filesystem.sync(self.root.fd.as_fd()))
+        {
+            return Ok(GenerationPublicationOutcome::OutcomeAmbiguous {
+                candidate: generation,
+                cause: format!("rollback is durable but commit-marker transition failed: {cause}"),
+            });
+        }
+        if let Err(cause) = filesystem
+            .unlink(self.root.fd.as_fd(), committed_marker.as_str())
+            .and_then(|()| filesystem.sync(self.root.fd.as_fd()))
+        {
+            return Ok(GenerationPublicationOutcome::CommittedWithCleanupPending {
+                generation,
+                cause,
+            });
+        }
+        Ok(GenerationPublicationOutcome::Committed(generation))
+    }
+
+    fn create_lease_locked(&self, record: &LeaseRecord) -> std::result::Result<String, String> {
+        let mut filesystem = RealPublicationFilesystem;
+        for _ in 0..64 {
+            let name = random_generation_id()?.0;
+            match write_synced_file(&self.leases.fd, &name, &record.encode(), &mut filesystem) {
+                Ok(()) => {
+                    if let Err(error) = filesystem.sync(self.leases.fd.as_fd()) {
+                        let _ = unlinkat(&self.leases.fd, name.as_str(), AtFlags::empty());
+                        let _ = fsync(&self.leases.fd);
+                        return Err(error);
+                    }
+                    return Ok(name);
+                }
+                Err(error) if error == Errno::EXIST.to_string() => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err("lease id collision retry limit exhausted".into())
+    }
+
     fn resolve_current(&self) -> std::result::Result<GenerationId, String> {
         let Some(bytes) = read_optional_regular_bytes(&self.root, Path::new("current"))? else {
             return Err("current generation is absent".into());
@@ -751,6 +1306,13 @@ impl GenerationStore {
     }
 
     fn validate_generation(&self, generation: &GenerationId) -> std::result::Result<(), String> {
+        self.open_validated_generation(generation).map(|_| ())
+    }
+
+    fn open_validated_generation(
+        &self,
+        generation: &GenerationId,
+    ) -> std::result::Result<GenerationRoot, String> {
         let generation_root = GenerationRoot {
             fd: openat(
                 &self.generations.fd,
@@ -760,7 +1322,8 @@ impl GenerationStore {
             )
             .map_err(|error| error.to_string())?,
         };
-        verify_opened_generation(&generation_root, generation)
+        verify_opened_generation(&generation_root, generation)?;
+        Ok(generation_root)
     }
 
     fn clean_staging(&self) -> std::result::Result<(), String> {
@@ -831,7 +1394,7 @@ impl GenerationStore {
                 filesystem.unlink(self.root.fd.as_fd(), absent_name.as_str())?;
                 filesystem.unlink(self.root.fd.as_fd(), current_name.as_str())?;
             }
-            PointerJournalState::CleanupCommitted { name } => {
+            PointerJournalState::CleanupCommitted { name, .. } => {
                 filesystem.unlink(self.root.fd.as_fd(), name.as_str())?;
             }
         }
@@ -967,7 +1530,10 @@ impl GenerationStore {
                 if let Some(previous) = &journal.content {
                     self.validate_generation(previous)?;
                 }
-                PointerJournalState::CleanupCommitted { name: journal.name }
+                PointerJournalState::CleanupCommitted {
+                    name: journal.name,
+                    previous: journal.content,
+                }
             }
             _ => return Err("pointer journal inventory is contradictory".into()),
         };
@@ -979,6 +1545,233 @@ impl GenerationStore {
 impl Drop for GenerationStoreLock<'_> {
     fn drop(&mut self) {
         let _ = flock(&self.store.lock, FlockOperation::Unlock);
+    }
+}
+
+impl GenerationSelection {
+    /// Return the immutable generation identity selected for this launch.
+    pub fn as_str(&self) -> &str {
+        self.generation.as_str()
+    }
+
+    /// Read one normalized manifest output through the held generation descriptor.
+    pub fn read_output(&self, path: &str) -> std::result::Result<Vec<u8>, String> {
+        if !safe_output_path(path) {
+            return Err("unsafe generation output path".into());
+        }
+        read_regular_bytes(&self.root, Path::new(path))
+    }
+
+    /// Return the validated generation path to pass to target dependency evaluation.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Durably release this launch's lease after its target has exited.
+    pub fn release(mut self) -> std::result::Result<(), String> {
+        self.release_inner()
+    }
+
+    fn release_inner(&mut self) -> std::result::Result<(), String> {
+        if self.released {
+            return Ok(());
+        }
+        match unlinkat(
+            &self.lease_directory,
+            self.lease_name.as_str(),
+            AtFlags::empty(),
+        ) {
+            Ok(()) | Err(Errno::NOENT) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        fsync(&self.lease_directory).map_err(|error| error.to_string())?;
+        self.released = true;
+        Ok(())
+    }
+}
+
+impl Drop for GenerationSelection {
+    fn drop(&mut self) {
+        let _ = self.release_inner();
+    }
+}
+
+impl LeaseRecord {
+    fn for_process(generation: GenerationId, pid: u32) -> std::result::Result<Self, String> {
+        let (start_time, owner_uid) = linux_process_identity(pid)?;
+        if owner_uid != rustix::process::getuid().as_raw() {
+            return Err("lease target is not owned by the current user".into());
+        }
+        Ok(Self {
+            generation,
+            pid,
+            start_time,
+            boot_id: linux_boot_id()?,
+            owner_uid,
+        })
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        format!(
+            "helm-generation-lease-v1\ngeneration {}\npid {}\nstart-time {}\nboot-id {}\nowner-uid {}\n",
+            self.generation.as_str(),
+            self.pid,
+            self.start_time,
+            self.boot_id,
+            self.owner_uid,
+        )
+        .into_bytes()
+    }
+
+    fn parse(raw: &[u8]) -> std::result::Result<Self, String> {
+        let text = std::str::from_utf8(raw).map_err(|_| "generation lease is not UTF-8")?;
+        if text.contains('\r') || !text.ends_with('\n') {
+            return Err("generation lease must use LF-terminated lines".into());
+        }
+        let mut lines = text[..text.len() - 1].split('\n');
+        if lines.next() != Some("helm-generation-lease-v1") {
+            return Err("unsupported generation lease version".into());
+        }
+        let generation = GenerationId::parse(record_value(&mut lines, "generation")?)?;
+        let pid = canonical_u32(record_value(&mut lines, "pid")?, "lease PID")?;
+        let start_time =
+            canonical_u64(record_value(&mut lines, "start-time")?, "lease start time")?;
+        let boot_id = record_value(&mut lines, "boot-id")?;
+        if !canonical_boot_id(boot_id) {
+            return Err("lease boot ID is malformed".into());
+        }
+        let owner_uid = canonical_u32(record_value(&mut lines, "owner-uid")?, "lease owner UID")?;
+        if lines.next().is_some() {
+            return Err("generation lease has extra records".into());
+        }
+        Ok(Self {
+            generation,
+            pid,
+            start_time,
+            boot_id: boot_id.into(),
+            owner_uid,
+        })
+    }
+
+    fn liveness(&self) -> LeaseLiveness {
+        let boot_id = match linux_boot_id() {
+            Ok(boot_id) => boot_id,
+            Err(_) => return LeaseLiveness::Uncertain,
+        };
+        if self.boot_id != boot_id {
+            return LeaseLiveness::Stale;
+        }
+        let proc_root = match open_directory_chain(Path::new("/proc")) {
+            Ok(proc_root) => proc_root,
+            Err(_) => return LeaseLiveness::Uncertain,
+        };
+        let process = match openat(
+            &proc_root,
+            self.pid.to_string(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(process) => process,
+            Err(Errno::NOENT) => return LeaseLiveness::Stale,
+            Err(_) => return LeaseLiveness::Uncertain,
+        };
+        let stat = match rustix::fs::fstat(&process) {
+            Ok(stat) => stat,
+            Err(_) => return LeaseLiveness::Uncertain,
+        };
+        if stat.st_uid != self.owner_uid {
+            return LeaseLiveness::Uncertain;
+        }
+        match linux_process_start_time_from(&process) {
+            Ok(start_time) if start_time == self.start_time => LeaseLiveness::Live,
+            Ok(_) => LeaseLiveness::Stale,
+            Err(error) if error == Errno::NOENT.to_string() => LeaseLiveness::Stale,
+            Err(_) => LeaseLiveness::Uncertain,
+        }
+    }
+}
+
+impl PublicationOrder {
+    fn empty() -> Self {
+        Self {
+            next_sequence: 1,
+            sequences: BTreeMap::new(),
+        }
+    }
+
+    fn parse(raw: &[u8]) -> std::result::Result<Self, String> {
+        let text = std::str::from_utf8(raw).map_err(|_| "publication order is not UTF-8")?;
+        if text.contains('\r') || !text.ends_with('\n') {
+            return Err("publication order must use LF-terminated lines".into());
+        }
+        let mut lines = text[..text.len() - 1].split('\n');
+        if lines.next() != Some("helm-generation-publication-order-v1") {
+            return Err("unsupported publication order version".into());
+        }
+        let next_sequence = canonical_positive_u64(
+            record_value(&mut lines, "next-sequence")?,
+            "publication next sequence",
+        )?;
+        let mut sequences = BTreeMap::new();
+        let mut used_sequences = BTreeSet::new();
+        let mut previous: Option<GenerationId> = None;
+        for line in lines {
+            let mut fields = line.split(' ');
+            if fields.next() != Some("generation") {
+                return Err("expected publication generation record".into());
+            }
+            let generation = GenerationId::parse(
+                fields
+                    .next()
+                    .ok_or("publication generation record lacks an identifier")?,
+            )?;
+            let sequence = canonical_positive_u64(
+                fields
+                    .next()
+                    .ok_or("publication generation record lacks a sequence")?,
+                "publication sequence",
+            )?;
+            if fields.next().is_some() {
+                return Err("publication generation record has extra fields".into());
+            }
+            if previous.as_ref().is_some_and(|prior| prior >= &generation) {
+                return Err("publication generation records are not strictly ordered".into());
+            }
+            if sequence >= next_sequence {
+                return Err("publication sequence is not below next sequence".into());
+            }
+            if !used_sequences.insert(sequence) {
+                return Err("publication sequence is duplicated".into());
+            }
+            previous = Some(generation.clone());
+            if sequences.insert(generation, sequence).is_some() {
+                return Err("publication generation is duplicated".into());
+            }
+        }
+        Ok(Self {
+            next_sequence,
+            sequences,
+        })
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        let mut encoded = format!(
+            "helm-generation-publication-order-v1\nnext-sequence {}\n",
+            self.next_sequence
+        );
+        for (generation, sequence) in &self.sequences {
+            encoded.push_str(&format!("generation {} {sequence}\n", generation.as_str()));
+        }
+        encoded.into_bytes()
+    }
+
+    fn reserve(&mut self) -> std::result::Result<u64, String> {
+        let reserved = self.next_sequence;
+        self.next_sequence = self
+            .next_sequence
+            .checked_add(1)
+            .ok_or("publication sequence space is exhausted")?;
+        Ok(reserved)
     }
 }
 
@@ -1156,7 +1949,7 @@ fn remove_tree_at(parent: &OwnedFd, name: &OsStr) -> std::result::Result<(), Str
 }
 
 /// An opaque, filesystem-safe generation identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GenerationId(String);
 
 impl GenerationId {
@@ -1477,6 +2270,90 @@ fn parse_pointer_record(bytes: &[u8], name: &str) -> std::result::Result<Generat
     GenerationId::parse(value)
 }
 
+fn canonical_u32(value: &str, field: &str) -> std::result::Result<u32, String> {
+    if value.is_empty() || (value.len() > 1 && value.starts_with('0')) {
+        return Err(format!("{field} is not canonical decimal"));
+    }
+    value
+        .parse()
+        .map_err(|_| format!("{field} is not canonical decimal"))
+}
+
+fn canonical_u64(value: &str, field: &str) -> std::result::Result<u64, String> {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return Err(format!("{field} is not canonical decimal"));
+    }
+    value
+        .parse()
+        .map_err(|_| format!("{field} is not canonical decimal"))
+}
+
+fn canonical_positive_u64(value: &str, field: &str) -> std::result::Result<u64, String> {
+    let value = canonical_u64(value, field)?;
+    if value == 0 {
+        return Err(format!("{field} must be positive"));
+    }
+    Ok(value)
+}
+
+fn canonical_boot_id(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                matches!(byte, b'0'..=b'9' | b'a'..=b'f')
+            }
+        })
+}
+
+fn linux_boot_id() -> std::result::Result<String, String> {
+    let root = GenerationRoot::open(Path::new("/proc/sys/kernel/random"))?;
+    let raw = read_regular_bytes(&root, Path::new("boot_id"))?;
+    let text = std::str::from_utf8(&raw).map_err(|_| "Linux boot ID is not UTF-8")?;
+    let value = text
+        .strip_suffix('\n')
+        .ok_or("Linux boot ID is not LF-terminated")?;
+    if !canonical_boot_id(value) {
+        return Err("Linux boot ID is malformed".into());
+    }
+    Ok(value.into())
+}
+
+fn linux_process_identity(pid: u32) -> std::result::Result<(u64, u32), String> {
+    let proc_root = open_directory_chain(Path::new("/proc"))?;
+    let process = openat(
+        &proc_root,
+        pid.to_string(),
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| error.to_string())?;
+    let stat = rustix::fs::fstat(&process).map_err(|error| error.to_string())?;
+    Ok((linux_process_start_time_from(&process)?, stat.st_uid))
+}
+
+fn linux_process_start_time_from(process: &OwnedFd) -> std::result::Result<u64, String> {
+    let root = GenerationRoot {
+        fd: process.try_clone().map_err(|error| error.to_string())?,
+    };
+    let raw = read_regular_bytes(&root, Path::new("stat"))?;
+    let text = std::str::from_utf8(&raw).map_err(|_| "Linux process stat is not UTF-8")?;
+    let fields = text
+        .rsplit_once(") ")
+        .ok_or("Linux process stat lacks a command terminator")?
+        .1;
+    fields
+        .split_ascii_whitespace()
+        .nth(19)
+        .ok_or("Linux process stat lacks start time")?
+        .parse()
+        .map_err(|_| "Linux process start time is malformed".into())
+}
+
 fn digest_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -1532,12 +2409,12 @@ mod tests {
     use std::collections::VecDeque;
     use std::io::BufRead;
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{mpsc, Arc};
-    use std::time::Duration;
+    use std::time::{Duration, UNIX_EPOCH};
 
     #[derive(Debug, PartialEq, Eq)]
     enum ActualFilesystemEvent {
@@ -1568,6 +2445,12 @@ mod tests {
         root_syncs: usize,
         failed: bool,
         fail_unlink: bool,
+    }
+
+    struct FailAfterMappedPublicationOrderFilesystem {
+        root: PathBuf,
+        publication_order_renames: usize,
+        failed: bool,
     }
 
     impl RecordingPublicationFilesystem {
@@ -1693,6 +2576,60 @@ mod tests {
         }
     }
 
+    impl PublicationFilesystem for FailAfterMappedPublicationOrderFilesystem {
+        fn sync(&mut self, fd: BorrowedFd<'_>) -> std::result::Result<(), String> {
+            fsync(fd).map_err(|error| error.to_string())?;
+            if RecordingPublicationFilesystem::descriptor_path(fd)? == self.root
+                && self.publication_order_renames == 2
+                && !self.failed
+            {
+                self.failed = true;
+                return Err("simulated death after mapped publication order became durable".into());
+            }
+            Ok(())
+        }
+
+        fn rename(
+            &mut self,
+            from_directory: BorrowedFd<'_>,
+            from_name: &str,
+            to_directory: BorrowedFd<'_>,
+            to_name: &str,
+        ) -> std::result::Result<(), String> {
+            renameat(from_directory, from_name, to_directory, to_name)
+                .map_err(|error| error.to_string())?;
+            if from_name == ".publication-order" && to_name == "publication-order" {
+                self.publication_order_renames += 1;
+            }
+            Ok(())
+        }
+
+        fn exchange(
+            &mut self,
+            left_directory: BorrowedFd<'_>,
+            left_name: &str,
+            right_directory: BorrowedFd<'_>,
+            right_name: &str,
+        ) -> std::result::Result<(), String> {
+            renameat_with(
+                left_directory,
+                left_name,
+                right_directory,
+                right_name,
+                RenameFlags::EXCHANGE,
+            )
+            .map_err(|error| error.to_string())
+        }
+
+        fn unlink(
+            &mut self,
+            directory: BorrowedFd<'_>,
+            name: &str,
+        ) -> std::result::Result<(), String> {
+            unlinkat(directory, name, AtFlags::empty()).map_err(|error| error.to_string())
+        }
+    }
+
     fn publication(_generation: &str, marker: &str) -> GenerationPublication {
         GenerationPublication::new(
             [
@@ -1736,7 +2673,798 @@ mod tests {
         let old = "00000000000000000000000000000001";
         v1_fixture(&root.join("generations"), old, "theme.ini", b"old");
         std::fs::write(root.join("current"), format!("{old}\n")).unwrap();
+        write_publication_order_fixture(
+            root,
+            "helm-generation-publication-order-v1\nnext-sequence 2\ngeneration 00000000000000000000000000000001 1\n",
+        );
         GenerationStore::open(root).unwrap()
+    }
+
+    fn write_publication_order_fixture(root: &Path, contents: &str) {
+        let path = root.join("publication-order");
+        std::fs::write(&path, contents).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    fn set_generation_modified(root: &Path, generation: &str, seconds: u64) {
+        let directory = std::fs::File::open(root.join("generations").join(generation)).unwrap();
+        let modified = UNIX_EPOCH + Duration::from_secs(seconds);
+        directory
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+    }
+
+    fn lease_names(root: &Path) -> Vec<OsString> {
+        let mut names: Vec<_> = std::fs::read_dir(root.join("leases"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn linux_boot_id() -> String {
+        std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .unwrap()
+            .trim_end()
+            .to_owned()
+    }
+
+    fn linux_start_time(pid: u32) -> u64 {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let after_comm = stat.rsplit_once(") ").unwrap().1;
+        after_comm
+            .split_ascii_whitespace()
+            .nth(19)
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    fn write_lease_fixture(
+        root: &Path,
+        name: &str,
+        generation: &str,
+        pid: u32,
+        start_time: u64,
+        boot_id: &str,
+        owner_uid: u32,
+    ) {
+        let path = root.join("leases").join(name);
+        std::fs::write(
+            &path,
+            format!(
+                "helm-generation-lease-v1\ngeneration {generation}\npid {pid}\nstart-time {start_time}\nboot-id {boot_id}\nowner-uid {owner_uid}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn g1_selected_old_generation_keeps_descriptor_pinned_bytes_after_new_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let old = store.select_current().unwrap();
+        assert_eq!(old.read_output("theme.ini").unwrap(), b"old");
+        let leases = lease_names(root.path());
+        assert_eq!(leases.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("leases").join(&leases[0])).unwrap(),
+            format!(
+                "helm-generation-lease-v1\ngeneration 00000000000000000000000000000001\npid {}\nstart-time {}\nboot-id {}\nowner-uid {}\n",
+                std::process::id(),
+                linux_start_time(std::process::id()),
+                linux_boot_id(),
+                rustix::process::getuid().as_raw(),
+            )
+        );
+
+        let candidate = "00000000000000000000000000000002";
+        publish_at(
+            &store,
+            candidate,
+            || Ok(publication(candidate, "new")),
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(old.as_str(), "00000000000000000000000000000001");
+        assert_eq!(old.read_output("theme.ini").unwrap(), b"old");
+        assert_eq!(store.select_current().unwrap().as_str(), candidate);
+        drop(old);
+        assert!(lease_names(root.path()).is_empty());
+    }
+
+    #[test]
+    fn g5_invalid_current_refuses_without_creating_a_lease() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        std::fs::write(
+            root.path()
+                .join("generations/00000000000000000000000000000001/theme.ini"),
+            b"tampered",
+        )
+        .unwrap();
+
+        assert!(store.select_current().is_err());
+        assert!(lease_names(root.path()).is_empty());
+    }
+
+    #[test]
+    fn os_advisory_shared_lock_blocks_separately_opened_writer_through_durable_lease_creation() {
+        use std::sync::Barrier;
+
+        let root = tempfile::tempdir().unwrap();
+        let selecting_store = Arc::new(seeded_store(root.path()));
+        let publishing_store = Arc::new(GenerationStore::open(root.path()).unwrap());
+        let lease_synced = Arc::new(Barrier::new(2));
+        let release_selector = Arc::new(Barrier::new(2));
+        let selecting_store = Arc::clone(&selecting_store);
+        let selecting_lease_synced = Arc::clone(&lease_synced);
+        let selecting_release = Arc::clone(&release_selector);
+        let selecting = std::thread::spawn(move || {
+            selecting_store
+                .select_current_with_checkpoint(std::process::id(), || {
+                    selecting_lease_synced.wait();
+                    selecting_release.wait();
+                })
+                .unwrap()
+        });
+        lease_synced.wait();
+        assert_eq!(lease_names(root.path()).len(), 1);
+
+        let exclusive_attempt = flock(
+            &publishing_store.lock,
+            FlockOperation::NonBlockingLockExclusive,
+        );
+        if exclusive_attempt.is_ok() {
+            flock(&publishing_store.lock, FlockOperation::Unlock).unwrap();
+        }
+
+        release_selector.wait();
+        let selected = selecting.join().unwrap();
+        assert_eq!(selected.as_str(), "00000000000000000000000000000001");
+        assert_eq!(exclusive_attempt.unwrap_err(), Errno::WOULDBLOCK);
+
+        let candidate = "00000000000000000000000000000002";
+        assert!(publish_at(
+            &publishing_store,
+            candidate,
+            || Ok(publication(candidate, "new")),
+            |_| Ok(()),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn g7_rollback_changes_future_selection_without_changing_running_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let old = GenerationId::parse("00000000000000000000000000000001").unwrap();
+        let candidate = "00000000000000000000000000000002";
+        publish_at(
+            &store,
+            candidate,
+            || Ok(publication(candidate, "new")),
+            |_| Ok(()),
+        )
+        .unwrap();
+        let running = store.select_current().unwrap();
+
+        store.rollback(&old).unwrap();
+
+        assert_eq!(running.as_str(), candidate);
+        assert_eq!(running.read_output("theme.ini").unwrap(), b"new");
+        assert_eq!(store.select_current().unwrap().as_str(), old.as_str());
+    }
+
+    #[test]
+    fn g7_rollback_refuses_a_malformed_retained_generation_without_changing_current() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let old = GenerationId::parse("00000000000000000000000000000001").unwrap();
+        let candidate = "00000000000000000000000000000002";
+        publish_at(
+            &store,
+            candidate,
+            || Ok(publication(candidate, "new")),
+            |_| Ok(()),
+        )
+        .unwrap();
+        std::fs::write(
+            root.path()
+                .join("generations")
+                .join(old.as_str())
+                .join("theme.ini"),
+            b"tampered",
+        )
+        .unwrap();
+
+        assert!(store.rollback(&old).is_err());
+        assert_eq!(store.select_current().unwrap().as_str(), candidate);
+    }
+
+    #[test]
+    fn g6_gc_removes_actual_pid_boot_and_start_time_mismatch_leases() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let generation = "00000000000000000000000000000001";
+        let pid = std::process::id();
+        let start_time = linux_start_time(pid);
+        let boot_id = linux_boot_id();
+        let owner_uid = rustix::process::getuid().as_raw();
+        write_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000011",
+            generation,
+            i32::MAX as u32,
+            start_time,
+            &boot_id,
+            owner_uid,
+        );
+        write_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000012",
+            generation,
+            pid,
+            start_time,
+            "00000000-0000-0000-0000-000000000000",
+            owner_uid,
+        );
+        write_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000013",
+            generation,
+            pid,
+            start_time + 1,
+            &boot_id,
+            owner_uid,
+        );
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_leases, 3);
+        assert!(lease_names(root.path()).is_empty());
+        assert!(root.path().join("generations").join(generation).exists());
+    }
+
+    #[test]
+    fn g6_gc_reclaims_provably_stale_lease_even_when_current_is_malformed() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let old = "00000000000000000000000000000001";
+        let candidate = "00000000000000000000000000000002";
+        v1_fixture(
+            &root.path().join("generations"),
+            candidate,
+            "theme.ini",
+            b"candidate",
+        );
+        write_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000011",
+            old,
+            i32::MAX as u32,
+            linux_start_time(std::process::id()),
+            &linux_boot_id(),
+            rustix::process::getuid().as_raw(),
+        );
+        std::fs::write(root.path().join("current"), b"corrupt\n").unwrap();
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_leases, 1);
+        assert_eq!(report.reclaimed_generations, 0);
+        assert!(lease_names(root.path()).is_empty());
+        assert!(root.path().join("generations").join(old).exists());
+        assert!(root.path().join("generations").join(candidate).exists());
+        assert_eq!(
+            std::fs::read(root.path().join("current")).unwrap(),
+            b"corrupt\n"
+        );
+    }
+
+    #[test]
+    fn g6_gc_reclaims_provably_stale_lease_when_current_is_absent() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let old = "00000000000000000000000000000001";
+        write_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000011",
+            old,
+            i32::MAX as u32,
+            linux_start_time(std::process::id()),
+            &linux_boot_id(),
+            rustix::process::getuid().as_raw(),
+        );
+        std::fs::remove_file(root.path().join("current")).unwrap();
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_leases, 1);
+        assert_eq!(report.reclaimed_generations, 0);
+        assert!(lease_names(root.path()).is_empty());
+        assert!(root.path().join("generations").join(old).exists());
+    }
+
+    #[test]
+    fn g6_committed_journal_prior_generation_is_protected_from_gc_candidates() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let prior = "00000000000000000000000000000001";
+        let current = "00000000000000000000000000000002";
+        publish_at(
+            &store,
+            current,
+            || Ok(publication(current, "current")),
+            |_| Ok(()),
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join(format!(".committed-{current}")),
+            format!("{prior}\n"),
+        )
+        .unwrap();
+        for number in 3..=4 {
+            let generation = format!("{number:032x}");
+            v1_fixture(
+                &root.path().join("generations"),
+                &generation,
+                "theme.ini",
+                format!("orphan-{number}").as_bytes(),
+            );
+        }
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_generations, 0);
+        assert!(root.path().join("generations").join(prior).exists());
+        assert_eq!(store.select_current().unwrap().as_str(), current);
+        assert_eq!(store.recover().unwrap().as_str(), current);
+    }
+
+    #[test]
+    fn g6_gc_retains_the_two_greatest_publication_sequences_not_mtime_or_id_order() {
+        let root = tempfile::tempdir().unwrap();
+        secure_store_root(root.path());
+        let generations = root.path().join("generations");
+        std::fs::create_dir(&generations).unwrap();
+        std::fs::set_permissions(&generations, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let newest = "00000000000000000000000000000001";
+        let second_newest = "00000000000000000000000000000002";
+        let current = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let oldest_candidate = "ffffffffffffffffffffffffffffffff";
+        for (generation, marker) in [
+            (newest, b"newest".as_slice()),
+            (second_newest, b"second-newest".as_slice()),
+            (current, b"current".as_slice()),
+            (oldest_candidate, b"oldest-candidate".as_slice()),
+        ] {
+            v1_fixture(&generations, generation, "theme.ini", marker);
+        }
+        std::fs::write(root.path().join("current"), format!("{current}\n")).unwrap();
+        write_publication_order_fixture(
+            root.path(),
+            "helm-generation-publication-order-v1\nnext-sequence 5\ngeneration 00000000000000000000000000000001 4\ngeneration 00000000000000000000000000000002 3\ngeneration aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1\ngeneration ffffffffffffffffffffffffffffffff 2\n",
+        );
+        let store = GenerationStore::open(root.path()).unwrap();
+
+        // Make the oldest publication look newest to an mtime-based collector,
+        // while the two newest publications have equal, much older mtimes.
+        set_generation_modified(root.path(), oldest_candidate, 4_000_000_000);
+        set_generation_modified(root.path(), newest, 1);
+        set_generation_modified(root.path(), second_newest, 1);
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_generations, 1);
+        assert!(!generations.join(oldest_candidate).exists());
+        assert!(generations.join(newest).exists());
+        assert!(generations.join(second_newest).exists());
+        assert!(generations.join(current).exists());
+    }
+
+    #[test]
+    fn g6_missing_or_malformed_publication_order_retains_every_generation() {
+        for malformed in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let store = seeded_store(root.path());
+            for number in 2..=4 {
+                let generation = format!("{number:032x}");
+                v1_fixture(
+                    &root.path().join("generations"),
+                    &generation,
+                    "theme.ini",
+                    format!("generation-{number}").as_bytes(),
+                );
+            }
+            write_lease_fixture(
+                root.path(),
+                "00000000000000000000000000000099",
+                "00000000000000000000000000000001",
+                i32::MAX as u32,
+                linux_start_time(std::process::id()),
+                &linux_boot_id(),
+                rustix::process::getuid().as_raw(),
+            );
+            if malformed {
+                write_publication_order_fixture(
+                    root.path(),
+                    "helm-generation-publication-order-v1\nnext-sequence 5\ngeneration out-of-order 4\n",
+                );
+            } else {
+                std::fs::remove_file(root.path().join("publication-order")).unwrap();
+            }
+
+            let report = store.garbage_collect().unwrap();
+
+            assert_eq!(
+                report.reclaimed_generations, 0,
+                "GC reclaimed a generation with malformed={malformed}"
+            );
+            assert_eq!(report.reclaimed_leases, 1);
+            assert_eq!(
+                std::fs::read_dir(root.path().join("generations"))
+                    .unwrap()
+                    .count(),
+                4
+            );
+        }
+    }
+
+    #[test]
+    fn g6_signed_publication_sequences_are_malformed_and_retain_every_generation() {
+        for signed_order in [
+            "helm-generation-publication-order-v1\nnext-sequence +5\ngeneration 00000000000000000000000000000001 1\ngeneration 00000000000000000000000000000002 2\ngeneration 00000000000000000000000000000003 3\ngeneration 00000000000000000000000000000004 4\n",
+            "helm-generation-publication-order-v1\nnext-sequence 5\ngeneration 00000000000000000000000000000001 1\ngeneration 00000000000000000000000000000002 +2\ngeneration 00000000000000000000000000000003 3\ngeneration 00000000000000000000000000000004 4\n",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let store = seeded_store(root.path());
+            for number in 2..=4 {
+                let generation = format!("{number:032x}");
+                v1_fixture(
+                    &root.path().join("generations"),
+                    &generation,
+                    "theme.ini",
+                    format!("generation-{number}").as_bytes(),
+                );
+            }
+            write_publication_order_fixture(root.path(), signed_order);
+
+            let report = store.garbage_collect().unwrap();
+
+            assert_eq!(report.reclaimed_generations, 0);
+            assert_eq!(
+                std::fs::read_dir(root.path().join("generations"))
+                    .unwrap()
+                    .count(),
+                4
+            );
+        }
+    }
+
+    #[test]
+    fn g6_missing_mapping_for_a_present_generation_retains_every_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        for number in 2..=4 {
+            let generation = format!("{number:032x}");
+            v1_fixture(
+                &root.path().join("generations"),
+                &generation,
+                "theme.ini",
+                format!("generation-{number}").as_bytes(),
+            );
+        }
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_generations, 0);
+        assert_eq!(
+            std::fs::read_dir(root.path().join("generations"))
+                .unwrap()
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn g6_lingering_publication_order_staging_retains_every_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        for number in 2..=4 {
+            let generation = format!("{number:032x}");
+            publish_at(
+                &store,
+                &generation,
+                || Ok(publication(&generation, &format!("generation-{number}"))),
+                |_| Ok(()),
+            )
+            .unwrap();
+        }
+        let staged = root.path().join(".publication-order");
+        std::fs::write(&staged, b"interrupted rewrite").unwrap();
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_generations, 0);
+        assert_eq!(
+            std::fs::read_dir(root.path().join("generations"))
+                .unwrap()
+                .count(),
+            4
+        );
+        assert!(staged.exists());
+    }
+
+    #[test]
+    fn publication_order_is_durable_before_a_candidate_can_become_selectable() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let old = "00000000000000000000000000000001";
+        let candidate = "00000000000000000000000000000002";
+        let mut filesystem = FailAfterMappedPublicationOrderFilesystem {
+            root: root.path().into(),
+            publication_order_renames: 0,
+            failed: false,
+        };
+
+        let interrupted = store.publish_with_checkpoint_ids_and_filesystem(
+            || Ok(publication(candidate, "candidate")),
+            |_| Ok(()),
+            || GenerationId::parse(candidate),
+            &mut filesystem,
+        );
+
+        assert!(interrupted.is_err());
+        assert!(filesystem.failed, "test did not reach the injected crash");
+        assert_eq!(filesystem.publication_order_renames, 2);
+        assert_eq!(store.select_current().unwrap().as_str(), old);
+        assert_eq!(store.recover().unwrap().as_str(), old);
+        assert!(!root.path().join("generations").join(candidate).exists());
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("publication-order")).unwrap(),
+            "helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 1\ngeneration 00000000000000000000000000000002 2\n"
+        );
+    }
+
+    #[test]
+    fn interrupted_sequence_reservation_leaves_a_gap_that_a_retry_does_not_fill() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let interrupted = "00000000000000000000000000000002";
+        let fresh = "00000000000000000000000000000003";
+
+        let failed = publish_at(
+            &store,
+            interrupted,
+            || Ok(publication(interrupted, "interrupted")),
+            |checkpoint| {
+                if checkpoint == CommitCheckpoint::PublicationSequenceReserved {
+                    Err("simulated death after sequence reservation".into())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(failed.is_err());
+        assert!(!root.path().join("generations").join(interrupted).exists());
+
+        publish_at(
+            &store,
+            fresh,
+            || Ok(publication(fresh, "fresh")),
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("publication-order")).unwrap(),
+            "helm-generation-publication-order-v1\nnext-sequence 4\ngeneration 00000000000000000000000000000001 1\ngeneration 00000000000000000000000000000003 3\n"
+        );
+        assert_eq!(store.select_current().unwrap().as_str(), fresh);
+    }
+
+    #[test]
+    fn publication_removes_only_safe_lingering_order_staging_before_retrying() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let candidate = "00000000000000000000000000000002";
+        let staged = root.path().join(".publication-order");
+        std::fs::write(&staged, b"interrupted rewrite").unwrap();
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        publish_at(
+            &store,
+            candidate,
+            || Ok(publication(candidate, "candidate")),
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert!(!staged.exists());
+        assert_eq!(store.select_current().unwrap().as_str(), candidate);
+    }
+
+    #[test]
+    fn exhausted_publication_sequence_refuses_without_constructing_a_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let candidate = "00000000000000000000000000000002";
+        write_publication_order_fixture(
+            root.path(),
+            "helm-generation-publication-order-v1\nnext-sequence 18446744073709551615\ngeneration 00000000000000000000000000000001 1\n",
+        );
+
+        let outcome = publish_at(
+            &store,
+            candidate,
+            || Ok(publication(candidate, "candidate")),
+            |_| Ok(()),
+        );
+
+        assert!(outcome.is_err());
+        assert!(!root.path().join("generations").join(candidate).exists());
+        assert_eq!(
+            store.select_current().unwrap().as_str(),
+            "00000000000000000000000000000001"
+        );
+    }
+
+    #[test]
+    fn g6_live_old_generation_is_pinned_while_only_oldest_unleased_candidate_is_collected() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let pinned = store.select_current().unwrap();
+        for number in 2..=5 {
+            let generation = format!("{number:032x}");
+            publish_at(
+                &store,
+                &generation,
+                || Ok(publication(&generation, &format!("generation-{number}"))),
+                |_| Ok(()),
+            )
+            .unwrap();
+        }
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_generations, 1);
+        assert!(root
+            .path()
+            .join("generations/00000000000000000000000000000001")
+            .exists());
+        assert!(!root
+            .path()
+            .join("generations/00000000000000000000000000000002")
+            .exists());
+        for number in 3..=5 {
+            assert!(root
+                .path()
+                .join("generations")
+                .join(format!("{number:032x}"))
+                .exists());
+        }
+        assert_eq!(pinned.read_output("theme.ini").unwrap(), b"old");
+    }
+
+    #[test]
+    fn g6_malformed_lease_keeps_all_generations_and_is_not_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        for number in 2..=4 {
+            let generation = format!("{number:032x}");
+            publish_at(
+                &store,
+                &generation,
+                || Ok(publication(&generation, &format!("generation-{number}"))),
+                |_| Ok(()),
+            )
+            .unwrap();
+        }
+        let malformed = root.path().join("leases/00000000000000000000000000000099");
+        std::fs::write(&malformed, b"not a canonical lease\n").unwrap();
+        std::fs::set_permissions(&malformed, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_leases, 0);
+        assert_eq!(report.reclaimed_generations, 0);
+        assert!(malformed.exists());
+        assert_eq!(
+            std::fs::read_dir(root.path().join("generations"))
+                .unwrap()
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn g6_malformed_sealed_generation_blocks_all_generation_collection() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        for number in 2..=5 {
+            let generation = format!("{number:032x}");
+            publish_at(
+                &store,
+                &generation,
+                || Ok(publication(&generation, &format!("generation-{number}"))),
+                |_| Ok(()),
+            )
+            .unwrap();
+        }
+        let malformed = root
+            .path()
+            .join("generations/00000000000000000000000000000001");
+        std::fs::write(malformed.join("unlisted"), b"diagnostic evidence").unwrap();
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_generations, 0);
+        assert!(malformed.exists());
+        assert!(root
+            .path()
+            .join("generations/00000000000000000000000000000002")
+            .exists());
+    }
+
+    #[test]
+    fn selection_can_lease_a_distinct_paused_target_process_and_expose_its_generation_path() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        let start_time = linux_start_time(pid);
+
+        let selected = store.select_current_for_process(pid).unwrap();
+
+        let leases = lease_names(root.path());
+        assert_eq!(leases.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("leases").join(&leases[0])).unwrap(),
+            format!(
+                "helm-generation-lease-v1\ngeneration 00000000000000000000000000000001\npid {pid}\nstart-time {start_time}\nboot-id {}\nowner-uid {}\n",
+                linux_boot_id(),
+                rustix::process::getuid().as_raw(),
+            )
+        );
+        assert_eq!(
+            selected.path(),
+            root.path()
+                .join("generations/00000000000000000000000000000001")
+        );
+
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(store.garbage_collect().unwrap().reclaimed_leases, 1);
+        assert!(lease_names(root.path()).is_empty());
+    }
+
+    #[test]
+    fn apply_id_exhaustion_refuses_without_reclaiming_a_protected_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let protected = store.select_current().unwrap();
+        let collision = GenerationId::parse("00000000000000000000000000000001").unwrap();
+        let outcome = store.publish_with_checkpoint_and_ids(
+            || Ok(publication(collision.as_str(), "candidate")),
+            |_| Ok(()),
+            || Ok(collision.clone()),
+        );
+
+        assert!(outcome.is_err());
+        assert_eq!(protected.read_output("theme.ini").unwrap(), b"old");
+        assert!(root
+            .path()
+            .join("generations/00000000000000000000000000000001")
+            .exists());
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("current")).unwrap(),
+            format!("{}\n", protected.as_str())
+        );
     }
 
     #[test]
@@ -2252,6 +3980,14 @@ mod tests {
                 .ino(),
             "store handles did not retain the same lock inode"
         );
+        let order = std::fs::symlink_metadata(root.path().join("publication-order")).unwrap();
+        assert!(order.is_file());
+        assert!(!order.file_type().is_symlink());
+        assert_eq!(order.permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("publication-order")).unwrap(),
+            "helm-generation-publication-order-v1\nnext-sequence 1\n"
+        );
     }
 
     #[test]
@@ -2366,6 +4102,131 @@ mod tests {
                 & 0o777,
             0o777
         );
+
+        let leases_root = tempfile::tempdir().unwrap();
+        secure_store_root(leases_root.path());
+        let victim = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(victim.path(), leases_root.path().join("leases")).unwrap();
+
+        assert!(GenerationStore::open(leases_root.path()).is_err());
+        assert!(!leases_root.path().join("activation.lock").exists());
+        assert!(!leases_root.path().join("generations").exists());
+        assert!(std::fs::read_dir(victim.path()).unwrap().next().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_or_malformed_order_does_not_block_restart_selection_or_stale_lease_cleanup() {
+        for state in [
+            "official-symlink",
+            "official-fifo",
+            "official-unsafe-mode",
+            "staging-symlink",
+            "malformed-official",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let store = seeded_store(root.path());
+            for number in 2..=4 {
+                let generation = format!("{number:032x}");
+                publish_at(
+                    &store,
+                    &generation,
+                    || Ok(publication(&generation, &format!("generation-{number}"))),
+                    |_| Ok(()),
+                )
+                .unwrap();
+            }
+            drop(store);
+
+            let victim = root.path().join("victim");
+            std::fs::write(&victim, "unchanged").unwrap();
+            let official = root.path().join("publication-order");
+            let staging = root.path().join(".publication-order");
+            match state {
+                "official-symlink" => {
+                    std::fs::remove_file(&official).unwrap();
+                    std::os::unix::fs::symlink(&victim, &official).unwrap();
+                }
+                "official-fifo" => {
+                    std::fs::remove_file(&official).unwrap();
+                    rustix::fs::mkfifoat(CWD, &official, Mode::RUSR | Mode::WUSR).unwrap();
+                }
+                "official-unsafe-mode" => {
+                    std::fs::set_permissions(&official, std::fs::Permissions::from_mode(0o666))
+                        .unwrap();
+                }
+                "staging-symlink" => {
+                    std::os::unix::fs::symlink(&victim, &staging).unwrap();
+                }
+                "malformed-official" => {
+                    std::fs::write(&official, "not publication order v1\n").unwrap();
+                }
+                _ => unreachable!(),
+            }
+
+            let reopened = GenerationStore::open(root.path())
+                .unwrap_or_else(|error| panic!("restart rejected {state}: {error}"));
+            let selected = reopened.select_current().unwrap();
+            assert_eq!(selected.as_str(), "00000000000000000000000000000004");
+            selected.release().unwrap();
+            write_lease_fixture(
+                root.path(),
+                "00000000000000000000000000000099",
+                "00000000000000000000000000000001",
+                i32::MAX as u32,
+                linux_start_time(std::process::id()),
+                &linux_boot_id(),
+                rustix::process::getuid().as_raw(),
+            );
+
+            let report = reopened.garbage_collect().unwrap();
+
+            assert_eq!(report.reclaimed_leases, 1, "state={state}");
+            assert_eq!(report.reclaimed_generations, 0, "state={state}");
+            assert_eq!(
+                std::fs::read_dir(root.path().join("generations"))
+                    .unwrap()
+                    .count(),
+                4
+            );
+            let candidate = "00000000000000000000000000000005";
+            assert!(publish_at(
+                &reopened,
+                candidate,
+                || Ok(publication(candidate, "must-fail-closed")),
+                |_| Ok(()),
+            )
+            .is_err());
+            assert!(!root.path().join("generations").join(candidate).exists());
+            assert_eq!(
+                reopened.select_current().unwrap().as_str(),
+                "00000000000000000000000000000004"
+            );
+            assert_eq!(std::fs::read_to_string(&victim).unwrap(), "unchanged");
+            match state {
+                "official-symlink" => assert!(std::fs::symlink_metadata(&official)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()),
+                "official-fifo" => assert!(std::fs::symlink_metadata(&official)
+                    .unwrap()
+                    .file_type()
+                    .is_fifo()),
+                "official-unsafe-mode" => assert_eq!(
+                    std::fs::metadata(&official).unwrap().permissions().mode() & 0o777,
+                    0o666
+                ),
+                "staging-symlink" => assert!(std::fs::symlink_metadata(&staging)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()),
+                "malformed-official" => assert_eq!(
+                    std::fs::read_to_string(&official).unwrap(),
+                    "not publication order v1\n"
+                ),
+                _ => unreachable!(),
+            }
+        }
     }
 
     #[test]
@@ -2407,11 +4268,13 @@ mod tests {
             observed,
             vec![
                 CommitCheckpoint::InputsCaptured,
+                CommitCheckpoint::PublicationSequenceReserved,
                 CommitCheckpoint::OutputsSynced,
                 CommitCheckpoint::ReceiptSynced,
                 CommitCheckpoint::ManifestSynced,
                 CommitCheckpoint::SealSynced,
                 CommitCheckpoint::StagingDirectorySynced,
+                CommitCheckpoint::PublicationOrderSynced,
                 CommitCheckpoint::TreeCommitted,
                 CommitCheckpoint::GenerationsDirectorySynced,
                 CommitCheckpoint::PointerFileSynced,
@@ -2446,12 +4309,28 @@ mod tests {
         assert_eq!(
             filesystem.events,
             vec![
+                ActualFilesystemEvent::Sync(root.path().join(".publication-order")),
+                ActualFilesystemEvent::Rename {
+                    from_directory: root.path().into(),
+                    from_name: ".publication-order".into(),
+                    to_directory: root.path().into(),
+                    to_name: "publication-order".into(),
+                },
+                ActualFilesystemEvent::Sync(root.path().into()),
                 ActualFilesystemEvent::Sync(staging.join("theme.ini")),
                 ActualFilesystemEvent::Sync(staging.clone()),
                 ActualFilesystemEvent::Sync(staging.join("receipt")),
                 ActualFilesystemEvent::Sync(staging.join("manifest")),
                 ActualFilesystemEvent::Sync(staging.join("seal")),
                 ActualFilesystemEvent::Sync(staging.clone()),
+                ActualFilesystemEvent::Sync(root.path().join(".publication-order")),
+                ActualFilesystemEvent::Rename {
+                    from_directory: root.path().into(),
+                    from_name: ".publication-order".into(),
+                    to_directory: root.path().into(),
+                    to_name: "publication-order".into(),
+                },
+                ActualFilesystemEvent::Sync(root.path().into()),
                 ActualFilesystemEvent::Rename {
                     from_directory: root.path().join("generations"),
                     from_name: format!(".staging-{generation}"),
@@ -2911,7 +4790,7 @@ mod tests {
         let candidate = "00000000000000000000000000000002";
         let mut filesystem = FailOnceOnRootSyncFilesystem {
             root: root.path().into(),
-            fail_on: 2,
+            fail_on: 4,
             root_syncs: 0,
             failed: false,
             fail_unlink: false,
@@ -2952,7 +4831,7 @@ mod tests {
         let candidate = "00000000000000000000000000000002";
         let mut filesystem = FailOnceOnRootSyncFilesystem {
             root: root.path().into(),
-            fail_on: 4,
+            fail_on: 6,
             root_syncs: 0,
             failed: false,
             fail_unlink: false,
@@ -3289,6 +5168,55 @@ mod tests {
     fn generation_id_rejects_paths_and_non_ascii() {
         assert!(GenerationId::parse("../old").is_err());
         assert!(GenerationId::parse("génération").is_err());
+    }
+
+    #[test]
+    fn publication_order_v1_accepts_gaps_and_reencodes_in_generation_id_order() {
+        let parsed = PublicationOrder::parse(
+            b"helm-generation-publication-order-v1\nnext-sequence 9\ngeneration 00000000000000000000000000000001 8\ngeneration ffffffffffffffffffffffffffffffff 2\n",
+        )
+        .unwrap();
+
+        assert_eq!(parsed.next_sequence, 9);
+        assert_eq!(
+            parsed.sequences[&GenerationId::parse("00000000000000000000000000000001").unwrap()],
+            8
+        );
+        assert_eq!(
+            parsed.encode(),
+            b"helm-generation-publication-order-v1\nnext-sequence 9\ngeneration 00000000000000000000000000000001 8\ngeneration ffffffffffffffffffffffffffffffff 2\n"
+        );
+    }
+
+    #[test]
+    fn publication_order_v1_rejects_every_noncanonical_or_ambiguous_shape() {
+        for malformed in [
+            b"".as_slice(),
+            b"helm-generation-publication-order-v1\nnext-sequence 1",
+            b"helm-generation-publication-order-v1\r\nnext-sequence 1\r\n",
+            b"helm-generation-publication-order-v2\nnext-sequence 1\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 0\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 01\n",
+            b"helm-generation-publication-order-v1\nnext-sequence +1\n",
+            b"helm-generation-publication-order-v1\nnext-sequence -1\n",
+            b"helm-generation-publication-order-v1\nnext-sequence \t1\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 0\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 03\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 +1\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 -1\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 1\t\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 3\ngeneration 00000000000000000000000000000001 3\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 4\ngeneration 00000000000000000000000000000001 2\ngeneration 00000000000000000000000000000002 2\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 4\ngeneration 00000000000000000000000000000002 2\ngeneration 00000000000000000000000000000001 3\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 4\ngeneration 00000000000000000000000000000001 2 extra\n",
+            b"helm-generation-publication-order-v1\nnext-sequence 4\n\n",
+            b"\xff\n",
+        ] {
+            assert!(
+                PublicationOrder::parse(malformed).is_err(),
+                "accepted malformed publication order: {malformed:?}"
+            );
+        }
     }
 
     #[test]

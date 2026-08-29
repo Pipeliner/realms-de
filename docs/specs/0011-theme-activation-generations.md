@@ -4,6 +4,7 @@
 - **Milestone:** M1
 - **Decision:** [ADR 0017](../adr/0017-immutable-theme-activation-generations.md)
 - **Issue:** [#131](https://github.com/Pipeliner/realms-de/issues/131)
+- **Implementation refinement:** publication-order record v1 (2026-08-29)
 
 ## Purpose
 
@@ -67,6 +68,78 @@ Recovery first discards only recognized `.staging-<generation-id>` entries as
 required above. Any malformed final name or tree, special entry, unrecognized
 staging-like entry, or remaining pointer journal then keeps the absent-current
 state fail closed rather than being ignored or guessed away.
+
+GC recency is recorded explicitly rather than inferred from directory metadata
+or the opaque generation identifier. The generated root contains the root-owned
+regular file `publication-order`. Writers validate and update it under the same
+exclusive `activation.lock`; GC reads it under that exclusive lock. A publisher
+atomically replaces it from the reserved `.publication-order` staging sibling,
+fsyncing the staged regular file and then the generated root after each rename.
+It first reserves a unique sequence by durably advancing `next-sequence`; after
+the staged tree is sealed and fsynced, it performs a second durable replacement
+which adds the candidate mapping before the tree becomes final and before it may
+create or commit any pointer journal for that generation. A crash after
+reservation but before mapping leaves an allowed sequence gap. A crash after
+mapping but before pointer commit leaves `current` unchanged and may leave a
+historical mapping or a valid ordered unpointed orphan. A crash before either
+order rename may leave `.publication-order`; publication may remove only that
+recognized current-UID mode-0600 regular staging file under the exclusive lock,
+then fsync the root before retrying. Selection ignores publication order and
+continues to validate only the pointer transaction and selected sealed tree.
+
+`publication-order` and `.publication-order` are reserved control names.
+Operations which consume or mutate either name open it descriptor-relatively
+with `O_NOFOLLOW` and require a current-UID regular file with mode 0600. Store
+open and launcher selection intentionally do not parse or reject an existing
+order entry: order state controls only publication and generation deletion, not
+selection of an otherwise valid pointer and sealed tree. A publisher fails
+closed without using or mutating a symlink, special file, foreign-owner entry,
+unsafe-mode entry or malformed official record. GC first removes independently
+provable stale leases, then treats any such entry, missing `publication-order`,
+lingering staging file or malformed record as uncertain and deletes zero
+generations.
+
+When `publication-order` is absent, the first opener serializes control creation
+with the exclusive persistent lock, creates it once with
+`O_CREAT|O_EXCL|O_NOFOLLOW` at mode 0600, writes and fsyncs the canonical empty
+record, and fsyncs the generated root before releasing the lock. Any existing
+entry at that name, including an unsafe or malformed entry, is left untouched
+and does not prevent the store from opening. Initialization never synthesizes
+ordering for pre-existing final generations: if the record was lost and is
+recreated after such generations, their missing mappings remain fail-closed.
+
+## Publication order v1 (L4 refinement)
+
+`publication-order` is canonical UTF-8 with this byte-exact grammar. Every line
+ends in one LF; CR, blank lines, comments and extra records are forbidden:
+
+```text
+helm-generation-publication-order-v1\n
+next-sequence <positive-decimal-publication-sequence>\n
+generation <generation-id> <positive-decimal-publication-sequence>\n
+... zero or more generation records, strictly sorted by generation-id
+```
+
+Each generation identifier has the same lowercase 128-bit grammar as `current`.
+Sequences are positive `u64` decimal values containing only ASCII bytes `0` to
+`9`, with no sign, whitespace or leading zeroes; they are unique within the
+generation records and need not be contiguous. `next-sequence` is
+also positive, appears exactly once immediately after the header, and is
+strictly greater than every mapped sequence. Record ordering is only by the
+unsigned byte order of generation identifiers; publication recency is defined
+only by the numeric mapped sequence. Every final generation directory currently
+present must have exactly one mapping. Historical mappings whose generation
+directory has already been collected or whose interrupted attempt never made a
+final tree are permitted and prevent identifier reuse. A new publisher reserves
+the current `next-sequence`, refusing if it cannot advance that value, then
+durably increments it before construction and adds its candidate mapping before
+final-tree and pointer commit. Interrupted attempts may therefore leave sequence
+gaps; neither generation IDs, directory iteration order, timestamps nor file
+metadata may fill, reorder or interpret those gaps. Duplicate generation IDs,
+duplicate mapped sequences, a mapped sequence greater than or equal to
+`next-sequence`, noncanonical order or decimal encoding, missing mappings for
+present final generations, or an unsafe/missing record makes generation recency
+unprovable and causes fail-closed zero generation deletion.
 
 ## Generation manifest v1 (L4)
 
@@ -153,7 +226,7 @@ redirection, but does not expand ADR 0017's same-UID threat model.
 | G3 | Given interruption after tree seal but before pointer replacement, when recovery runs, then the sealed tree is retained or safely collectible and `current` remains valid. |
 | G4 | Given concurrent applies, when both complete, then every committed pointer refers to one complete manifest/tree pair and neither mixes palette/catalogue/target inputs. |
 | G5 | Given a malformed, absent or digest-mismatched manifest, when a launcher resolves `current`, then it refuses before spawning a target. |
-| G6 | Given a live lease, when GC runs, then its generation is retained; given a stale PID, boot-ID or start-time lease, then GC reclaims only the lease and unleased old generation candidates; on uncertain liveness or a malformed sealed tree, it retains rather than deletes. |
+| G6 | Given a live lease, when GC runs, then its generation is retained; given a stale PID, boot-ID or start-time lease, then GC reclaims only the lease and unleased old generation candidates; the two retained unleased candidates are those with the greatest valid publication sequences, independent of opaque IDs and filesystem timestamps; on uncertain liveness, missing/malformed publication order or a malformed sealed tree, it deletes zero generations. |
 | G7 | Given rollback to a retained generation, when it commits, then future launches select it and already-running launches remain unchanged. |
 | G8 | Given a corrupt pointer, missing tree, or digest mismatch, when recovery or launch runs, then it fails closed and never selects an arbitrary/newest generation. |
 | G9 | Given concurrent applies, when both are accepted, then they serialize from input capture through pointer durability and each receipt identifies its committed generation. |
