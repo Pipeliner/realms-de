@@ -241,6 +241,10 @@ and returns `GenerationPublicationOutcome` directly. It does not accept a
 `CommittedWithCleanupPending` identify the generation selected for future
 launches; `OutcomeAmbiguous` is not reported as activated. Applying identical
 inputs may publish a new generation; no no-op result is promised.
+SPEC 0006 maps the variants deterministically: both committed variants are CLI
+success (with a durable-selection cleanup warning for the latter), while
+`OutcomeAmbiguous` is exit 6, names only an unconfirmed candidate, and cannot
+trigger automatic recovery or retry.
 
 The supported diff seam captures and renders the same inputs, then compares
 their normalized output set with the manifest-listed bytes of a fully validated

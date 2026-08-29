@@ -1,41 +1,56 @@
-//! The shipped template set and the shape of a template.
+//! The shipped template catalogue and its legacy mutable metadata.
+//!
+//! Supported generation apply treats targets as normalized paths inside one
+//! sealed generation and binds reload metadata into the catalogue digest without
+//! executing it. The mutable writer's target and reload interpretation remains
+//! only for implementation migration and historical tests.
 
 use std::path::PathBuf;
 
 /// `SIGUSR1`, the signal foot re-reads its configuration on.
 const SIGUSR1: i32 = rustix::process::Signal::USR1.as_raw();
 
-/// A file helm generates from the palette.
+/// One generated output and its catalogue metadata.
 pub struct Template {
     /// Stable id, e.g. `"gtk4"`, `"foot"`, `"yazi"`.
     pub id: &'static str,
     /// Source text with `{{ path.to.value }}` placeholders.
     pub source: &'static str,
-    /// Where the rendered file lands, relative to `$XDG_CONFIG_HOME`.
+    /// Output path.
+    ///
+    /// The legacy writer interprets it relative to its caller-supplied root;
+    /// supported apply normalizes it inside the staged generation.
     pub target: PathBuf,
-    /// How live consumers are told to re-read it.
+    /// Canonical reload metadata.
+    ///
+    /// The legacy writer executes it. Supported apply only digests it and never
+    /// reloads a process on pointer switch.
     pub reload: Reload,
 }
 
-/// How a themed program is told the theme changed.
+/// Canonical reload metadata retained for catalogue identity.
+///
+/// Only the legacy mutable writer executes these variants. A future live
+/// upgrade requires a separately specified generation-aware owned-process
+/// protocol; supported pointer publication never executes them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reload {
-    /// Nothing to do: read at next start.
+    /// Catalogue declares that the consumer reads at next start.
     None,
-    /// Send a signal to every process matching this name.
+    /// Legacy signal metadata for a named process.
     Signal {
         /// Process name as it appears in `/proc/<pid>/comm`.
         process: &'static str,
         /// Signal number.
         signal: i32,
     },
-    /// Run a command, e.g. `gsettings set ...`.
+    /// Legacy command metadata, e.g. `gsettings set ...`.
     Command(Vec<String>),
-    /// Notify helm's own clients over the control socket.
+    /// Metadata identifying Helm-owned clients.
     HelmClients,
 }
 
-/// Nudge GTK into re-reading its stylesheet.
+/// Build GTK's legacy reload metadata.
 ///
 /// GTK watches the settings it gets over the settings portal and rebuilds its
 /// style cascade when one changes; writing the theme name it already has is the
@@ -56,14 +71,12 @@ fn gtk_restyle() -> Reload {
     )
 }
 
-/// The templates helm ships.
+/// The template catalogue Helm ships.
 ///
-/// Targets are relative to `$XDG_CONFIG_HOME`. Where helm owns the file
-/// outright it writes the file the program actually reads; where a user is
-/// likely to have their own, helm writes a file of its own next to it and the
-/// user imports it. Which of those the GTK stylesheets should be is SPEC 0002's
-/// open `needs-human` question, and until it is answered this takes the
-/// non-destructive side of it.
+/// The legacy mutable writer interprets targets relative to its supplied root.
+/// Supported apply treats the same values as normalized output paths within a
+/// sealed generation. Reload fields remain part of the canonical catalogue
+/// digest but are not executed by supported apply.
 pub fn templates() -> Vec<Template> {
     vec![
         Template {

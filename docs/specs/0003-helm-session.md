@@ -7,10 +7,13 @@
   [ADR 0004](../adr/0004-ndjson-control-socket.md),
   [ADR 0009](../adr/0009-no-animation-budget.md),
   [ADR 0011](../adr/0011-session-integration-contract.md),
-  [ADR 0013](../adr/0013-river-window-management-backend.md)
+  [ADR 0013](../adr/0013-river-window-management-backend.md),
+  [ADR 0017](../adr/0017-immutable-theme-activation-generations.md)
 - **Implements:** [INTERFACES.md §1](../INTERFACES.md) (`WmBackend`) and
   [§4](../INTERFACES.md) (the socket's server half)
-- **Supersedes / Superseded by:** —
+- **Supersedes / Superseded by:** Theme apply/reload clauses are superseded by
+  [SPEC 0011](0011-theme-activation-generations.md): the CLI publishes a
+  generation without a session request or notification.
 
 > Written before the code, as S14 requires. The **Test** column below is
 > deliberately empty: those tests get written next, watched to fail, and only
@@ -51,7 +54,7 @@ lifecycle.
 | Not this component's job | Whose it is |
 |---|---|
 | Drawing anything | `helm-bar` (SPEC forthcoming, [ADR 0008](../adr/0008-layer-shell-rendering-stack.md)); the bar is an ordinary `wlr-layer-shell` client |
-| Template expansion, atomic writes, reload fan-out | `helm-theme` ([SPEC 0002](0002-theme-pipeline.md)); the session only *calls* `helm_theme::apply` and only off the input path |
+| Template expansion, sealed generation publication, and generation-aware diff | `helm-theme` ([SPEC 0002](0002-theme-pipeline.md), [SPEC 0011](0011-theme-activation-generations.md)); `helm ctl` calls it in-process and the session is not involved |
 | The ledger's mutation rules, the layout projection, colour maths, the wire types | `helm-core` ([SPEC 0001](0001-helm-core-contracts.md)) |
 | The environment handshake, systemd ordering, portals, cursor theme | the session entry contract ([ADR 0011](../adr/0011-session-integration-contract.md)) and `packaging/` |
 | The CLI surface | `helm-ctl`; it is a client of this socket and holds no privilege |
@@ -406,11 +409,10 @@ shared mutable state.**
   `timerfd` for the clock, an armed-only-when-held `timerfd` for key repeat, and
   an `eventfd` the worker signals.
 - The **worker** thread owns nothing and does only what it is told over a
-  bounded channel: `helm_theme::apply`, ledger snapshot writes, process spawning
-  and any future D-Bus work. It reports back over a channel and signals the
+  bounded channel: ledger snapshot writes, process spawning and any future
+  D-Bus work. It reports back over a channel and signals the
   `eventfd`. The event loop never blocks on a send to it; a full worker queue
-  drops the oldest pending duplicate of the same job (there is never a reason to
-  queue two theme applies).
+  drops the oldest pending duplicate of the same job.
 - **No locks.** A single owner means the input path cannot contend, which
   matters because a lock held for 40 ms is a stall nobody sees in review.
 
@@ -582,10 +584,12 @@ would put a `helm ctl` client on the input path, which §4 forbids.
 `Request::ShowLedger` answers `Response::Ledger(Vec<OrbitLedger>)` built from
 the ledger plus the per-window `app_id` and `title` last reported by river (both
 nullable in the protocol *(verified)*, rendered as empty strings).
-`Request::ReloadTheme` and `Request::Spawn` are handed to the worker and
-answered `Response::Ok` on acceptance. Decoding and protocol-error outcomes
-are exactly those in SPEC 0007's state/error table; they are not kept open by
-default merely because a decoder can return an error.
+`Request::Spawn` is handed to the worker and answered `Response::Ok` on
+acceptance. `Request::ReloadTheme` has no supported apply or notify meaning and
+is not sent by `helm ctl theme apply`; this Draft does not promise compatibility
+for that retired message. Decoding and protocol-error outcomes are exactly
+those in SPEC 0007's state/error table; they are not kept open by default merely
+because a decoder can return an error.
 
 **Subscribers.** `Request::Subscribe` turns a connection into a subscriber. Its
 first frame is an immediate `Event::State` snapshot, so a restarted bar draws at
@@ -682,7 +686,7 @@ From [ARCHITECTURE.md §4](../ARCHITECTURE.md); no number here is new.
 | State change → bar redraw | **< 8 ms** | The first part: derive, `renders_same_as`, encode, non-blocking write |
 | Bar idle CPU | **~0%** | Nothing polls. The clock schedules the next minute boundary; one shared 1 Hz sampler runs off the input path; the key-repeat timer exists only while a key is held |
 | Cold session start → usable | **< 900 ms** | Socket bound, six globals bound, ledger seeded or recovered, first `manage_finish` made |
-| `helm ctl theme apply` | **< 150 ms** | Runs on the worker thread. The budget is [SPEC 0002](0002-theme-pipeline.md)'s; what this spec adds is that it must not appear on the input path |
+| `helm ctl theme apply` | **< 150 ms** | No session share: the CLI publishes in its own process under SPEC 0011. No apply, diff, or post-commit notification may appear on the session input path |
 
 **Which of these become correctness bounds under river, and why.**
 
@@ -738,8 +742,9 @@ It also owns, from the other sections:
 It **contributes to but does not own**: "`WAYLAND_DISPLAY` never reaches D-Bus"
 (the session entry script owns it, ADR 0011; the daemon only refuses to start
 without it), "fractional scaling blur" (the session works entirely in logical
-coordinates and hands the bar its scale), and "half-applied theme" (SPEC 0002
-owns atomicity; this component owns only not blocking on it).
+coordinates and hands the bar its scale), and "partially selectable theme
+generation" (SPEC 0011 owns sealing and selection; this component does not
+participate in apply or diff).
 
 ## Open questions
 

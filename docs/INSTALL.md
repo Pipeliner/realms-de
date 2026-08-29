@@ -427,12 +427,18 @@ If `list-dependencies` shows the target with nothing under it, the package's
 `helm-session.target.wants/` symlinks are missing — starting the target then
 starts nothing at all and still exits 0.
 
-### Nothing is themed, though `helm ctl theme apply` works by hand
+### Running apps keep the old theme after `helm ctl theme apply`
+
+This is expected: apply selects a sealed generation for future launches and
+never rethemes an existing process. Test a newly launched program started
+through a verified Helm launch profile. If that future launch still uses the
+old generation, check the generation selection/profile integration before
+debugging toolkit reload behavior.
 
 User units started before the import and inherited an empty environment. Compare
 the three views: the compositor's `/proc/<pid>/environ`, `systemctl --user
 show-environment`, and what D-Bus hands an activated service. Any disagreement
-is the bug.
+is a separate session-startup bug; theme apply does not repair it.
 
 ---
 

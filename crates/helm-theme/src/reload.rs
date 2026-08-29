@@ -1,19 +1,19 @@
-//! Telling live programs the theme changed.
+//! Legacy mutable-writer reload execution.
 //!
-//! The fan-out runs once, after every file is in place, and once per distinct
-//! mechanism rather than once per file. Both halves of that matter: reloading
-//! early shows a half-applied theme, and reloading per file makes GTK rebuild
-//! its style cascade twice for one apply.
+//! This module remains for implementation migration and historical tests. The
+//! supported generation-only apply path never invokes it and never reloads a
+//! process when `current` changes.
 
 use rustix::process::{Pid, Signal};
 
 use crate::{Error, Reload, Result};
 
-/// Executes reload mechanisms.
+/// Executes reload mechanisms for the legacy mutable writer.
 ///
 /// A trait rather than a hardcoded call so a test can count the fan-out without
 /// a desktop underneath it — and so M2's control socket can be injected here
-/// rather than reached for from inside this crate.
+/// rather than reached for from inside this crate. It is not a supported
+/// generation-activation seam.
 pub trait Reloader {
     /// Fire one mechanism. Called at most once per distinct mechanism.
     fn reload(&mut self, reload: &Reload) -> Result<()>;
@@ -25,7 +25,9 @@ impl<F: FnMut(&Reload) -> Result<()>> Reloader for F {
     }
 }
 
-/// The real fan-out: signals real processes and runs real commands.
+/// Legacy system fan-out: signals real processes and runs real commands.
+///
+/// Supported generation apply does not construct or invoke this type.
 pub struct SystemReloader;
 
 impl Reloader for SystemReloader {
@@ -69,7 +71,7 @@ fn signal_all(process: &str, signal: i32) -> Result<()> {
     // rustix only offers an unsafe raw conversion, and this crate forbids
     // unsafe, so the signals helm is willing to send are named rather than
     // parsed. Widening the list is a deliberate act, which is the right shape
-    // for "which signals may a theme apply send to a stranger's process".
+    // for "which signals may the legacy mutable writer send to a process".
     let signal = match signal {
         s if s == Signal::USR1.as_raw() => Signal::USR1,
         s if s == Signal::USR2.as_raw() => Signal::USR2,

@@ -46,7 +46,7 @@ Legend: **Guard** = the thing that would fail loudly if the mitigation regressed
 |---|---|---|---|
 | Contrast implemented as a filter | Fullscreen GPU pass every frame; accent hues rotate | Contrast derived per-colour in OKLab, capped at the sRGB gamut boundary | `color::tests::contrast_stops_at_the_gamut_boundary_instead_of_desaturating` |
 | Unreadable palette after a tweak | Grey-on-grey body text | `Palette::lint` enforces WCAG floors and ≥25° accent separation | `palette::tests::shipped_palette_survives_the_whole_contrast_range` |
-| Half-applied theme | Terminal is new, GTK is old, until relogin | Render to temp files, `rename(2)` atomically, then one reload fan-out | *planned:* M1 |
+| Partial or mismatched theme generation becomes selectable | A newly launched program reads outputs from different palettes or a corrupt tree | Render one complete generation, seal and validate its manifest/output digests, then atomically commit `current` for future launches only; never reload existing processes on pointer switch | `generation::tests::g1_selected_old_generation_keeps_descriptor_pinned_bytes_after_new_commit`, `generation::tests::g5_invalid_current_refuses_without_creating_a_lease` |
 | Colour written down twice | The two drift | Nothing but `palette.toml` may contain a literal colour | *planned:* M1 CI grep |
 
 ## Session integration — the classic killers

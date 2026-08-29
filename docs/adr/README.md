@@ -19,13 +19,13 @@ Copy [`template.md`](template.md) to start a new one.
 |---|---|---|---|---|
 | [0001](0001-ledger-as-single-source-of-truth.md) | The ledger is the single source of truth | Accepted | Ordered `Vec<WinId>` per orbit; layouts are pure projections; undo restores an older ledger | **Structural** — the whole DE assumes it |
 | [0002](0002-borrow-a-compositor-first.md) | Borrow a compositor first; write ours later | ~~Superseded~~ by [0013](0013-river-window-management-backend.md) | Ship on niri behind a `WmBackend` trait. Kept in full: its mapping table is the evidence for the move | — |
-| [0003](0003-session-daemon-owns-state.md) | A session daemon owns the state | Accepted | `helm-session` holds `HelmState`; clients subscribe and hold nothing | Low |
+| [0003](0003-session-daemon-owns-state.md) | A session daemon owns the state | Accepted — theme-reload consequence superseded by [0017](0017-immutable-theme-activation-generations.md) | `helm-session` holds `HelmState`; clients subscribe and hold nothing | Low |
 | [0004](0004-ndjson-control-socket.md) | Newline-delimited JSON over a unix socket | Accepted | One JSON value per line at `$XDG_RUNTIME_DIR/helm/ctl.sock`, with a version handshake | Low — a D-Bus surface would be additive |
-| [0005](0005-palette-toml-single-source.md) | One `palette.toml`, everything generated | Accepted | No colour is written down twice; atomic rename then one reload fan-out | Low per target |
+| [0005](0005-palette-toml-single-source.md) | One `palette.toml`, everything generated | Accepted — activation clauses partially superseded by [0017](0017-immutable-theme-activation-generations.md) | No colour is written down twice; derive, lint, and render from one palette | Low per target |
 | [0006](0006-oklab-contrast-not-filters.md) | Contrast derived in OKLab, gamut-capped | Accepted | A `contrast()` filter costs a fullscreen pass per frame and rotates accent hues | Low |
 | [0007](0007-reuse-yazi-btop-starship.md) | Reuse yazi, btop and zsh+starship | Accepted | charon and horus are ~90% theme and keymap; always behind a seam | Low per tool |
 | [0008](0008-layer-shell-rendering-stack.md) | `smithay-client-toolkit` + `tiny-skia` + `cosmic-text` | Accepted | Pure Rust, no GPU context for a 32px bar, real font fallback | **Medium** — a client rewrite |
-| [0009](0009-no-animation-budget.md) | No animations; the frame budget is a CI gate | Accepted | "Snappy" is five numbers, not an adjective | Low |
+| [0009](0009-no-animation-budget.md) | No animations; the frame budget is a CI gate | Accepted — theme-apply mechanism partially superseded by [0017](0017-immutable-theme-activation-generations.md) | "Snappy" is five numbers, not an adjective | Low |
 | [0010](0010-nix-flake-as-reference-build.md) | The Nix flake is the reference build | Accepted — Fedora baseline clauses partially superseded by [0015](0015-fedora-44-pre-alpha-baseline.md) | root flake plus tracked native distro packaging; a NixOS VM test boots the session | **Medium** |
 | [0011](0011-session-integration-contract.md) | The session entry owns the environment handshake | Accepted | Import into systemd **and** D-Bus before starting anything, or portals hang | Low — the requirement is not reversible |
 | [0012](0012-font-fallback-is-a-contract.md) | Font fallback is a contract | Accepted — guard pending | Glyph inventory, a startup probe, and an ASCII fallback for all 37 glyphs | Low |
@@ -33,7 +33,7 @@ Copy [`template.md`](template.md) to start a new one.
 | [0014](0014-local-agent-sdd-pilot-governance.md) | Local agent-SDD pilot records are tracked but non-authoritative | Accepted | Metadata-only checkpoints/evidence aid handoff; docs, GitHub and tests retain their existing authority | Low — remove pilot records and validator |
 | [0015](0015-fedora-44-pre-alpha-baseline.md) | Fedora 44 is the sole explicit pre-alpha Fedora baseline | Accepted — partially supersedes [0010](0010-nix-flake-as-reference-build.md) and [0013](0013-river-window-management-backend.md) for Fedora | One exact Fedora release and native River candidate, without implying RPM/session support | Low — accept a successor baseline and replace the single lane |
 | [0016](0016-packaged-helm-sdd-carries-git.md) | The Nix-installed `helm-sdd` carries Git in its own runtime closure | Accepted | Git is wrapped only for the local Git-backed validator, never the desktop session | Low — replace with a separately specified interface |
-| [0017](0017-immutable-theme-activation-generations.md) | Theme activation uses sealed immutable generations | Accepted | Launches pin a digest-bound sealed tree; pointer commits change future launches only | Medium — changes #22/#132 launcher and lifecycle seams |
+| [0017](0017-immutable-theme-activation-generations.md) | Theme activation uses sealed immutable generations | Accepted — partially supersedes [0005](0005-palette-toml-single-source.md) | Launches pin a digest-bound sealed tree; pointer commits change future launches only and never reload | Medium — changes #22/#132 launcher and lifecycle seams |
 
 All active decisions through 0013 were **ratified by the owner on 2026-08-28**,
 after the correction set tracked by #3. ADR 0015 was authorized by the owner
@@ -76,6 +76,7 @@ decision silently stopped being true:
 | 0006 | `color::tests::contrast_stops_at_the_gamut_boundary_instead_of_desaturating`, `color::tests::contrast_preserves_accent_hue` |
 | 0009 | `palette::tests::out_of_range_values_are_rejected_at_parse_time` (enforces `metrics.radius == 0`) |
 | 0012 | `glyphs::tests::a_bare_ascii_font_degrades_instead_of_drawing_tofu`; ratification also requires `palette::tests::empty_typography_fallback_is_rejected` to fail for an empty-only fixture and pass for the shipped palette |
+| 0017 | `generation::tests::g1_selected_old_generation_keeps_descriptor_pinned_bytes_after_new_commit`, `generation::tests::g5_invalid_current_refuses_without_creating_a_lease`, `generation::tests::g8_recovery_fails_closed_for_corrupt_missing_mismatched_and_special_pointers` |
 
 ADRs 0007, 0008, 0010, 0011 and 0013 depend on guards that land with their
 milestones; each names them as *planned* with the milestone attached. 0013's

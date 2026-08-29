@@ -155,7 +155,8 @@ available optimization.
 
 ## Failure modes
 
-From [PITFALLS.md](../PITFALLS.md), this component owns: "half-applied theme",
+From [PITFALLS.md](../PITFALLS.md), this component owns: "partial or mismatched
+theme generation becomes selectable",
 "colour written down twice", "contrast implemented as a filter", and
 "unreadable palette after a tweak". It contributes to "Flatpak apps ignore the
 theme", which is documented as a limit rather than fought.

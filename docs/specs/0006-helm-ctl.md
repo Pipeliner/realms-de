@@ -161,7 +161,7 @@ theme for free and no colour is written down twice
 | 3 | No session: the fixed endpoint remains absent or refused after SPEC 0007's bounded startup retry |
 | 4 | Protocol version mismatch at the handshake |
 | 5 | The session refused the command; derived from `Response::Error::kind` |
-| 6 | A filesystem or I/O failure while applying or diffing a theme. An apply not known to have committed is not reported as activated; diff never mutates state (SPEC 0011) |
+| 6 | A filesystem or I/O failure while applying or diffing a theme, including `OutcomeAmbiguous`. An apply not known to have committed is not reported as activated; diff never mutates state (SPEC 0011) |
 
 Code 1 is deliberately the same for "your palette is unreadable", "a doctor
 check failed" and "the theme is stale": all three mean *the command worked and
@@ -171,6 +171,41 @@ surprises people otherwise.
 
 `doctor` never exits 3. A missing session is one of the things it is there to
 report, not a reason for it to fail.
+
+#### `theme apply` publication outcomes
+
+The CLI uses the `GenerationPublicationOutcome` variant directly. It does not
+probe `current`, recover, retry, or translate an ambiguous result into success:
+
+| Outcome | Human stdout | Human stderr | Exit |
+|---|---|---|---|
+| `Committed(generation)` | `generation <id> selected for future launches` | empty | 0 |
+| `CommittedWithCleanupPending { generation, cause }` | `generation <id> selected for future launches` | `warning: generation <id> is durably selected for future launches; committed cleanup is pending: <cause>` | 0 |
+| `OutcomeAmbiguous { candidate, cause }` | empty | `theme apply failed: activation is unconfirmed for candidate <id>; inspect generation state before retrying: <cause>` | 6 |
+
+`<id>` is the validated lowercase generation identifier. In human output,
+`<cause>` is one JSON string literal produced by the same serializer as
+`--json`; this escapes quotes, backslashes, newlines, carriage returns, tabs,
+and other control characters and therefore cannot inject another diagnostic
+line. The cleanup-pending warning says the pointer is durably selected and only
+journal cleanup is uncertain. The ambiguous diagnostic deliberately uses
+`candidate` and `unconfirmed`, never `selected`, `active`, `current`, `applied`,
+or another success word.
+
+With `--json`, stdout is exactly one object in the field order shown and stderr
+is empty. The exit codes remain those above:
+
+```json
+{"status":"committed","generation":"<id>"}
+{"status":"committed-cleanup-pending","generation":"<id>","cause":"<cause>"}
+{"status":"outcome-ambiguous","candidate":"<id>","cause":"<cause>","activated":false}
+```
+
+Only the object matching the returned variant is emitted. JSON encoding, not
+string concatenation, supplies `<cause>`. `OutcomeAmbiguous` is a CLI failure
+even though it is an outcome variant: the filesystem state does not justify an
+activation claim. This mapping is local result handling, not a live-upgrade or
+wire-compatibility protocol.
 
 ### 3. `doctor`
 
@@ -417,6 +452,9 @@ Each row is one happy path and becomes one test.
 | B12 | Given `WAYLAND_DISPLAY` absent from the D-Bus activation environment, when `doctor` runs, then `env/wayland-display/dbus` fails within its 2 s deadline, prints the 25-second-hang symptom and the `dbus-update-activation-environment` remedy, and the command exits 1 | |
 | B13 | Given no session running and a font stack that covers ASCII only, when `doctor` runs, then the session checks are `skip` with a banner, `fonts/glyphs` warns with `Probe::summary()`'s wording, and it exits 0 | |
 | B14 | Given no session bus and no session running, when `doctor` runs, then the D-Bus and portal checks are `skip` and not `fail`, and it exits 0 | |
+| B15 | Given `theme apply` returns `Committed(generation)`, when the CLI reports it, then it exits 0 and reports exactly that generation as selected for future launches | |
+| B16 | Given `theme apply` returns `CommittedWithCleanupPending { generation, cause }`, when the CLI reports it, then it exits 0, reports exactly that generation as selected for future launches, and emits the safely escaped committed-cleanup warning | |
+| B17 | Given `theme apply` returns `OutcomeAmbiguous { candidate, cause }`, when the CLI reports it, then it exits 6, emits no human stdout, safely reports the candidate and unconfirmed activation, claims no success, and performs no recovery or retry | |
 
 ## Budgets
 

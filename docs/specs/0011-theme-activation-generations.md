@@ -228,6 +228,18 @@ any process signal/command fan-out.  Its result reports the
 `OutcomeAmbiguous` is not reported as an activated theme.  Existing mutable
 target files are neither consulted for equality nor written by this path.
 
+The CLI maps those outcomes without interpretation. `Committed(generation)` is
+exit 0 and reports that generation as selected for future launches.
+`CommittedWithCleanupPending { generation, cause }` is also exit 0 because the
+pointer is durably committed; it reports the selected generation and a warning
+that committed-journal cleanup remains pending. `OutcomeAmbiguous { candidate,
+cause }` is exit 6, leaves stdout empty in human mode, and reports only that
+activation is unconfirmed for the candidate; it must not call the candidate
+selected, active, current, or successfully applied and must not run recovery or
+retry automatically. SPEC 0006 fixes the exact human and JSON representations,
+including safe escaping of the diagnostic cause. This result mapping neither
+adds a live-upgrade mechanism nor preserves a control-socket wire contract.
+
 Before publication, the apply boundary holds only safe input locators and opens
 the configuration root.  It creates or opens `helm/generated` only
 descriptor-relatively: each existing component is opened with `O_NOFOLLOW`,
@@ -313,6 +325,7 @@ candidate with a partially validated or mixed generation.
 | G9 | Given concurrent applies, when both are accepted, then they serialize from input capture through pointer durability and each receipt identifies its committed generation. |
 | G10 | Given a valid current generation and a candidate whose normalized output set differs, when `theme diff` runs, then it reports only lexicographically sorted `added`, `removed`, and `byte-different` output paths after fully validating current, and performs no control initialization, recovery, lease, GC, publication, output write, pointer switch, or reload. |
 | G11 | Given a successful apply or rollback pointer commit, when existing processes continue running, then Helm sends no signal, command, or notification and only later launches may select the newly current generation. |
+| G12 | Given `Committed`, `CommittedWithCleanupPending`, or `OutcomeAmbiguous`, when `helm ctl theme apply` reports the result, then the first two exit 0 and name the selected future-launch generation (with a cleanup warning for the second), while the ambiguous result exits 6, claims no activation, safely reports its candidate/cause, and performs no automatic recovery or retry. |
 
 ## Boundaries
 

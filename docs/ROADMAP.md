@@ -54,13 +54,13 @@ parallel with incompatible ideas of the same thing.
 ## M1 — Theming pipeline
 
 **Goal.** Make `palette.toml` the only place a colour is written down, and make
-one edit to it reach every themed surface without a relogin.
+one edit publish a coherent sealed theme generation for future launches.
 
 **Workstreams**
 
-- `helm-theme`: template engine, the template set in `configs/templates/`,
-  atomic writes (render to a temporary file, `rename(2)`, then reload), and the
-  reload fan-out.
+- `helm-theme`: template engine, the template set in `configs/templates/`, and
+  validated immutable generation publication with a future-launch-only
+  `current` pointer; no pointer-switch reload.
 - Templates for the surfaces the MVP needs: `gtk.css` for GTK 3 and 4,
   libadwaita named colours, `qt6ct` colour scheme, the terminal's 16-colour ANSI
   scheme, `yazi`, `btop`, `starship`, `fuzzel`.
@@ -69,12 +69,13 @@ one edit to it reach every themed surface without a relogin.
 - A CI check that no colour literal exists outside `palette.toml`.
 
 **Exit criterion.** Change one accent in `palette.toml`, run
-`helm ctl theme apply`, and watch GTK, the terminal, yazi and btop all change —
-in under 150 ms, with no half-applied intermediate state.
+`helm ctl theme apply`, and select in under 150 ms one sealed generation whose
+normalized outputs all carry that change. Existing processes stay pinned and
+future launches select the new generation.
 
 **Unblocks.** M2's bar (which reads the same palette), and the "one coherent
-theme" line of the MVP. Also closes two rows of the failure register: the
-half-applied theme, and the colour written down twice.
+theme" line of the MVP. Also closes two rows of the failure register: a partial
+or mismatched selectable generation, and colour written down twice.
 
 ---
 

@@ -1,8 +1,15 @@
 # ADR 0009 — No animations in v1, and "snappy" is a number
 
-- **Status:** Accepted (ratified 2026-08-28); see Reversal
+- **Status:** Accepted (ratified 2026-08-28); theme-apply mechanism partially
+  superseded by [ADR 0017](0017-immutable-theme-activation-generations.md)
 - **Deciders:** helm maintainers
-- **Supersedes / Superseded by:** —
+- **Supersedes / Superseded by:** ADR 0017 supersedes only the per-file
+  replacement mechanism in the theme-apply budget row; the < 150 ms budget
+  remains active and now includes sealed generation publication.
+
+> **Supersession notice (2026-08-29):** The table's per-file replacement text
+> is historical. Current apply renders, validates, seals, fsyncs, and selects one
+> immutable generation for future launches without reload.
 
 ## Context
 
