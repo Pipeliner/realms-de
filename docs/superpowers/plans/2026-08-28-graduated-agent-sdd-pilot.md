@@ -4,7 +4,7 @@
 
 **Goal:** Add a local, metadata-only checkpoint and evidence pilot without creating a second product-truth, task-truth, or hosted-memory system.
 
-**Architecture:** Existing specs/ADRs, GitHub issues, tests, and CI retain their present authority. A small internal Rust CLI validates and writes only tracked task records under `.agent/work/<github-issue>/`; the first pilot supports `probe`, `spike`, and `prototype` only. Beads stays untouched and Basic Memory remains manual/local.
+**Architecture:** Existing specs/ADRs, GitHub issues, tests, and CI retain their present authority. A small internal Rust CLI reads and reports on tracked task records under `.agent/work/<github-issue>/`; the first pilot supports `probe`, `spike`, and `prototype` only. Beads stays untouched and Basic Memory remains manual/local.
 
 **Tech Stack:** Rust 2021/MSRV 1.85, existing workspace serde/serde_json/toml/clap dependencies, Markdown.
 
@@ -55,10 +55,10 @@
 **Files:**
 - Modify: root `Cargo.toml`.
 - Create: `crates/helm-agent-sdd/` with library, `helm-sdd` binary, and tests.
-- Create: tracked `.agent/work/` fixture records.
+- Create: crate-local record templates materialized into temporary clean Git repositories by tests.
 
-- [ ] Write failing tests for checkpoint round-trip, duplicate evidence IDs, invalid lifecycle transition, stale commit evidence, and prohibited evidence fields.
-- [ ] Implement `checkpoint`, `rehydrate`, `schema-check`, `evidence-check`, `gate`, and `hygiene-check`.
+- [ ] Write failing tests for duplicate evidence IDs, invalid lifecycle transition, stale commit evidence, prohibited evidence fields, and exact report output.
+- [ ] Implement only read-only `gate` and `promote --dry-run`; their validation subsumes schema, evidence and hygiene checks.
 - [ ] Run focused tests, then the workspace trio, and record test names in the governance specification.
 - [ ] Commit the crate and fixtures.
 

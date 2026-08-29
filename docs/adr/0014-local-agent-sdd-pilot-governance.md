@@ -74,8 +74,8 @@ commands, IDs and Git revisions cannot cover.
 
 ## Guard
 
-*Planned (#120):* `helm-sdd schema-check`, `evidence-check`, `gate`, and
-`hygiene-check` fixtures reject malformed records, raw-output-like fields,
+*Planned (#120):* read-only `helm-sdd gate` and `helm-sdd promote --dry-run`
+fixtures reject malformed records, raw-output-like fields,
 stale evidence and every transition beyond report-only pilot scope. Until then,
 review of this spec is the guard; no tool claims to enforce it yet.
 
