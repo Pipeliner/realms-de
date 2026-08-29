@@ -28,6 +28,14 @@ Kernel release after process death is stale-writer recovery; a live lock is
 never stolen or replaced by deleting its pathname. The launcher then passes the selected generation path explicitly
 to target dependency evaluation.
 
+Candidate SPEC 0012 defines one conservative extension to lease reclamation. A
+process lease may be atomically transferred before exec into a canonical
+lifecycle lease for a verified scope or process group. Generic generation GC
+validates and treats that transferred lease as protected; it does not apply the
+ordinary PID-staleness removal rule. Only lifecycle reconciliation may unlink
+it after proof of ownership emptiness. This paragraph becomes implementation
+authority only when SPEC 0012 is Accepted.
+
 No read or write follows symlinks; all operations are descriptor-relative below
 Helm's owned generated subtree. `current` cannot name absent, staging, malformed
 or digest-mismatched content. An apply that cannot finish before pointer commit
@@ -331,9 +339,15 @@ candidate with a partially validated or mixed generation.
 
 This specification does not make arbitrary user configuration Helm-owned and
 does not settle systemd/no-systemd teardown, scope adoption, D-Bus ownership,
-or target package sources. Those are #117, #132, #133 and #134. A no-op apply
-optimization and compatibility with the retired mutable apply result or any
-existing control-socket wire message are not promised.
+or target package sources. Candidate
+[SPEC 0012](0012-activation-launch-lifecycle.md) is the only proposed extension
+for #132: it consumes a process selection into a durable lifecycle lease before
+exec, forbids drop-based release after transfer, and permits release only after
+verified scope/process-group emptiness. Until SPEC 0012 is Accepted, that
+extension is not implementation authority. #117, #133 and #134 retain their
+existing boundaries. A no-op apply optimization and compatibility with the
+retired mutable apply result or any existing control-socket wire message are
+not promised.
 
 Live upgrade is also outside this specification. #22 may define only a future
 generation-aware owned-process protocol which proves the generation selected by

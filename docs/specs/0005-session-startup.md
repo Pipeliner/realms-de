@@ -9,6 +9,10 @@
   [ADR 0010](../adr/0010-nix-flake-as-reference-build.md)
 - **Supersedes / Superseded by:** —
 - **Implements:** ADR 0011's packager checklist, steps 1–9
+- **M1 lifecycle reconciliation:** Candidate
+  [SPEC 0012](0012-activation-launch-lifecycle.md) governs the session claim,
+  profile-launch ownership, target stop propagation and proof-before-release
+  clauses only. It does not accept this M3 draft or its open questions.
 
 > Written before the code, as S14 requires. The **Test** column is deliberately
 > empty. Almost every row here is an integration test that cannot run in a
@@ -86,6 +90,8 @@ NixOS session discovery.
 | `helm-wm` | The **window manager and session daemon** binary (crate `helm-session`, ADR 0003). Under river it *is* the window manager. |
 | `helm-session.target` | The systemd user target that anchors everything needing a display. |
 | `helm-wm.service` | The unit that supervises `helm-wm`. |
+| launcher helper | A fixed, target-owned session UI that requests a launch. |
+| profile launch | The separately owned user application; never a target member. |
 
 The four-way collision between these names is a real hazard for readers and is
 raised as **OQ-4**.
@@ -93,6 +99,12 @@ raised as **OQ-4**.
 ### 1. The startup sequence
 
 The order is the contract. Each step below says what breaks if it moves.
+
+Before starting river, publishing any per-UID manager/bus environment, starting
+the target, or admitting a profile launch, the entry must first durably acquire
+SPEC 0012's single active session claim. A competing same-UID claim fails
+without any of those side effects. This prerequisite does not settle #133's
+environment ownership/restoration semantics.
 
 #### Step 1 — Identity, before anything is started
 
@@ -371,8 +383,8 @@ is guaranteed installed on any of the three targets. It connects to
 | Unit | `[Unit]` | `[Service]` | `[Install]` |
 |---|---|---|---|
 | `helm-session.target` | `BindsTo=graphical-session.target`, `Before=graphical-session.target`, `Wants=graphical-session-pre.target`, `After=graphical-session-pre.target` | — | **none** |
-| `helm-wm.service` | `PartOf=graphical-session.target`, `After=graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=helm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=helm-session.target` |
-| `helm-bar.service` | `PartOf=graphical-session.target`, `After=graphical-session.target helm-wm.service`, `Wants=helm-wm.service`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5` | `Type=exec`, `Restart=on-failure`, `RestartSec=1`, `TimeoutStopSec=5`, `Slice=app.slice` | `WantedBy=helm-session.target` |
+| `helm-wm.service` | `PartOf=helm-session.target graphical-session.target`, `After=graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=helm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=helm-session.target` |
+| `helm-bar.service` | `PartOf=helm-session.target graphical-session.target`, `After=graphical-session.target helm-wm.service`, `Wants=helm-wm.service`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5` | `Type=exec`, `Restart=on-failure`, `RestartSec=1`, `TimeoutStopSec=5`, `Slice=app.slice` | `WantedBy=helm-session.target` |
 
 The reasoning behind each relationship, because these are easy to copy wrongly:
 
@@ -385,8 +397,10 @@ The reasoning behind each relationship, because these are easy to copy wrongly:
   real ordering barrier rather than a coincidence of an empty target activating
   quickly. This is systemd's documented shape for a session unit
   (`systemd.special(7)`).
-- **`PartOf=`, never `BindsTo=`, on the clients.** `PartOf` propagates *stop*
-  downwards: ending the session stops the clients. `BindsTo` would additionally
+- **`PartOf=`, never `BindsTo=`, on session helpers.** Helpers name both
+  `helm-session.target` and `graphical-session.target`: the first makes an
+  explicit Helm-target stop propagate, while the second retains graphical
+  session integration. `BindsTo` would additionally
   propagate *failure* upwards, so a crashed bar would take the session with it —
   which is a listed pitfall, not a design.
 - **`Wants=`, never `Requires=`, from the target to the clients.** A bar that
@@ -535,12 +549,13 @@ by `helm-session --abort` (§2). The whole sequence has a hard deadline of 15
 seconds, after which the entry proceeds regardless — teardown may never be the
 thing that hangs a logout.
 
-1. **Stop the target first.** `systemctl --user stop helm-session.target`.
-   systemd stops `WantedBy` units in reverse dependency order, so the bar (which
-   is `After=helm-wm.service`) stops before the window manager. That order
-   matters: a bar still drawing against a departed window manager is a burst of
-   errors in the journal at exactly the moment the user is trying to read why
-   their session ended.
+1. **Freeze launch admission, then stop the target.** Durably enter SPEC 0012's
+   `admission-frozen` state before
+   `systemctl --user stop helm-session.target`. `PartOf=helm-session.target`,
+   not `WantedBy=`, propagates that stop to helpers. Their `After=` ordering is
+   reversed on stop, so the bar stops before the window manager. Verify every
+   helper inactive before clearing the environment. Profile-launch scopes have
+   no target dependency and remain untouched.
 2. **A client that refuses to exit** is in its unit's cgroup and is killed:
    `SIGTERM`, then `SIGKILL` after `TimeoutStopSec` (5 s for the bar, 10 s for
    the window manager). No client can extend the teardown beyond those bounds.
@@ -648,7 +663,7 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A11 | Given a stale window manager already holding river's window-management global, when `helm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed naming the holding process | VM | |
 | A12 | Given a running session, when `helm-bar` is killed, then it is restarted, and `helm-session.target` and `helm-wm.service` both stay `active` throughout | VM | |
 | A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the running portal chose the backends named in `helm-portals.conf` | VM | |
-| A14 | Given a session that is ending, when teardown runs, then the target is stopped before the environment is cleared, a client that ignores `SIGTERM` is killed after its `TimeoutStopSec`, the whole teardown completes within 15 s, and a second login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
+| A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
 | A16 | Given a real laptop, when the lid is closed, then the session locks within the configured delay and the screen is blank on reopen until authentication | **HARDWARE** *(blocked on OQ-1)* | |
 
