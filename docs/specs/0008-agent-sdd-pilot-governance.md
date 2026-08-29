@@ -7,9 +7,9 @@
 
 ## Purpose and authority
 
-This specification defines a narrow, planned local pilot for resumable agent
-work. It defines records that future `helm-sdd` may read and report on; it
-creates no product feature or runtime behaviour.
+This specification defines a narrow local pilot for resumable agent work. It
+defines records that `helm-sdd` reads and reports on; it creates no product
+feature or runtime behaviour.
 
 | Domain | Authority | Pilot role |
 |---|---|---|
@@ -171,8 +171,13 @@ All evidence references name sibling JSONL IDs.
 
 ## JSONL evidence schema, provenance and retention boundary
 
-`evidence.jsonl` is UTF-8 JSON Lines: one object per line, no blank lines and
-unique IDs. Absent optional fields are omitted, never `null`. Every evidence
+`evidence.jsonl` is the complete **current evidence snapshot** for one
+record-carrier commit. Refreshing a record replaces the complete file only with
+deliberately recaptured evidence at the new carrier parent; it never carries an
+old-revision entry forward as current evidence. Prior snapshots remain in
+ordinary Git history. Within one snapshot it is UTF-8 JSON Lines: one object
+per line, no blank lines and unique IDs. Absent optional fields are omitted,
+never `null`. Every evidence
 object, including a decision, requires `id`, `ts`, `kind` and `git_head`; its
 Git ID must resolve to a commit. IDs are `ev-` plus a decimal suffix containing
 at least one nonzero digit;
@@ -205,9 +210,10 @@ evidence IDs. JSON numbers must be integral and arrays may contain only the
 declared element type. A validation failure is represented only by the
 prescribed safe obligation code/status report.
 
-Tracked records are retained in ordinary Git history. Deleting a record stops
-future use but does not reliably erase historical commits or clones; therefore
-sensitive material is not recoverably retractable and must never be recorded.
+Tracked records, including superseded evidence snapshots, are retained in
+ordinary Git history. Replacing or deleting a record stops future use but does
+not reliably erase historical commits or clones; therefore sensitive material
+is not recoverably retractable and must never be recorded.
 
 File observations and command results are commit-scoped. A passing assessment
 requires a clean repository: `git status --porcelain=v1 --untracked-files=all`
@@ -230,7 +236,7 @@ rerun before that record supplies evidence.
 
 ## Report-only gate contract
 
-Future #120 commands select one record by `--issue <positive-decimal>`:
+The #120 commands select one record by `--issue <positive-decimal>`:
 
 ```text
 helm-sdd gate --issue <n> --from <maturity> --to <maturity>
@@ -305,10 +311,10 @@ approval or turn an observation into a normative requirement.
 
 ## Acceptance criteria
 
-#120 owns implementation and fixture tests. Until it lands these are
-requirements, not existing-tool claims.
+#120 supplied the implementation and fixture tests. These are requirements and
+existing-tool claims.
 
-| # | Given / When / Then | Planned verification |
+| # | Given / When / Then | Verification |
 |---|---|---|
 | A1 | A valid `probe → spike` record is assessed from a clean record-carrier commit with initial regular-blob record files | Exit 0 and exact pass JSON without tracked-file changes | `valid_gate_emits_complete_canonical_pass_report_without_writing`; `clean_gate_does_not_refresh_a_stale_git_index` |
 | A2 | Every scalar/table/array boundary, unknown field, duplicate or zero-only evidence ID, bad reference/timestamp/Git object, mismatched issue directory, cross-revision decision or decision cycle is supplied | Exit 3 identifies only safe metadata | `schema_rejects_every_checkpoint_scalar_enum_and_array_table_boundary`; `schema_rejects_every_evidence_scalar_and_collection_boundary`; `duplicate_json_object_members_are_schema_invalid_even_when_the_survivor_is_safe` |
@@ -317,8 +323,9 @@ requirements, not existing-tool claims.
 | A5 | A permitted transition is assessed with a selected issue and matching maturity fields | Stable complete JSON and no writes | `promote_dry_run_output_is_byte_identical_to_gate_and_read_only`; `spike_to_prototype_requires_limitations_and_accepts_file_observation` |
 | A6 | Candidate/production is requested | Exit 4 unsupported and no writes | `unsupported_targets_and_invalid_edges_have_exact_reports_and_do_not_write` |
 | A7 | An accepted reference is missing, non-Accepted, malformed, or differs between record commit and HEAD | Exit 3 resolves only current HEAD accepted documents | `accepted_reference_rejects_malformed_missing_ambiguous_or_nonaccepted_documents`; `accepted_reference_uses_the_document_at_assessment_head_not_its_parent`; `accepted_reference_requires_a_direct_child_governance_document` |
-| A8 | Future pilot implementation is reviewed | No daemon/hook/CI/cloud/embedding/Beads/Basic-Memory integration exists | #120 review/diff |
+| A8 | The pilot implementation is reviewed | No daemon/hook/CI/cloud/embedding/Beads/Basic-Memory integration exists | #120 review/diff |
 | A9 | Malformed CLI, absent record and each first step-2 failure is assessed | Exact specified compact invalid JSON, exit 3 and no writes | `malformed_cli_and_missing_record_reports_are_exact_and_read_only`; `every_step_two_failure_has_exact_precedence_and_safe_output` |
+| A10 | A record is refreshed after a non-record commit with a complete newly recaptured evidence snapshot at the new carrier parent | The refreshed carrier passes; any snapshot retaining stale evidence cannot pass, and an otherwise schema- and provenance-valid snapshot retaining a stale non-decision entry reports `fresh_evidence` unmet | `refreshed_replacement_carrier_requires_a_complete_current_evidence_snapshot`; #121 two real measured carriers |
 
 ## Open questions
 

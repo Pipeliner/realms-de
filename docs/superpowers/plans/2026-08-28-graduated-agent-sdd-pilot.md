@@ -69,6 +69,6 @@
 - Modify: the skills index and loop memory with concise invocation/measurement guidance.
 
 - [ ] Add bootstrap, checkpoint, and evidence-capture procedures with positive and negative triggers.
-- [ ] Use the records during two real Symphony iterations after #3 closes.
+- [ ] Use refreshable current evidence snapshots during two real Symphony iterations after #3 closes.
 - [ ] Record recovery observations; add neither CI nor external tooling until review of those measurements.
 - [ ] Commit procedure documentation.

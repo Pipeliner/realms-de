@@ -336,6 +336,54 @@ fn stale_evidence_makes_fresh_evidence_unmet() {
     assert_eq!(o.status.code(), Some(2));
     assert!(text(o).contains("\"code\":\"fresh_evidence\",\"status\":\"unmet\""));
 }
+
+#[test]
+fn refreshed_replacement_carrier_requires_a_complete_current_evidence_snapshot() {
+    let r = repo();
+    let first_parent = head(r.path());
+    valid_record(r.path());
+    let initial = gate(r.path());
+    assert_eq!(initial.status.code(), Some(0));
+    assert_eq!(
+        text(initial),
+        complete_report("pass", "met", "met", "met", "met", "met")
+    );
+
+    fs::write(r.path().join("README"), "new parent\n").unwrap();
+    git(r.path(), &["add", "README"]);
+    git(r.path(), &["commit", "-m", "non-record change"]);
+    let non_record = head(r.path());
+
+    write_record(
+        r.path(),
+        CHECKPOINT.replace("{head}", &non_record),
+        EVIDENCE.replace("{head}", &non_record),
+    );
+    let refreshed = gate(r.path());
+    assert_eq!(refreshed.status.code(), Some(0));
+    assert_eq!(
+        text(refreshed),
+        complete_report("pass", "met", "met", "met", "met", "met")
+    );
+
+    git(r.path(), &["checkout", "-b", "stale-snapshot", &non_record]);
+    let stale_evidence = format!(
+        "{}{{\"id\":\"ev-002\",\"ts\":\"2026-08-29T12:01:00Z\",\"kind\":\"file-observation\",\"path\":\"README\",\"lines\":\"1\",\"git_head\":\"{non_record}\",\"claim\":\"The refreshed fixture exists.\"}}\n",
+        EVIDENCE.replace("{head}", &first_parent)
+    );
+    write_record(
+        r.path(),
+        CHECKPOINT.replace("{head}", &non_record),
+        stale_evidence,
+    );
+    let stale = gate(r.path());
+    assert_eq!(stale.status.code(), Some(2));
+    assert_eq!(
+        text(stale),
+        complete_report("unmet", "met", "met", "unmet", "met", "met")
+    );
+}
+
 #[test]
 fn dirty_workspace_is_unmet() {
     let r = repo();

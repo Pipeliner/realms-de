@@ -276,7 +276,7 @@ things:
 
 ```
 helm doctor — helm-ctl 0.1.0, protocol 1
-2026-08-26T14:32:11+01:00 · Fedora 41 · kernel 6.12.4 · river 0.4.1 · helm-wm 0.1.0
+2026-08-26T14:32:11+01:00 · Fedora 44 · kernel 6.12.4 · river 0.4.1 · helm-wm 0.1.0
 
 session
   ok    socket            /run/user/1000/helm/ctl.sock — helm-wm 0.1.0

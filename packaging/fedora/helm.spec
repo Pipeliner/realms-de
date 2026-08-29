@@ -1,4 +1,4 @@
-# helm — Fedora 41+ spec (ARCHITECTURE.md §5).
+# helm — Fedora 44 pre-alpha spec (ADR 0015 / SPEC 0009).
 #
 # PRE-ALPHA (0.1.0). The Cargo workspace contains one crate, helm-core, and it
 # is a library: this package installs NO helm binaries, because none exist yet.
@@ -20,17 +20,10 @@
 # dist-git after a formal review. Until then, build from a local tarball:
 #   git archive --format=tar.gz --prefix=helm-0.1.0/ -o ~/rpmbuild/SOURCES/helm-0.1.0.tar.gz HEAD
 #
-# NEEDS-HUMAN (vendored river): river 0.4.x is the compositor helm drives over
-# river-window-management-v1, and it is NOT built by this spec. Fedora's own
-# river package version was not verifiable from the build container; F41-era
-# Fedora is likely to carry river 0.3.x or river-classic, neither of which
-# implements the protocol. Options: (a) a separate helm-river spec building the
-# upstream tag (https://codeberg.org/river/river) with zig 0.16 and wlroots
-# 0.20 — this puts zig into the packaging pipeline, which is accepted, but no
-# zig build invocation is written here because none has been verified;
-# (b) require Fedora's river once it reaches 0.4.x; (c) ship a COPR of river
-# 0.4.x. The Requires below accepts either name so the decision is not blocked
-# by this file.
+# Fedora 44's official repositories resolved river-0.4.8-1.fc44 during the
+# 2026-08-29 review. That dated package observation justifies the native
+# protocol-generation floor below; it is not evidence that a Helm graphical
+# session has run successfully with that package.
 
 %global helm_summary Keyboard-first, gapless-tiling Wayland desktop environment
 
@@ -44,10 +37,9 @@ License:        MIT OR Apache-2.0
 URL:            https://github.com/pipeliner/realms-de
 Source0:        %{name}-%{version}.tar.gz
 
-# helm's MSRV is 1.85 (Cargo.toml). Fedora 41's rust has moved past 1.85
-# through updates, but that was NOT verifiable from the build container — the
-# BuildRequires below is the check: dnf refuses the build rather than failing
-# halfway through cargo if the shipped rust is older.
+# helm's MSRV is 1.85 (Cargo.toml). The BuildRequires below is the mechanical
+# check: dnf refuses the build rather than failing halfway through cargo if the
+# shipped Rust compiler is older.
 BuildRequires:  rust >= 1.85
 BuildRequires:  cargo
 BuildRequires:  systemd-rpm-macros
@@ -58,9 +50,9 @@ BuildRequires:  make
 # --locked so it can be built today from a git checkout; switching to the
 # macros is mechanical and does not change anything below %%files.
 
-# The compositor. Either the vendored, pinned build or a distro river new
-# enough to speak river-window-management-v1 — 0.3.x and river-classic do not.
-Requires:       (helm-river >= 0.4.0 or river >= 0.4.0)
+# Fedora's native compositor candidate. The lower bound is the
+# river-window-management-v1 generation boundary, not a tested-session claim.
+Requires:       river >= 0.4.0
 # The two halves of the session handshake. Without dbus the activation
 # environment cannot be updated and portals hang; without systemd the user
 # units never start.
@@ -222,6 +214,10 @@ cargo test --release --locked --workspace
 # that is the guard that would fail if this claim regressed.
 
 %changelog
+* Sat Aug 29 2026 helm contributors <helm-maintainers@helm.invalid> - 0.1.0-1
+- Correct the pre-alpha baseline to Fedora 44 and use Fedora's native
+  river >= 0.4.0 candidate; runtime/session compatibility remains unverified.
+
 * Wed Aug 26 2026 helm contributors <helm-maintainers@helm.invalid> - 0.1.0-1
 - Initial packaging skeleton: session entry, systemd user units, portal policy
   and palette. No helm binaries yet (M1-M2).

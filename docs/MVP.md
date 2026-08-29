@@ -23,7 +23,7 @@ does not serve it waits — however good it would look in a screenshot.
 | 9 | Shell: thoth | zsh + starship, `nav@caldera :: 𓂃%` | `configs/zsh` |
 | 10 | One coherent theme across GTK, Qt and TUIs | The difference between a DE and a pile of programs | `helm-theme` + `helm-ctl theme apply` |
 | 11 | Portals work: FileChooser, ScreenCast, **Settings**, and **Inhibit routed to `none`** | Browsers and Electron apps are non-negotiable in a work week. Settings is what stops every GTK4 and Flatpak app rendering light; Inhibit must be `none` or the gtk backend claims success and the screen blanks mid-call | `configs/portal` + ADR 0011 |
-| 12 | Install on NixOS, Ubuntu and Fedora, with a vendored pinned river | The stated targets | `packaging/` |
+| 12 | Install on NixOS, Ubuntu and Fedora with River 0.4-compatible, target-specific packaging; Fedora uses its official native candidate | The stated targets | `packaging/` |
 | 13 | `helm ctl doctor` | Tells the user what is wrong before they file a bug | `helm-ctl` |
 
 ## Out — deliberately, for now

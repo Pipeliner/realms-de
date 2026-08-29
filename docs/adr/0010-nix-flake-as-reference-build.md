@@ -2,7 +2,9 @@
 
 - **Status:** Accepted (ratified 2026-08-28); see Reversal
 - **Deciders:** helm maintainers
-- **Supersedes / Superseded by:** —
+- **Supersedes / Superseded by:** Fedora 41-or-later baseline clauses and the
+  Fedora part of Decision 7 are superseded by
+  [ADR 0015](0015-fedora-44-pre-alpha-baseline.md); all other clauses remain active
 
 ## Context
 
