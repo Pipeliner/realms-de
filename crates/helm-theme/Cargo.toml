@@ -13,6 +13,7 @@ helm-core = { workspace = true }
 thiserror = { workspace = true }
 rustix = { workspace = true }
 sha2 = "0.10"
+getrandom = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
