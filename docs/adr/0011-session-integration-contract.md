@@ -2,7 +2,10 @@
 
 - **Status:** Accepted (ratified 2026-08-28); see Reversal
 - **Deciders:** helm maintainers
-- **Supersedes / Superseded by:** —
+- **Supersedes / Superseded by:** Fedora-specific River-vendoring premise in
+  the lock-screen discussion superseded by
+  [ADR 0015](0015-fedora-44-pre-alpha-baseline.md); Ubuntu and Nix remain
+  governed by ADR 0010/0013.
 
 ## Context
 
@@ -216,10 +219,14 @@ waylock directly, gtklock via the `gtk-session-lock-0` library.
   `staging/ext-session-lock/ext-session-lock-v1.xml` — reportedly since 1.7.
   Describing it as an X11-era holdover is no longer accurate. It remains a
   weaker fit than the two below on theming, not on safety.
-- **The objection to waylock is void.** It was rejected here for being "Zig, a
-  toolchain we otherwise do not have". [ADR 0013](0013-river-window-management-backend.md)
-  vendors a pinned Zig river in every package, so we already pay that cost. The
-  objection died with ADR 0002 and this section simply had not caught up.
+- **The former waylock objection was conditional on River packaging.** ADR
+  0013 originally described a pinned Zig River in every package, so its
+  universal model removed the "toolchain we otherwise do not have" objection.
+  [ADR 0015](0015-fedora-44-pre-alpha-baseline.md) supersedes that premise only
+  for the Fedora 44 pre-alpha baseline, which uses Fedora's native River
+  candidate: the Zig cost must therefore be reconsidered for Fedora. Ubuntu
+  and Nix retain their ADR 0010/0013 source decisions, so the objection remains
+  removed there. This correction does not choose a locker.
 
 ### The two candidates
 
@@ -230,7 +237,7 @@ waylock directly, gtklock via the `gtk-session-lock-0` library.
 | Attack surface | Very small: seven source files and a PAM path | GTK, its theme machinery, and a plugin system |
 | Theming | Four flags, `-init-color`, `-input-color`, `-input-alt-color`, `-fail-color`, all `0xRRGGBB` — which `Rgb::hex_bare()` already emits, so it themes from `palette.toml` with no patch and no template | Themed by the `gtk.css` we already generate (ADR 0005), including type and layout, at no extra cost |
 | Visual fidelity | Colour only. No clock, no text, no type. The lock screen will not look like helm | The lock screen can genuinely look like helm |
-| Packaging | One more Zig build, on a toolchain we now carry anyway | An extra library, `gtk-session-lock-0`, on three distros |
+| Packaging | Ubuntu/Nix: one more Zig build, on a toolchain already carried under ADR 0013. Fedora: the native-River baseline in ADR 0015 means the Zig cost must be re-evaluated. | An extra library, `gtk-session-lock-0`, on three distros |
 
 Writing our own (`helm-ward`) stays out of scope: getting a lock screen wrong is
 the worst class of bug in a desktop. Not before M6, if ever.
@@ -242,14 +249,15 @@ the worst class of bug in a desktop. Not before M6, if ever.
 from correct facts about the lock protocol, so the split is a genuine trade
 rather than a mistake by either.
 
-**I find the waylock argument stronger, but not for the reason it gives.**
-Removing the Zig objection does not make waylock right; it only removes the
-reason this ADR had rejected it. The real trade is attack surface against
-visual fidelity, on the one surface in the desktop that stands between a locked
-laptop and its contents. On that surface I would spend fidelity to buy a smaller
-attack surface, and I would put the locker on ADR 0005's published list of
-things theming does not reach — a list that already exists and already tells
-users the truth about libadwaita geometry and CSD shapes.
+**I find the waylock argument stronger, but not for the reason it gives.** For
+Ubuntu and Nix, removing the Zig objection does not make waylock right; it only
+removes the reason this ADR had rejected it. Fedora must reconsider that cost
+under ADR 0015 before applying the same analysis. The real trade is attack
+surface against visual fidelity, on the one surface in the desktop that stands
+between a locked laptop and its contents. On that surface I would spend fidelity
+to buy a smaller attack surface, and I would put the locker on ADR 0005's
+published list of things theming does not reach — a list that already exists and
+already tells users the truth about libadwaita geometry and CSD shapes.
 
 The strongest case against my own position, and it is not weak: `docs/MVP.md`
 defines success as using helm as your only desktop for a week, and a user locks
