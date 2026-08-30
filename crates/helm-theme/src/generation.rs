@@ -118,6 +118,29 @@ struct LeaseRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum ParsedLeaseRecord {
+    Process(LeaseRecord),
+    Lifecycle(LifecycleLeaseRecord),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LifecycleLeaseRecord {
+    generation: GenerationId,
+    launch: GenerationId,
+    pid: u32,
+    start_time: u64,
+    boot_id: String,
+    owner_uid: u32,
+    owner_kind: LifecycleOwnerKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LifecycleOwnerKind {
+    SystemdScope,
+    ProcessGroup,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PublicationOrder {
     next_sequence: u64,
     sequences: BTreeMap<GenerationId, u64>,
@@ -1063,22 +1086,31 @@ impl GenerationStore {
                     continue;
                 }
             };
-            let Ok(record) = LeaseRecord::parse(&raw) else {
+            let Ok(record) = ParsedLeaseRecord::parse(&raw) else {
                 uncertain_lease = true;
                 continue;
             };
-            match record.liveness() {
-                LeaseLiveness::Live => {
-                    live_generations.insert(record.generation);
-                }
-                LeaseLiveness::Stale => stale_leases.push(name.to_owned()),
-                LeaseLiveness::Uncertain => {
+            match record {
+                ParsedLeaseRecord::Process(record) => match record.liveness() {
+                    LeaseLiveness::Live => {
+                        live_generations.insert(record.generation);
+                    }
+                    LeaseLiveness::Stale => stale_leases.push(name.to_owned()),
+                    LeaseLiveness::Uncertain => {
+                        uncertain_lease = true;
+                        live_generations.insert(record.generation);
+                    }
+                },
+                ParsedLeaseRecord::Lifecycle(record) => {
                     uncertain_lease = true;
                     live_generations.insert(record.generation);
                 }
             }
         }
         drop(leases);
+        if uncertain_lease {
+            return Ok((report, live_generations, true));
+        }
         for lease in stale_leases {
             match unlinkat(&self.leases.fd, lease.as_str(), AtFlags::empty()) {
                 Ok(()) => {
@@ -1924,6 +1956,105 @@ impl LeaseRecord {
     }
 }
 
+impl ParsedLeaseRecord {
+    fn parse(raw: &[u8]) -> std::result::Result<Self, String> {
+        match raw.split(|byte| *byte == b'\n').next() {
+            Some(b"helm-generation-lease-v1") => Ok(Self::Process(LeaseRecord::parse(raw)?)),
+            Some(b"helm-generation-lifecycle-lease-v1") => {
+                Ok(Self::Lifecycle(LifecycleLeaseRecord::parse(raw)?))
+            }
+            _ => Err("unsupported generation lease version".into()),
+        }
+    }
+}
+
+impl LifecycleLeaseRecord {
+    fn parse(raw: &[u8]) -> std::result::Result<Self, String> {
+        let text = std::str::from_utf8(raw).map_err(|_| "lifecycle lease is not UTF-8")?;
+        if text.contains('\r') || !text.ends_with('\n') {
+            return Err("lifecycle lease must use LF-terminated lines".into());
+        }
+        let mut lines = text[..text.len() - 1].split('\n');
+        if lines.next() != Some("helm-generation-lifecycle-lease-v1") {
+            return Err("unsupported lifecycle lease version".into());
+        }
+        let generation = GenerationId::parse(record_value(&mut lines, "generation")?)?;
+        let launch = GenerationId::parse(record_value(&mut lines, "launch")?)?;
+        let pid = canonical_u32(record_value(&mut lines, "pid")?, "lifecycle lease PID")?;
+        if pid == 0 {
+            return Err("lifecycle lease PID must be positive".into());
+        }
+        let start_time = canonical_positive_u64(
+            record_value(&mut lines, "start-time")?,
+            "lifecycle lease start time",
+        )?;
+        let boot_id = record_value(&mut lines, "boot-id")?;
+        if !canonical_boot_id(boot_id) {
+            return Err("lifecycle lease boot ID is malformed".into());
+        }
+        let owner_uid = canonical_u32(
+            record_value(&mut lines, "owner-uid")?,
+            "lifecycle lease owner UID",
+        )?;
+        let owner_kind = match record_value(&mut lines, "owner-kind")? {
+            "systemd-scope" => LifecycleOwnerKind::SystemdScope,
+            "process-group" => LifecycleOwnerKind::ProcessGroup,
+            _ => return Err("lifecycle lease owner kind is malformed".into()),
+        };
+        let unit = record_value(&mut lines, "unit")?;
+        let invocation = record_value(&mut lines, "unit-invocation")?;
+        let process_group = canonical_u32(
+            record_value(&mut lines, "process-group")?,
+            "lifecycle lease process group",
+        )?;
+        let cgroup = record_value(&mut lines, "cgroup")?;
+        let cgroup_device = canonical_u64(
+            record_value(&mut lines, "cgroup-device")?,
+            "lifecycle lease cgroup device",
+        )?;
+        let cgroup_inode = canonical_u64(
+            record_value(&mut lines, "cgroup-inode")?,
+            "lifecycle lease cgroup inode",
+        )?;
+        if lines.next().is_some() {
+            return Err("lifecycle lease has extra records".into());
+        }
+        match owner_kind {
+            LifecycleOwnerKind::SystemdScope => {
+                if process_group != 0
+                    || unit != format!("helm-launch-{}.scope", launch.as_str())
+                    || !lower_hex_32(invocation)
+                    || !normalized_cgroup_path(cgroup)
+                    || cgroup_device == 0
+                    || cgroup_inode == 0
+                {
+                    return Err("systemd lifecycle lease identity is malformed".into());
+                }
+            }
+            LifecycleOwnerKind::ProcessGroup => {
+                if unit != "none"
+                    || invocation != "none"
+                    || process_group != pid
+                    || cgroup != "none"
+                    || cgroup_device != 0
+                    || cgroup_inode != 0
+                {
+                    return Err("process group lifecycle lease identity is malformed".into());
+                }
+            }
+        }
+        Ok(Self {
+            generation,
+            launch,
+            pid,
+            start_time,
+            boot_id: boot_id.into(),
+            owner_uid,
+            owner_kind,
+        })
+    }
+}
+
 impl PublicationOrder {
     fn empty() -> Self {
         Self {
@@ -2549,6 +2680,24 @@ fn canonical_boot_id(value: &str) -> bool {
         })
 }
 
+fn lower_hex_32(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn normalized_cgroup_path(value: &str) -> bool {
+    !value.is_empty()
+        && value != "none"
+        && value
+            .split('/')
+            .all(|component| !component.is_empty()
+                && !matches!(component, "." | "..")
+                && component.bytes().all(|byte| matches!(byte,
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b':' | b'@' | b'%' | b'+' | b'-')))
+}
+
 fn linux_boot_id() -> std::result::Result<String, String> {
     let root = GenerationRoot::open(Path::new("/proc/sys/kernel/random"))?;
     let raw = read_regular_bytes(&root, Path::new("boot_id"))?;
@@ -2997,6 +3146,60 @@ mod tests {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
 
+    fn write_raw_lease_fixture(root: &Path, name: &str, contents: &[u8]) {
+        let path = root.join("leases").join(name);
+        std::fs::write(&path, contents).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn lifecycle_lease_parser_requires_canonical_direct_identity() {
+        let generation = "00000000000000000000000000000001";
+        let launch = "00000000000000000000000000000002";
+        let pid = std::process::id();
+        let start_time = linux_start_time(pid);
+        let boot_id = linux_boot_id();
+        let owner_uid = rustix::process::getuid().as_raw();
+        let valid = format!(
+            "helm-generation-lifecycle-lease-v1\ngeneration {generation}\nlaunch {launch}\npid {pid}\nstart-time {start_time}\nboot-id {boot_id}\nowner-uid {owner_uid}\nowner-kind process-group\nunit none\nunit-invocation none\nprocess-group {pid}\ncgroup none\ncgroup-device 0\ncgroup-inode 0\n"
+        );
+
+        let parsed = ParsedLeaseRecord::parse(valid.as_bytes()).unwrap();
+        assert!(matches!(parsed, ParsedLeaseRecord::Lifecycle(_)));
+
+        let zero_pid = valid.replacen(&format!("pid {pid}\n"), "pid 0\n", 1);
+        assert!(ParsedLeaseRecord::parse(zero_pid.as_bytes()).is_err());
+
+        let zero_start = valid.replacen(&format!("start-time {start_time}\n"), "start-time 0\n", 1);
+        assert!(ParsedLeaseRecord::parse(zero_start.as_bytes()).is_err());
+
+        let mismatched_group =
+            valid.replacen(&format!("process-group {pid}\n"), "process-group 1\n", 1);
+        assert!(ParsedLeaseRecord::parse(mismatched_group.as_bytes()).is_err());
+
+        let systemd = format!(
+            "helm-generation-lifecycle-lease-v1\ngeneration {generation}\nlaunch {launch}\npid {pid}\nstart-time {start_time}\nboot-id {boot_id}\nowner-uid {owner_uid}\nowner-kind systemd-scope\nunit helm-launch-{launch}.scope\nunit-invocation 00000000000000000000000000000000\nprocess-group 0\ncgroup user.slice/helm.scope\ncgroup-device 1\ncgroup-inode 1\n"
+        );
+        assert!(matches!(
+            ParsedLeaseRecord::parse(systemd.as_bytes()),
+            Ok(ParsedLeaseRecord::Lifecycle(_))
+        ));
+        let systemd_with_direct_group =
+            systemd.replacen("process-group 0\n", "process-group 1\n", 1);
+        assert!(ParsedLeaseRecord::parse(systemd_with_direct_group.as_bytes()).is_err());
+
+        let systemd_with_current_directory =
+            systemd.replacen("cgroup user.slice/helm.scope\n", "cgroup .\n", 1);
+        assert!(ParsedLeaseRecord::parse(systemd_with_current_directory.as_bytes()).is_err());
+
+        let systemd_with_parent_directory = systemd.replacen(
+            "cgroup user.slice/helm.scope\n",
+            "cgroup user.slice/../helm.scope\n",
+            1,
+        );
+        assert!(ParsedLeaseRecord::parse(systemd_with_parent_directory.as_bytes()).is_err());
+    }
+
     #[test]
     fn g1_selected_old_generation_keeps_descriptor_pinned_bytes_after_new_commit() {
         let root = tempfile::tempdir().unwrap();
@@ -3266,6 +3469,116 @@ mod tests {
         assert_eq!(report.reclaimed_leases, 3);
         assert!(lease_names(root.path()).is_empty());
         assert!(root.path().join("generations").join(generation).exists());
+    }
+
+    #[test]
+    fn g6_gc_retains_stale_process_lease_when_lifecycle_evidence_is_malformed() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let generation = "00000000000000000000000000000001";
+        let generations = [
+            generation,
+            "00000000000000000000000000000002",
+            "00000000000000000000000000000003",
+            "00000000000000000000000000000004",
+        ];
+        for (index, candidate) in generations.iter().skip(1).enumerate() {
+            publish_at(
+                &store,
+                candidate,
+                || Ok(publication(candidate, &format!("candidate-{index}"))),
+                |_| Ok(()),
+            )
+            .unwrap();
+        }
+        write_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000011",
+            generation,
+            i32::MAX as u32,
+            linux_start_time(std::process::id()),
+            &linux_boot_id(),
+            rustix::process::getuid().as_raw(),
+        );
+        write_raw_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000012",
+            b"helm-generation-lifecycle-lease-v1\n",
+        );
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_leases, 0);
+        assert_eq!(report.reclaimed_generations, 0);
+        assert_eq!(
+            lease_names(root.path()),
+            vec![
+                OsString::from("00000000000000000000000000000011"),
+                OsString::from("00000000000000000000000000000012"),
+            ]
+        );
+        for generation in generations {
+            assert!(root.path().join("generations").join(generation).exists());
+        }
+    }
+
+    #[test]
+    fn g6_gc_retains_stale_process_lease_when_lifecycle_evidence_is_valid() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let generation = "00000000000000000000000000000001";
+        let generations = [
+            generation,
+            "00000000000000000000000000000002",
+            "00000000000000000000000000000003",
+            "00000000000000000000000000000004",
+        ];
+        for (index, candidate) in generations.iter().skip(1).enumerate() {
+            publish_at(
+                &store,
+                candidate,
+                || Ok(publication(candidate, &format!("candidate-{index}"))),
+                |_| Ok(()),
+            )
+            .unwrap();
+        }
+        let launch = "00000000000000000000000000000002";
+        let pid = std::process::id();
+        let start_time = linux_start_time(pid);
+        let boot_id = linux_boot_id();
+        let owner_uid = rustix::process::getuid().as_raw();
+        write_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000011",
+            generation,
+            i32::MAX as u32,
+            start_time,
+            &boot_id,
+            owner_uid,
+        );
+        write_raw_lease_fixture(
+            root.path(),
+            "00000000000000000000000000000012",
+            format!(
+                "helm-generation-lifecycle-lease-v1\ngeneration {generation}\nlaunch {launch}\npid {pid}\nstart-time {start_time}\nboot-id {boot_id}\nowner-uid {owner_uid}\nowner-kind process-group\nunit none\nunit-invocation none\nprocess-group {pid}\ncgroup none\ncgroup-device 0\ncgroup-inode 0\n"
+            )
+            .as_bytes(),
+        );
+
+        let report = store.garbage_collect().unwrap();
+
+        assert_eq!(report.reclaimed_leases, 0);
+        assert_eq!(report.reclaimed_generations, 0);
+        assert_eq!(
+            lease_names(root.path()),
+            vec![
+                OsString::from("00000000000000000000000000000011"),
+                OsString::from("00000000000000000000000000000012"),
+            ]
+        );
+        for generation in generations {
+            assert!(root.path().join("generations").join(generation).exists());
+        }
     }
 
     #[test]
