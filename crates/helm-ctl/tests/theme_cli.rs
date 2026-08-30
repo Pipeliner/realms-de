@@ -217,7 +217,7 @@ fn lint_empty_root_uses_shipped_palette_without_mutating_the_inventory() {
 
 #[cfg(unix)]
 #[test]
-fn lint_ignores_a_symlinked_helm_directory() {
+fn lint_refuses_a_symlinked_helm_directory_without_touching_its_destination() {
     use std::os::unix::fs::symlink;
 
     let temp = tempfile::tempdir().expect("temporary config root");
@@ -232,8 +232,13 @@ fn lint_ignores_a_symlinked_helm_directory() {
 
     let out = helmctl_at(&root, ["theme", "lint"]);
 
-    assert!(out.status.success(), "{}", stderr(&out));
-    assert!(stdout(&out).contains("violet/"));
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(stdout(&out).is_empty());
+    assert!(
+        !stderr(&out).contains("text.bright") && !stderr(&out).contains("text.normal"),
+        "lint followed a symlinked helm directory: {}",
+        stderr(&out)
+    );
     assert_eq!(
         tree(&root),
         before,
@@ -243,7 +248,7 @@ fn lint_ignores_a_symlinked_helm_directory() {
 
 #[cfg(unix)]
 #[test]
-fn lint_uses_the_shipped_palette_for_every_symlinked_root_spelling_without_touching_outside() {
+fn lint_refuses_every_symlinked_root_spelling_without_touching_outside() {
     use std::{ffi::OsString, os::unix::fs::symlink};
 
     let temp = tempfile::tempdir().expect("temporary config root");
@@ -265,15 +270,13 @@ fn lint_uses_the_shipped_palette_for_every_symlinked_root_spelling_without_touch
                 .chain(std::iter::once(spelling)),
         );
 
-        assert!(
-            out.status.success(),
-            "default lint followed symlinked root spelling {suffix:?}: {}",
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "default lint accepted symlinked root spelling {suffix:?}: {}",
             stderr(&out)
         );
-        assert!(
-            stdout(&out).contains("violet/"),
-            "default lint did not use the shipped palette for root spelling {suffix:?}"
-        );
+        assert!(stdout(&out).is_empty());
         assert!(
             !stderr(&out).contains("text.bright") && !stderr(&out).contains("text.normal"),
             "default lint selected the invalid outside palette for root spelling {suffix:?}: {}",

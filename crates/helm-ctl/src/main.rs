@@ -212,7 +212,7 @@ fn default_config_root(env: &impl Env) -> Result<PathBuf, String> {
 pub fn run_lint(args: &LintArgs, root: &Path) -> Result<ExitCode, String> {
     let palette = match &args.palette {
         Some(path) => Palette::load(path).map_err(|error| error.to_string())?,
-        None => load_lint_palette(root).map_err(|error| error.to_string())?,
+        None => helm_theme::load_lint_palette(root).map_err(|error| error.to_string())?,
     };
     let report = helm_theme::lint(&palette);
     for separation in &report.separations {
@@ -229,75 +229,6 @@ pub fn run_lint(args: &LintArgs, root: &Path) -> Result<ExitCode, String> {
     } else {
         ExitCode::from(1)
     })
-}
-
-fn load_lint_palette(root: &Path) -> helm_theme::Result<Palette> {
-    let root = normalized_root_spelling(root);
-    if !is_directory_without_following_links(&root) {
-        return shipped_lint_palette();
-    }
-
-    let helm = root.join("helm");
-    if !is_directory_without_following_links(&helm) {
-        return shipped_lint_palette();
-    }
-
-    let path = helm.join("palette.toml");
-    match std::fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_file() => Ok(Palette::load(&path)?),
-        _ => shipped_lint_palette(),
-    }
-}
-
-fn is_directory_without_following_links(path: &Path) -> bool {
-    matches!(
-        std::fs::symlink_metadata(path),
-        Ok(metadata) if metadata.file_type().is_dir()
-    )
-}
-
-/// Remove equivalent terminal separators and `.` components before the
-/// no-follow metadata check sees the root's basename.
-///
-/// This is lexical-only: it never resolves any path component.
-fn normalized_root_spelling(root: &Path) -> PathBuf {
-    use std::os::unix::ffi::{OsStrExt, OsStringExt};
-
-    let bytes = root.as_os_str().as_bytes();
-    if bytes.is_empty() || bytes == b"." || bytes.iter().all(|byte| *byte == b'/') {
-        return root.to_path_buf();
-    }
-
-    let mut end = bytes.len();
-    loop {
-        while end > 0 && bytes[end - 1] == b'/' {
-            if bytes[..end].iter().all(|byte| *byte == b'/') {
-                break;
-            }
-            end -= 1;
-        }
-
-        if end == 1 && bytes[0] == b'.' {
-            break;
-        }
-        let component_start = bytes[..end]
-            .iter()
-            .rposition(|byte| *byte == b'/')
-            .map_or(0, |separator| separator + 1);
-        if bytes[component_start..end] != *b"." {
-            break;
-        }
-        end = component_start;
-    }
-
-    if end == bytes.len() {
-        return root.to_path_buf();
-    }
-    PathBuf::from(OsString::from_vec(bytes[..end].to_vec()))
-}
-
-fn shipped_lint_palette() -> helm_theme::Result<Palette> {
-    Palette::from_toml(helm_theme::SHIPPED_PALETTE).map_err(Into::into)
 }
 
 fn failure(error: &str) -> ExitCode {

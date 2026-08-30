@@ -2040,23 +2040,27 @@ impl GenerationRoot {
 
 /// Open a directory pathname a component at a time, never following a symlink.
 pub(crate) fn open_directory_chain(path: &Path) -> std::result::Result<OwnedFd, String> {
+    open_directory_chain_no_follow(path).map_err(|error| error.to_string())
+}
+
+/// Open a directory pathname a component at a time, preserving the errno for
+/// callers that distinguish absence from an unsafe existing entry.
+pub(crate) fn open_directory_chain_no_follow(path: &Path) -> std::result::Result<OwnedFd, Errno> {
     let directory_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let mut fd = match path.components().next() {
         Some(Component::RootDir) => openat(CWD, "/", directory_flags, Mode::empty()),
-        Some(Component::Prefix(_)) => return Err("unsupported generation root prefix".into()),
+        Some(Component::Prefix(_)) => return Err(Errno::INVAL),
         _ => openat(CWD, ".", directory_flags, Mode::empty()),
-    }
-    .map_err(|error| error.to_string())?;
+    }?;
 
     for component in path.components() {
         let Component::Normal(component) = component else {
             if matches!(component, Component::RootDir | Component::CurDir) {
                 continue;
             }
-            return Err("generation root must not contain parent traversal".into());
+            return Err(Errno::INVAL);
         };
-        fd = openat(&fd, component, directory_flags, Mode::empty())
-            .map_err(|error| error.to_string())?;
+        fd = openat(&fd, component, directory_flags, Mode::empty())?;
     }
     Ok(fd)
 }
