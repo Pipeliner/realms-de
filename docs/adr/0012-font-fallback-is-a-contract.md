@@ -64,6 +64,19 @@ fallback for every entry.
 6. **`helm ctl doctor` runs the same probe** and reports it with
    `Probe::summary()`, so a user with a missing font gets a sentence naming the
    glyphs rather than a screen of boxes.
+7. **Helm does not redistribute Symbola or a generic Nerd Font.** Their
+   provenance is not one unambiguous, project-owned licensing decision. Helm
+   packages and release artifacts contain no font bytes from either family.
+   Target packaging may only recommend distribution-reviewed symbol-font or
+   Nerd Font packages; it must not make that optional visual enhancement a hard
+   runtime dependency. A recommendation never substitutes for the startup probe
+   and ASCII fallback.
+8. **Helm ships only unmodified IBM Plex Mono under SIL OFL 1.1.** Any
+   first-party artifact that contains it must carry the upstream OFL licence
+   and required notices. A target which does not embed it must recommend its
+   reviewed IBM Plex Mono package instead. This does not authorize embedding
+   or patching another font: that needs an explicit licensing ADR amendment
+   covering source, licence, notices, update and removal policy.
 
 ## Alternatives considered
 
