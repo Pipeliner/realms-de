@@ -160,14 +160,11 @@ in
     };
 
     # The glyph contract (ADR 0012). IBM Plex Mono is the design's face; the
-    # symbols-only Nerd Font supplies runes and instrument glyphs. Without
-    # these the bar is a row of tofu on first boot.
-    #
-    # On nixpkgs older than 24.11 the second attribute is
-    # `(nerdfonts.override { fonts = [ "NerdFontsSymbolsOnly" ]; })`.
+    # IBM Plex Mono is Helm's only first-party font selection. ADR 0012 keeps
+    # Symbola and Nerd Fonts optional: the startup probe falls back to ASCII
+    # rather than making a third-party symbol font a mandatory system change.
     fonts.packages = [
       pkgs.ibm-plex
-      pkgs.nerd-fonts.symbols-only
     ];
 
     # XWayland: old apps should look wrong-ish, not broken.

@@ -73,6 +73,44 @@ Stop and hand back to a human when any of these is true:
 4. Never let the loop run against a milestone whose ADRs are unreviewed.
 5. Every iteration leaves the repo installable from a clean clone.
 
+## Spec-number allocation
+
+Before creating a new `docs/specs/NNNN-*.md`, inspect open pull requests as
+well as `main`. Draft specs reserve their number: as of 2026-08-30, PRs #162
+through #165 reserve 0012 through 0015 even though `main` ends at 0011. Use the
+next unreserved number and reconcile the index in the same change; never reuse
+or silently collide with an in-flight specification.
+
+## Remote ShellCheck authority
+
+The Nix `shellcheck` check is a merge gate even when this host lacks a local
+ShellCheck binary. On 2026-08-30 it rejected SC2016 (a single-quoted Markdown
+literal containing backticks) and SC1112 (a typographic apostrophe). Treat
+remote Nix/ShellCheck as the authoritative verification for changed shell
+scripts; keep shell literals ASCII where practical and write quoted Markdown so
+ShellCheck can see literal intent without a suppression.
+
+## Pilot procedure measurement
+
+For a real local agent-SDD pilot iteration, use the three `helm-agent-sdd-*`
+skills only after the normal orient/pick/spec-first procedure. Keep the pilot
+record separate from product work and report the recovery detail it made
+available, the added record work, and any limitation in `.claude/memory/`.
+These observations are revisable operational knowledge, never product truth or
+an automatic maturity promotion. Keep #121 open until two subsequent real
+iterations supply that evidence.
+
+### Pilot observation: #104
+
+On 2026-08-30, #104 used bootstrap, checkpoint, and evidence-capture procedures
+after its accepted SPEC 0019 and code commit. The separate record carrier added
+exactly two tracked files and 31 lines; both report-only assessments passed.
+There was no compaction or fresh-agent handoff, so recovery detail and
+re-derivation tax were not measurable in this iteration. The second iteration
+must deliberately record whether a checkpoint changes the next correct action
+or leaves recovery measurement unavailable. This is one revisable pilot
+observation, not an automatic promotion or a product fact.
+
 ## Running it
 
 - **Manually:** `/loop` with the iteration prompt, or ask for "next issue".

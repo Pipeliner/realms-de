@@ -18,6 +18,17 @@
     pkgs.runCommand "helm-shellcheck" { nativeBuildInputs = [ pkgs.shellcheck ]; }
       ''
         shellcheck --shell=bash ${src + "/packaging/session/helm-session"}
+        shellcheck --shell=sh \
+          ${src + "/packaging/check-font-policy.sh"} \
+          ${src + "/packaging/font-policy-test.sh"} \
+          ${src + "/packaging/nix/check-root-flake-ci.sh"} \
+          ${src + "/packaging/nix/test-root-flake-ci.sh"} \
+          ${src + "/docs/check-readme-truth-snapshot.sh"} \
+          ${src + "/docs/test-readme-truth-snapshot.sh"} \
+          ${src + "/docs/check-contribution-templates.sh"} \
+          ${src + "/docs/test-contribution-templates.sh"} \
+          ${src + "/packaging/debian/toolchain-path.sh"} \
+          ${src + "/packaging/debian/test-toolchain-path.sh"}
         touch $out
       '';
 

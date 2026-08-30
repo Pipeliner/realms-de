@@ -364,8 +364,10 @@ fc-list | grep -iE 'symbols|symbola'
 ```
 
 Install `fonts-ibm-plex` + `fonts-symbola` (Ubuntu, the first from multiverse),
-`ibm-plex-mono-fonts` + `google-noto-sans-symbols2-fonts` (Fedora); the Nix
-module installs IBM Plex and the symbols-only Nerd Font for you.
+or `ibm-plex-mono-fonts` + `google-noto-sans-symbols2-fonts` (Fedora). The Nix
+module installs IBM Plex, but does not install a Symbola or Nerd Font
+automatically. These symbol-font packages are optional recommendations: the
+glyph probe and ASCII fallbacks keep Helm legible when they are absent.
 
 *`helm ctl doctor` will print the glyph coverage summary —
 `helm-core::glyphs::Probe::summary()` already produces exactly that line.*

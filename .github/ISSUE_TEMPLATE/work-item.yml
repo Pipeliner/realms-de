@@ -1,0 +1,37 @@
+name: Work item
+description: A bounded, evidence-backed unit of project work
+title: "<component>: <outcome>"
+labels: ["needs-triage"]
+body:
+  - type: textarea
+    id: why
+    attributes:
+      label: Why this matters
+      description: State the user, system, or delivery consequence.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Each line is a happy path that can become a test.
+      value: |
+        - [ ] Given …, when …, then …
+    validations:
+      required: true
+  - type: input
+    id: blocked-by
+    attributes:
+      label: "Blocked by:"
+      description: Issue or decision required first; write None when unblocked.
+      placeholder: "#123, or None"
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: "Source:"
+      description: Repository document section that establishes this work.
+      placeholder: "docs/ARCHITECTURE.md §2"
+    validations:
+      required: true

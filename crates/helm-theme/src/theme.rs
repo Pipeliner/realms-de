@@ -1344,6 +1344,94 @@ mod tests {
         );
     }
 
+    #[test]
+    fn public_apply_keeps_an_existing_user_palette_and_publishes_its_derived_output() {
+        let root = tempfile::tempdir().unwrap();
+        let helm = root.path().join("helm");
+        std::fs::create_dir(&helm).unwrap();
+        let palette_path = helm.join("palette.toml");
+        let mut user_palette = shipped();
+        user_palette.accent.violet = helm_core::color::Rgb::new(0xb0, 0x7a, 0xff);
+        let user_bytes = user_palette.to_toml();
+        std::fs::write(&palette_path, &user_bytes).unwrap();
+
+        let outcome = apply(root.path()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&palette_path).unwrap(), user_bytes);
+        let GenerationPublicationOutcome::Committed(generation) = outcome else {
+            panic!("user-palette apply did not commit cleanly: {outcome:?}");
+        };
+        let store = GenerationStore::open(&root.path().join("helm/generated")).unwrap();
+        let selected = store.select_current().unwrap();
+        assert_eq!(selected.as_str(), generation.as_str());
+        assert!(
+            selected
+                .read_output("fuzzel/fuzzel.ini")
+                .unwrap()
+                .windows(b"b07aff".len())
+                .any(|window| window == b"b07aff"),
+            "the selected generation did not use the existing user palette"
+        );
+        selected.release().unwrap();
+    }
+
+    #[test]
+    fn public_apply_refuses_a_fatal_user_palette_without_replacing_current() {
+        let root = tempfile::tempdir().unwrap();
+        let first = apply(root.path()).unwrap();
+        let GenerationPublicationOutcome::Committed(first_generation) = first else {
+            panic!("initial apply did not commit cleanly: {first:?}");
+        };
+
+        let mut fatal_palette = shipped();
+        fatal_palette.text.normal = fatal_palette.background.pane;
+        std::fs::write(root.path().join(USER_PALETTE), fatal_palette.to_toml()).unwrap();
+
+        let error = apply(root.path()).expect_err("fatal palette lint must refuse publication");
+        assert!(
+            error.to_string().contains("text.normal"),
+            "fatal palette refusal lost its diagnostic: {error:?}"
+        );
+
+        let store = GenerationStore::open(&root.path().join("helm/generated")).unwrap();
+        let selected = store.select_current().unwrap();
+        assert_eq!(selected.as_str(), first_generation.as_str());
+        selected.release().unwrap();
+    }
+
+    #[test]
+    fn generation_apply_refuses_an_unknown_placeholder_without_replacing_current() {
+        let root = tempfile::tempdir().unwrap();
+        let first = apply(root.path()).unwrap();
+        let GenerationPublicationOutcome::Committed(first_generation) = first else {
+            panic!("initial apply did not commit cleanly: {first:?}");
+        };
+
+        let error = apply_with_snapshot(root.path(), || {
+            ThemeSnapshot::new(
+                SHIPPED_PALETTE.as_bytes().to_vec(),
+                built_in_launch_profile().to_vec(),
+                BTreeMap::new(),
+                vec![Template {
+                    id: "unknown",
+                    source: "value = {{ unknown.path }}\n",
+                    target: PathBuf::from("unknown.conf"),
+                    reload: Reload::None,
+                }],
+            )
+        })
+        .expect_err("unknown placeholders must refuse generation publication");
+        assert!(
+            error.to_string().contains("unknown.path"),
+            "unknown placeholder refusal lost its diagnostic: {error:?}"
+        );
+
+        let store = GenerationStore::open(&root.path().join("helm/generated")).unwrap();
+        let selected = store.select_current().unwrap();
+        assert_eq!(selected.as_str(), first_generation.as_str());
+        selected.release().unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn public_apply_refuses_a_palette_symlink_without_seeding_its_destination() {
