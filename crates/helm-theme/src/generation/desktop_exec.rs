@@ -177,9 +177,9 @@ fn is_unquoted_reserved(byte: u8) -> bool {
 mod tests {
     use super::{
         absolute_components, admit_desktop, capture_base_environment, capture_desktop,
-        capture_roots, capture_working_directory, parse_exec, parse_try_exec,
-        resolve_executable, validate_document, validate_main_group, validate_path,
-        AdmissionAuditEvent, AdmissionInputs, DesktopExecError, DesktopFileId,
+        capture_roots, capture_working_directory, parse_exec, parse_try_exec, resolve_executable,
+        validate_document, validate_main_group, validate_path, AdmissionAuditEvent,
+        AdmissionInputs, DesktopExecError, DesktopFileId,
     };
     use std::ffi::OsString;
     use std::fs;
@@ -533,8 +533,8 @@ mod tests {
             OsString::from("LANG=C.UTF-8"),
         ]);
 
-        let captured = capture_desktop(id("example.desktop"), &inputs)
-            .expect("VM fixture desktop capture");
+        let captured =
+            capture_desktop(id("example.desktop"), &inputs).expect("VM fixture desktop capture");
         validate_main_group(&captured.document, &inputs).expect("VM fixture main group");
         let argv = parse_exec(
             captured
@@ -546,7 +546,8 @@ mod tests {
                 .as_bytes(),
         )
         .expect("VM fixture Exec syntax");
-        let base_environment = capture_base_environment(&inputs).expect("VM fixture base environment");
+        let base_environment =
+            capture_base_environment(&inputs).expect("VM fixture base environment");
         let _exec = resolve_executable(&argv[0], &base_environment.path_directories)
             .expect("VM fixture Exec static preflight");
         let _try_exec = parse_try_exec(&captured.document, &inputs)
@@ -555,7 +556,8 @@ mod tests {
             .map(|value| resolve_executable(value, &base_environment.path_directories))
             .transpose()
             .expect("VM fixture TryExec static preflight");
-        let _cwd = capture_working_directory(&captured.document).expect("VM fixture working directory");
+        let _cwd =
+            capture_working_directory(&captured.document).expect("VM fixture working directory");
 
         let plan = admit_desktop(id("example.desktop"), &inputs).expect("accepted VM plan");
         assert_eq!(plan.argv, vec![executable_name.as_bytes().to_vec()]);
@@ -1683,10 +1685,11 @@ fn open_static_executable(
     let before = statat(&parent.fd, name, AtFlags::SYMLINK_NOFOLLOW)?;
     validate_executable_stat(&before)?;
     let flags = AtFlags::SYMLINK_NOFOLLOW | AtFlags::EACCESS;
-    if !effective_access_is_proven(
-        accessat(&parent.fd, name, Access::WRITE_OK, flags),
-        accessat(&parent.fd, name, Access::EXEC_OK, flags),
-    ) {
+    let write_access = accessat(&parent.fd, name, Access::WRITE_OK, flags);
+    let execute_access = accessat(&parent.fd, name, Access::EXEC_OK, flags);
+    #[cfg(test)]
+    eprintln!("desktop Exec access pre-open: write={write_access:?} execute={execute_access:?}");
+    if !effective_access_is_proven(write_access, execute_access) {
         return Err(AdmissionError::Refused);
     }
     let fd = openat(
@@ -1697,13 +1700,14 @@ fn open_static_executable(
     )?;
     let identity = FileIdentity::from_stat(&before);
     let opened = fstat(&fd)?;
-    if FileIdentity::from_stat(&opened) != identity
-        || validate_executable_stat(&opened).is_err()
-        || !effective_access_is_proven(
-            accessat(&parent.fd, name, Access::WRITE_OK, flags),
-            accessat(&parent.fd, name, Access::EXEC_OK, flags),
-        )
-    {
+    if FileIdentity::from_stat(&opened) != identity || validate_executable_stat(&opened).is_err() {
+        return Err(AdmissionError::Refused);
+    }
+    let write_access = accessat(&parent.fd, name, Access::WRITE_OK, flags);
+    let execute_access = accessat(&parent.fd, name, Access::EXEC_OK, flags);
+    #[cfg(test)]
+    eprintln!("desktop Exec access post-open: write={write_access:?} execute={execute_access:?}");
+    if !effective_access_is_proven(write_access, execute_access) {
         return Err(AdmissionError::Refused);
     }
     let mut header = [0_u8; 64];
