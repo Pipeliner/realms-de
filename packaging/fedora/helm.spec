@@ -5,7 +5,7 @@
 # wayland-session entry, the
 # session wrapper that performs the ADR 0011 systemd/D-Bus environment
 # handshake, the systemd user units and the palette. %install picks up
-# helm-wm, helm-bar and helm automatically once they build.
+# helm-wm and helm-bar automatically once they build.
 #
 # BINARY NAMES ARE SETTLED (ARCHITECTURE.md, commit 4ddcc26). Fedora ships
 # Kubernetes Helm as %%{_bindir}/helm, and two packages owning one path cannot

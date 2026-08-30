@@ -4,7 +4,7 @@
 # metadata-only local validator are installed. This derivation also
 # installs the session wrapper (wrapped so it can find river, systemctl,
 # dbus-update-activation-environment and gsettings), the wayland-session entry,
-# the systemd user units and the palette. helm-bar, helm-wm and helm remain
+# the systemd user units and the palette. helm-bar and helm-wm remain
 # pending M1–M2 binaries.
 {
   pkgs,
