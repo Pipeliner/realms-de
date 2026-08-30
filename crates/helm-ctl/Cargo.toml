@@ -1,0 +1,22 @@
+[package]
+name = "helm-ctl"
+description = "Command-line interface for Helm theme generation operations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+helm-core = { workspace = true }
+helm-theme = { path = "../helm-theme", version = "0.1.0" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "helmctl"
+path = "src/main.rs"

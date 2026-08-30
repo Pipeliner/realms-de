@@ -132,16 +132,15 @@ tests with similar names are historical evidence, not a second apply contract.
 | A6 | Given a palette with a fatal lint finding, when `apply` runs, then it refuses, prints the findings, and leaves `current` unchanged | lint behavior retained; publication: SPEC 0011 |
 | A7 | Given a successful apply or rollback, when its pointer commit completes, then it invokes no reload mechanism and existing processes remain pinned to their selected generation | SPEC 0011 G11 |
 | A8 | Given no user palette, when `apply` runs, then the shipped palette is copied to the user config path first | `theme::tests::first_run_copies_the_shipped_palette_to_the_user_config` |
-| A9 | Given the shipped palette, when `helm ctl theme lint` runs, then it exits 0 and prints the accent hue separations | `theme::tests::lint_report_is_clean_for_the_shipped_palette_and_lists_hue_separations` |
-| A10 | Given a fully validated current generation and a modified candidate, when `helm ctl theme diff` runs, then it reports only sorted `added`, `removed`, and `byte-different` normalized outputs and performs no control initialization, recovery, lease, publication, pointer change, output write, or reload | SPEC 0011 G10 |
+| A9 | Given the shipped palette, when `helmctl theme lint` runs, then it exits 0 and prints the accent hue separations | `theme_cli::lint_shipped_palette_is_session_independent_and_prints_hue_separations` |
+| A10 | Given a fully validated current generation and a modified candidate, when `helmctl theme diff` runs, then it reports only sorted `added`, `removed`, and `byte-different` normalized outputs and performs no control initialization, recovery, lease, publication, pointer change, output write, or reload | `theme_cli::diff_after_palette_edit_is_sorted_and_does_not_mutate_generation_tree`; `theme_cli::diff_refusal_for_missing_current_does_not_mutate_generation_tree` |
 | A11 | Given an empty, escaping, duplicate, symlinked, or prefix-colliding output path, or an unsafe configuration/generated root, when `apply` runs, then it refuses before publishing a generation or touching anything outside Helm's owned subtree | SPEC 0011 |
 | A12 | Given an attacker-controlled staging or generation entry, when `apply` runs, then descriptor-relative no-follow validation refuses it without modifying its destination | SPEC 0011 |
 | A13 | Given a symlinked configuration root spelled directly, with trailing separators, with terminal `.` components, or both, or a symlinked `helm` palette directory or `palette.toml`, when palette loading or first-run initialization runs, then it refuses without reading or writing the link destination | `theme::tests::a_symlinked_palette_path_is_refused_without_touching_its_destination`, `theme::tests::a_symlinked_palette_root_with_a_trailing_separator_is_refused_without_initializing_its_destination`, `theme::tests::a_symlinked_palette_root_with_terminal_dot_is_refused_without_reading_its_destination` |
 | A14 | Given a generation output parent is replaced after its directory descriptor is acquired, when staging, validation, cleanup, or commit proceeds, then no operation follows the replacement outside the held generation tree | SPEC 0011 |
 
-A9 and A10 name `helm ctl` subcommands, but the CLI is a separate M1 slice and
-does not exist yet. A9 is exercised at the existing library boundary. A10 now
-requires the generation-aware read-only boundary from SPEC 0011; the legacy
+A9 and A10 are exercised through the `helmctl` integration tests. A10 requires
+the generation-aware read-only boundary from SPEC 0011; the legacy
 mutable-output diff test does not satisfy it.
 
 ## Budgets

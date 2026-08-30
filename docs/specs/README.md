@@ -67,3 +67,4 @@ Sequential, never reused. A superseded spec keeps its number and gains a
 | [0017](0017-contribution-templates.md) | Contribution templates | Accepted |
 | [0018](0018-agent-sdd-pilot-procedures.md) | Local agent-SDD pilot procedures | Accepted |
 | [0019](0019-ubuntu-versioned-rust-toolchain.md) | Ubuntu versioned Rust toolchain guard | Accepted |
+| [0020](0020-helmctl-theme-json.md) | helmctl theme JSON output | Accepted |

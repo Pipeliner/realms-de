@@ -9,9 +9,9 @@
 #
 # (a copy works too; the symlink keeps one copy of the truth).
 #
-# PRE-ALPHA (0.1.0): the workspace contains one crate, helm-core, and it is a
-# library. This build therefore produces no helm binaries — override_dh_auto_
-# install installs whichever of them exist, so M1-M2 land with no change here.
+# PRE-ALPHA (0.1.0): this workspace builds `helmctl` for the implemented theme
+# commands. override_dh_auto_install installs every built Helm binary, so
+# helm-wm and helm-bar can land without another packaging change.
 #
 # NEEDS-HUMAN — the vendored river (helm-river) this package depends on is NOT
 # built by these rules, and building it is not a trivial recipe:
@@ -86,8 +86,9 @@ override_dh_auto_install:
 		debian/helm/usr/lib/systemd/user/helm-session.target.wants/helm-wm.service
 	ln -sf ../helm-bar.service \
 		debian/helm/usr/lib/systemd/user/helm-session.target.wants/helm-bar.service
-	# Install whichever helm binaries this revision actually built. Today that
-	# is none of them; the loop means M1-M2 need no packaging change. The names
+	# Install whichever helm binaries this revision actually built. `helmctl` is
+	# built now; the loop means helm-wm and helm-bar need no packaging change. The
+	# names
 	# are the settled ones: helm-wm (the window manager and session daemon) and
 	# helmctl (the CLI, so it cannot collide with Kubernetes helm).
 	set -e; \
@@ -96,7 +97,7 @@ override_dh_auto_install:
 			install -Dm755 "target/release/$$bin" "debian/helm/usr/bin/$$bin"; \
 			echo "installed $$bin"; \
 		else \
-			echo "skipping $$bin: not built (expected before M2)"; \
+			echo "skipping $$bin: not built in this revision"; \
 		fi; \
 	done
 

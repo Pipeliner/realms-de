@@ -111,6 +111,17 @@ must deliberately record whether a checkpoint changes the next correct action
 or leaves recovery measurement unavailable. This is one revisable pilot
 observation, not an automatic promotion or a product fact.
 
+### Pilot observation: #166
+
+On 2026-08-30, #166 used the same pilot procedures after SPEC 0020, its
+test-first implementation, and a fresh merge of main. Its separate record
+carrier added exactly two tracked files and 31 lines; both report-only
+`spike` to `prototype` assessments passed. The record preserved fresh full
+workspace test and static-check references for the immediately preceding
+commit. There was no compaction or fresh-agent handoff, so recovery detail and
+re-derivation tax remain unavailable; this is the pilot's second revisable
+operational observation, not a product truth or a maturity promotion.
+
 ## Running it
 
 - **Manually:** `/loop` with the iteration prompt, or ask for "next issue".

@@ -158,5 +158,6 @@ jobs:
             nix build --print-build-logs \
               ".#checks.$system.shellcheck" \
               ".#checks.$system.package" \
+              ".#checks.$system.packaged-binaries" \
               ".#checks.$system.helm-sdd-git-runtime"
           fi

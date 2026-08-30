@@ -1,0 +1,29 @@
+schema = "helm-agent-sdd/checkpoint/v1"
+issue = 166
+reason = "handoff"
+created_at = "2026-08-30T08:10:26Z"
+current_maturity = "spike"
+requested_maturity = "prototype"
+git_head = "c2878a7323b67de8a41f34ecab09c694dd672c25"
+question = "Can the specified helmctl JSON contract land with verified local evidence"
+success_condition = "Fresh contract tests and static checks pass for SPEC 0020."
+limitations = ["Remote CI assessment remains pending."]
+affected_specs = ["SPEC-0020"]
+
+[goal]
+statement = "Provide stable machine readable helmctl theme reports."
+
+[acceptance]
+criteria = ["SPEC-0020"]
+
+[workspace]
+branch = "codex/helmctl-cli"
+base = "2c9b03534690ca3e76ce14bb17a5be36c01f7a68"
+dirty = false
+
+[[completed]]
+claim = "The full workspace verification suite passed."
+evidence = ["ev-001", "ev-002"]
+
+[next_actions]
+items = ["Review remote CI results.", "Resolve any review findings."]

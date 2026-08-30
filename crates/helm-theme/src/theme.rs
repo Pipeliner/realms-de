@@ -219,6 +219,23 @@ pub fn load_palette(root: &Path) -> Result<Palette> {
     Ok(Palette::load(&path)?)
 }
 
+/// Read the user palette for `helmctl theme lint` without creating any files.
+///
+/// The shipped palette is used only when the configuration root, its `helm`
+/// directory, or `palette.toml` is absent. Existing entries are opened through
+/// retained directory descriptors and must be safe directories or a regular
+/// palette file.
+pub fn load_lint_palette(root: &Path) -> Result<Palette> {
+    let Some(config) = ConfigRoot::open_optional(root)? else {
+        return shipped_lint_palette();
+    };
+    config.load_lint_palette()
+}
+
+fn shipped_lint_palette() -> Result<Palette> {
+    Palette::from_toml(SHIPPED_PALETTE).map_err(Into::into)
+}
+
 /// Refuse the palette path when it crosses a pre-existing link. Seeding a
 /// palette is a write just like rendering a template, so it must not turn a
 /// seemingly private configuration root into a write primitive elsewhere.
@@ -522,6 +539,43 @@ impl ConfigRoot {
         let root = normalized_root_spelling(root);
         let fd = crate::generation::open_directory_chain(&root).map_err(Error::Generation)?;
         Ok(Self { fd })
+    }
+
+    fn open_optional(root: &Path) -> Result<Option<Self>> {
+        let root = normalized_root_spelling(root);
+        match crate::generation::open_directory_chain_no_follow(&root) {
+            Ok(fd) => Ok(Some(Self { fd })),
+            Err(Errno::NOENT) => Ok(None),
+            Err(error) => Err(Error::Generation(format!("configuration root: {error}"))),
+        }
+    }
+
+    fn load_lint_palette(&self) -> Result<Palette> {
+        let directory_flags =
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let helm = match openat(&self.fd, "helm", directory_flags, Mode::empty()) {
+            Ok(fd) => fd,
+            Err(Errno::NOENT) => return shipped_lint_palette(),
+            Err(error) => {
+                return Err(Error::Generation(format!(
+                    "helm palette directory: {error}"
+                )))
+            }
+        };
+        let palette = match openat(
+            &helm,
+            "palette.toml",
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(fd) => fd,
+            Err(Errno::NOENT) => return shipped_lint_palette(),
+            Err(error) => return Err(Error::Generation(format!("helm palette: {error}"))),
+        };
+        let raw = read_open_palette(palette)?;
+        Ok(Palette::from_toml(std::str::from_utf8(&raw).map_err(
+            |error| Error::Generation(format!("helm palette is not UTF-8: {error}")),
+        )?)?)
     }
 
     fn open_generated_root(&self) -> Result<OwnedFd> {
@@ -1268,6 +1322,26 @@ mod tests {
             );
         }
         selected.release().unwrap();
+    }
+
+    #[test]
+    fn public_apply_fatal_candidate_preserves_current_generation() {
+        let root = tempfile::tempdir().unwrap();
+        apply(root.path()).expect("apply initial generation");
+        let current = root.path().join("helm/generated/current");
+        let before = std::fs::read_to_string(&current).expect("read current generation");
+        let palette = root.path().join(USER_PALETTE);
+        let invalid = std::fs::read_to_string(&palette)
+            .expect("read seeded palette")
+            .replace("normal = \"#c2cbde\"", "normal = \"#101218\"");
+        std::fs::write(&palette, invalid).expect("write fatally unreadable palette");
+
+        assert!(apply(root.path()).is_err(), "fatal palette was accepted");
+        assert_eq!(
+            std::fs::read_to_string(&current).expect("read current generation"),
+            before,
+            "fatal candidate changed the current generation"
+        );
     }
 
     #[test]
@@ -2246,6 +2320,58 @@ mod tests {
             std::fs::read_to_string(palette_victim).unwrap(),
             "not a palette\n"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lint_palette_loader_refuses_every_static_symlinked_root_spelling() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = parent.path().join("config");
+        std::fs::create_dir_all(outside.path().join("helm")).unwrap();
+        std::fs::write(outside.path().join(USER_PALETTE), "not a palette\n").unwrap();
+        symlink(outside.path(), &root).unwrap();
+
+        for suffix in ["", "/", "/.", "/.//"] {
+            let mut spelling = root.as_os_str().to_owned();
+            spelling.push(suffix);
+            let error = load_lint_palette(Path::new(&spelling))
+                .expect_err("an existing symlinked root must be refused");
+            assert!(
+                matches!(error, Error::Generation(_)),
+                "unexpected error for {suffix:?}: {error}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lint_palette_loader_uses_the_retained_root_descriptor_after_path_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("config");
+        let outside = parent.path().join("outside");
+        std::fs::create_dir_all(root.join("helm")).unwrap();
+        std::fs::create_dir_all(outside.join("helm")).unwrap();
+        std::fs::write(
+            root.join(USER_PALETTE),
+            SHIPPED_PALETTE.replace("name = \"helm-void\"", "name = \"held-root\""),
+        )
+        .unwrap();
+        std::fs::write(outside.join(USER_PALETTE), "not a palette\n").unwrap();
+
+        let config = ConfigRoot::open(&root).expect("open root descriptor before replacement");
+        let held_root = parent.path().join("held-root");
+        std::fs::rename(&root, &held_root).unwrap();
+        symlink(&outside, &root).unwrap();
+
+        let palette = config
+            .load_lint_palette()
+            .expect("held descriptor must not resolve the replacement pathname");
+        assert_eq!(palette.name, "held-root");
     }
 
     #[cfg(unix)]
