@@ -2,7 +2,7 @@
 
 set -eu
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 resolver="$repo_root/packaging/debian/toolchain-path.sh"
 rules="$repo_root/packaging/debian/rules"
 tmp=$(mktemp -d)
