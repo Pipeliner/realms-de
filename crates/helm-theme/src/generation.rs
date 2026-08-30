@@ -1850,9 +1850,23 @@ impl GenerationSelection {
                 .try_clone()
                 .map_err(|error| error.to_string())?,
         };
-        read_optional_regular_bytes(&lease_directory, Path::new(&self.lease_name))?
-            .map(|raw| ParsedLeaseRecord::parse(&raw))
-            .transpose()
+        let Some(mut file) =
+            open_optional_regular_file(&lease_directory, Path::new(&self.lease_name))?
+        else {
+            return Ok(None);
+        };
+        let stat = rustix::fs::fstat(&file).map_err(|error| error.to_string())?;
+        validate_owned_mode(
+            "generation lease",
+            &stat,
+            FileType::RegularFile,
+            0o600,
+            rustix::process::getuid().as_raw(),
+        )?;
+        let mut raw = Vec::new();
+        file.read_to_end(&mut raw)
+            .map_err(|error| error.to_string())?;
+        ParsedLeaseRecord::parse(&raw).map(Some)
     }
 
     fn release_matching_process_lease(&mut self) -> std::result::Result<(), String> {
@@ -3216,6 +3230,18 @@ mod tests {
             ParsedLeaseRecord::parse(&std::fs::read(path).unwrap()),
             Ok(ParsedLeaseRecord::Lifecycle(_))
         ));
+    }
+
+    #[test]
+    fn selection_drop_never_unlinks_an_unsafe_process_lease() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let selection = store.select_current().unwrap();
+        let name = selection.lease_name.clone();
+        let path = root.path().join("leases").join(&name);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(selection);
+        assert!(path.exists());
     }
 
     #[test]
