@@ -1,7 +1,8 @@
 # SPEC 0006 — helm ctl
 
 - **Status:** Accepted (2026-08-26; generation contract reconciled by #159) —
-  not yet implemented
+  `theme apply`, `theme lint`, and `theme diff` implemented; remaining command
+  surface not yet implemented
 - **Milestone:** M3, with `theme` and the argument surface in M1 and
   `orbit` / `ledger` in M2
 - **Decisions:** [ADR 0004](../adr/0004-ndjson-control-socket.md),
@@ -13,10 +14,9 @@
 - **Supersedes / Superseded by:** Theme apply/diff behavior is refined and
   superseded by [SPEC 0011](0011-theme-activation-generations.md).
 
-> Written before the code, as S14 requires. The **Test** column below is
-> deliberately empty: those tests get written next, watched to fail, and only
-> then implemented against. Filling the column in is what moves this spec to
-> Implemented.
+> Written before the code, as S14 requires. Implemented acceptance rows name
+> their direct test evidence; remaining rows stay empty until their tests are
+> written, watched to fail, and implemented against.
 
 ## Purpose
 
@@ -142,8 +142,9 @@ else on the stream — a warning that would have gone to stdout goes to stderr
 instead. The object's shape is the `Response` it came from wherever there is
 one, so `helm ctl ledger show --json` round-trips `Response::Ledger` and a
 script can rely on `helm-core`'s serde definitions rather than on a format
-invented here. Where a command has no `Response` (`theme lint`, `doctor`), the
-shape is defined in this spec and is versioned by `PROTOCOL_VERSION`.
+invented here. `theme lint` and `theme diff` shapes are refined by
+[SPEC 0020](0020-helmctl-theme-json.md); `doctor` remains defined here and
+versioned by `PROTOCOL_VERSION`.
 
 **Colour** only when stdout is a terminal and `NO_COLOR` is unset, and only as
 ANSI indices — never a truecolor literal. The generated ANSI theme already maps
@@ -438,9 +439,9 @@ Each row is one happy path and becomes one test.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| B1 | Given the shipped palette and no session running, when `theme lint` runs, then it exits 0 and prints the six accents' hue separations | |
-| B2 | Given a palette with a fatal finding, when `theme lint` runs, then it exits 1 and prints every finding, not only the first | |
-| B3 | Given a fully validated current generation and one edited accent, when `theme diff` runs, then it exits 1, reports only lexicographically sorted `added`, `removed`, and `byte-different` normalized outputs, and performs no control initialization, recovery, lease, publication, pointer change, output write, or reload | |
+| B1 | Given the shipped palette and no session running, when `theme lint` runs, then it exits 0 and prints the six accents' hue separations | `theme_cli::lint_shipped_palette_is_session_independent_and_prints_hue_separations` |
+| B2 | Given a palette with a fatal finding, when `theme lint` runs, then it exits 1 and prints every finding, not only the first | `theme_cli::lint_bad_explicit_palette_exits_one_and_prints_every_fatal_finding` |
+| B3 | Given a fully validated current generation and one edited accent, when `theme diff` runs, then it exits 1, reports only lexicographically sorted `added`, `removed`, and `byte-different` normalized outputs, and performs no control initialization, recovery, lease, publication, pointer change, output write, or reload | `theme_cli::diff_after_palette_edit_is_sorted_and_does_not_mutate_generation_tree`; `theme_cli::diff_refusal_for_missing_current_does_not_mutate_generation_tree` |
 | B4 | Given a session with windows in orbits 1 and 3, when `orbit list` runs, then it prints six rows carrying rune, name, window count and layout, with orbit 1 marked active | |
 | B5 | Given a running session, when `orbit switch 3` runs, then it sends `Request::SwitchOrbit(3)`, prints the new orbit and exits 0 | |
 | B6 | Given a session whose backend has disconnected, when `orbit switch 2` runs and the session answers `Error { kind: backend-refused }`, then the CLI prints the session's message and exits 5 | |
@@ -452,9 +453,9 @@ Each row is one happy path and becomes one test.
 | B12 | Given `WAYLAND_DISPLAY` absent from the D-Bus activation environment, when `doctor` runs, then `env/wayland-display/dbus` fails within its 2 s deadline, prints the 25-second-hang symptom and the `dbus-update-activation-environment` remedy, and the command exits 1 | |
 | B13 | Given no session running and a font stack that covers ASCII only, when `doctor` runs, then the session checks are `skip` with a banner, `fonts/glyphs` warns with `Probe::summary()`'s wording, and it exits 0 | |
 | B14 | Given no session bus and no session running, when `doctor` runs, then the D-Bus and portal checks are `skip` and not `fail`, and it exits 0 | |
-| B15 | Given `theme apply` returns `Committed(generation)`, when the CLI reports it, then it exits 0 and reports exactly that generation as selected for future launches | |
-| B16 | Given `theme apply` returns `CommittedWithCleanupPending { generation, cause }`, when the CLI reports it, then it exits 0, reports exactly that generation as selected for future launches, and emits the safely escaped committed-cleanup warning | |
-| B17 | Given `theme apply` returns `OutcomeAmbiguous { candidate, cause }`, when the CLI reports it, then it exits 6, emits no human stdout, safely reports the candidate and unconfirmed activation, claims no success, and performs no recovery or retry | |
+| B15 | Given `theme apply` returns `Committed(generation)`, when the CLI reports it, then it exits 0 and reports exactly that generation as selected for future launches | `theme_cli::apply_reports_selected_future_generation_without_reload_or_session` |
+| B16 | Given `theme apply` returns `CommittedWithCleanupPending { generation, cause }`, when the CLI reports it, then it exits 0, reports exactly that generation as selected for future launches, and emits the safely escaped committed-cleanup warning | `helmctl::tests::cleanup_pending_reports_selected_generation_with_escaped_warning` |
+| B17 | Given `theme apply` returns `OutcomeAmbiguous { candidate, cause }`, when the CLI reports it, then it exits 6, emits no human stdout, safely reports the candidate and unconfirmed activation, claims no success, and performs no recovery or retry | `helmctl::tests::ambiguous_reports_no_success_stdout_and_escaped_cause` |
 
 ## Budgets
 

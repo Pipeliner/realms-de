@@ -18,7 +18,7 @@ result. They encode the parts of helm that are expensive to rediscover: the
 invariants that fail silently, the ordering contract that breaks portals, and
 the design rules the mockups state once and everything downstream depends on.
 
-## The seven
+## The ten
 
 | Skill | Triggers when | What it prevents |
 |---|---|---|
@@ -29,6 +29,9 @@ the design rules the mockups state once and everything downstream depends on.
 | [`helm-ui-fidelity`](helm-ui-fidelity/) | Building the bar, which-key strip, window headers, launcher or charon; reading the `.dc.html` prototypes | Drifting from the mockups; hardcoded sizes and colours; a rounded corner or an animation sneaking in; tofu glyphs on a machine without Nerd Fonts |
 | [`helm-perf-budget`](helm-perf-budget/) | Adding a timer, poll loop, animation or redraw path; anything hot; "is this fast enough" | Idle CPU that never reaches zero; redundant redraws; banned effects arriving as "just a small one"; performance claimed rather than measured |
 | [`helm-issue-flow`](helm-issue-flow/) | Picking up work, opening or closing an issue, running the agentic loop | Work that is not an issue; guessing at an ambiguous contract; a silent guess where a `needs-human` label belonged; a red build pushed |
+| [`helm-agent-sdd-bootstrap`](helm-agent-sdd-bootstrap/) | Beginning or recovering a local agent-SDD pilot investigation for one GitHub issue | A stale checkpoint treated as current truth; pilot records created without the normal issue/spec-first flow |
+| [`helm-agent-sdd-checkpoint`](helm-agent-sdd-checkpoint/) | Capturing a fresh issue-numbered pilot handoff or assessing a supported report-only edge | A record combined with ordinary work, stale Git provenance, or a dry-run assessment treated as promotion |
+| [`helm-agent-sdd-evidence-capture`](helm-agent-sdd-evidence-capture/) | Recording one fresh local pilot command, file observation or decision | Tool output, secrets, source snapshots or stale observations entering durable records |
 
 ## Adding an eighth
 

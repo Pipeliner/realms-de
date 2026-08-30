@@ -1,0 +1,2 @@
+{"id":"ev-001","ts":"2026-08-30T08:10:26Z","kind":"command","summary":"Ran the workspace verification suite","command":"cargo test --workspace --all-features --locked --quiet","exit_code":0,"git_head":"c2878a7323b67de8a41f34ecab09c694dd672c25","purpose":"verify SPEC 0020 implementation"}
+{"id":"ev-002","ts":"2026-08-30T08:10:26Z","kind":"command","summary":"Ran the workspace static checks","command":"cargo clippy --all-targets --all-features -- -D warnings","exit_code":0,"git_head":"c2878a7323b67de8a41f34ecab09c694dd672c25","purpose":"verify the changed Rust code"}

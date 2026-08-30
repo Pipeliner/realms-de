@@ -1,0 +1,2 @@
+{"id":"ev-001","ts":"2026-08-30T07:46:47Z","kind":"command","summary":"Ran the workspace test suite","command":"cargo test --workspace --all-features --locked --quiet","exit_code":0,"git_head":"9ee6de04de0690497c6fd85353fec21db95aa85a","purpose":"verify the code commit"}
+{"id":"ev-002","ts":"2026-08-30T07:46:47Z","kind":"file-observation","path":"packaging/debian/rules","lines":"44-53","git_head":"9ee6de04de0690497c6fd85353fec21db95aa85a","claim":"Rules select a versioned Rust toolchain before Cargo."}

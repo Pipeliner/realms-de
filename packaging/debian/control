@@ -47,7 +47,6 @@ Depends: ${shlibs:Depends},
          xdg-desktop-portal,
          xdg-desktop-portal-gtk,
          xdg-desktop-portal-wlr,
-         fonts-symbola,
          foot,
          fuzzel,
          btop,
@@ -65,6 +64,7 @@ Depends: ${shlibs:Depends},
 # font instead of drawing tofu, so this is a Recommends and the install docs
 # say how to get the real face.
 Recommends: fonts-ibm-plex,
+            fonts-symbola,
             gsettings-desktop-schemas,
             xwayland,
             slurp
@@ -84,7 +84,8 @@ Description: keyboard-first, gapless-tiling Wayland desktop environment
  river-window-management-v1.
  .
  THIS PACKAGE IS PRE-ALPHA (0.1.0) AND DOES NOT INSTALL A WORKING DESKTOP.
- helm's binaries — the window manager, the bar, the CLI — are not written yet.
+ helmctl is installed with its `theme apply`, `theme lint`, and `theme diff`
+ commands. The window manager and bar are not written yet.
  What it installs today is the session contract: the wayland-session entry, the
  session wrapper that performs the systemd/D-Bus environment handshake, the
  systemd user units and the palette. Logging into it gives you river with no

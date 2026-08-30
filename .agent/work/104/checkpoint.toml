@@ -1,0 +1,29 @@
+schema = "helm-agent-sdd/checkpoint/v1"
+issue = 104
+reason = "handoff"
+created_at = "2026-08-30T07:46:47Z"
+current_maturity = "probe"
+requested_maturity = "spike"
+git_head = "9ee6de04de0690497c6fd85353fec21db95aa85a"
+question = "Does Ubuntu Debian packaging select a verified versioned Rust toolchain?"
+success_condition = "Fresh verification evidence exists for the accepted packaging guard."
+limitations = ["Remote CI assessment remains pending."]
+affected_specs = ["SPEC-0019"]
+
+[goal]
+statement = "Keep Ubuntu package builds on a verified Rust toolchain."
+
+[acceptance]
+criteria = ["SPEC-0019"]
+
+[workspace]
+branch = "codex/issue-104-debian-toolchain"
+base = "3831a1e6ddcfc777757b7d94555a28a3c6023a86"
+dirty = false
+
+[[completed]]
+claim = "Focused package checks passed at the code commit."
+evidence = ["ev-001", "ev-002"]
+
+[next_actions]
+items = ["Open the reviewed pull request.", "Review remote CI results."]

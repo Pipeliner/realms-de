@@ -1,0 +1,33 @@
+name: Needs a human decision
+description: A decision the repository cannot determine from evidence alone
+title: "Decision: <what must be decided>"
+labels: ["needs-human", "needs-triage"]
+body:
+  - type: textarea
+    id: decision
+    attributes:
+      label: Decision needed
+      description: State the question that requires a person to decide.
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options and honest trade-offs
+      description: Give the real options, including the cost of each.
+    validations:
+      required: true
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Recommendation
+      description: Say which option the evidence supports and why.
+    validations:
+      required: true
+  - type: textarea
+    id: blocked
+    attributes:
+      label: What is blocked until answered
+      description: Name the work that cannot safely proceed.
+    validations:
+      required: true

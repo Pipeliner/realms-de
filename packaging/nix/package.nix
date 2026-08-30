@@ -1,11 +1,11 @@
 # The helm derivation.
 #
-# PRE-ALPHA (0.1.0): desktop binaries remain pending, but the workspace's
-# metadata-only local validator is installed as helm-sdd. This derivation also
+# PRE-ALPHA (0.1.0): `helmctl theme {apply,lint,diff}` and the workspace's
+# metadata-only local validator are installed. This derivation also
 # installs the session wrapper (wrapped so it can find river, systemctl,
 # dbus-update-activation-environment and gsettings), the wayland-session entry,
-# the systemd user units and the palette. helm-bar, helm-wm and helm land
-# in M1–M2 and appear in $out/bin with no change here.
+# the systemd user units and the palette. helm-bar and helm-wm remain
+# pending M1–M2 binaries.
 {
   pkgs,
   lib,
@@ -31,6 +31,11 @@
 
   cargoLock.lockFile = src + "/Cargo.lock";
 
+  # This virtual workspace has no root package. Build every member explicitly
+  # so postInstall can copy helmctl from Cargo's target-qualified output while
+  # retaining the helm-sdd binary that is wrapped below.
+  cargoBuildFlags = [ "--workspace" ];
+
   # The complete workspace test suite includes helm-sdd integration fixtures
   # and invokes Git to construct and inspect fixture repositories.  Git is a
   # check-time tool here, not an implicit runtime-closure decision for the
@@ -45,6 +50,8 @@
   doCheck = true;
 
   postInstall = ''
+    install -Dm755 target/${pkgs.stdenv.targetPlatform.rust.cargoShortTarget}/release/helmctl \
+      $out/bin/helmctl
     install -Dm755 ${src + "/packaging/session/helm-session"} $out/bin/helm-session
 
     # The desktop entry must point at the store path, not /usr/bin.

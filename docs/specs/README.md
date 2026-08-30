@@ -64,3 +64,8 @@ Sequential, never reused. A superseded spec keeps its number and gains a
 | [0010](0010-packaged-helm-sdd-git-runtime.md) | Packaged `helm-sdd` Git runtime | Accepted |
 | [0011](0011-theme-activation-generations.md) | Immutable theme activation generations | Accepted |
 | [0012](0012-activation-launch-lifecycle.md) | Activation launch lifecycle | Draft — candidate for acceptance |
+| [0016](0016-readme-truth-snapshot.md) | README truthfulness snapshot | Accepted |
+| [0017](0017-contribution-templates.md) | Contribution templates | Accepted |
+| [0018](0018-agent-sdd-pilot-procedures.md) | Local agent-SDD pilot procedures | Accepted |
+| [0019](0019-ubuntu-versioned-rust-toolchain.md) | Ubuntu versioned Rust toolchain guard | Accepted |
+| [0020](0020-helmctl-theme-json.md) | helmctl theme JSON output | Accepted |

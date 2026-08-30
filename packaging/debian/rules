@@ -9,9 +9,9 @@
 #
 # (a copy works too; the symlink keeps one copy of the truth).
 #
-# PRE-ALPHA (0.1.0): the workspace contains one crate, helm-core, and it is a
-# library. This build therefore produces no helm binaries — override_dh_auto_
-# install installs whichever of them exist, so M1-M2 land with no change here.
+# PRE-ALPHA (0.1.0): this workspace builds `helmctl` for the implemented theme
+# commands. override_dh_auto_install installs every built Helm binary, so
+# helm-wm and helm-bar can land without another packaging change.
 #
 # NEEDS-HUMAN — the vendored river (helm-river) this package depends on is NOT
 # built by these rules, and building it is not a trivial recipe:
@@ -42,16 +42,15 @@ export CARGO_HOME = $(CURDIR)/debian/.cargo
 export CARGO_TERM_COLOR = never
 
 # Ubuntu 24.04's default cargo is 1.75, below helm's MSRV of 1.85. The
-# versioned toolchain packages install under /usr/lib/rust-<version>/bin, which
-# is the Debian convention for them; the wildcard takes the newest one present,
-# so a newer toolchain is picked up without editing this file. The path itself
-# is NOT verified on a live noble box from this container — if it is wrong,
-# nothing is added to PATH and the version guard below fails loudly with the
-# rustc it did find, rather than building with the wrong compiler.
-RUST_VERSIONED_BIN := $(lastword $(sort $(wildcard /usr/lib/rust-1.[89][0-9]/bin)))
-ifneq ($(RUST_VERSIONED_BIN),)
-export PATH := $(RUST_VERSIONED_BIN):$(PATH)
+# versioned toolchain packages install under /usr/lib/rust-<version>/bin. The
+# resolver accepts only a complete cargo/rustc pair and returns the newest
+# matching path. Its Ubuntu 24.04 archive layout was verified on #104.
+RUST_VERSIONED_GLOB := /usr/lib/rust-1.[89][0-9]/bin
+RUST_VERSIONED_BIN := $(shell ./packaging/debian/toolchain-path.sh)
+ifeq ($(strip $(RUST_VERSIONED_BIN)),)
+$(error helm: missing Ubuntu versioned Rust toolchain directory: $(RUST_VERSIONED_GLOB))
 endif
+export PATH := $(RUST_VERSIONED_BIN):$(PATH)
 
 %:
 	dh $@
@@ -87,8 +86,9 @@ override_dh_auto_install:
 		debian/helm/usr/lib/systemd/user/helm-session.target.wants/helm-wm.service
 	ln -sf ../helm-bar.service \
 		debian/helm/usr/lib/systemd/user/helm-session.target.wants/helm-bar.service
-	# Install whichever helm binaries this revision actually built. Today that
-	# is none of them; the loop means M1-M2 need no packaging change. The names
+	# Install whichever helm binaries this revision actually built. `helmctl` is
+	# built now; the loop means helm-wm and helm-bar need no packaging change. The
+	# names
 	# are the settled ones: helm-wm (the window manager and session daemon) and
 	# helmctl (the CLI, so it cannot collide with Kubernetes helm).
 	set -e; \
@@ -97,7 +97,7 @@ override_dh_auto_install:
 			install -Dm755 "target/release/$$bin" "debian/helm/usr/bin/$$bin"; \
 			echo "installed $$bin"; \
 		else \
-			echo "skipping $$bin: not built (expected before M2)"; \
+			echo "skipping $$bin: not built in this revision"; \
 		fi; \
 	done
 
