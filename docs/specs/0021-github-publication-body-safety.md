@@ -40,7 +40,9 @@ and is not introduced here.
    surfaces. Documentation prose and static test fixtures remain outside that
    command-source check.
 4. The normal CI workflow runs the helper's black-box test and the guard's
-   pass/fail fixtures before documentation success is reported.
+   pass/fail fixtures before documentation success is reported. The guard and
+   its test are valid POSIX shell programs under the pinned ShellCheck policy;
+   they do not rely on a ShellCheck suppression to encode literal shell syntax.
 
 ## Acceptance criteria
 
@@ -50,6 +52,7 @@ and is not introduced here.
 | A2 | Given invalid identifiers, arity, or non-regular/unreadable body inputs, when the helper is run, then it fails before invoking the fake GitHub CLI. | `docs/test-gh-body-file.sh` — `reject-before-gh` |
 | A3 | Given a tracked automation fixture containing any forbidden direct body publication form, when the repository guard runs, then it fails; given the approved helper and read-only queries, it passes. | `docs/test-github-body-safety.sh` — `tracked-command-allowlist` |
 | A4 | Given the normal pull-request CI workflow, when documentation checks run, then the helper and guard fixtures execute and the repository guard passes. | `.github/workflows/ci.yml` — `docs` |
+| A5 | Given the helper guard and its fixture test, when the pinned ShellCheck policy examines them, then both parse and pass without a ShellCheck suppression. | `docs/test-github-body-safety.sh` — `guard-source-is-shellcheck-clean`; `checks.shellcheck` |
 
 ## Failure modes
 

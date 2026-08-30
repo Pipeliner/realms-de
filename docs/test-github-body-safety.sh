@@ -16,8 +16,7 @@ make_fixture() {
     fixture=$1
     mkdir -p "$fixture/scripts" "$fixture/.github/workflows" "$fixture/docs"
     cp "$root/scripts/gh-body-file" "$fixture/scripts/gh-body-file"
-    # shellcheck disable=SC2016 # The fixture deliberately contains literal shell-looking prose.
-    printf '%s%s%s\n' '# allowed documentation prose: g' 'h issue comment --bo' 'dy "$text"' >"$fixture/docs/policy.md"
+    printf '%s%s%s%s\n' '# allowed documentation prose: g' 'h issue comment --bo' 'dy "$' 'text"' >"$fixture/docs/policy.md"
     printf '%s\n' 'name: fixture' >"$fixture/.github/workflows/ci.yml"
     git -C "$fixture" init -q
     git -C "$fixture" add .
@@ -38,6 +37,13 @@ expect_fail() {
 fixture=$tmp/repository
 make_fixture "$fixture"
 expect_pass "$fixture"
+
+directive_prefix='shellcheck dis'
+directive_suffix='able'
+if grep -F -q "$directive_prefix$directive_suffix" "$guard" ||
+    grep -F -q "$directive_prefix$directive_suffix" "$root/docs/test-github-body-safety.sh"; then
+    fail 'body-safety guard and fixture test must encode literal syntax without ShellCheck suppressions'
+fi
 
 for command in \
     './docs/test-gh-body-file.sh' \
