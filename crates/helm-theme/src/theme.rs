@@ -1270,6 +1270,26 @@ mod tests {
         selected.release().unwrap();
     }
 
+    #[test]
+    fn public_apply_fatal_candidate_preserves_current_generation() {
+        let root = tempfile::tempdir().unwrap();
+        apply(root.path()).expect("apply initial generation");
+        let current = root.path().join("helm/generated/current");
+        let before = std::fs::read_to_string(&current).expect("read current generation");
+        let palette = root.path().join(USER_PALETTE);
+        let invalid = std::fs::read_to_string(&palette)
+            .expect("read seeded palette")
+            .replace("normal = \"#c2cbde\"", "normal = \"#101218\"");
+        std::fs::write(&palette, invalid).expect("write fatally unreadable palette");
+
+        assert!(apply(root.path()).is_err(), "fatal palette was accepted");
+        assert_eq!(
+            std::fs::read_to_string(&current).expect("read current generation"),
+            before,
+            "fatal candidate changed the current generation"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn public_apply_refuses_a_palette_symlink_without_seeding_its_destination() {

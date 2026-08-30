@@ -125,34 +125,52 @@ where
 
 fn run_apply(root: &Path) -> ExitCode {
     match helm_theme::apply(root) {
-        Ok(GenerationPublicationOutcome::Committed(generation)) => {
-            println!(
-                "generation {} selected for future launches",
-                generation.as_str()
-            );
-            ExitCode::SUCCESS
-        }
-        Ok(GenerationPublicationOutcome::CommittedWithCleanupPending { generation, cause }) => {
-            println!(
-                "generation {} selected for future launches",
-                generation.as_str()
-            );
-            eprintln!(
-                "warning: generation {} is durably selected for future launches; committed cleanup is pending: {}",
-                generation.as_str(),
-                escaped_cause(&cause),
-            );
-            ExitCode::SUCCESS
-        }
-        Ok(GenerationPublicationOutcome::OutcomeAmbiguous { candidate, cause }) => {
-            eprintln!(
-                "theme apply failed: activation is unconfirmed for candidate {}; inspect generation state before retrying: {}",
-                candidate.as_str(),
-                escaped_cause(&cause),
-            );
-            ExitCode::from(6)
+        Ok(outcome) => {
+            let report = report_apply_outcome(outcome);
+            print!("{}", report.stdout);
+            eprint!("{}", report.stderr);
+            report.exit
         }
         Err(error) => failure(&error.to_string()),
+    }
+}
+
+struct ApplyReport {
+    exit: ExitCode,
+    stdout: String,
+    stderr: String,
+}
+
+fn report_apply_outcome(outcome: GenerationPublicationOutcome) -> ApplyReport {
+    match outcome {
+        GenerationPublicationOutcome::Committed(generation) => ApplyReport {
+            exit: ExitCode::SUCCESS,
+            stdout: format!("generation {} selected for future launches\n", generation.as_str()),
+            stderr: String::new(),
+        },
+        GenerationPublicationOutcome::CommittedWithCleanupPending { generation, cause } => {
+            ApplyReport {
+                exit: ExitCode::SUCCESS,
+                stdout: format!(
+                    "generation {} selected for future launches\n",
+                    generation.as_str()
+                ),
+                stderr: format!(
+                    "warning: generation {} is durably selected for future launches; committed cleanup is pending: {}\n",
+                    generation.as_str(),
+                    escaped_cause(&cause),
+                ),
+            }
+        }
+        GenerationPublicationOutcome::OutcomeAmbiguous { candidate, cause } => ApplyReport {
+            exit: ExitCode::from(6),
+            stdout: String::new(),
+            stderr: format!(
+                "theme apply failed: activation is unconfirmed for candidate {}; inspect generation state before retrying: {}\n",
+                candidate.as_str(),
+                escaped_cause(&cause),
+            ),
+        },
     }
 }
 
@@ -233,4 +251,48 @@ where
 
 fn main() -> ExitCode {
     run(std::env::args_os(), &ProcessEnv)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use helm_theme::generation::GenerationId;
+
+    fn generation() -> GenerationId {
+        GenerationId::parse("0123456789abcdef0123456789abcdef").expect("valid generation id")
+    }
+
+    #[test]
+    fn cleanup_pending_reports_selected_generation_with_escaped_warning() {
+        let report =
+            report_apply_outcome(GenerationPublicationOutcome::CommittedWithCleanupPending {
+                generation: generation(),
+                cause: "cleanup \"later\"\nretry".into(),
+            });
+
+        assert_eq!(report.exit, ExitCode::SUCCESS);
+        assert_eq!(
+            report.stdout,
+            "generation 0123456789abcdef0123456789abcdef selected for future launches\n"
+        );
+        assert_eq!(
+            report.stderr,
+            "warning: generation 0123456789abcdef0123456789abcdef is durably selected for future launches; committed cleanup is pending: \"cleanup \\\"later\\\"\\nretry\"\n"
+        );
+    }
+
+    #[test]
+    fn ambiguous_reports_no_success_stdout_and_escaped_cause() {
+        let report = report_apply_outcome(GenerationPublicationOutcome::OutcomeAmbiguous {
+            candidate: generation(),
+            cause: "pointer \"unknown\"\ninspect".into(),
+        });
+
+        assert_eq!(report.exit, ExitCode::from(6));
+        assert!(report.stdout.is_empty());
+        assert_eq!(
+            report.stderr,
+            "theme apply failed: activation is unconfirmed for candidate 0123456789abcdef0123456789abcdef; inspect generation state before retrying: \"pointer \\\"unknown\\\"\\ninspect\"\n"
+        );
+    }
 }
