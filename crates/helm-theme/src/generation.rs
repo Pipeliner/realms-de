@@ -3,6 +3,9 @@
 #[allow(dead_code)]
 mod lifecycle;
 
+#[allow(dead_code)]
+mod desktop_exec;
+
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
