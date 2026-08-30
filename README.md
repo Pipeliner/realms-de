@@ -1,8 +1,8 @@
 <h1 align="center">✦ helm</h1>
 
 <p align="center">
-  <strong>a keyboard-first, gapless-tiling Wayland desktop environment</strong><br>
-  <em>space and magic, no wasted pixels, zero animations</em>
+  <strong>a keyboard-first, gapless-tiling, Rust-first Wayland desktop environment</strong><br>
+  <em>zero animations, one palette file · space and magic, no wasted pixels</em>
 </p>
 
 <p align="center">
@@ -26,21 +26,22 @@
 
 ## What makes it different
 
-- **The ledger is the only state.** Window positions are never stored — they are
+- **The ledger is the truth.** Window positions are never stored — they are
   projected from an ordered list, on demand. Undo is not a stack of inverse
   operations; it restores an older ledger, and the screen comes back exactly as
   it was. [ADR 0001](docs/adr/0001-ledger-as-single-source-of-truth.md)
 
-- **One file decides every colour.** `palette.toml` is the single source of
+- **No colour outside `palette.toml`.** `palette.toml` is the single source of
   truth for the bar, the terminal, GTK, Qt, yazi, btop and the prompt. Contrast
   is *derived* in perceptual colour space, not applied as a fullscreen filter,
   so accents keep their hue instead of rotating. Nothing downstream is permitted
   a colour literal. [ADR 0005](docs/adr/0005-palette-toml-single-source.md)
 
-- **"Snappy" is a number.** There are no animations, and there is a published
+- **Snappy is a number.** There are no animations, and there is a published
   frame budget for every path that can feel slow: key press to new geometry
   under 4 ms, state change to bar redraw under 8 ms, cold session start under
   900 ms. Budgets are gates in CI, not aspirations.
+  [ADR 0009](docs/adr/0009-no-animation-budget.md) ·
   [ARCHITECTURE §4](docs/ARCHITECTURE.md#4-what-robust-and-snappy-mean-here)
 
 - **Proven tools, kept behind seams.** charon is yazi, horus is btop, thoth is
@@ -104,17 +105,18 @@ The long form, with the component map and the decision register, is in
 
 ## Status
 
-**Pre-alpha. Milestone M0. There is no desktop environment here yet.**
+**Pre-alpha. Milestone M0 is in progress. There is no desktop environment here yet.**
 
 What exists, honestly:
 
 | | |
 |---|---|
-| `helm-core` | **Implemented and tested.** Ledger, layout projection, OKLab palette derivation and lint, keymap, glyph inventory, IPC types. 54 tests, `cargo test` green. |
+| `helm-core` | **Implemented and tested.** Ledger, layout projection, OKLab palette derivation and lint, keymap, glyph inventory and IPC types. [`cargo test`](#try-it) is the current executable evidence. |
 | Architecture, MVP cut line, failure register | **Written.** [ARCHITECTURE](docs/ARCHITECTURE.md) · [MVP](docs/MVP.md) · [PITFALLS](docs/PITFALLS.md) |
 | Specs and ADRs | **In progress.** [`docs/specs/`](docs/specs/) · [`docs/adr/`](docs/adr/) |
-| `helm-theme`, `helm-ctl`, `helm-session`, `helm-bar`, `helm-hecate`, `helm-odin`, `helm-compositor` | **Planned.** Not started. |
-| Packaging, session entry, portals | **Planned.** Not started. |
+| `helm-theme` | **Implemented and tested pre-alpha library.** It renders and validates sealed generations, but has no user-facing `helmctl theme` command yet. |
+| `helm-ctl`, `helm-session`, `helm-bar`, `helm-hecate`, `helm-odin`, `helm-compositor` | **Planned.** The binaries that make a usable desktop do not exist yet. |
+| Package/session/portal assets | **Tracked pre-alpha contract.** The repository contains a session entry and wrapper, systemd units, portal configuration, Nix module and native package definitions; none creates a usable Helm desktop yet. |
 | Every image in this repository | **Concept art.** Hand-drawn SVG and the design handoff's HTML prototypes. There are no screenshots of helm, because helm does not run yet. |
 
 Crates join the Cargo workspace only when they gain a real implementation, so a
@@ -126,9 +128,10 @@ is in [docs/ROADMAP.md](docs/ROADMAP.md). **M3 is the MVP.**
 
 ## Try it
 
-You cannot yet. There is nothing to install: no session entry, no compositor
-backend, no bar. `cargo test` is the only thing to run, and it exercises a
-library, not a desktop.
+You cannot log into helm yet. A tracked session entry intentionally aborts
+because `helm-wm` is not implemented; the bar is also absent, so the
+package/session assets are not a usable desktop. `cargo test` exercises the
+implemented pre-alpha libraries, not a running desktop.
 
 ```console
 $ git clone https://github.com/Pipeliner/realms-de
@@ -147,19 +150,25 @@ a `helm ctl doctor` that says what is wrong before you file a bug.
 ## Needs a human
 
 Standing order S3: judgement the repository cannot supply is surfaced here, on
-the front page, rather than buried in an issue. Each of these is blocked on a
-person deciding, not on someone writing code. They carry the
+the front page, rather than buried in an issue. This is a snapshot of the open
 [**`needs-human`**](https://github.com/Pipeliner/realms-de/labels/needs-human)
-label.
+label at **2026-08-30T06:18:36Z**; follow the label for the live state.
 
-| Question | Why it needs a person | The options, as we see them |
-|---|---|---|
-| **Which River source and compatibility policy should Ubuntu and Nix use?** Fedora 44 now has an official `river >= 0.4.0` packaging candidate, but that availability is not a tested Helm session. Ubuntu and Nix retain their independent source and pinning obligations. | It is a maintenance commitment, not a technical question: someone must own each non-Fedora source and re-test compatibility on every bump. See [ADR 0013](docs/adr/0013-river-window-management-backend.md) and [ADR 0015](docs/adr/0015-fedora-44-pre-alpha-baseline.md). | (a) use target-native packages where the accepted protocol floor is available; (b) pin a River source per affected target; (c) bring `helm-compositor` forward and pay for it with a year. |
-| **Which lock screen ships, and what are the idle defaults?** A desktop that does not lock on lid-close is not daily-drivable, and blank/lock timeouts are user-visible security defaults. | Choosing a lock screen is choosing a security posture, and the repository should not pick one silently. See [ADR 0011](docs/adr/0011-session-integration-contract.md). | (a) `gtklock` — `ext-session-lock-v1` is the property that matters; (b) `swaylock-effects` themed from `palette.toml`; (c) write `helm-ward` later and use a stopgap until then. Timeouts: not to be guessed. |
-| **Where do distro packages live, and who holds the signing key?** The tracked native `.deb` and `.rpm` package paths still need a distribution channel and signed artefacts. | Needs an account, a key and a person willing to hold it. Nothing in the repository can decide this. See [ADR 0010](docs/adr/0010-nix-flake-as-reference-build.md). | (a) GitHub Releases only, install by download; (b) a self-hosted apt repo plus a Copr; (c) an OBS project covering both. |
-| **Font licensing for the Nerd Font fallback.** helm's glyph inventory — runes, planetary and alchemical symbols — needs a symbol font present at first boot, and the packages must be able to redistribute it. | A licence call. Redistribution terms differ per family, and getting it wrong is a legal problem, not a bug. See [ADR 0012](docs/adr/0012-font-fallback-is-a-contract.md). | (a) depend on distribution packages and refuse to vendor; (b) vendor Symbols Nerd Font Mono where its licence permits; (c) ship only the ASCII fallbacks and let the user install a symbol font. |
-
-None of these blocks M0 or M1.
+| Issue | What it blocks |
+|---|---|
+| [#168 — Reconcile generation GC with transferred lifecycle leases and M1/M2 launch sequencing](https://github.com/Pipeliner/realms-de/issues/168) | An accepted lifecycle-lease/GC contract and truthful M1/M2 launch sequencing. |
+| [#166 — Specify JSON schemas for helmctl theme lint and diff](https://github.com/Pipeliner/realms-de/issues/166) | The public `theme lint` and `theme diff` JSON contracts. |
+| [#135 — Complete exact M1 activation assets and supported-consumer probes](https://github.com/Pipeliner/realms-de/issues/135) | Exact M1 consumer assets and supported-consumer black-box probes. |
+| [#134 — Decide supported M1 package sources and catalog migration for Yazi and Starship](https://github.com/Pipeliner/realms-de/issues/134) | The supported Yazi/Starship package-source and catalog-migration policy. |
+| [#133 — Specify truthful desktop-entry and D-Bus activation for themed Qt launches](https://github.com/Pipeliner/realms-de/issues/133) | A truthful desktop-entry and D-Bus activation contract for themed Qt launches. |
+| [#132 — Reconcile activation launch lifecycle with session teardown and restart](https://github.com/Pipeliner/realms-de/issues/132) | The activation lifecycle, teardown and restart contract. |
+| [#35 — Does the 𓂃 prompt sigil survive on the target distros' default fonts, or does `~` become the default?](https://github.com/Pipeliner/realms-de/issues/35) | A verified default for the Egyptian prompt sigil on target installations. |
+| [#30 — Template: starship prompt for thoth, with the 𓂃 sigil and its ASCII fallback](https://github.com/Pipeliner/realms-de/issues/30) | The Starship prompt’s default-glyph decision. |
+| [#25 — Template: GTK 3, GTK 4 and libadwaita stylesheets](https://github.com/Pipeliner/realms-de/issues/25) | An accepted GTK configuration-location contract. |
+| [#24 — Extend the "no colour outside palette.toml" CI guard to templates and generated outputs](https://github.com/Pipeliner/realms-de/issues/24) | A palette-literal guard for templates and generated outputs. |
+| [#23 — Add `helmctl theme apply`, `lint` and `diff`](https://github.com/Pipeliner/realms-de/issues/23) | The complete `helmctl theme` interface. |
+| [#17 — Configure branch protection on the default branch with the CI checks as required](https://github.com/Pipeliner/realms-de/issues/17) | Enforced required CI checks and branch protection. |
+| [#16 — Enable Dependabot alerts and version updates, and create the labels its config references](https://github.com/Pipeliner/realms-de/issues/16) | Dependabot activation and the labels it requires. |
 
 ---
 
@@ -170,15 +179,13 @@ realms-de/
 ├─ crates/
 │  └─ helm-core/        the contracts: ledger, layout, palette, keys, ipc, glyphs
 ├─ configs/             shipped configs for the tools helm reuses
-│  ├─ templates/          *.tmpl rendered from palette.toml
-│  ├─ yazi/               charon: keymap + theme
-│  ├─ btop/               horus: theme
-│  ├─ zsh/ starship/      thoth: prompt
+│  ├─ templates/          rendered theme inputs for GTK, Qt, TUI and prompt targets
 │  └─ portal/             xdg-desktop-portal wiring
 ├─ packaging/
-│  ├─ nix/              flake, NixOS module, VM boot test — the reference build
+│  ├─ nix/              Nix package/module/check implementation
 │  ├─ debian/           control, rules
 │  └─ fedora/           spec
+├─ flake.nix            root Nix reference-build entry point
 ├─ docs/
 │  ├─ ARCHITECTURE.md   the shape we are building towards, and why
 │  ├─ MVP.md            the cut line — what M3 must do to count

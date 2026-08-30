@@ -22,7 +22,9 @@
           ${src + "/packaging/check-font-policy.sh"} \
           ${src + "/packaging/font-policy-test.sh"} \
           ${src + "/packaging/nix/check-root-flake-ci.sh"} \
-          ${src + "/packaging/nix/test-root-flake-ci.sh"}
+          ${src + "/packaging/nix/test-root-flake-ci.sh"} \
+          ${src + "/docs/check-readme-truth-snapshot.sh"} \
+          ${src + "/docs/test-readme-truth-snapshot.sh"}
         touch $out
       '';
 
