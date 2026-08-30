@@ -143,12 +143,39 @@ struct LifecycleLeaseRecord {
     boot_id: String,
     owner_uid: u32,
     owner_kind: LifecycleOwnerKind,
+    unit: String,
+    unit_invocation: String,
+    process_group: u32,
+    cgroup: String,
+    cgroup_device: u64,
+    cgroup_inode: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LifecycleOwnerKind {
     SystemdScope,
     ProcessGroup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransferCheckpoint {
+    BeforeReplace,
+    AfterReplace,
+    AfterLeaseDirectoryFsync,
+    BeforeAdoptedRecord,
+    BeforeSelectionDisarm,
+}
+
+trait LeaseFilesystem {
+    fn checkpoint(&mut self, checkpoint: TransferCheckpoint) -> std::result::Result<(), String>;
+}
+
+struct RealLeaseFilesystem;
+
+impl LeaseFilesystem for RealLeaseFilesystem {
+    fn checkpoint(&mut self, _checkpoint: TransferCheckpoint) -> std::result::Result<(), String> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1872,6 +1899,113 @@ impl GenerationSelection {
         ParsedLeaseRecord::parse(&raw).map(Some)
     }
 
+    fn revalidate_for_lifecycle_transfer(&self) -> std::result::Result<(), String> {
+        if self.process_identity.owner_uid != rustix::process::getuid().as_raw()
+            || self.process_identity.boot_id != linux_boot_id()?
+        {
+            return Err("generation selection owner identity is stale".into());
+        }
+        let (start_time, owner_uid) = linux_process_identity(self.process_identity.pid)?;
+        if start_time != self.process_identity.start_time
+            || owner_uid != self.process_identity.owner_uid
+        {
+            return Err("generation selection process identity is stale".into());
+        }
+        let manifest = verify_opened_generation(&self.root, &self.generation)?;
+        if digest_hex(manifest.v1.raw.as_bytes()) != self.manifest_seal_digest {
+            return Err("generation manifest changed after selection".into());
+        }
+        match self.read_current_lease()? {
+            Some(ParsedLeaseRecord::Process(record)) if record == self.process_identity => Ok(()),
+            _ => Err("generation selection lacks its exact process lease".into()),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn replace_with_lifecycle_locked(
+        &self,
+        record: LifecycleLeaseRecord,
+    ) -> std::result::Result<(), String> {
+        let mut filesystem = RealLeaseFilesystem;
+        self.replace_with_lifecycle_locked_with_filesystem(record, &mut filesystem)
+    }
+
+    fn replace_with_lifecycle_locked_with_filesystem<F: LeaseFilesystem>(
+        &self,
+        record: LifecycleLeaseRecord,
+        filesystem: &mut F,
+    ) -> std::result::Result<(), String> {
+        if record.generation != self.generation
+            || record.pid != self.process_identity.pid
+            || record.start_time != self.process_identity.start_time
+            || record.boot_id != self.process_identity.boot_id
+            || record.owner_uid != self.process_identity.owner_uid
+        {
+            return Err("lifecycle lease does not match its source selection".into());
+        }
+        let raw = record.encode();
+        if LifecycleLeaseRecord::parse(&raw)? != record {
+            return Err("lifecycle lease is not canonical".into());
+        }
+        self.revalidate_for_lifecycle_transfer()?;
+
+        let temporary = format!(".lease-transfer-{}", self.lease_name);
+        let descriptor = openat(
+            &self.lease_directory,
+            temporary.as_str(),
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .map_err(|error| error.to_string())?;
+        let mut file = std::fs::File::from(descriptor);
+        let staging_identity =
+            rustix::fs::fstat(file.as_fd()).map_err(|error| error.to_string())?;
+        validate_owned_mode(
+            "lifecycle lease transfer staging file",
+            &staging_identity,
+            FileType::RegularFile,
+            0o600,
+            rustix::process::getuid().as_raw(),
+        )?;
+        let staged = (|| {
+            file.write_all(&raw).map_err(|error| error.to_string())?;
+            fsync(file.as_fd()).map_err(|error| error.to_string())?;
+            filesystem.checkpoint(TransferCheckpoint::BeforeReplace)?;
+            if !transfer_staging_matches(
+                &self.lease_directory,
+                temporary.as_str(),
+                &staging_identity,
+            )? {
+                return Err("lifecycle lease transfer staging file changed".into());
+            }
+            self.revalidate_for_lifecycle_transfer()?;
+            renameat(
+                &self.lease_directory,
+                temporary.as_str(),
+                &self.lease_directory,
+                self.lease_name.as_str(),
+            )
+            .map_err(|error| error.to_string())?;
+            filesystem.checkpoint(TransferCheckpoint::AfterReplace)?;
+            fsync(&self.lease_directory).map_err(|error| error.to_string())?;
+            filesystem.checkpoint(TransferCheckpoint::AfterLeaseDirectoryFsync)
+        })();
+        if staged.is_err()
+            && matches!(
+                transfer_staging_matches(
+                    &self.lease_directory,
+                    temporary.as_str(),
+                    &staging_identity,
+                ),
+                Ok(true)
+            )
+        {
+            let _ = unlinkat(&self.lease_directory, temporary.as_str(), AtFlags::empty());
+            let _ = fsync(&self.lease_directory);
+        }
+        staged
+    }
+
     fn release_matching_process_lease(&mut self) -> std::result::Result<(), String> {
         if self.released {
             return Ok(());
@@ -1904,6 +2038,26 @@ impl GenerationSelection {
     fn disarm_after_transfer(&mut self) {
         self.released = true;
     }
+}
+
+fn transfer_staging_matches(
+    parent: &OwnedFd,
+    name: &str,
+    opened: &rustix::fs::Stat,
+) -> std::result::Result<bool, String> {
+    let path = match statat(parent, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(path) => path,
+        Err(Errno::NOENT) => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+    };
+    validate_owned_mode(
+        "lifecycle lease transfer staging file",
+        &path,
+        FileType::RegularFile,
+        0o600,
+        rustix::process::getuid().as_raw(),
+    )?;
+    Ok(path.st_dev == opened.st_dev && path.st_ino == opened.st_ino)
 }
 
 impl Drop for GenerationSelection {
@@ -2020,6 +2174,29 @@ impl ParsedLeaseRecord {
 }
 
 impl LifecycleLeaseRecord {
+    fn encode(&self) -> Vec<u8> {
+        format!(
+            "helm-generation-lifecycle-lease-v1\ngeneration {}\nlaunch {}\npid {}\nstart-time {}\nboot-id {}\nowner-uid {}\nowner-kind {}\nunit {}\nunit-invocation {}\nprocess-group {}\ncgroup {}\ncgroup-device {}\ncgroup-inode {}\n",
+            self.generation.as_str(),
+            self.launch.as_str(),
+            self.pid,
+            self.start_time,
+            self.boot_id,
+            self.owner_uid,
+            match self.owner_kind {
+                LifecycleOwnerKind::SystemdScope => "systemd-scope",
+                LifecycleOwnerKind::ProcessGroup => "process-group",
+            },
+            self.unit,
+            self.unit_invocation,
+            self.process_group,
+            self.cgroup,
+            self.cgroup_device,
+            self.cgroup_inode,
+        )
+        .into_bytes()
+    }
+
     fn parse(raw: &[u8]) -> std::result::Result<Self, String> {
         let text = std::str::from_utf8(raw).map_err(|_| "lifecycle lease is not UTF-8")?;
         if text.contains('\r') || !text.ends_with('\n') {
@@ -2102,6 +2279,12 @@ impl LifecycleLeaseRecord {
             boot_id: boot_id.into(),
             owner_uid,
             owner_kind,
+            unit: unit.into(),
+            unit_invocation: invocation.into(),
+            process_group,
+            cgroup: cgroup.into(),
+            cgroup_device,
+            cgroup_inode,
         })
     }
 }
