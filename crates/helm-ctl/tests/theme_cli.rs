@@ -217,6 +217,19 @@ fn lint_bad_explicit_palette_exits_one_and_prints_every_fatal_finding() {
     assert!(diagnostics.contains("text.normal"));
 }
 
+#[test]
+fn apply_reports_selected_future_generation_without_reload_or_session() {
+    let temp = tempfile::tempdir().expect("temporary config root");
+
+    let out = helmctl_at(temp.path(), ["theme", "apply"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    let report = stdout(&out);
+    assert!(report.starts_with("generation "));
+    assert!(report.contains(" selected for future launches"));
+    assert!(!report.contains("reloaded"));
+}
+
 #[cfg(unix)]
 #[test]
 fn diff_after_palette_edit_is_sorted_and_does_not_mutate_generation_tree() {

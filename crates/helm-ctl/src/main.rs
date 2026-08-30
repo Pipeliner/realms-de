@@ -6,7 +6,7 @@ use std::{
 
 use clap::{error::ErrorKind, Args, Parser, Subcommand};
 use helm_core::Palette;
-use helm_theme::ThemeOutputChange;
+use helm_theme::{generation::GenerationPublicationOutcome, ThemeOutputChange};
 
 #[derive(Parser)]
 #[command(name = "helmctl")]
@@ -79,8 +79,17 @@ where
 
     match cli.command {
         Command::Theme(Theme {
-            command: ThemeCommand::Apply(_),
-        }) => ExitCode::SUCCESS,
+            command: ThemeCommand::Apply(args),
+        }) => {
+            let root = match args.config_root {
+                Some(root) => root,
+                None => match default_config_root(env) {
+                    Ok(root) => root,
+                    Err(error) => return usage_error(&error),
+                },
+            };
+            run_apply(&root)
+        }
         Command::Theme(Theme {
             command: ThemeCommand::Diff(args),
         }) => {
@@ -112,6 +121,43 @@ where
             }
         }
     }
+}
+
+fn run_apply(root: &Path) -> ExitCode {
+    match helm_theme::apply(root) {
+        Ok(GenerationPublicationOutcome::Committed(generation)) => {
+            println!(
+                "generation {} selected for future launches",
+                generation.as_str()
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(GenerationPublicationOutcome::CommittedWithCleanupPending { generation, cause }) => {
+            println!(
+                "generation {} selected for future launches",
+                generation.as_str()
+            );
+            eprintln!(
+                "warning: generation {} is durably selected for future launches; committed cleanup is pending: {}",
+                generation.as_str(),
+                escaped_cause(&cause),
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(GenerationPublicationOutcome::OutcomeAmbiguous { candidate, cause }) => {
+            eprintln!(
+                "theme apply failed: activation is unconfirmed for candidate {}; inspect generation state before retrying: {}",
+                candidate.as_str(),
+                escaped_cause(&cause),
+            );
+            ExitCode::from(6)
+        }
+        Err(error) => failure(&error.to_string()),
+    }
+}
+
+fn escaped_cause(cause: &str) -> String {
+    serde_json::to_string(cause).expect("serializing a string cannot fail")
 }
 
 fn run_diff(root: &Path) -> ExitCode {

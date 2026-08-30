@@ -231,6 +231,7 @@ dependencies = [
  "clap",
  "helm-core",
  "helm-theme",
+ "serde_json",
  "tempfile",
 ]
 
