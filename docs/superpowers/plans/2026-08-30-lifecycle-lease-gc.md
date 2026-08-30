@@ -33,7 +33,7 @@
 
 - [ ] **Step 1: Add failing canonical-parser fixtures**
 
-Add fixtures that write a valid `helm-generation-lifecycle-lease-v1` record, an unknown discriminator, a lifecycle record with a duplicated `launch` field, and a lifecycle record with a process-group/systemd cross-kind field combination. Assert that only the valid record parses as `ParsedLeaseRecord::Lifecycle` and every other form is rejected.
+Add fixtures that write a valid `helm-generation-lifecycle-lease-v1` record, an unknown discriminator, a lifecycle record with a duplicated `launch` field, and each process-group/systemd cross-kind field combination. Add `pid 0`, `start-time 0`, direct `process-group` not equal to `pid`, systemd nonzero process group, invalid systemd unit name, invalid invocation ID, and direct non-none cgroup fixtures. Assert that only the valid record parses as `ParsedLeaseRecord::Lifecycle` and every other form is rejected.
 
 - [ ] **Step 2: Run the focused red test**
 
@@ -43,7 +43,7 @@ Expected: FAIL because `ParsedLeaseRecord` and the lifecycle parser do not exist
 
 - [ ] **Step 3: Implement canonical discriminator-first parsing**
 
-Replace the single-version branch in `LeaseRecord::parse` with a `ParsedLeaseRecord::parse(raw)` dispatcher. Preserve the existing process-v1 byte grammar exactly. Implement `LifecycleLeaseRecord::parse` in SPEC 0012 field order, require one LF-terminated UTF-8 record with no extra fields, and reject any owner-kind field combination not permitted by the contract.
+Replace the single-version branch in `LeaseRecord::parse` with a `ParsedLeaseRecord::parse(raw)` dispatcher. Preserve the existing process-v1 byte grammar exactly. Implement `LifecycleLeaseRecord::parse` in SPEC 0012 field order, require one LF-terminated UTF-8 record with no extra fields, require positive lifecycle PID/start-time, and reject any owner-kind field combination not permitted by the contract. For systemd require `process-group 0`, exact `helm-launch-<launch-id>.scope`, lowercase 32-hex invocation, and non-none normalized cgroup with positive device/inode. For direct require `process-group == pid`, unit/cgroup fields `none`, and every cgroup number `0`.
 
 - [ ] **Step 4: Run the focused parser tests**
 
@@ -69,7 +69,7 @@ git commit -m "feat: parse lifecycle generation leases"
 
 - [ ] **Step 1: Add failing GC fixtures**
 
-Use a stale supervisor PID in a valid lifecycle-v1 fixture and add two further sealed generations so collection would be observable. Assert that `garbage_collect()` reports zero reclaimed lifecycle leases and zero reclaimed generations, and the lifecycle lease plus its generation remain. In the same fixture add a stale process-v1 lease and assert it also remains. Add a separate process-only fixture to prove the existing stale process reclaim behavior remains unchanged when no lifecycle evidence exists.
+Publish at least four sealed generations, then combine a stale process-v1 lease with each of: a valid lifecycle-v1 lease, unknown discriminator, malformed lifecycle header, duplicated-field lifecycle body, cross-kind lifecycle body, and unreadable/wrong-type lease evidence. Assert every mixed inventory reports zero reclaimed leases/generations, retains both lease paths, and retains every generation. Add a separate process-only fixture to prove the existing stale process reclaim behavior remains unchanged when no lifecycle or malformed evidence exists.
 
 - [ ] **Step 2: Run the focused red test**
 
@@ -79,11 +79,11 @@ Expected: FAIL because GC treats every parsed lease as a process lease.
 
 - [ ] **Step 3: Implement conservative GC dispatch**
 
-Have `reclaim_stale_leases_locked` dispatch on `ParsedLeaseRecord`. Apply `LeaseRecord::liveness()` only to `Process`; add every lifecycle generation to the protected set and set uncertainty. Do not unlink queued stale process leases until the entire inventory finishes with no uncertainty. Never unlink a lifecycle record in the generic path. Preserve process-v1 stale reclaim only for an all-process, fully validated inventory; any lifecycle anomaly prevents every lease unlink and every generation deletion.
+Represent a complete scan as a pass-wide `LeaseInventory` with provisional stale process names, protected generations, and a `deletion_barrier`. Dispatch each entry through `ParsedLeaseRecord` before liveness. Apply `LeaseRecord::liveness()` only to `Process`; a valid lifecycle record inserts its generation into protected generations and sets the barrier because only the future M2 registry can validate/release it. Any unknown, malformed, unreadable, cross-kind, unsafe, or identity-unavailable entry also sets the barrier. Do not unlink provisional stale process names until the entire inventory finishes with no barrier. Never unlink a lifecycle record in generic GC. Preserve process-v1 stale reclaim only for an all-process, fully validated inventory; any lifecycle evidence or anomaly prevents every lease unlink and every generation deletion.
 
 - [ ] **Step 4: Add explicit inspector-result tests**
 
-Assert valid lifecycle, malformed lifecycle, cross-kind lifecycle, and unreadable lifecycle fixtures each retain every lease and every generation, including an otherwise stale process-v1 lease. Assert the process-only stale fixture still reclaims only its stale process lease.
+Assert valid lifecycle, malformed lifecycle, cross-kind lifecycle, unknown discriminator, and unreadable lifecycle fixtures each retain every lease and every generation, including an otherwise stale process-v1 lease. Assert the process-only stale fixture still reclaims only its stale process lease. Name this generic behavior frozen pending M2 registry validation; do not claim the `helm-theme` slice validates registry evidence.
 
 - [ ] **Step 5: Run focused and workspace tests**
 
