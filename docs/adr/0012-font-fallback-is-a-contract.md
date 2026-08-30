@@ -73,10 +73,12 @@ fallback for every entry.
    and ASCII fallback.
 8. **Helm ships only unmodified IBM Plex Mono under SIL OFL 1.1.** Any
    first-party artifact that contains it must carry the upstream OFL licence
-   and required notices. A target which does not embed it must recommend its
-   reviewed IBM Plex Mono package instead. This does not authorize embedding
-   or patching another font: that needs an explicit licensing ADR amendment
-   covering source, licence, notices, update and removal policy.
+   and required notices. The Nix reference module declares the reviewed
+   `nixpkgs` IBM Plex package as this approved delivery mechanism. Debian and
+   Fedora packages do not embed it and must only recommend their reviewed IBM
+   Plex package instead. This does not authorize embedding or patching another
+   font: that needs an explicit licensing ADR amendment covering source,
+   licence, notices, update and removal policy.
 
 ## Alternatives considered
 

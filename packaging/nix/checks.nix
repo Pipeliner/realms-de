@@ -18,6 +18,9 @@
     pkgs.runCommand "helm-shellcheck" { nativeBuildInputs = [ pkgs.shellcheck ]; }
       ''
         shellcheck --shell=bash ${src + "/packaging/session/helm-session"}
+        shellcheck --shell=sh \
+          ${src + "/packaging/check-font-policy.sh"} \
+          ${src + "/packaging/font-policy-test.sh"}
         touch $out
       '';
 
