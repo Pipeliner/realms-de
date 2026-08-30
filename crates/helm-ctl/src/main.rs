@@ -131,7 +131,7 @@ fn run_apply(root: &Path) -> ExitCode {
             eprint!("{}", report.stderr);
             report.exit
         }
-        Err(error) => failure(&error.to_string()),
+        Err(error) => operational_failure("apply", &error.to_string()),
     }
 }
 
@@ -187,7 +187,7 @@ fn run_diff(root: &Path) -> ExitCode {
             }
             ExitCode::from(1)
         }
-        Err(error) => failure(&error.to_string()),
+        Err(error) => operational_failure("diff", &error.to_string()),
     }
 }
 
@@ -212,7 +212,7 @@ fn default_config_root(env: &impl Env) -> Result<PathBuf, String> {
 pub fn run_lint(args: &LintArgs, root: &Path) -> Result<ExitCode, String> {
     let palette = match &args.palette {
         Some(path) => Palette::load(path).map_err(|error| error.to_string())?,
-        None => helm_theme::load_palette(root).map_err(|error| error.to_string())?,
+        None => load_lint_palette(root).map_err(|error| error.to_string())?,
     };
     let report = helm_theme::lint(&palette);
     for separation in &report.separations {
@@ -231,9 +231,42 @@ pub fn run_lint(args: &LintArgs, root: &Path) -> Result<ExitCode, String> {
     })
 }
 
+fn load_lint_palette(root: &Path) -> helm_theme::Result<Palette> {
+    if !is_directory_without_following_links(root) {
+        return shipped_lint_palette();
+    }
+
+    let helm = root.join("helm");
+    if !is_directory_without_following_links(&helm) {
+        return shipped_lint_palette();
+    }
+
+    let path = helm.join("palette.toml");
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(Palette::load(&path)?),
+        _ => shipped_lint_palette(),
+    }
+}
+
+fn is_directory_without_following_links(path: &Path) -> bool {
+    matches!(
+        std::fs::symlink_metadata(path),
+        Ok(metadata) if metadata.file_type().is_dir()
+    )
+}
+
+fn shipped_lint_palette() -> helm_theme::Result<Palette> {
+    Palette::from_toml(helm_theme::SHIPPED_PALETTE).map_err(Into::into)
+}
+
 fn failure(error: &str) -> ExitCode {
     eprintln!("error: {error}");
     ExitCode::from(1)
+}
+
+fn operational_failure(command: &str, error: &str) -> ExitCode {
+    eprintln!("theme {command} failed: {}", escaped_cause(error));
+    ExitCode::from(6)
 }
 
 fn usage_error(error: &str) -> ExitCode {

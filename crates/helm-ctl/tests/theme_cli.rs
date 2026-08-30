@@ -193,17 +193,52 @@ fn lint_explicit_palette_needs_no_home_or_xdg_config_home() {
     assert!(stdout(&out).contains("violet/"));
 }
 
+#[cfg(unix)]
 #[test]
-fn lint_shipped_palette_is_session_independent_and_prints_hue_separations() {
+fn lint_empty_root_uses_shipped_palette_without_mutating_the_inventory() {
     let temp = tempfile::tempdir().expect("temporary config root");
+    let before = tree(temp.path());
+
     let out = helmctl([
         "theme",
         "lint",
         "--config-root",
         temp.path().to_str().unwrap(),
     ]);
+
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("violet/"));
+    assert_eq!(
+        tree(temp.path()),
+        before,
+        "default lint must not seed or otherwise mutate an empty configuration root"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn lint_ignores_a_symlinked_helm_directory() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("temporary config root");
+    let root = temp.path().join("config");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(outside.join("helm")).expect("create outside helm directory");
+    let bad_palette = write_bad_palette(&outside.join("helm"));
+    std::fs::rename(bad_palette, outside.join("helm/palette.toml")).expect("name outside palette");
+    std::fs::create_dir(&root).expect("create config root");
+    symlink(outside.join("helm"), root.join("helm")).expect("link outside helm directory");
+    let before = tree(&root);
+
+    let out = helmctl_at(&root, ["theme", "lint"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("violet/"));
+    assert_eq!(
+        tree(&root),
+        before,
+        "lint must not follow a symlinked helm directory"
+    );
 }
 
 #[test]
@@ -228,6 +263,23 @@ fn apply_reports_selected_future_generation_without_reload_or_session() {
     assert!(report.starts_with("generation "));
     assert!(report.contains(" selected for future launches"));
     assert!(!report.contains("reloaded"));
+}
+
+#[test]
+fn apply_operational_failure_exits_six_with_a_safe_diagnostic() {
+    let temp = tempfile::tempdir().expect("temporary config root");
+    let root = temp.path().join("not-a-directory");
+    std::fs::write(&root, "sentinel").expect("create non-directory config root");
+
+    let out = helmctl_at(&root, ["theme", "apply"]);
+
+    assert_eq!(out.status.code(), Some(6), "{}", stderr(&out));
+    assert!(stdout(&out).is_empty(), "failed apply reported success");
+    assert!(
+        stderr(&out).starts_with("theme apply failed: \""),
+        "failed apply did not report a safe operational diagnostic: {}",
+        stderr(&out)
+    );
 }
 
 #[cfg(unix)]
@@ -263,7 +315,7 @@ fn diff_after_palette_edit_is_sorted_and_does_not_mutate_generation_tree() {
 
 #[cfg(unix)]
 #[test]
-fn diff_refusal_for_missing_current_does_not_mutate_generation_tree() {
+fn diff_refusal_for_missing_current_exits_six_without_mutating_generation_tree() {
     let temp = tempfile::tempdir().expect("temporary config root");
     let root = temp.path();
     helm_theme::apply(root).expect("apply initial generation");
@@ -273,8 +325,13 @@ fn diff_refusal_for_missing_current_does_not_mutate_generation_tree() {
 
     let out = helmctl_at(root, ["theme", "diff"]);
 
-    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(out.status.code(), Some(6), "{}", stderr(&out));
     assert!(stdout(&out).is_empty(), "refused diff reported changes");
+    assert!(
+        stderr(&out).starts_with("theme diff failed: "),
+        "refused diff did not report a safe operational diagnostic: {}",
+        stderr(&out)
+    );
     assert_eq!(
         tree(root),
         before,
