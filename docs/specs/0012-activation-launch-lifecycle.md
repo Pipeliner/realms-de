@@ -128,6 +128,15 @@ values matching `[a-f0-9]{32}`. A generation lease reference has the same
 grammar and names its existing record below SPEC 0011's `leases/` directory; it
 is not a mutable generated path.
 
+Opening the activation registry also requires the private validated lease
+capability derived from the already opened SPEC 0011 `GenerationStore`. The
+registry stores cloned `leases/` and `activation.lock` descriptors plus the
+store's original in-process mutex, never a generated-root pathname from state
+or launch-record data. Restart bootstrap therefore reopens and validates the
+configured generated root first and passes only that sealed capability into
+registry open. A launch record's generation or lease text cannot select a
+different filesystem root.
+
 Helm creates each owned directory descriptor-relatively at mode 0700 and the
 persistent `lifecycle.lock` once at mode 0600. Every existing component must be
 owned by the current UID and have exactly that type and mode. All traversal and
@@ -473,6 +482,42 @@ cgroup-device <u64>
 cgroup-inode <u64>
 ```
 
+The replacement uses SPEC 0011's reserved
+`.lease-transfer-<lease-id>` unpublished staging form. The registry fsyncs its
+canonical lifecycle bytes in a mode-0600 unnamed `O_TMPFILE`, validates the
+held descriptor and exact contents, then publishes that exact inode at the
+fixed stage name with one no-replace `linkat`: `AT_EMPTY_PATH` where permitted,
+otherwise `/proc/self/fd/<held-fd>` plus `AT_SYMLINK_FOLLOW` after proving it
+resolves to the held descriptor. Unavailable `/proc`, link failure, or identity
+mismatch fails closed with no rename and no second named stage. The registry
+revalidates the linked pathname's inode/device, current UID, exact mode,
+bounded canonical bytes and equality to the held content before fsyncing the
+leases directory. Only then does it hold and revalidate descriptors for that
+stage and the exact process target, atomically exchange their names with
+`RENAME_EXCHANGE`, post-validate the lifecycle target/process staging pair,
+fsync the leases directory, then remove and fsync the displaced process staging
+name. A pre-link crash exposes no named stage and leaves only the process
+target; a post-link crash exposes one exact canonical pair. Registry
+reconciliation alone applies SPEC 0011's whole-inventory two-state rule:
+process-target/lifecycle-stage is untransferred, while
+lifecycle-target/process-stage is transferred. No staging payload alone is
+inferred to be adopted, and an unsafe, missing, same-kind or mismatched pair
+remains fail-closed evidence rather than cleanup authority. A detected pathname
+swap is exchanged back only with the exact inverse-pair proof SPEC 0011 permits;
+otherwise the result is retained and ambiguous.
+
+Generic generation GC does not own registry evidence or controller proofs and
+therefore never normalizes a transfer stage, even an exact valid pair. Any
+`.lease-transfer-*` makes generic GC retain every lease and generation without
+mutation. This retention path remains bounded: a read-only first pass enforces
+the complete 4096-entry, 16-MiB and 4096-byte-per-record limits before generic
+GC retains canonical names or reads any lease payload. Stage, bound, name, or
+metadata uncertainty stops before liveness evaluation or mutation. Likewise, the private core transfer operation refuses an already
+named stage and changes neither target nor stage; adoption retry may proceed
+only after a complete `ActivationRegistry` reconciliation pass has classified
+all registry/lease evidence, obtained every required exact controller result,
+and normalized the pair in its third phase.
+
 All common fields equal the prior process lease and launch record. The
 ownership-specific fields, including cgroup identity, obey the same
 systemd/direct restrictions as the launch record. A crash before the atomic
@@ -493,8 +538,31 @@ replacement succeeds, only registry reconciliation may release the lifecycle
 lease according to this specification.  No caller can obtain a transferable
 capability, independently replace a lease, or release a transferred lease.
 
+The registry's private generation-lease capability and every selection must
+name the same validated store authority. At both `prepare` and `adopt`, while
+holding `lifecycle.lock` then the shared generation lock, the registry
+revalidates exact device/inode identity for the selection's `leases/`
+directory and `activation.lock` against the capability. A cross-store
+selection is rejected before any registry, staging, lease, or launch-record
+mutation; matching path text or copied canonical bytes are not authority. A
+consumed rejected selection is destructor-disarmed without touching its
+foreign process lease, which remains owned by its originating store and
+eligible for that store's normal stale-process recovery.
+
+The verifier's internal ownership evidence is sealed to the exact prepared
+launch: it carries and matches the launch id, owner PID/start-time/UID/boot
+identity, selected owner kind, and deterministic unit or process group in
+addition to the verified systemd incarnation/cgroup fields. Evidence verified
+for one launch, owner incarnation or unit is invalid for every other prepared
+record and cannot be rebound by copying only its invocation/cgroup payload.
+The registry compares that complete binding under `lifecycle.lock` before any
+lease mutation.
+
 The selection cleanup path is destructor-safe at every transfer boundary: before
-unlinking, it reopens the same opaque filename with no-follow validation, parses
+unlinking, it first acquires the selection's stored originating-store mutex and
+shared `activation.lock`, then reopens the same opaque filename with no-follow validation, reads
+at most 4097 bytes and rejects/retains any payload above the 4096-byte record
+limit, parses
 its discriminator, and unlinks only a canonical process lease whose generation,
 PID, start time, boot id and UID still exactly equal the selection it owns.  A
 lifecycle discriminator, malformed/unreadable/unsafe record, missing record, or
@@ -504,6 +572,13 @@ disarm cannot remove the transferred lifecycle lease.  Red fixtures inject
 failure before replacement, after replacement, after directory fsync and before
 disarm, proving both that a pre-transfer matching process lease is released and
 that no post-transfer lifecycle lease is unlinked.
+
+Selection cleanup shares the cooperative Helm-writer unlink threat boundary
+stated below for retirement: conforming writers hold the generation lock and
+do not mutate the selected lease name between final proof and unlink. A swap
+before or at final proof is retained. Hostile same-UID post-proof mutation is
+outside M2's account-compromise boundary; no unlink-by-descriptor defense is
+claimed.
 
 Failure before transfer keeps the gate closed, kills and reaps the inert owner,
 durably records `terminal/failed` with `lease-kind process`, and then releases
@@ -619,25 +694,61 @@ transition, and terminal `result`.
 
 A crash after any terminal record fsync and before lease removal retries the
 applicable proof and removal.  A crash after lease-directory fsync and before
-record removal retries only collection after the same proof.  A missing,
-malformed, cross-kind, or identity-mismatched lease/evidence selects the
-existing uncertain recovery row and never permits a transition from this table.
+record removal retries only collection after the same proof. Malformed,
+cross-kind, or identity-mismatched lease/evidence selects the existing
+uncertain recovery row and never permits a transition from this table. Absence
+follows only the explicit state-sensitive recovery rows below: `preparing`
+abort/collection, `terminal` collection retry, or fatal `adopted`/`running`.
 
 `collectible` is a predicate, not a persisted backward transition: owner
 emptiness is proven, `terminal` is fsynced, the actual process or lifecycle
-lease is unlinked and the leases directory fsynced, and only then may the
-record be removed and the launches directory fsynced. A crash after terminal
+lease is atomically retired and the leases directory fsynced, and only then may
+the record be atomically retired and the launches directory fsynced. Retirement
+uses fixed `.lease-retire-<lease-id>` and `.launch-retire-<launch-id>` siblings:
+one no-replace rename moves the canonical name, post-move descriptor/inode and
+canonical-content proof selects the exact moved object, and only that retirement
+name may then be unlinked. A replacement that wins the final-name race is moved
+and retained in that detecting pass; stale held-inode authority never deletes
+it. A later fresh complete reconciliation may treat semantically identical
+canonical retirement evidence as current evidence and retire it only after all
+inventory, record, and ownership proofs pass again. The canonical and retirement forms may not coexist.
+After a crash with only an exact retirement form, reconciliation treats it as
+the still-present lease or terminal record, repeats the applicable proof, and
+finishes the same retirement. Malformed, duplicate, mismatched, or unsafe
+retirement evidence freezes the destructive pass. A crash after terminal
 but before lease removal retries removal; a crash after lease removal but
 before record removal recognizes the terminal/missing-lease case below. If any
 proof is uncertain or an operation fails, the remaining record/lease stays.
 TERM refusal is bounded; it leaks safe evidence rather than authorizing
 deletion.
 
+Permanent preservation of the replacement inode itself is not an M2 guarantee:
+an identical quarantined replacement and a legitimate retirement-only crash are
+indistinguishable without additional durable transaction provenance. M2 defers
+that stronger protocol and requires same-pass retention plus fresh-proof
+semantic equivalence instead.
+
+The retirement unlink threat model is cooperative among Helm writers: every
+conforming writer holds `lifecycle.lock` then the shared generation lock and
+does not mutate reserved retirement names. Pre-/at-retirement replacement is
+tested and fails closed. Hostile same-UID mutation of the retirement name after
+post-move proof is outside M2's account-compromise boundary because Linux does
+not provide ordinary unlink-by-descriptor. No stronger hostile-same-UID unlink
+defense is claimed.
+
 Reconciliation runs at activation-root open, before a restarted `helm-wm`
 accepts a launch, and after user-manager reconnect. It opens the referenced
 lease without following links and dispatches on durable record state plus the
 lease's actual parsed format; `lease-kind` is an expected value whose mismatch
 selects a recovery row rather than being guessed away:
+
+Every destructive lease inspection uses the registry's private SPEC 0011
+lease capability. While already holding `lifecycle.lock`, reconciliation
+takes the capability's original in-process generation mutex and shared
+`activation.lock`, revalidates the held descriptors, and only then opens the
+opaque lease name descriptor-relatively. It unlinks and fsyncs only within
+that held leases directory. State-home paths, launch-record fields, and a
+freshly reconstructed config path are never lease-directory authority.
 
 | Durable record | Actual lease | Recovery |
 |---|---|---|
@@ -648,7 +759,8 @@ selects a recovery row rather than being guessed away:
 | `running` | matching lifecycle lease | Reconcile the same live owner/scope/group in place and never spawn. A systemd scope releases only after the section 4 complete-subtree proof. A direct group remains retained while `running`: only its still-live owner may write the terminal `direct-drained yes` witness after draining descendants; owner death or an external empty-group observation is uncertain and retains the lease. |
 | `terminal`, `lease-kind process` | matching process lease | Re-prove the gate-closed owner/ownership empty, unlink/fsync the process lease, then collect. This is the crash after terminal and before untransferred release. |
 | `terminal`, `lease-kind lifecycle` | matching lifecycle lease | For a systemd scope, re-prove complete ownership empty. For a direct group, validate `direct-drained yes`, prove the exact owner identity stale, then prove the recorded group empty. Only then unlink/fsync the lifecycle lease and collect; missing witness, live/reused owner, or nonempty/uncertain group retains it. |
-| `terminal` | lease absent | For systemd, after re-proving recorded ownership empty, remove/fsync the terminal record. For direct, remove it only after validating `direct-drained yes`, exact owner staleness and recorded-group emptiness. This is the crash after lease release and before record collection; absence is not uncertainty only after the applicable proof. |
+| `terminal`, direct, `result failed`, `lease-kind process`, `exec-open no`, `direct-drained no` | lease absent | This is the distinct reachable crash after a gate-closed pre-exec abort durably wrote terminal and removed/fsynced the process lease, but before launch collection. Re-run the exact gate-closed direct abort/empty proof; only exact empty permits record retirement. No owner-written lifecycle drain witness is required because profile execution was never authorized. Uncertainty retains the record. |
+| `terminal` | lease absent | For systemd, after re-proving recorded ownership empty, remove/fsync the terminal record. For direct lifecycle completion, remove it only after validating `direct-drained yes`, exact owner staleness and recorded-group emptiness. This is the crash after lifecycle lease release and before record collection; absence is not uncertainty only after the applicable proof. Direct terminal rows not matched by the preceding process/pre-exec crash row remain conservative. |
 | `adopted` or `running` | process lease, absent lease, malformed lease, or identity mismatch | This inventory is not producer-reachable and might expose an unprotected execution. Report fatal/uncertain; do not signal, adopt, release or delete. |
 | any state / expected `lease-kind` | every canonical or malformed actual lease format, absence, identity relation or cross-kind combination not matched by an earlier row | Exhaustive fatal/uncertain default. This includes `preparing` with expected lifecycle, terminal cross-kind leases, and malformed or identity-mismatched Preparing/Terminal evidence. It authorizes no signal, adoption, release, record deletion or generation deletion. |
 
@@ -666,6 +778,50 @@ been reused never authorizes action; stale identity may prove death but never
 identifies a replacement owner. Whenever evidence is provably terminal, the
 table reaches collection and cannot consume the 4096-record quota forever.
 
+Reconciliation is three-phase under one `lifecycle.lock` then generation-lock
+critical section. First it validates and classifies the complete bounded
+record/lease/retirement/transfer-staging inventory without mutation and performs every read-only ownership
+observation; any fatal row or uncertain observation freezes the whole pass
+before a controller call or filesystem mutation. Second, only when passive
+classification is globally safe, it may invoke bounded controllers for exact
+gate-closed `preparing`/`adopted` rows. These abort attempts may stop their
+already-unexecutable owners, but no registry or lease mutation occurs until
+every requested controller returns an exact empty proof; any uncertain result
+retains the entire durable inventory for retry. Third, it first applies any
+already-classified safe registry-temporary and transfer-staging normalization,
+then applies the durable transitions and retirements. A safe unpublished
+registry temporary or valid staging pair plus any unrelated fatal or uncertain
+row therefore produces zero filesystem mutation. Every inventory collector
+enforces the 4096-entry/16-MiB bounds incrementally before retaining another
+name, descriptor, or payload. Directory enumeration order
+must not change this rule.
+
+Complete inventory means an unconditional scan of every lease-directory entry,
+not only the names referenced by launch records and not only inventories that
+contain staging. Unknown/non-UTF-8 names, unsafe or malformed unreferenced
+entries, orphan lifecycle leases, canonical-plus-retirement forms, and two
+launch records that reference one lease name are fatal. They freeze the pass
+before any ownership observation or controller call. A valid unreferenced
+process lease remains outside lifecycle authority and is left to generic GC.
+A lease retirement form is reachable only after its sole matching launch record
+is durably `terminal`; retirement paired with any nonterminal state is fatal. A
+launch retirement form is reachable only after its referenced lease is absent
+and the leases-directory fsync completed; retired launch plus present lease is
+fatal. These ordering violations freeze before ownership adapters.
+
+`preparing` plus an absent lease is a safe controller row because the gate
+cannot have opened: exact abort/proof permits `terminal/failed` and record
+collection without a lease release. In contrast, `adopted` or `running` plus
+an absent lease is fatal evidence and freezes every destructive row. Only
+`terminal` plus absent is the ordinary post-lease-fsync collection retry.
+
+A read-only direct observation may identify exact detachment separately from
+owner death, group emptiness, and uncertainty. For a matching `running`
+direct lifecycle lease, exact detachment durably writes `terminal/lost` with
+`direct-drained no` and retains both record and lease. It never authorizes
+release or collection. Other witness-free running-direct observations remain
+nonterminal and retained.
+
 A WM crash/restart reconciles these activation records independently of its
 runtime ledger snapshot. It does not restart a profile application. Whether
 river replays existing windows and how SPEC 0003 rebuilds rectangles remain its
@@ -682,6 +838,16 @@ collisions and uncertain liveness authorize no signal, adoption, record
 deletion or lease release. Read-only reconciliation of independent valid
 records may continue, but a destructive registry-GC pass stops; valid unrelated
 state is left intact.
+
+Failure to normalize SPEC 0011 transfer staging is fatal retained evidence,
+including when there are zero launch records. Reconciliation returns an
+explicit error/frozen outcome rather than a clean zero-count report.
+
+Launch identity reservation covers both the canonical `<launch-id>` name and
+its fixed `.launch-retire-<launch-id>` form. `prepare` rejects the requested id
+if either exists, before selection or launch mutation. A retirement-only crash
+therefore cannot be shadowed by a newly prepared canonical launch with the same
+id.
 
 ### 6. Unit graph and teardown
 
