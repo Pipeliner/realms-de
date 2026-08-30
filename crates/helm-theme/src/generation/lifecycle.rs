@@ -75,14 +75,50 @@ struct AdoptedLaunch {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum VerifiedOwnership {
     Direct {
-        process_group: u32,
+        binding: OwnershipBinding,
     },
     Systemd {
+        binding: OwnershipBinding,
         unit_invocation: String,
         cgroup: String,
         cgroup_device: u64,
         cgroup_inode: u64,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OwnershipBinding {
+    launch: LaunchId,
+    session: SessionId,
+    generation: GenerationId,
+    manifest_sha256: String,
+    lease: String,
+    owner_uid: u32,
+    boot_id: String,
+    owner_pid: u32,
+    owner_start_time: u64,
+    mode: OwnershipMode,
+    unit: String,
+    process_group: u32,
+}
+
+impl OwnershipBinding {
+    fn from_preparing(record: &LaunchRecord) -> Self {
+        Self {
+            launch: record.launch,
+            session: record.session,
+            generation: record.generation.clone(),
+            manifest_sha256: record.manifest_sha256.clone(),
+            lease: record.lease.clone(),
+            owner_uid: record.owner_uid,
+            boot_id: record.boot_id.clone(),
+            owner_pid: record.owner_pid,
+            owner_start_time: record.owner_start_time,
+            mode: record.mode,
+            unit: record.unit.clone(),
+            process_group: record.process_group,
+        }
+    }
 }
 
 mod ownership_verifier {
@@ -1310,14 +1346,15 @@ fn transfer_records(
 ) -> Result<(LifecycleLeaseRecord, LaunchRecord), String> {
     let (owner_kind, unit, unit_invocation, process_group, cgroup, cgroup_device, cgroup_inode) =
         match (preparing.mode, evidence) {
-            (OwnershipMode::Direct, VerifiedOwnership::Direct { process_group })
-                if process_group == preparing.owner_pid =>
+            (OwnershipMode::Direct, VerifiedOwnership::Direct { binding })
+                if binding == OwnershipBinding::from_preparing(preparing)
+                    && binding.process_group == preparing.owner_pid =>
             {
                 (
                     LifecycleOwnerKind::ProcessGroup,
                     "none".to_owned(),
                     "none".to_owned(),
-                    process_group,
+                    binding.process_group,
                     "none".to_owned(),
                     0,
                     0,
@@ -1326,12 +1363,14 @@ fn transfer_records(
             (
                 OwnershipMode::Systemd,
                 VerifiedOwnership::Systemd {
+                    binding,
                     unit_invocation,
                     cgroup,
                     cgroup_device,
                     cgroup_inode,
                 },
-            ) if lower_hex_32(&unit_invocation)
+            ) if binding == OwnershipBinding::from_preparing(preparing)
+                && lower_hex_32(&unit_invocation)
                 && normalized_cgroup_path(&cgroup)
                 && cgroup_device > 0
                 && cgroup_inode > 0 =>
@@ -1811,14 +1850,39 @@ bar-process-group 0\n",
     }
 
     struct TestOwnershipVerifier {
-        ownership: VerifiedOwnership,
+        proof: TestOwnershipProof,
+    }
+
+    enum TestOwnershipProof {
+        Direct,
+        Systemd {
+            unit_invocation: String,
+            cgroup: String,
+            cgroup_device: u64,
+            cgroup_inode: u64,
+        },
     }
 
     impl ownership_verifier::Sealed for TestOwnershipVerifier {}
 
     impl OwnershipVerifier for TestOwnershipVerifier {
-        fn verify(&self, _prepared: &PreparedLaunch) -> Result<VerifiedOwnership, String> {
-            Ok(self.ownership.clone())
+        fn verify(&self, prepared: &PreparedLaunch) -> Result<VerifiedOwnership, String> {
+            let binding = OwnershipBinding::from_preparing(&prepared.record);
+            Ok(match &self.proof {
+                TestOwnershipProof::Direct => VerifiedOwnership::Direct { binding },
+                TestOwnershipProof::Systemd {
+                    unit_invocation,
+                    cgroup,
+                    cgroup_device,
+                    cgroup_inode,
+                } => VerifiedOwnership::Systemd {
+                    binding,
+                    unit_invocation: unit_invocation.clone(),
+                    cgroup: cgroup.clone(),
+                    cgroup_device: *cgroup_device,
+                    cgroup_inode: *cgroup_inode,
+                },
+            })
         }
     }
 
@@ -1832,6 +1896,116 @@ bar-process-group 0\n",
     struct SwappingLeaseFilesystem {
         lease_path: std::path::PathBuf,
         displaced_path: std::path::PathBuf,
+    }
+
+    struct ExitAtTransferCheckpointFilesystem {
+        checkpoint: TransferCheckpoint,
+        code: i32,
+    }
+
+    impl LeaseFilesystem for ExitAtTransferCheckpointFilesystem {
+        fn checkpoint(&mut self, checkpoint: TransferCheckpoint) -> Result<(), String> {
+            if checkpoint == self.checkpoint {
+                std::process::exit(self.code);
+            }
+            Ok(())
+        }
+    }
+
+    struct SwapAfterValidationFilesystem {
+        lease_path: std::path::PathBuf,
+        displaced_path: std::path::PathBuf,
+    }
+
+    struct RemoveTargetBeforeExchangeFilesystem {
+        lease_path: std::path::PathBuf,
+    }
+
+    impl LeaseFilesystem for RemoveTargetBeforeExchangeFilesystem {
+        fn checkpoint(&mut self, checkpoint: TransferCheckpoint) -> Result<(), String> {
+            if checkpoint == TransferCheckpoint::BeforeExchange {
+                fs::remove_file(&self.lease_path).unwrap();
+            }
+            Ok(())
+        }
+    }
+
+    struct ForcingProcFallbackFilesystem {
+        empty_path_attempts: usize,
+        proc_attempts: usize,
+    }
+
+    impl LeaseFilesystem for ForcingProcFallbackFilesystem {
+        fn checkpoint(&mut self, _checkpoint: TransferCheckpoint) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn link_unnamed_empty_path(
+            &mut self,
+            _source: &OwnedFd,
+            _directory: &OwnedFd,
+            _name: &str,
+        ) -> Result<(), Errno> {
+            self.empty_path_attempts += 1;
+            Err(Errno::OPNOTSUPP)
+        }
+
+        fn link_unnamed_proc(
+            &mut self,
+            source: &Path,
+            directory: &OwnedFd,
+            name: &str,
+        ) -> Result<(), Errno> {
+            self.proc_attempts += 1;
+            rustix::fs::linkat(
+                rustix::fs::CWD,
+                source,
+                directory,
+                name,
+                AtFlags::SYMLINK_FOLLOW,
+            )
+        }
+    }
+
+    struct MismatchedProcFallbackFilesystem {
+        decoy: OwnedFd,
+    }
+
+    impl LeaseFilesystem for MismatchedProcFallbackFilesystem {
+        fn checkpoint(&mut self, _checkpoint: TransferCheckpoint) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn link_unnamed_empty_path(
+            &mut self,
+            _source: &OwnedFd,
+            _directory: &OwnedFd,
+            _name: &str,
+        ) -> Result<(), Errno> {
+            Err(Errno::OPNOTSUPP)
+        }
+
+        fn proc_fd_source(&mut self, _source: &OwnedFd) -> Result<std::path::PathBuf, String> {
+            use std::os::fd::AsRawFd;
+
+            Ok(format!("/proc/self/fd/{}", self.decoy.as_raw_fd()).into())
+        }
+    }
+
+    impl LeaseFilesystem for SwapAfterValidationFilesystem {
+        fn checkpoint(&mut self, checkpoint: TransferCheckpoint) -> Result<(), String> {
+            if checkpoint == TransferCheckpoint::BeforeExchange {
+                let lease_name = self.lease_path.file_name().unwrap().to_str().unwrap();
+                let staging = self
+                    .lease_path
+                    .parent()
+                    .unwrap()
+                    .join(format!(".lease-transfer-{lease_name}"));
+                fs::rename(&staging, &self.displaced_path).unwrap();
+                write_mode(&staging, b"replacement evidence", 0o600);
+            }
+            Ok(())
+        }
     }
 
     impl LeaseFilesystem for SwappingLeaseFilesystem {
@@ -1959,9 +2133,7 @@ bar-process-group 0\n",
 
         fn direct_evidence(&self) -> VerifiedOwnership {
             TestOwnershipVerifier {
-                ownership: VerifiedOwnership::Direct {
-                    process_group: self.prepared.record.owner_pid,
-                },
+                proof: TestOwnershipProof::Direct,
             }
             .verify(&self.prepared)
             .unwrap()
@@ -1969,7 +2141,7 @@ bar-process-group 0\n",
 
         fn systemd_evidence(&self) -> VerifiedOwnership {
             TestOwnershipVerifier {
-                ownership: VerifiedOwnership::Systemd {
+                proof: TestOwnershipProof::Systemd {
                     unit_invocation: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
                     cgroup: "app.slice/helm-launch.scope".into(),
                     cgroup_device: 11,
@@ -2457,7 +2629,9 @@ bar-process-group 0\n",
     #[test]
     fn transfer_never_leaves_an_unleased_generation() {
         for fail_at in [
+            TransferCheckpoint::DuringStageWrite,
             TransferCheckpoint::BeforeReplace,
+            TransferCheckpoint::BeforeExchange,
             TransferCheckpoint::AfterReplace,
             TransferCheckpoint::AfterLeaseDirectoryFsync,
             TransferCheckpoint::BeforeAdoptedRecord,
@@ -2488,7 +2662,9 @@ bar-process-group 0\n",
                 assert!(process_lease_exists || lifecycle_lease_exists);
                 assert_ne!(process_lease_exists, lifecycle_lease_exists);
                 match checkpoint {
-                    TransferCheckpoint::BeforeReplace => {
+                    TransferCheckpoint::DuringStageWrite
+                    | TransferCheckpoint::BeforeReplace
+                    | TransferCheckpoint::BeforeExchange => {
                         assert!(process_lease_exists);
                         assert_eq!(launch.state, LaunchState::Preparing);
                     }
@@ -2504,7 +2680,12 @@ bar-process-group 0\n",
                     }
                 }
             }
-            if fail_at == TransferCheckpoint::BeforeReplace {
+            if matches!(
+                fail_at,
+                TransferCheckpoint::DuringStageWrite
+                    | TransferCheckpoint::BeforeReplace
+                    | TransferCheckpoint::BeforeExchange
+            ) {
                 assert!(!lease_path.exists());
             } else {
                 assert!(matches!(
@@ -2604,6 +2785,65 @@ bar-process-group 0\n",
     }
 
     #[test]
+    fn ownership_evidence_cannot_be_rebound_to_another_prepared_launch() {
+        let source = TransferFixture::systemd();
+        let source_evidence = source.systemd_evidence();
+        let target =
+            TransferFixture::new("77777777777777777777777777777777", OwnershipMode::Systemd);
+        assert!(target
+            .registry
+            .adopt_prepared(
+                &target.session,
+                target.prepared,
+                target.selection,
+                source_evidence,
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn unnamed_stage_uses_descriptor_validated_proc_fallback() {
+        let fixture = TransferFixture::direct();
+        let evidence = fixture.direct_evidence();
+        let mut filesystem = ForcingProcFallbackFilesystem {
+            empty_path_attempts: 0,
+            proc_attempts: 0,
+        };
+        assert!(fixture
+            .registry
+            .adopt_prepared_with_filesystem(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+                &mut filesystem,
+            )
+            .is_ok());
+        assert_eq!(filesystem.empty_path_attempts, 1);
+        assert_eq!(filesystem.proc_attempts, 1);
+    }
+
+    #[test]
+    fn proc_fallback_rejects_a_source_not_matching_the_held_tmpfile() {
+        let fixture = TransferFixture::direct();
+        let decoy_path = fixture._generated.path().join("proc-fd-decoy");
+        write_mode(&decoy_path, b"decoy", 0o600);
+        let decoy = fs::File::open(decoy_path).unwrap().into();
+        let evidence = fixture.direct_evidence();
+        let mut filesystem = MismatchedProcFallbackFilesystem { decoy };
+        assert!(fixture
+            .registry
+            .adopt_prepared_with_filesystem(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+                &mut filesystem,
+            )
+            .is_err());
+    }
+
+    #[test]
     fn transfer_rejects_stale_session_launch_selection_and_evidence_without_replacement() {
         fn rejects(mut fixture: TransferFixture, mutate: impl FnOnce(&mut TransferFixture)) {
             let launch_path = fixture.launch_path();
@@ -2670,13 +2910,9 @@ bar-process-group 0\n",
         ));
 
         fixture = TransferFixture::direct();
-        let evidence = TestOwnershipVerifier {
-            ownership: VerifiedOwnership::Direct {
-                process_group: fixture.prepared.record.owner_pid + 1,
-            },
-        }
-        .verify(&fixture.prepared)
-        .unwrap();
+        let mut binding = OwnershipBinding::from_preparing(&fixture.prepared.record);
+        binding.process_group += 1;
+        let evidence = VerifiedOwnership::Direct { binding };
         assert!(fixture
             .registry
             .adopt_prepared(
@@ -2688,13 +2924,9 @@ bar-process-group 0\n",
             .is_err());
 
         let fixture = TransferFixture::systemd();
-        let evidence = TestOwnershipVerifier {
-            ownership: VerifiedOwnership::Direct {
-                process_group: fixture.prepared.record.owner_pid,
-            },
-        }
-        .verify(&fixture.prepared)
-        .unwrap();
+        let evidence = VerifiedOwnership::Direct {
+            binding: OwnershipBinding::from_preparing(&fixture.prepared.record),
+        };
         assert!(fixture
             .registry
             .adopt_prepared(
@@ -2809,10 +3041,11 @@ bar-process-group 0\n",
     fn lease_transfer_never_unlinks_a_replaced_staging_inode() {
         let fixture = TransferFixture::direct();
         let lease_path = fixture.lease_path();
+        let process = fixture.selection.process_identity.clone();
         let displaced_path = fixture._generated.path().join("displaced-transfer");
         let evidence = fixture.direct_evidence();
         let mut filesystem = SwappingLeaseFilesystem {
-            lease_path,
+            lease_path: lease_path.clone(),
             displaced_path: displaced_path.clone(),
         };
         assert!(fixture
@@ -2834,5 +3067,420 @@ bar-process-group 0\n",
             ParsedLeaseRecord::parse(&fs::read(displaced_path).unwrap()),
             Ok(ParsedLeaseRecord::Lifecycle(_))
         ));
+        assert_eq!(
+            ParsedLeaseRecord::parse(&fs::read(lease_path).unwrap()),
+            Ok(ParsedLeaseRecord::Process(process))
+        );
+    }
+
+    #[test]
+    fn gc_recovers_exact_post_exchange_lifecycle_process_pair() {
+        let fixture = TransferFixture::direct();
+        let lease_name = fixture.selection.lease_name.clone();
+        let lease_path = fixture.lease_path();
+        let staging_path = fixture
+            ._generated
+            .path()
+            .join("leases")
+            .join(format!(".lease-transfer-{lease_name}"));
+        let evidence = fixture.direct_evidence();
+        let (lifecycle, _) =
+            transfer_records(&fixture.prepared.record, &fixture.selection, evidence).unwrap();
+        write_mode(&staging_path, &lifecycle.encode(), 0o600);
+        renameat_with(
+            &fixture.selection.lease_directory,
+            staging_path.file_name().unwrap(),
+            &fixture.selection.lease_directory,
+            lease_name.as_str(),
+            RenameFlags::EXCHANGE,
+        )
+        .unwrap();
+        std::mem::forget(fixture.selection);
+
+        fixture.store.garbage_collect().unwrap();
+        assert!(!staging_path.exists());
+        assert!(matches!(
+            ParsedLeaseRecord::parse(&fs::read(lease_path).unwrap()),
+            Ok(ParsedLeaseRecord::Lifecycle(record)) if record == lifecycle
+        ));
+    }
+
+    #[test]
+    fn gc_recovers_exact_pre_exchange_process_lifecycle_pair() {
+        let fixture = TransferFixture::direct();
+        let lease_name = fixture.selection.lease_name.clone();
+        let lease_path = fixture.lease_path();
+        let process = fixture.selection.process_identity.clone();
+        let staging_path = fixture
+            ._generated
+            .path()
+            .join("leases")
+            .join(format!(".lease-transfer-{lease_name}"));
+        let evidence = fixture.direct_evidence();
+        let (lifecycle, _) =
+            transfer_records(&fixture.prepared.record, &fixture.selection, evidence).unwrap();
+        write_mode(&staging_path, &lifecycle.encode(), 0o600);
+        std::mem::forget(fixture.selection);
+
+        fixture.store.garbage_collect().unwrap();
+        assert!(!staging_path.exists());
+        assert_eq!(
+            ParsedLeaseRecord::parse(&fs::read(lease_path).unwrap()),
+            Ok(ParsedLeaseRecord::Process(process))
+        );
+    }
+
+    #[test]
+    fn gc_retains_everything_for_mismatched_transfer_staging_pair() {
+        let fixture = TransferFixture::direct();
+        let lease_name = fixture.selection.lease_name.clone();
+        let lease_path = fixture.lease_path();
+        let staging_path = fixture
+            ._generated
+            .path()
+            .join("leases")
+            .join(format!(".lease-transfer-{lease_name}"));
+        let evidence = fixture.direct_evidence();
+        let (mut lifecycle, _) =
+            transfer_records(&fixture.prepared.record, &fixture.selection, evidence).unwrap();
+        lifecycle.start_time += 1;
+        write_mode(&staging_path, &lifecycle.encode(), 0o600);
+        std::mem::forget(fixture.selection);
+
+        let report = fixture.store.garbage_collect().unwrap();
+        assert_eq!(report.reclaimed_leases, 0);
+        assert!(lease_path.exists());
+        assert!(staging_path.exists());
+    }
+
+    #[test]
+    #[ignore = "subprocess crash helper"]
+    fn pre_exchange_crash_subprocess() {
+        let Ok(generated) = std::env::var("HELM_TEST_CRASH_GENERATED") else {
+            return;
+        };
+        let state = std::env::var("HELM_TEST_CRASH_STATE").unwrap();
+        let store = GenerationStore::open(Path::new(&generated)).unwrap();
+        let selection = store
+            .select_current_for_process(std::process::id())
+            .unwrap();
+        let registry = ActivationRegistry::open(Path::new(&state)).unwrap();
+        let session = registry
+            .open_active_session(
+                SessionId::parse("22222222222222222222222222222222").unwrap(),
+                7,
+            )
+            .unwrap();
+        let prepared = registry
+            .prepare(
+                &session,
+                PrepareLaunch {
+                    launch: LaunchId::parse("88888888888888888888888888888888").unwrap(),
+                    mode: OwnershipMode::Direct,
+                },
+                &selection,
+            )
+            .unwrap();
+        let evidence = TestOwnershipVerifier {
+            proof: TestOwnershipProof::Direct,
+        }
+        .verify(&prepared)
+        .unwrap();
+        let mut filesystem = ExitAtTransferCheckpointFilesystem {
+            checkpoint: TransferCheckpoint::BeforeExchange,
+            code: 86,
+        };
+        let result = registry.adopt_prepared_with_filesystem(
+            &session,
+            prepared,
+            selection,
+            evidence,
+            &mut filesystem,
+        );
+        panic!("pre-exchange crash checkpoint returned: {result:?}");
+    }
+
+    #[test]
+    #[ignore = "subprocess crash helper"]
+    fn partial_stage_write_crash_subprocess() {
+        let Ok(generated) = std::env::var("HELM_TEST_CRASH_GENERATED") else {
+            return;
+        };
+        let state = std::env::var("HELM_TEST_CRASH_STATE").unwrap();
+        let store = GenerationStore::open(Path::new(&generated)).unwrap();
+        let selection = store
+            .select_current_for_process(std::process::id())
+            .unwrap();
+        let registry = ActivationRegistry::open(Path::new(&state)).unwrap();
+        let session = registry
+            .open_active_session(
+                SessionId::parse("22222222222222222222222222222222").unwrap(),
+                7,
+            )
+            .unwrap();
+        let prepared = registry
+            .prepare(
+                &session,
+                PrepareLaunch {
+                    launch: LaunchId::parse("77777777777777777777777777777777").unwrap(),
+                    mode: OwnershipMode::Direct,
+                },
+                &selection,
+            )
+            .unwrap();
+        let evidence = TestOwnershipVerifier {
+            proof: TestOwnershipProof::Direct,
+        }
+        .verify(&prepared)
+        .unwrap();
+        let mut filesystem = ExitAtTransferCheckpointFilesystem {
+            checkpoint: TransferCheckpoint::DuringStageWrite,
+            code: 87,
+        };
+        let result = registry.adopt_prepared_with_filesystem(
+            &session,
+            prepared,
+            selection,
+            evidence,
+            &mut filesystem,
+        );
+        panic!("partial-stage-write crash checkpoint returned: {result:?}");
+    }
+
+    #[test]
+    fn real_partial_stage_write_crash_never_publishes_named_stage() {
+        let generated = tempfile::tempdir().unwrap();
+        fs::set_permissions(generated.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let store = GenerationStore::open(generated.path()).unwrap();
+        let digest = "a".repeat(64);
+        store
+            .publish(|| {
+                Ok(GenerationPublication {
+                    input_digests: [
+                        digest.clone(),
+                        digest.clone(),
+                        digest.clone(),
+                        digest.clone(),
+                        digest.clone(),
+                    ],
+                    outputs: vec![("fixture".into(), b"sealed".to_vec())],
+                })
+            })
+            .unwrap();
+        let state = tempfile::tempdir().unwrap();
+        drop(ActivationRegistry::open(state.path()).unwrap());
+        write_mode(
+            &state.path().join("helm/activation/session"),
+            &exact_session_record("active", 7),
+            0o600,
+        );
+
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--ignored")
+            .arg("--exact")
+            .arg("generation::lifecycle::tests::partial_stage_write_crash_subprocess")
+            .env("HELM_TEST_CRASH_GENERATED", generated.path())
+            .env("HELM_TEST_CRASH_STATE", state.path())
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(87));
+
+        let crashed = LaunchRecord::parse(
+            &fs::read(
+                state
+                    .path()
+                    .join("helm/activation/launches/77777777777777777777777777777777"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let target = generated.path().join("leases").join(&crashed.lease);
+        let staging = generated
+            .path()
+            .join("leases")
+            .join(format!(".lease-transfer-{}", crashed.lease));
+        assert!(matches!(
+            ParsedLeaseRecord::parse(&fs::read(target).unwrap()),
+            Ok(ParsedLeaseRecord::Process(_))
+        ));
+        assert!(!staging.exists());
+    }
+
+    #[test]
+    fn real_pre_exchange_crash_is_recovered_before_a_new_transfer() {
+        let generated = tempfile::tempdir().unwrap();
+        fs::set_permissions(generated.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let store = GenerationStore::open(generated.path()).unwrap();
+        let digest = "a".repeat(64);
+        store
+            .publish(|| {
+                Ok(GenerationPublication {
+                    input_digests: [
+                        digest.clone(),
+                        digest.clone(),
+                        digest.clone(),
+                        digest.clone(),
+                        digest.clone(),
+                    ],
+                    outputs: vec![("fixture".into(), b"sealed".to_vec())],
+                })
+            })
+            .unwrap();
+        let state = tempfile::tempdir().unwrap();
+        drop(ActivationRegistry::open(state.path()).unwrap());
+        write_mode(
+            &state.path().join("helm/activation/session"),
+            &exact_session_record("active", 7),
+            0o600,
+        );
+
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--ignored")
+            .arg("--exact")
+            .arg("generation::lifecycle::tests::pre_exchange_crash_subprocess")
+            .env("HELM_TEST_CRASH_GENERATED", generated.path())
+            .env("HELM_TEST_CRASH_STATE", state.path())
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(86));
+
+        let crashed = LaunchRecord::parse(
+            &fs::read(
+                state
+                    .path()
+                    .join("helm/activation/launches/88888888888888888888888888888888"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let target = generated.path().join("leases").join(&crashed.lease);
+        let staging = generated
+            .path()
+            .join("leases")
+            .join(format!(".lease-transfer-{}", crashed.lease));
+        assert!(matches!(
+            ParsedLeaseRecord::parse(&fs::read(&target).unwrap()),
+            Ok(ParsedLeaseRecord::Process(_))
+        ));
+        assert!(matches!(
+            ParsedLeaseRecord::parse(&fs::read(&staging).unwrap()),
+            Ok(ParsedLeaseRecord::Lifecycle(_))
+        ));
+
+        store.garbage_collect().unwrap();
+        assert!(!staging.exists());
+        assert!(!target.exists());
+
+        let selection = store
+            .select_current_for_process(std::process::id())
+            .unwrap();
+        let registry = ActivationRegistry::open(state.path()).unwrap();
+        let session = registry
+            .open_active_session(
+                SessionId::parse("22222222222222222222222222222222").unwrap(),
+                7,
+            )
+            .unwrap();
+        let prepared = registry
+            .prepare(
+                &session,
+                PrepareLaunch {
+                    launch: LaunchId::parse("99999999999999999999999999999999").unwrap(),
+                    mode: OwnershipMode::Direct,
+                },
+                &selection,
+            )
+            .unwrap();
+        let evidence = TestOwnershipVerifier {
+            proof: TestOwnershipProof::Direct,
+        }
+        .verify(&prepared)
+        .unwrap();
+        assert!(registry
+            .adopt_prepared(&session, prepared, selection, evidence)
+            .is_ok());
+    }
+
+    #[test]
+    fn post_validation_staging_swap_restores_the_exact_process_target() {
+        let fixture = TransferFixture::direct();
+        let lease_path = fixture.lease_path();
+        let process = fixture.selection.process_identity.clone();
+        let launch_path = fixture.launch_path();
+        let displaced_path = fixture
+            ._generated
+            .path()
+            .join("displaced-validated-transfer");
+        let evidence = fixture.direct_evidence();
+        let mut filesystem = SwapAfterValidationFilesystem {
+            lease_path: lease_path.clone(),
+            displaced_path: displaced_path.clone(),
+        };
+        assert!(fixture
+            .registry
+            .adopt_prepared_with_filesystem(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+                &mut filesystem,
+            )
+            .is_err());
+        assert_eq!(
+            ParsedLeaseRecord::parse(&fs::read(&lease_path).unwrap()),
+            Ok(ParsedLeaseRecord::Process(process))
+        );
+        let staging = lease_path.parent().unwrap().join(format!(
+            ".lease-transfer-{}",
+            lease_path.file_name().unwrap().to_str().unwrap()
+        ));
+        assert_eq!(fs::read(staging).unwrap(), b"replacement evidence");
+        assert!(matches!(
+            ParsedLeaseRecord::parse(&fs::read(displaced_path).unwrap()),
+            Ok(ParsedLeaseRecord::Lifecycle(_))
+        ));
+        assert_eq!(
+            LaunchRecord::parse(&fs::read(launch_path).unwrap())
+                .unwrap()
+                .state,
+            LaunchState::Preparing
+        );
+    }
+
+    #[test]
+    fn exchange_failure_from_a_missing_target_retains_the_lifecycle_stage() {
+        let fixture = TransferFixture::direct();
+        let lease_path = fixture.lease_path();
+        let launch_path = fixture.launch_path();
+        let lease_name = fixture.selection.lease_name.clone();
+        let evidence = fixture.direct_evidence();
+        let mut filesystem = RemoveTargetBeforeExchangeFilesystem {
+            lease_path: lease_path.clone(),
+        };
+        assert!(fixture
+            .registry
+            .adopt_prepared_with_filesystem(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+                &mut filesystem,
+            )
+            .is_err());
+        assert!(!lease_path.exists());
+        let staging = lease_path
+            .parent()
+            .unwrap()
+            .join(format!(".lease-transfer-{lease_name}"));
+        assert!(matches!(
+            ParsedLeaseRecord::parse(&fs::read(staging).unwrap()),
+            Ok(ParsedLeaseRecord::Lifecycle(_))
+        ));
+        assert_eq!(
+            LaunchRecord::parse(&fs::read(launch_path).unwrap())
+                .unwrap()
+                .state,
+            LaunchState::Preparing
+        );
     }
 }

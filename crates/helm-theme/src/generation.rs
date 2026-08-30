@@ -6,13 +6,13 @@ mod lifecycle;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use rustix::fs::{
-    flock, fsync, mkdirat, openat, renameat, renameat_with, statat, unlinkat, AtFlags, Dir,
+    flock, fsync, linkat, mkdirat, openat, renameat, renameat_with, statat, unlinkat, AtFlags, Dir,
     FileType, FlockOperation, Mode, OFlags, RenameFlags, CWD,
 };
 use rustix::io::Errno;
@@ -159,7 +159,9 @@ enum LifecycleOwnerKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TransferCheckpoint {
+    DuringStageWrite,
     BeforeReplace,
+    BeforeExchange,
     AfterReplace,
     AfterLeaseDirectoryFsync,
     BeforeAdoptedRecord,
@@ -168,6 +170,28 @@ enum TransferCheckpoint {
 
 trait LeaseFilesystem {
     fn checkpoint(&mut self, checkpoint: TransferCheckpoint) -> std::result::Result<(), String>;
+
+    fn link_unnamed_empty_path(
+        &mut self,
+        source: &OwnedFd,
+        directory: &OwnedFd,
+        name: &str,
+    ) -> std::result::Result<(), Errno> {
+        linkat(source, "", directory, name, AtFlags::EMPTY_PATH)
+    }
+
+    fn proc_fd_source(&mut self, source: &OwnedFd) -> std::result::Result<PathBuf, String> {
+        Ok(format!("/proc/self/fd/{}", source.as_raw_fd()).into())
+    }
+
+    fn link_unnamed_proc(
+        &mut self,
+        source: &Path,
+        directory: &OwnedFd,
+        name: &str,
+    ) -> std::result::Result<(), Errno> {
+        linkat(CWD, source, directory, name, AtFlags::SYMLINK_FOLLOW)
+    }
 }
 
 struct RealLeaseFilesystem;
@@ -176,6 +200,12 @@ impl LeaseFilesystem for RealLeaseFilesystem {
     fn checkpoint(&mut self, _checkpoint: TransferCheckpoint) -> std::result::Result<(), String> {
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct ValidatedLeaseInventoryEntry {
+    record: ParsedLeaseRecord,
+    descriptor: OwnedFd,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1088,6 +1118,9 @@ impl GenerationStore {
         let mut live_generations = BTreeSet::new();
         let mut uncertain_lease = false;
         let mut stale_leases = Vec::new();
+        if recover_lease_transfer_staging_locked(&self.leases.fd).is_err() {
+            return Ok((report, live_generations, true));
+        }
         let current_uid = rustix::process::getuid().as_raw();
         let mut leases = Dir::read_from(&self.leases.fd).map_err(|error| error.to_string())?;
         while let Some(entry) = leases.read() {
@@ -1948,12 +1981,19 @@ impl GenerationSelection {
             return Err("lifecycle lease is not canonical".into());
         }
         self.revalidate_for_lifecycle_transfer()?;
+        recover_lease_transfer_staging_locked(&self.lease_directory)?;
+        self.revalidate_for_lifecycle_transfer()?;
+        let source_process =
+            read_validated_lease_inventory_entry(&self.lease_directory, self.lease_name.as_str())?;
+        if source_process.record != ParsedLeaseRecord::Process(self.process_identity.clone()) {
+            return Err("lifecycle lease transfer source changed before staging".into());
+        }
 
         let temporary = format!(".lease-transfer-{}", self.lease_name);
         let descriptor = openat(
             &self.lease_directory,
-            temporary.as_str(),
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            ".",
+            OFlags::RDWR | OFlags::TMPFILE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::RUSR | Mode::WUSR,
         )
         .map_err(|error| error.to_string())?;
@@ -1968,38 +2008,200 @@ impl GenerationSelection {
             rustix::process::getuid().as_raw(),
         )?;
         let staged = (|| {
-            file.write_all(&raw).map_err(|error| error.to_string())?;
+            let split = raw.len() / 2;
+            file.write_all(&raw[..split])
+                .map_err(|error| error.to_string())?;
+            filesystem.checkpoint(TransferCheckpoint::DuringStageWrite)?;
+            file.write_all(&raw[split..])
+                .map_err(|error| error.to_string())?;
             fsync(file.as_fd()).map_err(|error| error.to_string())?;
-            filesystem.checkpoint(TransferCheckpoint::BeforeReplace)?;
-            if !transfer_staging_matches(
+            let after_write = rustix::fs::fstat(file.as_fd()).map_err(|error| error.to_string())?;
+            validate_owned_mode(
+                "unnamed lifecycle lease transfer staging file",
+                &after_write,
+                FileType::RegularFile,
+                0o600,
+                rustix::process::getuid().as_raw(),
+            )?;
+            if after_write.st_dev != staging_identity.st_dev
+                || after_write.st_ino != staging_identity.st_ino
+                || after_write.st_size != raw.len() as i64
+                || after_write.st_size > 4096
+            {
+                return Err("unnamed lifecycle lease transfer staging file changed".into());
+            }
+            file.seek(SeekFrom::Start(0))
+                .map_err(|error| error.to_string())?;
+            let mut held_raw = Vec::new();
+            Read::by_ref(&mut file)
+                .take(4097)
+                .read_to_end(&mut held_raw)
+                .map_err(|error| error.to_string())?;
+            if held_raw != raw || LifecycleLeaseRecord::parse(&held_raw)? != record {
+                return Err("unnamed lifecycle lease transfer bytes changed".into());
+            }
+            let staged_lifecycle = ValidatedLeaseInventoryEntry {
+                record: ParsedLeaseRecord::Lifecycle(record.clone()),
+                descriptor: file
+                    .try_clone()
+                    .map(OwnedFd::from)
+                    .map_err(|error| error.to_string())?,
+            };
+
+            if filesystem
+                .link_unnamed_empty_path(
+                    &staged_lifecycle.descriptor,
+                    &self.lease_directory,
+                    temporary.as_str(),
+                )
+                .is_err()
+            {
+                let proc_source = filesystem.proc_fd_source(&staged_lifecycle.descriptor)?;
+                let proc_identity = statat(CWD, &proc_source, AtFlags::empty())
+                    .map_err(|error| error.to_string())?;
+                validate_owned_mode(
+                    "lifecycle lease transfer proc descriptor source",
+                    &proc_identity,
+                    FileType::RegularFile,
+                    0o600,
+                    rustix::process::getuid().as_raw(),
+                )?;
+                let held_identity = rustix::fs::fstat(&staged_lifecycle.descriptor)
+                    .map_err(|error| error.to_string())?;
+                if proc_identity.st_dev != held_identity.st_dev
+                    || proc_identity.st_ino != held_identity.st_ino
+                    || proc_identity.st_size != held_identity.st_size
+                {
+                    return Err(
+                        "lifecycle lease transfer proc descriptor source is mismatched".into(),
+                    );
+                }
+                filesystem
+                    .link_unnamed_proc(&proc_source, &self.lease_directory, temporary.as_str())
+                    .map_err(|error| error.to_string())?;
+            }
+
+            if !validated_lease_record_matches(
                 &self.lease_directory,
                 temporary.as_str(),
-                &staging_identity,
+                &staged_lifecycle,
             )? {
-                return Err("lifecycle lease transfer staging file changed".into());
+                return Err("published lifecycle lease transfer staging file changed".into());
             }
+            fsync(&self.lease_directory).map_err(|error| error.to_string())?;
+            filesystem.checkpoint(TransferCheckpoint::BeforeReplace)?;
             self.revalidate_for_lifecycle_transfer()?;
-            renameat(
+
+            if !validated_lease_record_matches(
+                &self.lease_directory,
+                self.lease_name.as_str(),
+                &source_process,
+            )? || !validated_lease_path_matches(
+                &self.lease_directory,
+                temporary.as_str(),
+                &staged_lifecycle.descriptor,
+            )? || !validated_lease_path_matches(
+                &self.lease_directory,
+                self.lease_name.as_str(),
+                &source_process.descriptor,
+            )? {
+                return Err("lifecycle lease transfer pair changed before exchange".into());
+            }
+
+            filesystem.checkpoint(TransferCheckpoint::BeforeExchange)?;
+            renameat_with(
                 &self.lease_directory,
                 temporary.as_str(),
                 &self.lease_directory,
                 self.lease_name.as_str(),
+                RenameFlags::EXCHANGE,
             )
             .map_err(|error| error.to_string())?;
+
+            let target_is_staged_lifecycle = validated_lease_record_matches(
+                &self.lease_directory,
+                self.lease_name.as_str(),
+                &staged_lifecycle,
+            )
+            .unwrap_or(false);
+            let staging_is_source_process = validated_lease_record_matches(
+                &self.lease_directory,
+                temporary.as_str(),
+                &source_process,
+            )
+            .unwrap_or(false);
+            if !target_is_staged_lifecycle || !staging_is_source_process {
+                if !target_is_staged_lifecycle && staging_is_source_process {
+                    renameat_with(
+                        &self.lease_directory,
+                        temporary.as_str(),
+                        &self.lease_directory,
+                        self.lease_name.as_str(),
+                        RenameFlags::EXCHANGE,
+                    )
+                    .map_err(|error| {
+                        format!(
+                            "lifecycle lease exchange is ambiguous and rollback failed: {error}"
+                        )
+                    })?;
+                    fsync(&self.lease_directory).map_err(|error| error.to_string())?;
+                    if validated_lease_record_matches(
+                        &self.lease_directory,
+                        self.lease_name.as_str(),
+                        &source_process,
+                    )? {
+                        return Err(
+                            "lifecycle lease exchange detected a pathname swap and rolled back"
+                                .into(),
+                        );
+                    }
+                }
+                return Err("lifecycle lease exchange result is ambiguous".into());
+            }
+
             filesystem.checkpoint(TransferCheckpoint::AfterReplace)?;
             fsync(&self.lease_directory).map_err(|error| error.to_string())?;
-            filesystem.checkpoint(TransferCheckpoint::AfterLeaseDirectoryFsync)
+            filesystem.checkpoint(TransferCheckpoint::AfterLeaseDirectoryFsync)?;
+            if !validated_lease_record_matches(
+                &self.lease_directory,
+                self.lease_name.as_str(),
+                &staged_lifecycle,
+            )? || !validated_lease_record_matches(
+                &self.lease_directory,
+                temporary.as_str(),
+                &source_process,
+            )? {
+                return Err("lifecycle lease exchange changed before staging cleanup".into());
+            }
+            unlinkat(&self.lease_directory, temporary.as_str(), AtFlags::empty())
+                .map_err(|error| error.to_string())?;
+            fsync(&self.lease_directory).map_err(|error| error.to_string())
         })();
-        if staged.is_err()
-            && matches!(
-                transfer_staging_matches(
-                    &self.lease_directory,
-                    temporary.as_str(),
-                    &staging_identity,
-                ),
-                Ok(true)
-            )
-        {
+        let exact_untransferred_pair = matches!(
+            read_validated_lease_inventory_entry(
+                &self.lease_directory,
+                temporary.as_str(),
+            ),
+            Ok(staging)
+                if staging.record == ParsedLeaseRecord::Lifecycle(record.clone())
+                    && matches!(
+                        transfer_staging_matches(
+                            &self.lease_directory,
+                            temporary.as_str(),
+                            &staging_identity,
+                        ),
+                        Ok(true)
+                    )
+                    && matches!(
+                        validated_lease_record_matches(
+                            &self.lease_directory,
+                            self.lease_name.as_str(),
+                            &source_process,
+                        ),
+                        Ok(true)
+                    )
+        );
+        if staged.is_err() && exact_untransferred_pair {
             let _ = unlinkat(&self.lease_directory, temporary.as_str(), AtFlags::empty());
             let _ = fsync(&self.lease_directory);
         }
@@ -2009,6 +2211,21 @@ impl GenerationSelection {
     fn release_matching_process_lease(&mut self) -> std::result::Result<(), String> {
         if self.released {
             return Ok(());
+        }
+
+        let transfer_staging = format!(".lease-transfer-{}", self.lease_name);
+        match statat(
+            &self.lease_directory,
+            transfer_staging.as_str(),
+            AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(_) => {
+                return Err(
+                    "generation lease release retained ambiguous transfer staging evidence".into(),
+                );
+            }
+            Err(Errno::NOENT) => {}
+            Err(error) => return Err(error.to_string()),
         }
 
         let current = match self.read_current_lease() {
@@ -2040,6 +2257,23 @@ impl GenerationSelection {
     }
 }
 
+fn validated_lease_record_matches(
+    lease_directory: &OwnedFd,
+    name: &str,
+    expected: &ValidatedLeaseInventoryEntry,
+) -> std::result::Result<bool, String> {
+    let current = match read_validated_lease_inventory_entry(lease_directory, name) {
+        Ok(current) => current,
+        Err(_) => return Ok(false),
+    };
+    let expected_stat =
+        rustix::fs::fstat(&expected.descriptor).map_err(|error| error.to_string())?;
+    let current_stat = rustix::fs::fstat(&current.descriptor).map_err(|error| error.to_string())?;
+    Ok(current.record == expected.record
+        && current_stat.st_dev == expected_stat.st_dev
+        && current_stat.st_ino == expected_stat.st_ino)
+}
+
 fn transfer_staging_matches(
     parent: &OwnedFd,
     name: &str,
@@ -2058,6 +2292,173 @@ fn transfer_staging_matches(
         rustix::process::getuid().as_raw(),
     )?;
     Ok(path.st_dev == opened.st_dev && path.st_ino == opened.st_ino)
+}
+
+fn recover_lease_transfer_staging_locked(
+    lease_directory: &OwnedFd,
+) -> std::result::Result<(), String> {
+    let mut final_entries = BTreeMap::<String, ValidatedLeaseInventoryEntry>::new();
+    let mut staging_entries = BTreeMap::<String, ValidatedLeaseInventoryEntry>::new();
+    let mut directory = Dir::read_from(lease_directory).map_err(|error| error.to_string())?;
+    while let Some(entry) = directory.read() {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let bytes = entry.file_name().to_bytes();
+        if matches!(bytes, b"." | b"..") {
+            continue;
+        }
+        let name = std::str::from_utf8(bytes)
+            .map_err(|_| "generation lease inventory name is not UTF-8")?;
+        if GenerationId::parse(name).is_ok() {
+            let validated = read_validated_lease_inventory_entry(lease_directory, name)?;
+            if final_entries.insert(name.to_owned(), validated).is_some() {
+                return Err("generation lease inventory contains a duplicate name".into());
+            }
+            continue;
+        }
+        let Some(target) = name.strip_prefix(".lease-transfer-") else {
+            return Err("generation lease inventory contains an unknown name".into());
+        };
+        GenerationId::parse(target)
+            .map_err(|_| "generation lease transfer staging name is malformed")?;
+        let validated = read_validated_lease_inventory_entry(lease_directory, name)?;
+        if staging_entries
+            .insert(target.to_owned(), validated)
+            .is_some()
+        {
+            return Err("generation lease inventory contains duplicate transfer staging".into());
+        }
+    }
+    drop(directory);
+
+    if staging_entries.is_empty() {
+        return Ok(());
+    }
+    for (target_name, staging) in &staging_entries {
+        let target = final_entries
+            .get(target_name)
+            .ok_or("generation lease transfer staging target is absent")?;
+        let exact_pair = match (&target.record, &staging.record) {
+            (ParsedLeaseRecord::Process(process), ParsedLeaseRecord::Lifecycle(lifecycle))
+            | (ParsedLeaseRecord::Lifecycle(lifecycle), ParsedLeaseRecord::Process(process)) => {
+                lifecycle_matches_process(lifecycle, process)
+            }
+            _ => false,
+        };
+        if !exact_pair {
+            return Err("generation lease transfer staging pair is inconsistent".into());
+        }
+    }
+
+    for (target_name, staging) in &staging_entries {
+        let staging_name = format!(".lease-transfer-{target_name}");
+        if !validated_lease_path_matches(
+            lease_directory,
+            staging_name.as_str(),
+            &staging.descriptor,
+        )? || !validated_lease_path_matches(
+            lease_directory,
+            target_name.as_str(),
+            &final_entries
+                .get(target_name)
+                .expect("staging targets were validated")
+                .descriptor,
+        )? {
+            return Err("generation lease transfer pair changed before recovery".into());
+        }
+    }
+
+    fsync(lease_directory).map_err(|error| error.to_string())?;
+    for target_name in staging_entries.keys() {
+        unlinkat(
+            lease_directory,
+            format!(".lease-transfer-{target_name}").as_str(),
+            AtFlags::empty(),
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    fsync(lease_directory).map_err(|error| error.to_string())
+}
+
+fn read_validated_lease_inventory_entry(
+    lease_directory: &OwnedFd,
+    name: &str,
+) -> std::result::Result<ValidatedLeaseInventoryEntry, String> {
+    let before = statat(lease_directory, name, AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(|error| error.to_string())?;
+    validate_owned_mode(
+        "generation lease inventory entry",
+        &before,
+        FileType::RegularFile,
+        0o600,
+        rustix::process::getuid().as_raw(),
+    )?;
+    if before.st_size > 4096 {
+        return Err("generation lease inventory entry exceeds 4096 bytes".into());
+    }
+    let descriptor = openat(
+        lease_directory,
+        name,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| error.to_string())?;
+    let opened = rustix::fs::fstat(&descriptor).map_err(|error| error.to_string())?;
+    if before.st_dev != opened.st_dev || before.st_ino != opened.st_ino {
+        return Err("generation lease inventory entry changed during open".into());
+    }
+    let mut file = std::fs::File::from(descriptor.try_clone().map_err(|error| error.to_string())?);
+    let mut raw = Vec::new();
+    Read::by_ref(&mut file)
+        .take(4097)
+        .read_to_end(&mut raw)
+        .map_err(|error| error.to_string())?;
+    if raw.len() > 4096 {
+        return Err("generation lease inventory entry exceeds 4096 bytes".into());
+    }
+    let record = ParsedLeaseRecord::parse(&raw)?;
+    let canonical = match &record {
+        ParsedLeaseRecord::Process(record) => record.encode(),
+        ParsedLeaseRecord::Lifecycle(record) => record.encode(),
+    };
+    if canonical != raw {
+        return Err("generation lease inventory entry is not canonical".into());
+    }
+    if !validated_lease_path_matches(lease_directory, name, &descriptor)? {
+        return Err("generation lease inventory entry changed during read".into());
+    }
+    Ok(ValidatedLeaseInventoryEntry { record, descriptor })
+}
+
+fn validated_lease_path_matches(
+    lease_directory: &OwnedFd,
+    name: &str,
+    descriptor: &OwnedFd,
+) -> std::result::Result<bool, String> {
+    let path = match statat(lease_directory, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(path) => path,
+        Err(Errno::NOENT) => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+    };
+    validate_owned_mode(
+        "generation lease inventory entry",
+        &path,
+        FileType::RegularFile,
+        0o600,
+        rustix::process::getuid().as_raw(),
+    )?;
+    if path.st_size > 4096 {
+        return Err("generation lease inventory entry exceeds 4096 bytes".into());
+    }
+    let opened = rustix::fs::fstat(descriptor).map_err(|error| error.to_string())?;
+    Ok(path.st_dev == opened.st_dev && path.st_ino == opened.st_ino)
+}
+
+fn lifecycle_matches_process(lifecycle: &LifecycleLeaseRecord, process: &LeaseRecord) -> bool {
+    lifecycle.generation == process.generation
+        && lifecycle.pid == process.pid
+        && lifecycle.start_time == process.start_time
+        && lifecycle.boot_id == process.boot_id
+        && lifecycle.owner_uid == process.owner_uid
 }
 
 impl Drop for GenerationSelection {
