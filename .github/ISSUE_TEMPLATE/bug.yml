@@ -103,6 +103,14 @@ body:
       render: console
 
   - type: input
+    id: missed-guard
+    attributes:
+      label: Which guard from `docs/PITFALLS.md` should have caught it?
+      description: Name the failure-register guard, or write "none" if this is a new failure mode.
+    validations:
+      required: true
+
+  - type: input
     id: display
     attributes:
       label: Outputs and scaling

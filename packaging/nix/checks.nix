@@ -24,7 +24,9 @@
           ${src + "/packaging/nix/check-root-flake-ci.sh"} \
           ${src + "/packaging/nix/test-root-flake-ci.sh"} \
           ${src + "/docs/check-readme-truth-snapshot.sh"} \
-          ${src + "/docs/test-readme-truth-snapshot.sh"}
+          ${src + "/docs/test-readme-truth-snapshot.sh"} \
+          ${src + "/docs/check-contribution-templates.sh"} \
+          ${src + "/docs/test-contribution-templates.sh"}
         touch $out
       '';
 
