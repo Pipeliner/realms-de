@@ -341,12 +341,15 @@ impl SessionRecord {
         {
             return Err("claimed session contains unpublished identities".into());
         }
-        if matches!(state, SessionState::Active)
+        if matches!(state, SessionState::Preparing | SessionState::Active)
             && (compositor_pid == 0
                 || compositor_start_time == 0
                 || helper_mode == HelperMode::None)
         {
-            return Err("active session lacks published identities".into());
+            return Err("preparing or active session lacks published identities".into());
+        }
+        if (compositor_pid == 0) != (helper_mode == HelperMode::None) {
+            return Err("session helper mode lacks its compositor publication boundary".into());
         }
         let wm_complete = identity_triple_valid(wm_pid, wm_start_time, wm_process_group);
         let bar_complete = identity_triple_valid(bar_pid, bar_start_time, bar_process_group);
@@ -561,22 +564,15 @@ impl LaunchRecord {
             return Err("launch record has extra or duplicate fields".into());
         }
 
-        if matches!(state, LaunchState::Terminal) != !matches!(result, LaunchResult::None) {
-            return Err("launch state and result disagree".into());
-        }
-        if matches!(state, LaunchState::Preparing) && lease_kind != LeaseKind::Process {
-            return Err("preparing launch must retain a process lease".into());
-        }
-        if matches!(state, LaunchState::Adopted | LaunchState::Running)
-            && lease_kind != LeaseKind::Lifecycle
-        {
-            return Err("adopted or running launch requires a lifecycle lease".into());
-        }
-        if matches!(state, LaunchState::Preparing) && exec_open {
-            return Err("preparing launch cannot have an open exec gate".into());
-        }
-        if matches!(state, LaunchState::Running) && !exec_open {
-            return Err("running launch requires durable exec authorization".into());
+        if !producer_reachable_launch_tuple(
+            state,
+            result,
+            lease_kind,
+            mode,
+            exec_open,
+            direct_drained,
+        ) {
+            return Err("launch state tuple is not producer-reachable".into());
         }
 
         match mode {
@@ -660,6 +656,53 @@ fn launch_state_name(state: LaunchState) -> &'static str {
         LaunchState::Adopted => "adopted",
         LaunchState::Running => "running",
         LaunchState::Terminal => "terminal",
+    }
+}
+
+fn producer_reachable_launch_tuple(
+    state: LaunchState,
+    result: LaunchResult,
+    lease_kind: LeaseKind,
+    mode: OwnershipMode,
+    exec_open: bool,
+    direct_drained: bool,
+) -> bool {
+    match (state, lease_kind, mode, result) {
+        (LaunchState::Preparing, LeaseKind::Process, _, LaunchResult::None) => {
+            !exec_open && !direct_drained
+        }
+        (LaunchState::Adopted, LeaseKind::Lifecycle, _, LaunchResult::None) => !direct_drained,
+        (LaunchState::Running, LeaseKind::Lifecycle, _, LaunchResult::None) => {
+            exec_open && !direct_drained
+        }
+        (LaunchState::Terminal, LeaseKind::Process, _, LaunchResult::Failed) => {
+            !exec_open && !direct_drained
+        }
+        (
+            LaunchState::Terminal,
+            LeaseKind::Lifecycle,
+            OwnershipMode::Systemd,
+            LaunchResult::Failed,
+        ) => !direct_drained,
+        (
+            LaunchState::Terminal,
+            LeaseKind::Lifecycle,
+            OwnershipMode::Systemd,
+            LaunchResult::Exited,
+        ) => exec_open && !direct_drained,
+        (
+            LaunchState::Terminal,
+            LeaseKind::Lifecycle,
+            OwnershipMode::Direct,
+            LaunchResult::Exited,
+        ) => exec_open && direct_drained,
+        (
+            LaunchState::Terminal,
+            LeaseKind::Lifecycle,
+            OwnershipMode::Direct,
+            LaunchResult::Lost,
+        ) => exec_open && !direct_drained,
+        _ => false,
     }
 }
 
@@ -959,6 +1002,17 @@ impl ActivationRegistry {
     }
 
     fn inspect_and_recover_inventory(&self) -> Result<(), String> {
+        self.inspect_and_recover_inventory_with_checkpoint(|| {})
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn inspect_and_recover_inventory_with_checkpoint<H>(
+        &self,
+        mut before_delete: H,
+    ) -> Result<(), String>
+    where
+        H: FnMut(),
+    {
         let activation_entries = directory_entries(&self.activation.fd)?;
         let launch_entries = directory_entries(&self.launches.fd)?;
         let mut entries = 0_usize;
@@ -980,8 +1034,19 @@ impl ActivationRegistry {
             } else {
                 let temporary = parse_temporary_name(raw)
                     .ok_or("activation root contains an unknown or malformed reserved entry")?;
-                validate_temporary(&self.activation.fd, &name, &stat)?;
-                temporaries.push((InventoryDirectory::Activation, name, temporary));
+                if !matches!(
+                    temporary,
+                    TemporaryName::SessionClaim(_) | TemporaryName::SessionUpdate(_, _, _)
+                ) {
+                    return Err("activation root contains a wrong-namespace reserved entry".into());
+                }
+                let descriptor = validate_temporary(&self.activation.fd, &name, &stat)?;
+                temporaries.push(ValidatedTemporary {
+                    directory: InventoryDirectory::Activation,
+                    name,
+                    kind: temporary,
+                    descriptor,
+                });
             }
         }
 
@@ -1002,13 +1067,24 @@ impl ActivationRegistry {
             }
             let temporary = parse_temporary_name(raw)
                 .ok_or("launch inventory contains an unknown or malformed reserved entry")?;
-            validate_temporary(&self.launches.fd, &name, &stat)?;
-            temporaries.push((InventoryDirectory::Launches, name, temporary));
+            if !matches!(
+                temporary,
+                TemporaryName::LaunchCreate(_, _) | TemporaryName::LaunchUpdate(_, _, _)
+            ) {
+                return Err("launch inventory contains a wrong-namespace reserved entry".into());
+            }
+            let descriptor = validate_temporary(&self.launches.fd, &name, &stat)?;
+            temporaries.push(ValidatedTemporary {
+                directory: InventoryDirectory::Launches,
+                name,
+                kind: temporary,
+                descriptor,
+            });
         }
         inventory_within_bounds(entries, bytes)?;
 
-        for (_, _, temporary) in &temporaries {
-            match temporary {
+        for temporary in &temporaries {
+            match &temporary.kind {
                 TemporaryName::SessionClaim(_) | TemporaryName::LaunchCreate(_, _) => {}
                 TemporaryName::SessionUpdate(id, _, _) => {
                     if session_record.as_ref().map(|record| record.session) != Some(*id) {
@@ -1027,10 +1103,19 @@ impl ActivationRegistry {
             }
         }
 
+        before_delete();
+        for temporary in &temporaries {
+            let parent = match temporary.directory {
+                InventoryDirectory::Activation => &self.activation.fd,
+                InventoryDirectory::Launches => &self.launches.fd,
+            };
+            revalidate_temporary(parent, &temporary.name, &temporary.descriptor)?;
+        }
+
         let mut activation_changed = false;
         let mut launches_changed = false;
-        for (directory, name, _) in temporaries {
-            let parent = match directory {
+        for temporary in temporaries {
+            let parent = match temporary.directory {
                 InventoryDirectory::Activation => {
                     activation_changed = true;
                     &self.activation.fd
@@ -1040,7 +1125,8 @@ impl ActivationRegistry {
                     &self.launches.fd
                 }
             };
-            unlinkat(parent, &name, AtFlags::empty()).map_err(|error| error.to_string())?;
+            unlinkat(parent, &temporary.name, AtFlags::empty())
+                .map_err(|error| error.to_string())?;
         }
         if activation_changed {
             fsync(&self.activation.fd).map_err(|error| error.to_string())?;
@@ -1062,6 +1148,14 @@ impl Drop for RegistryLock<'_> {
 enum InventoryDirectory {
     Activation,
     Launches,
+}
+
+#[derive(Debug)]
+struct ValidatedTemporary {
+    directory: InventoryDirectory,
+    name: OsString,
+    kind: TemporaryName,
+    descriptor: OwnedFd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1184,7 +1278,7 @@ fn validate_temporary(
     parent: &OwnedFd,
     name: &OsStr,
     stat: &rustix::fs::Stat,
-) -> Result<(), String> {
+) -> Result<OwnedFd, String> {
     validate_owned_mode(
         "lifecycle temporary",
         stat,
@@ -1208,6 +1302,27 @@ fn validate_temporary(
         || opened_stat.st_size > MAX_RECORD_BYTES as i64
     {
         return Err("lifecycle temporary changed during inventory".into());
+    }
+    Ok(opened)
+}
+
+fn revalidate_temporary(parent: &OwnedFd, name: &OsStr, opened: &OwnedFd) -> Result<(), String> {
+    let path =
+        statat(parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| error.to_string())?;
+    validate_owned_mode(
+        "lifecycle temporary",
+        &path,
+        FileType::RegularFile,
+        0o600,
+        rustix::process::getuid().as_raw(),
+    )?;
+    let descriptor = rustix::fs::fstat(opened).map_err(|error| error.to_string())?;
+    if path.st_dev != descriptor.st_dev
+        || path.st_ino != descriptor.st_ino
+        || path.st_size != descriptor.st_size
+        || path.st_size > MAX_RECORD_BYTES as i64
+    {
+        return Err("lifecycle temporary changed before deletion".into());
     }
     Ok(())
 }
@@ -1520,6 +1635,72 @@ bar-process-group 0\n",
     #[test]
     fn claimed_session_rejects_prepublished_compositor_or_helpers() {
         assert!(SessionRecord::parse(&exact_session_record("claimed", 1)).is_err());
+        let pid = std::process::id();
+        let (start_time, uid) = linux_process_identity(pid).unwrap();
+        let preparing_without_publication = String::from_utf8(
+            SessionRecord::claimed(
+                SessionId::parse("22222222222222222222222222222222").unwrap(),
+                pid,
+                start_time,
+                uid,
+                linux_boot_id().unwrap(),
+            )
+            .encode(),
+        )
+        .unwrap()
+        .replace("state claimed", "state preparing")
+        .into_bytes();
+        assert!(SessionRecord::parse(&preparing_without_publication).is_err());
+        let preparing_without_compositor = String::from_utf8(exact_session_record("active", 2))
+            .unwrap()
+            .replace("state active", "state preparing")
+            .replace(
+                &format!("compositor-pid {}", std::process::id()),
+                "compositor-pid 0",
+            )
+            .replace(
+                &format!(
+                    "compositor-start-time {}",
+                    linux_process_identity(std::process::id()).unwrap().0
+                ),
+                "compositor-start-time 0",
+            )
+            .into_bytes();
+        assert!(SessionRecord::parse(&preparing_without_compositor).is_err());
+    }
+
+    #[test]
+    fn terminal_launch_parser_accepts_only_producer_reachable_tuples() {
+        let direct = String::from_utf8(direct_preparing("process-group 42")).unwrap();
+        let terminal_process_exited = direct
+            .replace("state preparing", "state terminal")
+            .replace("result none", "result exited");
+        assert!(LaunchRecord::parse(terminal_process_exited.as_bytes()).is_err());
+
+        let terminal_process_open = direct
+            .replace("state preparing", "state terminal")
+            .replace("result none", "result failed")
+            .replace("exec-open no", "exec-open yes");
+        assert!(LaunchRecord::parse(terminal_process_open.as_bytes()).is_err());
+
+        let direct_lifecycle_failed = direct
+            .replace("state preparing", "state terminal")
+            .replace("result none", "result failed")
+            .replace("lease-kind process", "lease-kind lifecycle");
+        assert!(LaunchRecord::parse(direct_lifecycle_failed.as_bytes()).is_err());
+
+        let systemd_lifecycle_lost = String::from_utf8(systemd_preparing(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "helm-launch-11111111111111111111111111111111.scope",
+        ))
+        .unwrap()
+        .replace("state preparing", "state terminal")
+        .replace("result none", "result lost")
+        .replace("lease-kind process", "lease-kind lifecycle")
+        .replace("cgroup none", "cgroup app.slice/helm")
+        .replace("cgroup-device 0", "cgroup-device 1")
+        .replace("cgroup-inode 0", "cgroup-inode 2");
+        assert!(LaunchRecord::parse(systemd_lifecycle_lost.as_bytes()).is_err());
     }
 
     #[test]
@@ -1661,6 +1842,26 @@ bar-process-group 0\n",
     }
 
     #[test]
+    fn cross_namespace_temporaries_are_retained_and_fail_closed() {
+        for activation_name in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            drop(ActivationRegistry::open(root.path()).unwrap());
+            let path = if activation_name {
+                root.path().join(
+                    "helm/activation/.launch-create-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-cccccccccccccccccccccccccccccccc",
+                )
+            } else {
+                root.path().join(
+                    "helm/activation/launches/.session-claim-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                )
+            };
+            write_mode(&path, b"", 0o600);
+            assert!(ActivationRegistry::open(root.path()).is_err());
+            assert!(path.exists());
+        }
+    }
+
+    #[test]
     fn inventory_retains_unsafe_temporary_and_fails_closed() {
         let root = tempfile::tempdir().unwrap();
         drop(ActivationRegistry::open(root.path()).unwrap());
@@ -1691,6 +1892,26 @@ bar-process-group 0\n",
         fs::set_permissions(&temporary, fs::Permissions::from_mode(0o700)).unwrap();
         assert!(ActivationRegistry::open(root.path()).is_err());
         assert!(temporary.is_dir());
+    }
+
+    #[test]
+    fn temporary_inode_replacement_before_delete_is_retained() {
+        let root = tempfile::tempdir().unwrap();
+        let registry = ActivationRegistry::open(root.path()).unwrap();
+        let temporary = root
+            .path()
+            .join("helm/activation/.session-claim-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let displaced = root.path().join("helm/activation/displaced-temporary");
+        write_mode(&temporary, b"original", 0o600);
+
+        let _lock = registry.lock().unwrap();
+        let result = registry.inspect_and_recover_inventory_with_checkpoint(|| {
+            fs::rename(&temporary, &displaced).unwrap();
+            write_mode(&temporary, b"replacement evidence", 0o600);
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read(&temporary).unwrap(), b"replacement evidence");
+        assert_eq!(fs::read(&displaced).unwrap(), b"original");
     }
 
     #[test]
