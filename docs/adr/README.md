@@ -35,6 +35,7 @@ Copy [`template.md`](template.md) to start a new one.
 | [0016](0016-packaged-helm-sdd-carries-git.md) | The Nix-installed `helm-sdd` carries Git in its own runtime closure | Accepted | Git is wrapped only for the local Git-backed validator, never the desktop session | Low — replace with a separately specified interface |
 | [0017](0017-immutable-theme-activation-generations.md) | Theme activation uses sealed immutable generations | Accepted — partially supersedes [0005](0005-palette-toml-single-source.md) | Launches pin a digest-bound sealed tree; pointer commits change future launches only and never reload | Medium — changes #22/#132 launcher and lifecycle seams |
 | [0018](0018-fresh-desktop-exec-only.md) | Desktop launch is fresh-process Exec only | Accepted | Reject D-Bus activation before side effects; plain Exec is a fresh child-only immutable plan | Medium — a future D-Bus path is additive only |
+| [0019](0019-nix-ci-cache-is-optional.md) | Nix CI cache is optional | Accepted | External cache authentication may not prevent the reference build or VM evidence | Low — add only reviewed non-blocking cache support |
 
 All active decisions through 0013 were **ratified by the owner on 2026-08-28**,
 after the correction set tracked by #3. ADR 0015 was authorized by the owner
