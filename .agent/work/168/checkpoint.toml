@@ -1,0 +1,29 @@
+schema = "helm-agent-sdd/checkpoint/v1"
+issue = 168
+reason = "handoff"
+created_at = "2026-08-30T08:33:22Z"
+current_maturity = "probe"
+requested_maturity = "spike"
+git_head = "76bfcc9ef27156cd27fd247e5c38eca774b01277"
+question = "Can lifecycle GC preserve generations after transferred owner death"
+success_condition = "Accepted contracts state conservative lease discrimination and release proof."
+limitations = ["Remote CI assessment remains pending.", "Implementation fixtures remain future work."]
+affected_specs = ["ADR-0017", "SPEC-0011", "SPEC-0012"]
+
+[goal]
+statement = "Keep transferred generation leases pinned until ownership is proven gone."
+
+[acceptance]
+criteria = ["SPEC-0011", "SPEC-0012"]
+
+[workspace]
+branch = "codex/activation-lifecycle-spec"
+base = "b803f8ae20b2cdc3d26cdd49648fba82c895dd93"
+dirty = false
+
+[[completed]]
+claim = "Local verification and adversarial specification review completed."
+evidence = ["ev-001", "ev-002"]
+
+[next_actions]
+items = ["Review remote CI results.", "Merge accepted specification gradually.", "Plan red lifecycle fixtures."]
