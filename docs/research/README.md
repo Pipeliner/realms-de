@@ -12,6 +12,9 @@ ADRs in [`docs/adr/`](../adr/), and executable checks.
 * [`2026-08-28-graduated-agentic-sdd-operational-memory-verified.md`](2026-08-28-graduated-agentic-sdd-operational-memory-verified.md)
   is a dated verification companion.  It distinguishes primary-source facts
   from proposals and repository decisions.
+* [`2026-08-30-m1-yazi-starship-provenance.md`](2026-08-30-m1-yazi-starship-provenance.md)
+  records current upstream package-source evidence for the unresolved M1
+  Yazi/Starship provenance decision.
 
 No document in this directory installs tooling, enables hooks, starts a
 service, or changes CI.
