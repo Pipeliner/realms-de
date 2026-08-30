@@ -2,8 +2,8 @@
 
 - **Status:** Accepted (2026-08-29)
 - **Deciders:** helm maintainers, repo owner
-- **Supersedes / Superseded by:** Supplements ADR 0005; candidate
-  [SPEC 0012](../specs/0012-activation-launch-lifecycle.md) owns #132's
+- **Supersedes / Superseded by:** Supplements ADR 0005; accepted
+  [SPEC 0012](../specs/0012-activation-launch-lifecycle.md) owns #132/#168's
   session/scope lifecycle. Supersedes ADR 0005's mutable target publication, no-op result,
   reload fan-out, and mixed-generation interruption contracts for the supported
   apply path. #22 may own only a future generation-aware live-upgrade protocol.
@@ -56,12 +56,15 @@ cannot prove which palette, target catalogue, or output bytes a process used.
    fsyncs its lease, and only then executes.
    Reclamation under the exclusive lock removes a lease only when the boot ID,
    PID, or start-time no longer matches `/proc`; a live lease prevents deletion.
-   Candidate SPEC 0012 adds one narrow exception: before profile exec, verified
+   Before profile exec, verified
    scope/process-group adoption may atomically transfer that process lease into
    a lifecycle lease which generic generation GC never removes from PID death
    alone. Lifecycle reconciliation releases it only after proving the complete
-   recorded ownership empty. The exception is not implementation authority
-   until SPEC 0012 is Accepted.
+   recorded ownership empty. A dead direct lifetime-owner PID is not complete
+   ownership proof; only the still-live owner may record a durable
+   descendant-drain witness before exit, after which reconciliation must also
+   verify the exact owner stale and recorded group empty. Otherwise it retains
+   the lifecycle lease and generation.
    GC retains `current` plus the two most recent unleased generations. On any
    inability to prove liveness, it retains rather than deletes. At retention
    exhaustion it refuses a new apply rather than reclaiming a protected tree.
@@ -89,9 +92,9 @@ cannot prove which palette, target catalogue, or output bytes a process used.
   proves each process's selected generation. It must not signal, command, or
   notify processes merely because `current` changed, and cannot make
   foreign/direct launches generation-selected.
-- *Candidate (#132):* [SPEC 0012](../specs/0012-activation-launch-lifecycle.md)
+- *Accepted (#132/#168):* [SPEC 0012](../specs/0012-activation-launch-lifecycle.md)
   defines session/scope lifecycle ownership, transferable lease authority and
-  logout/restart rules; it is not implementation authority until Accepted.
+  logout/restart rules.
 
 ## Needs a human
 
