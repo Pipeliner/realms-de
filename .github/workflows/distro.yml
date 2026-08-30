@@ -132,14 +132,8 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
 
-      # NEEDS-HUMAN: verify this action is still the right one before M3.
-      # magic-nix-cache was sunset by Determinate Systems in favour of
-      # FlakeHub Cache (DeterminateSystems/flakehub-cache-action), which needs
-      # a FlakeHub account and `id-token: write`. It is named here because the
-      # brief asked for it; if it no longer works, either swap in
-      # flakehub-cache-action (and add the permission) or drop caching — the
-      # flake check is correct either way, only slower.
-      - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
+      # ADR 0019: caching is optional.  Do not make the reference build depend
+      # on an authenticated third-party cache service.
 
       # KVM availability is detected, not assumed. A KVM-capable runner executes
       # the NixOS VM; a runner without KVM still evaluates the flake and builds the

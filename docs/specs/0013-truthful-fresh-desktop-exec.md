@@ -184,7 +184,10 @@ writable by the effective UID; every traversed parent is root-owned and has no
 group/other write bit.  Admission holds a no-follow `O_RDONLY|O_CLOEXEC`
 descriptor and records its device/inode metadata.  It does not claim an fd alone
 freezes bytes: this policy makes mutation by the invoking UID impossible; root
-or equivalent package authority is outside this threat model.
+or equivalent package authority is outside this threat model.  Every ownership,
+mode, effective-access, identity, and header check is fail-closed: inability to
+establish the required fact (including an unsupported, interrupted, or raced
+permission probe) refuses admission.
 
 The initial supported kind is Linux ELF64 little-endian: the held first 64 bytes
 must carry `7f 45 4c 46`, class 2, data 1, version 1, `ET_EXEC` or `ET_DYN`, and

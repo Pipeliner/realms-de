@@ -9,6 +9,7 @@
   lib,
   src,
   helm,
+  desktopAdmissionVmTest,
   nixosModule,
 }:
 {
@@ -123,6 +124,9 @@ EOF
         programs.helm.enable = true;
         services.displayManager.ly.enable = true;
         virtualisation.memorySize = 2048;
+        users.users.alice = {
+          isNormalUser = true;
+        };
       };
 
     testScript =
@@ -133,6 +137,22 @@ EOF
       ''
       # Everything asserted here is true of helm 0.1.0 today.
       machine.wait_for_unit("multi-user.target")
+
+      # Task 3's descriptor admission needs a positive proof that is impossible
+      # on the host test filesystem. The Nix store itself is group-writable in
+      # NixOS, which the admission policy deliberately refuses, so root copies
+      # a known native ELF to a test-only root-owned immutable-location fixture.
+      machine.succeed("install -d -m 0755 /opt/helm-desktop-exec-test")
+      machine.succeed(
+        "install -m 0555 ${pkgs.coreutils}/bin/true /opt/helm-desktop-exec-test/true"
+      )
+      machine.succeed(
+        "su -s /bin/sh alice -c "
+        + "'HELM_DESKTOP_EXEC_TEST_ELF=/opt/helm-desktop-exec-test/true "
+        + "${desktopAdmissionVmTest}/libexec/helm-theme-desktop-exec-tests "
+        + "--exact generation::desktop_exec::tests::nixos_vm_static_preflight_admits_root_owned_elf_from_non_root_user "
+        + "--ignored --nocapture'"
+      )
 
       # The wayland-session entry materialised by NixOS display-manager session data.
       machine.succeed("test -f ${desktops}/share/wayland-sessions/helm.desktop")

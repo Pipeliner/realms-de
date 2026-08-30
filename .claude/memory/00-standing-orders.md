@@ -158,3 +158,12 @@ contracts. Make the reasonable decision when the evidence and existing product
 intent determine it. Still ask before a genuinely new product direction,
 security or privacy posture, licensing choice, material external cost, or any
 infrastructure publication; never use this authorisation to guess.
+
+## S18 — GitHub Markdown is data, never shell source
+
+For every GitHub issue, pull-request, or comment body, write exact Markdown to
+a file with `apply_patch` and publish only through `scripts/gh-body-file`.
+Never put Markdown, especially backticks or substitution-looking text, into a
+shell argument, command substitution, heredoc, or interpolation. The accepted
+SPEC 0021 guard and its regression tests are the mechanical repository check;
+do not weaken them with ShellCheck suppressions.
