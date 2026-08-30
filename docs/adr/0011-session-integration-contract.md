@@ -78,11 +78,14 @@ dbus-update-activation-environment --systemd \
 
 Both. Every time. This is the step that is skipped.
 
-**4. Only now start the session daemon, the bar and the clients.**
+**4. Only now start target-owned session helpers.**
 
-`helm-session` is a systemd user unit ordered after the import. Clients are
-separate restartable units bound to it (ADR 0003), so a crashed bar does not
-end the session.
+`helm-session` is a systemd user unit ordered after the import. The bar and any
+fixed launcher UI are separate restartable helpers bound to the Helm target
+(ADR 0003), so a crashed bar does not end the session. Candidate SPEC 0012
+requires its per-UID session claim before this global publication and keeps
+profile-launched applications in independent scopes; those applications are
+not target clients and are neither stopped nor respawned by target teardown.
 
 **5. Declare a portal backend dependency.**
 

@@ -28,6 +28,23 @@ Kernel release after process death is stale-writer recovery; a live lock is
 never stolen or replaced by deleting its pathname. The launcher then passes the selected generation path explicitly
 to target dependency evaluation.
 
+Two canonical lease kinds exist. A process lease uses the existing
+`helm-generation-lease-v1` grammar and generic GC may unlink it only after
+proving its PID, boot ID, or start time stale. Before exec, a process lease may
+be atomically replaced at the same opaque lease name with the
+`helm-generation-lifecycle-lease-v1` grammar from [SPEC 0012](0012-activation-launch-lifecycle.md).
+GC parses the discriminator before assessing liveness. It never PID-reclaims a
+valid lifecycle lease: it validates its launch reference against the lifecycle
+registry and retains its generation until the lifecycle reconciler has durably
+proved the complete recorded scope or process group empty and unlinked the
+lease. A missing, malformed, cross-kind, identity-mismatched, or unreadable
+lifecycle record/evidence is uncertain: GC unlinks neither lease kind and
+deletes zero generations. For a direct process group, death of the lifetime
+owner is likewise uncertain unless that still-live owner durably recorded its
+descendant-drain witness before exit; only then may reconciliation validate the
+exact owner stale and recorded group empty. A later reconciler must never invent
+the witness.
+
 No read or write follows symlinks; all operations are descriptor-relative below
 Helm's owned generated subtree. `current` cannot name absent, staging, malformed
 or digest-mismatched content. An apply that cannot finish before pointer commit
@@ -319,7 +336,7 @@ candidate with a partially validated or mixed generation.
 | G3 | Given interruption after tree seal but before pointer replacement, when recovery runs, then the sealed tree is retained or safely collectible and `current` remains valid. |
 | G4 | Given concurrent applies, when both complete, then every committed pointer refers to one complete manifest/tree pair and neither mixes palette/catalogue/target inputs. |
 | G5 | Given a malformed, absent or digest-mismatched manifest, when a launcher resolves `current`, then it refuses before spawning a target. |
-| G6 | Given a live lease, when GC runs, then its generation is retained; given a stale PID, boot-ID or start-time lease, then GC reclaims only the lease and unleased old generation candidates; the two retained unleased candidates are those with the greatest valid publication sequences, independent of opaque IDs and filesystem timestamps; on uncertain liveness, missing/malformed publication order or a malformed sealed tree, it deletes zero generations. |
+| G6 | Given a live process or lifecycle lease, when GC runs, then its generation is retained. Given a validated stale process lease, GC reclaims only that lease and unleased old generation candidates. A valid lifecycle lease is never PID-reclaimed: its generation remains pinned until SPEC 0012 reconciliation proves complete recorded ownership empty and releases it. A stale supervisor with a surviving scoped descendant, a dead direct owner without its prior descendant-drain witness plus exact-owner staleness and recorded-group emptiness, or missing/malformed/cross-kind/unreadable lifecycle evidence is uncertain and deletes zero generations. The two retained unleased candidates are those with the greatest valid publication sequences, independent of opaque IDs and filesystem timestamps. |
 | G7 | Given rollback to a retained generation, when it commits, then future launches select it and already-running launches remain unchanged. |
 | G8 | Given a corrupt pointer, missing tree, or digest mismatch, when recovery or launch runs, then it fails closed and never selects an arbitrary/newest generation. |
 | G9 | Given concurrent applies, when both are accepted, then they serialize from input capture through pointer durability and each receipt identifies its committed generation. |
@@ -331,9 +348,13 @@ candidate with a partially validated or mixed generation.
 
 This specification does not make arbitrary user configuration Helm-owned and
 does not settle systemd/no-systemd teardown, scope adoption, D-Bus ownership,
-or target package sources. Those are #117, #132, #133 and #134. A no-op apply
-optimization and compatibility with the retired mutable apply result or any
-existing control-socket wire message are not promised.
+or target package sources. [SPEC 0012](0012-activation-launch-lifecycle.md) is
+the M2 lifecycle owner for #132/#168: it consumes a process selection into a
+durable lifecycle lease before exec, forbids drop-based release after transfer,
+and permits release only after verified scope/process-group emptiness. #117,
+#133 and #134 retain their existing boundaries. A no-op apply optimization and compatibility with the
+retired mutable apply result or any existing control-socket wire message are
+not promised.
 
 Live upgrade is also outside this specification. #22 may define only a future
 generation-aware owned-process protocol which proves the generation selected by

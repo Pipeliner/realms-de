@@ -44,8 +44,11 @@ Something has to own lifecycle, and it must not be a client.
 3. Serves the control socket (ADR 0004): accepts `Request`s, answers
    `Response`s, and pushes `Event::State` to every subscriber on change.
 4. Owns client connections, not client process supervision. `systemd --user`
-   units launch and restart the bar, launcher, and terminal; the session
-   outlives their connections and is never responsible for respawning them.
+   units launch and restart target-owned session helpers such as the bar and
+   fixed launcher UI. Profile-launched terminals and other user applications
+   are separate lifecycle-owned scopes under candidate SPEC 0012; target stop
+   neither kills nor respawns them. The session outlives client connections and
+   never relaunches an application while reconciling one.
 5. Delivers subscriber events through bounded, nonblocking per-subscriber
    queues. A full queue or write failure evicts that subscriber; a socket write
    may never delay window-management or input processing.

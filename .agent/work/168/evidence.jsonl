@@ -1,0 +1,2 @@
+{"id":"ev-001","ts":"2026-08-30T08:31:00Z","kind":"command","summary":"Ran workspace verification after specification review","command":"cargo test --workspace --all-features --locked --quiet","exit_code":0,"git_head":"76bfcc9ef27156cd27fd247e5c38eca774b01277","purpose":"verify the reviewed specification commit"}
+{"id":"ev-002","ts":"2026-08-30T08:31:00Z","kind":"command","summary":"Built workspace API documentation","command":"cargo doc --workspace --no-deps","exit_code":0,"git_head":"76bfcc9ef27156cd27fd247e5c38eca774b01277","purpose":"verify documentation generation"}

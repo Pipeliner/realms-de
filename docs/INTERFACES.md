@@ -332,7 +332,63 @@ is only the ergonomic wrapper.
 
 ---
 
-## 5. What is deliberately *not* an interface
+## 5. Candidate activation lifecycle capability — no current authority
+
+> [SPEC 0012](specs/0012-activation-launch-lifecycle.md) is Draft. This section
+> records its review candidate only: it does not extend Accepted SPEC 0011 and
+> is not an implementation or compatibility requirement unless SPEC 0012 is
+> accepted in an explicit authority transition.
+
+If accepted, the process-local selection would gain this semantic shape:
+
+```rust
+pub struct GenerationLeaseRef(/* opaque 128-bit lease id */);
+
+pub enum LifecycleOwner {
+    SystemdScope {
+        pid: u32,
+        start_time: u64,
+        unit: String,
+        invocation_id: String,
+    },
+    ProcessGroup {
+        pid: u32,
+        start_time: u64,
+        process_group: u32,
+    },
+}
+
+impl GenerationSelection {
+    /// Stable reference recorded while this selection still releases on drop.
+    pub fn lease_ref(&self) -> &GenerationLeaseRef;
+
+    /// Consume local release authority after verified adoption and durably
+    /// replace the process lease with a lifecycle lease for `launch_id`.
+    pub fn transfer_to_lifecycle(
+        self,
+        launch_id: LaunchId,
+        owner: LifecycleOwner,
+    ) -> Result<GenerationLeaseRef>;
+}
+```
+
+Before successful transfer, dropping `GenerationSelection` retains SPEC 0011's
+failure cleanup. After successful transfer, no returned or dropped launcher
+value may unlink the lease. Only activation-registry reconciliation may release
+the opaque reference, and only after it has revalidated the durable launch
+record and proven the recorded scope/process group empty. Generic generation GC
+treats a valid transferred lease as protected rather than applying the ordinary
+PID-staleness rule. Missing, malformed or inconsistent lifecycle evidence is
+uncertain and retains the lease.
+
+The concrete Rust ownership types could be refined during red-first
+implementation. On acceptance, the consume-on-transfer, no-drop-release and
+proof-before-release properties would become compatibility requirements rather
+than private conventions; while Draft, none of them is current authority.
+
+---
+
+## 6. What is deliberately *not* an interface
 
 - **The ledger.** There is one implementation and there will only ever be one.
   Making it a trait would invite a second source of truth, which is the exact

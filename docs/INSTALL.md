@@ -17,6 +17,13 @@
 >
 > Every section below has a **What this actually installs today** block that says
 > exactly what you get and what you do not.
+>
+> **Candidate SPEC 0012 is not implemented by today's package.** The current
+> entry starts river without a persistent activation claim, the WM/bar units
+> are only `PartOf=graphical-session.target`, and current exit has no durable
+> admission-freeze or launch-record/lease reconciliation. Those differences are
+> expected red implementation evidence while SPEC 0012 remains Draft; current
+> packages must not be described as satisfying its restart/logout contract.
 
 helm intends to support three M3 platforms, but today's evidence differs by
 target ([ARCHITECTURE.md §5](ARCHITECTURE.md)):
@@ -247,6 +254,11 @@ when they build.
 `helm-session` is not boilerplate. It implements the ordering contract in
 ADR 0011, and the order is the entire point:
 
+The numbered list below describes the currently shipped SPEC 0005 path. Draft
+SPEC 0012 requires a crash-safe persistent session claim before step 2 and
+mode-specific systemd/direct lifecycle teardown, but neither is shipped or
+implementation authority yet.
+
 1. Export `XDG_CURRENT_DESKTOP=helm`, `XDG_SESSION_TYPE=wayland`,
    `XDG_SESSION_DESKTOP=helm`, `XCURSOR_THEME`, `XCURSOR_SIZE` — **before** the
    compositor starts, because portal backend selection and cursor loading both
@@ -272,8 +284,12 @@ ADR 0011, and the order is the entire point:
    is empty, and the desktop is inert. If the window manager is not `active`,
    the entry logs `FATAL WM-ABORT` and returns you to the display manager.
 
-On exit it stops the target and clears both environments, so the next session
-does not inherit a `WAYLAND_DISPLAY` pointing at a dead socket.
+On exit the current pre-alpha script attempts to stop the target and clear both
+environments so the next session does not inherit a `WAYLAND_DISPLAY` pointing
+at a dead socket. This is not proof of candidate SPEC 0012 conformance: the
+shipped units do not yet propagate Helm-target stop and the script does not yet
+freeze launch admission or preserve/reconcile durable launch records and
+leases.
 
 Every degradation emits exactly one line with a stable code, so it can be
 grepped, quoted in a bug report and looked up here:

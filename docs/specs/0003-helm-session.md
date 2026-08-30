@@ -13,7 +13,10 @@
   [§4](../INTERFACES.md) (the socket's server half)
 - **Supersedes / Superseded by:** Theme apply/reload clauses are superseded by
   [SPEC 0011](0011-theme-activation-generations.md): the CLI publishes a
-  generation without a session request or notification.
+  generation without a session request or notification. Candidate
+  [SPEC 0012](0012-activation-launch-lifecycle.md) governs activation ownership,
+  lifecycle reconciliation and the WM unit restart rule without accepting this
+  M2 draft or its river replay assumptions.
 
 > Written before the code, as S14 requires. The **Test** column below is
 > deliberately empty: those tests get written next, watched to fail, and only
@@ -136,9 +139,11 @@ refuses to start without `WAYLAND_DISPLAY` (already enforced by the unit's
 **Shutdown.** `Request::Quit` and `Action::Quit` mean the user asked to log out.
 Broadcast `Event::Shutdown` to every subscriber, flush, then make
 `river_window_manager_v1::exit_session`, which is documented as being for
-user-requested logout only *(verified)*. Exit 0 — the unit's
-`Restart=on-failure` deliberately does not restart a clean exit, which is what
-makes quitting possible.
+user-requested logout only *(verified)*. The compositor exit makes the entry
+freeze admission and stop `helm-session.target`; that target stop is what
+prevents restart. SPEC 0012 fixes `helm-wm.service` at `Restart=always`, because
+an unsolicited clean WM exit while the compositor and target remain live is not
+a logout and must not leave river unmanaged.
 
 ### 2. The manage sequence, and which state is which
 
@@ -500,8 +505,9 @@ at all, which is one reason §1 refuses below 4.
 
 A dead `helm-session` leaves windows unplaced and keys dead — a sharper failure
 than a crashed bar, and one the user cannot work around. `helm-wm.service`
-already specifies `Restart=on-failure`, `RestartSec=1` and a five-in-thirty-
-seconds start limit; this section specifies what a restart must restore.
+uses SPEC 0012's `Restart=always`, `RestartSec=1` and a five-in-thirty-seconds
+start limit; this section specifies only the Draft M2 ledger state a restart
+would restore.
 
 **`WinId` is not river's identifier.**
 
@@ -584,10 +590,12 @@ would put a `helm ctl` client on the input path, which §4 forbids.
 `Request::ShowLedger` answers `Response::Ledger(Vec<OrbitLedger>)` built from
 the ledger plus the per-window `app_id` and `title` last reported by river (both
 nullable in the protocol *(verified)*, rendered as empty strings).
-`Request::Spawn` is handed to the worker and answered `Response::Ok` on
-acceptance. `Request::ReloadTheme` has no supported apply or notify meaning and
-is not sent by `helm ctl theme apply`; this Draft does not promise compatibility
-for that retired message. Decoding and protocol-error outcomes are exactly
+Any profile-launch request is handed to the SPEC 0012 lifecycle worker and may
+be acknowledged only after that spec's admission and durable preparation
+boundary. The exact request DTO, request-id idempotency and reply spelling are
+not accepted here; SPEC 0006/#117 owns them. `Request::ReloadTheme` has no
+supported apply or notify meaning and is not sent by `helm ctl theme apply`;
+this Draft does not promise compatibility for that retired message. Decoding and protocol-error outcomes are exactly
 those in SPEC 0007's state/error table; they are not kept open by default merely
 because a decoder can return an error.
 
@@ -813,12 +821,10 @@ in-flight work and finishes the sequence with whatever it has, rather than being
 disconnected. This is the second reason this spec is Draft: it changes what A12
 asserts.
 
-**6. `helm-wm.service`: `Restart=on-failure` or `Restart=always` plus an
-explicit success status?** The unit file already carries this as a `needs-human`
-note deferred to M2, and this spec does not close it: it depends on whether
-`helm-wm` can exit 0 for any reason other than a deliberate quit, which
-needs a daemon to observe. Recorded here so the two places agree.
-**`needs-human`.**
+**6. `helm-wm.service` restart policy.** Resolved by candidate SPEC 0012:
+`Restart=always`, with user logout expressed by compositor exit followed by
+admission freeze and target stop. This removes the clean-exit ambiguity without
+settling any river existing-window replay behaviour.
 
 ---
 
