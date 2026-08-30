@@ -327,8 +327,20 @@ impl Client {
 ```
 
 The wire types (`Request`, `Response`, `Event`, `HelmState`) already exist in
-`helm-core::ipc` and `helm-core::state` and are the normative definition; this
-is only the ergonomic wrapper.
+`helm-core::ipc` and `helm-core::state` and are the normative implemented
+definition; this is only the ergonomic wrapper. In particular, today's
+`Request::Spawn(Vec<String>) -> Response::Ok|Error` is raw,
+direct/unverified admission and has no generation/profile/themed status.
+Draft SPEC 0013 proposes a distinct typed `LaunchDesktop` request and
+identity-bearing accepted/refused reply plus a total `DesktopLaunchCurrent`
+point-query DTO for pending, accepted and refused durable evidence. M1
+deliberately defines no desktop-launch event or subscription; #117 must first
+specify a topology compatible with SPEC 0007.
+Its Draft SPEC 0006/#117 amendment uses the Hello `session_id` plus a stable
+`request_id` to recover ambiguous replies without duplicate execution, and
+does not return `application-running` before the pidfd-backed positive post-Exec proof.
+Those types do not exist and are not an interface commitment until both Draft
+amendments are Accepted.
 
 ---
 

@@ -1,7 +1,9 @@
 # SPEC 0006 — helm ctl
 
-- **Status:** Accepted (2026-08-26; generation contract reconciled by #159) —
-  not yet implemented
+- **Status:** Accepted base (2026-08-26; generation contract reconciled by
+  #159; factual ADR 0011 environment-evidence correction accepted 2026-08-30),
+  not yet implemented. The explicitly labelled #117/#133 desktop-launch
+  amendment below is Draft and has no implementation authority.
 - **Milestone:** M3, with `theme` and the argument surface in M1 and
   `orbit` / `ledger` in M2
 - **Decisions:** [ADR 0004](../adr/0004-ndjson-control-socket.md),
@@ -93,7 +95,7 @@ a real `FileChooser.OpenFile` call, which opens a dialog, so it is opt-in.
 | `orbit list` | `ShowLedger(None)` | `Ledger(Vec<OrbitLedger>)` |
 | `orbit switch N` | `SwitchOrbit(N)` | `Ok` \| `Error` |
 | `ledger show [N]` | `ShowLedger(Some(N))` or `ShowLedger(None)` | `Ledger(Vec<OrbitLedger>)` |
-| `run ARGV…` | `Spawn(argv)` | `Ok` \| `Error` |
+| `run ARGV…` (direct/unverified) | `Spawn(argv)` | `Ok` \| `Error` |
 | `doctor` | `Hello`, then `GetHealth` (new); skipped entirely when no session is running | `Hello`, `Health` (new) |
 
 Every socket-backed command opens the socket and completes the `Hello`
@@ -102,11 +104,71 @@ handshake first, as [INTERFACES.md §4](../INTERFACES.md) requires:
 meanings. `theme apply`, `theme lint`, `theme diff`, and `doctor` do not require
 the socket at all (§4).
 
-`run` is fire-and-forget by construction. `Response::Ok` means the session
-accepted the argv, not that the program started — `execve` fails after the fork
-and there is nowhere to report it to. The session logs the failure; `helm ctl`
-says "accepted" and not "launched", because the difference matters to someone
-debugging a `.desktop` entry.
+`run` is fire-and-forget and direct/unverified by construction.
+`Response::Ok` means only that the session accepted raw argv, not that the
+program started. It carries no desktop id, immutable generation/profile
+identity or verified/themed assertion. The session logs a later failure; `helm ctl` says "accepted" and not
+"launched".
+
+Draft SPEC 0013 proposes a separate
+`Request::LaunchDesktop(DesktopExecRequest)` relation with identity-bearing
+accepted reply/status query. That addition is not part of this Accepted spec or the
+current enum until SPEC 0013 and its coordinated SPEC 0006/#117 amendment are
+Accepted. It must not be emulated through `Spawn`.
+
+#### Draft #117/#133 typed desktop-launch amendment — not Accepted
+
+The candidate adds `session_id` to `Response::Hello`; session-scoped
+`Request::LaunchDesktop { session_id, request_id, desktop_file_id }` and
+`Request::GetDesktopLaunch { session_id, request_id }`; and the exact
+`DesktopLaunchAccepted`, `DesktopLaunchRefused` and total
+`DesktopLaunchCurrent` fields/states in Draft SPEC
+0013 §8. This subsection is the coordinated SPEC
+0006 side of that relation, not an implementation instruction.
+
+`request_id` is the random 128-bit lowercase-hex id for one user action. Same
+session/request/desktop is idempotent and returns the current durable launch;
+same key with another desktop or a stale session refuses. The client retries an
+ambiguous disconnect with the same key. It never substitutes raw `Spawn`, and
+the server never repeats owner creation, authorization or application-child
+creation for a durable mapping. `authorized` means accepted but not launched;
+`application-running` is returned only after SPEC 0013's EOF, non-readable
+pidfd and exact `/proc/<pid>/exe` identity proof. M1 defines no desktop-launch
+event or subscription; idempotent retry and `GetDesktopLaunch` are the complete
+recovery surface. #117 must separately specify a SPEC 0007-compatible
+subscription topology before any such event exists.
+
+`DesktopLaunchRefused/pidfd-capability-unavailable` is the structured response
+for a new typed launch while Draft SPEC 0012's current-incarnation pidfd health
+is absent, probing, failed or blocked on old ownership/probe containment. It
+creates no mapping. The shared SPEC 0007 listener remains open: point queries,
+orbit/window/health controls, other non-launch requests and existing raw
+`Spawn` semantics are unaffected. This is not the broader session
+`admission-frozen` transition and triggers no helper/session teardown.
+
+`GetDesktopLaunch` always returns `DesktopLaunchCurrent` for a valid mapping,
+including pending `preparing`/`adopted`, accepted later states, and refused
+`terminal/failed` with `exec-open no`. An idempotent launch retry which finds a
+mapping returns the same current DTO. Its constant fresh-Exec admission mode
+and disposition/execution-evidence/result/refusal combinations are exactly
+SPEC 0013's table; the mode is not proof, and no current state is hidden
+behind a bounded wait. Only an absent key uses `unknown-request`, while
+malformed/uncertain evidence uses `uncertain-state` without fabricated fields.
+
+Every typed request/reply remains one SPEC 0007 frame, at most 65,536
+bytes including LF, with one pending ordinary reply and its existing two-second
+no-progress write limit. No argv, env or plan bytes enter this public protocol.
+Terminal idempotency evidence remains until the matching session closes under
+Draft SPEC 0012; #117 may later add paginated history but cannot weaken retry
+identity or make a future event stream execution authority.
+
+Draft acceptance rows (not part of Accepted B1–B17):
+
+| # | Given / When / Then | Test |
+|---|---|---|
+| D1 | Given disconnect at every mutation/reply boundary, when the client retries the same session/request/desktop or queries it, then `DesktopLaunchCurrent` returns the one exact pending/accepted/refused durable launch and no second owner, gate or child creation; changed desktop/stale session refuses. | |
+| D2 | Given every legal preparing, adopted, authorized, starting, application-running, owner-drained and terminal state/result/exec-open/execution-evidence combination plus external terminal bypass, when replies and point queries are decoded, then the total DTO returns `launch_mode: fresh-exec` only as admission mode and the exact disposition/execution-evidence/result/refusal, only SPEC 0013's positive post-Exec proof yields `exec_evidence: positive` and application-running, and query is complete recovery without an event topology or wait. | |
+| D3 | Given maximum legal ids/state/disposition/launch-mode/execution-evidence/result/refusal fields and a non-reading client, when every typed request/reply including `DesktopLaunchCurrent` is encoded, then each complete LF frame is at most 65,536 bytes, contains no plan/argv/env bytes, obeys the one-pending-frame rule, and the existing no-progress deadline evicts the peer; a desktop-launch Event variant is absent/refused. | |
 
 #### Gaps in the current `Request` enum
 
@@ -256,17 +318,25 @@ by parsing `systemctl` output, and XWayland is checked by connecting to its
 socket. The only commands it runs are the reused tools' own `--version`, where
 the tool's absence *is* the finding.
 
+**Accepted ADR 0011 environment-evidence correction (2026-08-30).** The
+`env/*/dbus`, `env/agree`, `env/cursor` and `env/xwayland` row changes below,
+and corrected B12, implement ADR 0011's factual no-readback clarification and
+coordinate its Draft SPEC 0005 fixtures. They do not weaken mandatory dual
+import: they prevent production
+doctor from pretending that portal behaviour is a raw environment readback.
+
 | id | What it checks | Probe | Fail, and what it prints |
 |---|---|---|---|
 | `env/identity` | `XDG_CURRENT_DESKTOP=helm`, `XDG_SESSION_TYPE=wayland`, `XDG_SESSION_DESKTOP=helm` in this process | `std::env` | *"Portals will pick the wrong backend and screen share will silently fail."* |
 | `env/wayland-display/process` | `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` in this process | `std::env` | *"You are not inside a helm session."* Remedy: run this from a terminal in the session |
 | `env/wayland-display/systemd` | it reached the systemd user manager | `Environment` property on `org.freedesktop.systemd1.Manager` | *"User units come up displayless; nothing is themed after login."* Remedy: the `import-environment` line, step 3 of the session entry |
-| `env/wayland-display/dbus` | it reached the **D-Bus activation environment** | functional: activate the portal and read `org.freedesktop.portal.FileChooser` `version`, 2 s deadline. There is no public API that reads the activation environment back, so the honest test is whether an activated service works | *"File dialogs will hang for about 25 seconds and then fail."* Remedy: `dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP XDG_RUNTIME_DIR`, run before anything touches the bus |
-| `env/desktop/systemd`, `env/desktop/dbus` | `XDG_CURRENT_DESKTOP=helm` in both | as above | *"Screen share will offer no sources, with no error anywhere."* |
-| `env/agree` | all three views hold the *same* values, not merely non-empty ones | process, systemd, bus, compared | *"The import ran too early, or ran twice with different values."* Prints the three views side by side; a disagreement is the whole diagnosis |
+| `env/wayland-display/dbus` | a portal can function against this display | read/activate `org.freedesktop.portal.FileChooser` `version`, 2 s deadline. A fresh activation witnesses sufficient display/desktop inheritance for that service; an existing owner proves only current function and is labelled weaker. No public activation-environment readback exists and neither case proves every imported value | *"File dialogs will hang for about 25 seconds and then fail."* Remedy: `dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP XDG_RUNTIME_DIR`, run before anything touches the bus |
+| `env/desktop/systemd` | manager has exact `XDG_CURRENT_DESKTOP=helm` | manager `Environment` property | *"Screen share will offer no sources, with no error anywhere."* |
+| `env/desktop/dbus` | the activated portal selected the Helm backend | functional portal property/config result, 2 s deadline; it does not read the raw variable | same symptom; reports the functional coverage limit |
+| `env/agree` | process and systemd values agree exactly; the portal agrees functionally for display/desktop only | compare process with manager property, then report the separate portal result | *"The import ran too early, or ran twice with different values."* Never prints an invented raw D-Bus view |
 | `env/stale` | systemd's `WAYLAND_DISPLAY` names a socket that exists | the property, then `stat` under `$XDG_RUNTIME_DIR` | `systemd --user` and the session bus outlive a logout, always when lingering, so a login can inherit a display name pointing at a dead socket. *"Symptoms identical to never importing it at all."* Remedy: `systemctl --user unset-environment WAYLAND_DISPLAY`, then log in again |
-| `env/cursor` | `XCURSOR_THEME`/`XCURSOR_SIZE` in all three views, the theme resolving to a directory containing `cursors/` under `~/.icons`, `~/.local/share/icons` or `/usr/share/icons`, and gsettings agreeing | env, the systemd property, the icon search path, the GSettings value | *"The cursor will be the default black X11 arrow, or invisible over some surfaces, or will change size as it crosses a window."* Names both places, because setting one leaves it wrong in the other |
-| `env/xwayland` | `DISPLAY` in all three views when XWayland is up, and the integer-scale policy in force | connect to the X11 socket directly | `warn`. Reports honestly that the session entry's `DISPLAY` import is a known gap where the compositor does not hand its `:N` back. *"X11 apps absent, or blurred on a scaled output."* |
+| `env/cursor` | process/systemd `XCURSOR_THEME`/`XCURSOR_SIZE`, resolvable theme, and matching gsettings | process env, manager property, icon search path and GSettings. Production cannot inspect raw D-Bus values and says so; the VM sentinel covers them | *"The cursor will be the default black X11 arrow, or invisible over some surfaces, or will change size as it crosses a window."* |
+| `env/xwayland` | process/systemd `DISPLAY` when XWayland is up, and integer-scale policy | manager property plus direct X11 socket connection. Production cannot inspect raw D-Bus `DISPLAY`; the VM sentinel covers it | `warn`. Reports honestly that the session entry's `DISPLAY` import is a known gap where the compositor does not hand its `:N` back. *"X11 apps absent, or blurred on a scaled output."* |
 | `env/list-matches-entry` | `doctor`'s variable list is identical to the session entry's | both lists, compared; a **CI** check with no session needed | *"A variable was added in one place and forgotten in the other."* SPEC 0005 A3 |
 | `units/target` | `helm-session.target` is active and its `.wants` symlinks exist | `ActiveState` over D-Bus | *"A target that starts nothing and reports success."* |
 | `units/wm` | the window manager's unit is `ActiveState=active`, with `ConditionResult` reported **separately** | both properties | an unmet `ConditionEnvironment=` leaves a unit `inactive (dead)` with `ConditionResult=no`, and `systemctl start` still exits 0 with nothing in `--failed`. *"Nothing started and nothing complained."* Prints the condition that was not met |
@@ -336,8 +406,8 @@ environment
   FAIL  wayland/dbus      portal did not answer within 2000 ms
         └ symptom  file dialogs hang for about 25 seconds, then fail;
                    screen sharing offers nothing
-          cause    WAYLAND_DISPLAY is missing from the D-Bus activation
-                   environment
+          cause    fresh portal activation did not become functional;
+                   production cannot read the raw D-Bus environment
           fix      dbus-update-activation-environment --systemd \
                      WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE \
                      XDG_SESSION_DESKTOP XDG_RUNTIME_DIR
@@ -371,7 +441,7 @@ therefore pasteable as-is.
     {"id": "env/wayland-display/dbus", "group": "environment", "status": "fail",
      "summary": "portal did not answer within 2000 ms",
      "symptom": "file dialogs hang for about 25 seconds, then fail",
-     "cause": "WAYLAND_DISPLAY is missing from the D-Bus activation environment",
+     "cause": "fresh portal activation did not become functional; raw D-Bus environment is not readable",
      "remedy": "dbus-update-activation-environment --systemd …",
      "data": {"deadline_ms": 2000, "elapsed_ms": 2000}}
   ],
@@ -447,9 +517,9 @@ Each row is one happy path and becomes one test.
 | B7 | Given no listener at SPEC 0007's fixed endpoint after its bounded retry, when `orbit switch 2` runs, then it exits 3, names the path it tried, and suggests how to start a session | |
 | B8 | Given a session answering `Hello` with a different `version`, when any command runs, then the CLI refuses before sending anything else, prints both versions and exits 4 | |
 | B9 | Given a session with three windows in orbit 1, when `ledger show 1 --json` runs, then stdout is exactly one object that deserialises as `Response::Ledger` with the windows in ledger order and the focused one marked | |
-| B10 | Given a running session, when `run foot -e yazi` runs, then it sends `Request::Spawn(["foot","-e","yazi"])`, exits 0 without waiting, and reports the argv as accepted rather than launched | |
+| B10 | Given a running session, when `run foot -e yazi` runs, then it sends direct/unverified `Request::Spawn(["foot","-e","yazi"])`, exits 0 without waiting, reports the argv as accepted rather than launched, and emits no desktop/generation/profile/verified reply or event field | |
 | B11 | Given a healthy session, when `doctor` runs, then every check reports `ok` or `warn`, the header names the tool, protocol, distribution, kernel and compositor versions, and it exits 0 | |
-| B12 | Given `WAYLAND_DISPLAY` absent from the D-Bus activation environment, when `doctor` runs, then `env/wayland-display/dbus` fails within its 2 s deadline, prints the 25-second-hang symptom and the `dbus-update-activation-environment` remedy, and the command exits 1 | |
+| B12 | Given separate missing-D-Bus-import fixtures, when a fresh VM sentinel, a freshly activated portal and production doctor against an existing functioning portal run, then the sentinel fails exact inheritance; the fresh portal reports only its bounded functional outcome; and the existing-owner doctor result is labelled weaker/inconclusive and never attributes a raw missing `WAYLAND_DISPLAY` it cannot observe. A failed functional probe still prints the 25-second-hang symptom and dual-import remedy and exits 1 | |
 | B13 | Given no session running and a font stack that covers ASCII only, when `doctor` runs, then the session checks are `skip` with a banner, `fonts/glyphs` warns with `Probe::summary()`'s wording, and it exits 0 | |
 | B14 | Given no session bus and no session running, when `doctor` runs, then the D-Bus and portal checks are `skip` and not `fail`, and it exits 0 | |
 | B15 | Given `theme apply` returns `Committed(generation)`, when the CLI reports it, then it exits 0 and reports exactly that generation as selected for future launches | |

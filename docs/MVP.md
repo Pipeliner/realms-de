@@ -16,7 +16,7 @@ does not serve it waits — however good it would look in a screenshot.
 | 2 | Tile windows: summon, banish, focus, swap, six orbits, triptych + mono | This *is* the window manager — literally, under river 0.4 | `helm-core` + `helm-session` |
 | 3 | See state: bar with orbits, layout, mode, title, clock, cpu/mem/net/battery | A tiling WM without a bar is unusable for a week | `helm-bar` |
 | 4 | Discover keys: which-key strip + `?` grimoire | Chords no one can remember are chords no one uses | `helm-bar` |
-| 5 | Launch things | Terminal, browser, anything on `PATH` | fuzzel themed as hecate |
+| 5 | Launch things | Terminal, browser, anything on `PATH` | fuzzel picker UI feeding Helm's broker; direct application mode is an unverified bypass |
 | 6 | A terminal that looks like helm | Where the week is actually spent | foot + generated ANSI theme |
 | 7 | Files: charon | yazi + helm keymap and theme | `configs/yazi` |
 | 8 | Monitor: horus | btop + generated theme | `configs/btop` |
@@ -31,7 +31,7 @@ does not serve it waits — however good it would look in a screenshot.
 | Deferred | Stopgap in MVP | Lands in |
 |---|---|---|
 | `helm-compositor` (Smithay) | river 0.4 via `RiverBackend`, with helm as its window manager | M5 |
-| `helm-hecate` native launcher | themed fuzzel | M4 |
+| `helm-hecate` native launcher | fuzzel as picker UI over Helm admission; direct fuzzel launch remains unverified | M4 |
 | `helm-odin` agent harness | run the agent runner in a terminal | M4 |
 | urania orrery pane | — (the one pure-ornament pane) | M4 |
 | charon *portal* open dialog | the toolkit's own dialog, themed | M4 |

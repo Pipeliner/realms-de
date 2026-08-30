@@ -1,6 +1,7 @@
 # ADR 0011 — The session entry owns the environment handshake
 
-- **Status:** Accepted (ratified 2026-08-28); see Reversal
+- **Status:** Accepted (ratified 2026-08-28; factual evidence correction
+  accepted 2026-08-30); see Reversal
 - **Deciders:** helm maintainers
 - **Supersedes / Superseded by:** Fedora-specific River-vendoring premise in
   the lock-screen discussion superseded by
@@ -124,11 +125,20 @@ human*. The idle daemon may be any `ext-idle-notify-v1` client.
 **9. `helm ctl doctor` verifies every one of the above.**
 
 Not a subset. The doctor is what turns this contract from documentation into
-something that fails loudly. Its checks:
+something that fails loudly. A factual evidence clarification does not weaken
+step 3: there is no public API that reads the D-Bus activation environment
+back. Therefore production `doctor` must distinguish three observations rather
+than call them one raw view: exact systemd-manager property readback; a fresh
+D-Bus-activated test sentinel's exact inherited values on an isolated bus; and
+portal functional behaviour. A freshly activated portal proves only its
+bounded functional result, while an already-owned portal proves still less and
+cannot diagnose whether this session performed the import. The sentinel is VM
+acceptance evidence, not a production doctor API. The mandatory dual import
+and before-first-bus-touch ordering remain Accepted and unchanged. Its checks:
 
 | Check | Covers |
 |---|---|
-| `WAYLAND_DISPLAY` and `XDG_CURRENT_DESKTOP=helm` present in the systemd user environment **and** in the D-Bus activation environment, separately reported | steps 1, 3 |
+| Exact `WAYLAND_DISPLAY` and `XDG_CURRENT_DESKTOP=helm` systemd-manager readback; separately, fresh-activation VM sentinel evidence for exact D-Bus inheritance; separately, production portal functional evidence labelled fresh or existing-owner/weaker | steps 1, 3 |
 | The portal config names GTK for `FileChooser` and `Settings`, `none` for `Inhibit`, and wlr for `ScreenCast`/`Screenshot`; the selected implementations resolve, and an on-demand `FileChooser.OpenFile` round trip returns a request handle within two seconds | step 5 |
 | Cursor theme resolvable and gsettings agrees with the environment | step 6 |
 | XWayland running if enabled; scale policy as configured | step 7 |
@@ -184,8 +194,13 @@ is not reversible: it is imposed by how D-Bus activation works.
 - *Planned (M3):* the NixOS VM test boots the session and runs
   `helm ctl doctor`, failing the build on any non-zero exit. This is the guard.
 - *Planned (M3):* a negative test that deliberately skips the
-  `dbus-update-activation-environment` call and asserts `doctor` reports it.
-  A health check that has never been seen to fail is not a health check.
+  `dbus-update-activation-environment` call and asserts the first fresh-bus
+  D-Bus-activated test sentinel fails its exact inherited-value check. A
+  separately freshly activated portal reports only its bounded functional
+  outcome. Production `doctor` reports a fresh portal's functional failure but
+  labels an already-owned functioning portal weaker/inconclusive; it never
+  claims either observation is a raw import readback. A guard that has never
+  been seen to fail is not a guard.
 - *Planned (M3):* a portal round-trip test in the VM asserting a `FileChooser`
   request answers within two seconds, which is what the hang violates.
 - *Planned (M3):* a consistency test asserting the variable list in the session

@@ -592,12 +592,12 @@ gate (ADR 0011's guard).
 | `env/identity` | `XDG_CURRENT_DESKTOP=helm`, `XDG_SESSION_TYPE=wayland`, `XDG_SESSION_DESKTOP=helm` in the process | Portal picks the wrong backend | VM |
 | `env/wayland-display/process` | Present in `doctor`'s own environment | — | VM |
 | `env/wayland-display/systemd` | Present in `systemctl --user show-environment` | Nothing themed after login; units come up displayless | VM |
-| `env/wayland-display/dbus` | Present in the bus activation environment | File dialogs hang ~25 s | VM |
-| `env/desktop/systemd`, `env/desktop/dbus` | `XDG_CURRENT_DESKTOP=helm` in both | Screen share offers no sources | VM |
-| `env/agree` | All three views hold the *same* values | The import ran too early or was skipped | VM |
+| `env/wayland-display/dbus` | A first D-Bus-activated sentinel on a fresh isolated bus inherited the exact expected value; production doctor reports only fresh/existing portal function and its coverage limit | File dialogs hang ~25 s | VM |
+| `env/desktop/systemd`, `env/desktop/dbus` | Exact manager value; separately, exact fresh-sentinel inheritance in VM and only backend-selection function in production | Screen share offers no sources | VM |
+| `env/agree` | Process and manager values agree exactly; the fresh VM sentinel separately agrees exactly; a portal agrees only functionally | The import ran too early or was skipped | VM |
 | `env/list-matches-entry` | `doctor`'s variable list equals the session entry's | A variable added in one place and forgotten in the other | **CI** |
-| `env/cursor` | `XCURSOR_THEME`/`SIZE` in all three, theme resolves on disk, gsettings agrees | Black X11 arrow; cursor resizes across windows | VM |
-| `env/xwayland` | `DISPLAY` in all three when XWayland is up; integer-scale policy in force | X11 apps absent or blurred | VM |
+| `env/cursor` | Process/manager values and gsettings agree and the theme resolves; a fresh VM sentinel separately proves D-Bus inheritance | Black X11 arrow; cursor resizes across windows | VM |
+| `env/xwayland` | Process/manager `DISPLAY` when XWayland is up, fresh VM sentinel inheritance, and integer-scale policy in force | X11 apps absent or blurred | VM |
 | `units/target` | `helm-session.target` active, and its `.wants` symlinks exist | A target that starts nothing and reports success | VM |
 | `units/wm` | `helm-wm.service` `ActiveState=active`; `ConditionResult` reported separately | **N1** — a condition-skipped unit read as success | VM |
 | `units/bar` | `helm-bar.service` active or cleanly restarting | Bar gone unnoticed | VM |
@@ -639,9 +639,9 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A2 | Given the session entry source, when the ordering test runs, then the identity exports precede the compositor start, and the two imports precede every client start, every `gsettings` call and every other D-Bus touch | CI | |
 | A3 | Given the entry's variable list, the units' `ConditionEnvironment=` set and `doctor`'s list, when the consistency test runs, then all three name the same variables | CI | |
 | A4 | Given a container with no reachable `systemd --user` and no `dbus-update-activation-environment`, when the entry runs against a stub compositor, then it logs exactly one `DEGRADED NO-SYSTEMD-USER` line and one `DEGRADED NO-DBUS-ACTIVATION` line, starts the clients directly under the bounded respawn loop, and does not hang | CI | |
-| A5 | Given a booted session, when `systemctl --user show-environment` and the bus activation environment are read, then every imported variable is present in both with values equal to the compositor's `/proc/<pid>/environ` | VM | |
-| A6 | Given a session started with the D-Bus import deliberately suppressed, when `doctor` runs, then `env/wayland-display/dbus` fails, names the twenty-five second hang, and `doctor` exits non-zero | VM | |
-| A7 | Given a booted session, when the cursor is checked, then the environment, the imported environment and `gsettings` all name the same theme and size, and the theme resolves to a directory on disk | VM | |
+| A5 | Given a booted session on a fresh isolated bus, when manager properties are read and the first test sentinel is D-Bus activated, then every imported variable is present in the manager and is returned as the sentinel's exact inherited sorted name/value list with nonce; this is process-inheritance evidence, not a bus-environment readback | VM | |
+| A6 | Given separate sessions with D-Bus import suppressed, when the fresh sentinel, freshly activated portal, and production doctor against an already-owned functioning portal run, then the sentinel exact-value fixture fails; the fresh portal reports only its bounded functional outcome without diagnosing a raw variable; and the existing-owner doctor observation is weaker/inconclusive rather than a false raw-import failure or success | VM | |
+| A7 | Given a booted session, when the cursor is checked, then process and manager values plus `gsettings` name the same theme/size and the theme resolves, while a fresh sentinel separately proves its inherited D-Bus values; production doctor claims no raw bus view | VM | |
 | A8 | Given river started, when `helm-wm` attaches, then `doctor` reports `wm/attached` and `wm/layer-shell` served, and the measured unmanaged interval is inside the cold-start budget | VM | |
 | A9 | Given `helm-wm` removed from the image, when the session starts, then the entry logs `FATAL WM-ABORT` with the "no window can be placed" message, tears river down, and exits non-zero — and the same happens when the unit is condition-skipped rather than failed | VM | |
 | A10 | Given a running session with three windows, when `helm-wm` is killed, then it is restarted within `RestartSec`, the ledger is recovered from the snapshot, the three windows return to their projected rectangles, and `helm-bar.service` never leaves `active` | VM | |

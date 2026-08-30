@@ -27,17 +27,21 @@ Copy [`template.md`](template.md) to start a new one.
 | [0008](0008-layer-shell-rendering-stack.md) | `smithay-client-toolkit` + `tiny-skia` + `cosmic-text` | Accepted | Pure Rust, no GPU context for a 32px bar, real font fallback | **Medium** — a client rewrite |
 | [0009](0009-no-animation-budget.md) | No animations; the frame budget is a CI gate | Accepted — theme-apply mechanism partially superseded by [0017](0017-immutable-theme-activation-generations.md) | "Snappy" is five numbers, not an adjective | Low |
 | [0010](0010-nix-flake-as-reference-build.md) | The Nix flake is the reference build | Accepted — Fedora baseline clauses partially superseded by [0015](0015-fedora-44-pre-alpha-baseline.md) | root flake plus tracked native distro packaging; a NixOS VM test boots the session | **Medium** |
-| [0011](0011-session-integration-contract.md) | The session entry owns the environment handshake | Accepted | Import into systemd **and** D-Bus before starting anything, or portals hang | Low — the requirement is not reversible |
+| [0011](0011-session-integration-contract.md) | The session entry owns the environment handshake | Accepted — factual evidence correction 2026-08-30 | Import into systemd **and** D-Bus before starting anything; exact fresh-sentinel evidence is distinct from portal function | Low — the requirement is not reversible |
 | [0012](0012-font-fallback-is-a-contract.md) | Font fallback is a contract | Accepted — guard pending | Glyph inventory, a startup probe, and an ASCII fallback for all 37 glyphs | Low |
 | [0013](0013-river-window-management-backend.md) | helm **is** the window manager, on river's protocol | Accepted — supersedes [0002](0002-borrow-a-compositor-first.md); Fedora part of Decision 4 superseded by [0015](0015-fedora-44-pre-alpha-baseline.md) | river 0.4 moved window management out of the compositor; every row 0002 marked lossy becomes faithful | **Medium** — back to niri is an architecture change, not a module swap |
 | [0014](0014-local-agent-sdd-pilot-governance.md) | Local agent-SDD pilot records are tracked but non-authoritative | Accepted | Metadata-only checkpoints/evidence aid handoff; docs, GitHub and tests retain their existing authority | Low — remove pilot records and validator |
 | [0015](0015-fedora-44-pre-alpha-baseline.md) | Fedora 44 is the sole explicit pre-alpha Fedora baseline | Accepted — partially supersedes [0010](0010-nix-flake-as-reference-build.md) and [0013](0013-river-window-management-backend.md) for Fedora | One exact Fedora release and native River candidate, without implying RPM/session support | Low — accept a successor baseline and replace the single lane |
 | [0016](0016-packaged-helm-sdd-carries-git.md) | The Nix-installed `helm-sdd` carries Git in its own runtime closure | Accepted | Git is wrapped only for the local Git-backed validator, never the desktop session | Low — replace with a separately specified interface |
 | [0017](0017-immutable-theme-activation-generations.md) | Theme activation uses sealed immutable generations | Accepted — partially supersedes [0005](0005-palette-toml-single-source.md) | Launches pin a digest-bound sealed tree; pointer commits change future launches only and never reload | Medium — changes #22/#132 launcher and lifecycle seams |
+| [0018](0018-m1-desktop-launch-is-fresh-exec-only.md) | M1 desktop launch is fresh-process Exec only | Accepted | Tokenized plain Exec starts one fresh child; D-Bus entries are refused without owner probing or fallback | Medium and additive if D-Bus remains a separate path |
 
 All active decisions through 0013 were **ratified by the owner on 2026-08-28**,
 after the correction set tracked by #3. ADR 0015 was authorized by the owner
-after independent review on 2026-08-29. "Accepted" means we are building on it, not that it is settled forever —
+after independent review on 2026-08-29. ADR 0018 records the owner's explicit
+2026-08-29 #133 ruling and follow-up correction: existing-owner semantics apply
+only to D-Bus activation; plain Exec is fresh-only. "Accepted" means we are
+building on it, not that it is settled forever —
 0002 is the worked example, superseded within a day of being written and kept
 intact because the trail is the point.
 
