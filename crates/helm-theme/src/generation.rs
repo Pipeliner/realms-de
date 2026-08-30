@@ -1,5 +1,8 @@
 //! Immutable generation validation, publication and fail-closed recovery.
 
+#[allow(dead_code)]
+mod lifecycle;
+
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
