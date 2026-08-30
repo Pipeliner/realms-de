@@ -69,6 +69,13 @@
           src = self;
         };
 
+      desktopAdmissionVmTest =
+        pkgs:
+        import ./packaging/nix/desktop-admission-vm-test.nix {
+          inherit pkgs support;
+          src = self;
+        };
+
       nixosModule = import ./packaging/nix/nixos-module.nix { inherit self support; };
       homeManagerModule = import ./packaging/nix/home-manager-module.nix { inherit self support; };
     in
@@ -153,6 +160,7 @@
           inherit pkgs lib nixosModule;
           src = self;
           helm = helmPackage pkgs;
+          desktopAdmissionVmTest = desktopAdmissionVmTest pkgs;
         }
       );
 

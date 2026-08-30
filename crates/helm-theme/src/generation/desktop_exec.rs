@@ -176,14 +176,16 @@ fn is_unquoted_reserved(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        admit_desktop, capture_roots, parse_exec, validate_document, AdmissionInputs,
+        absolute_components, admit_desktop, capture_desktop, capture_roots, parse_exec,
+        parse_try_exec, validate_document, validate_path, AdmissionAuditEvent, AdmissionInputs,
         DesktopExecError, DesktopFileId,
     };
     use std::ffi::OsString;
     use std::fs;
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::ffi::OsStringExt;
     use std::os::unix::fs::symlink;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
 
@@ -318,6 +320,250 @@ mod tests {
         );
     }
 
+    #[test]
+    fn dbus_refusal_after_structural_validation() {
+        let temp = TempDir::new().expect("temp root");
+        write_entry(
+            temp.path(),
+            "example.desktop",
+            "[Desktop Entry]\nType=Application\nName=Example\nDBusActivatable=true\nExec=invalid;exec\n",
+        );
+        let admission_inputs = inputs(Some(temp.path()), Some(temp.path()), &[]);
+        assert!(admit_desktop(id("example.desktop"), &admission_inputs).is_err());
+        assert_eq!(
+            admission_inputs.downstream_attempts(),
+            vec![
+                AdmissionAuditEvent::MainGroupValidated,
+                AdmissionAuditEvent::DbusDecision,
+            ]
+        );
+
+        for document in [
+            "[Desktop Entry]\nType=Link\nName=Example\nDBusActivatable=true\n",
+            "[Desktop Entry]\nType=Application\nName=\nDBusActivatable=true\n",
+            "[Desktop Entry]\nType=Application\nName=Example\nHidden=true\nDBusActivatable=true\n",
+            "[Desktop Entry]\nType=Application\nName=Example\nNoDisplay=true\nDBusActivatable=true\n",
+            "[Desktop Entry]\nType=Application\nName=Example\nTerminal=true\nDBusActivatable=true\n",
+        ] {
+            write_entry(temp.path(), "example.desktop", document);
+            let admission_inputs = inputs(Some(temp.path()), Some(temp.path()), &[]);
+            assert!(admit_desktop(id("example.desktop"), &admission_inputs).is_err());
+            assert!(admission_inputs.downstream_attempts().is_empty());
+        }
+    }
+
+    #[test]
+    fn static_preflight_refuses_without_generation_effect() {
+        let temp = TempDir::new().expect("temp root");
+        for (document, expected) in [
+            (
+                "[Desktop Entry]\nType=Application\nName=Example\n",
+                vec![
+                    AdmissionAuditEvent::MainGroupValidated,
+                    AdmissionAuditEvent::DbusDecision,
+                    AdmissionAuditEvent::ExecAccessed,
+                ],
+            ),
+            (
+                "[Desktop Entry]\nType=Application\nName=Example\nExec=invalid;exec\n",
+                vec![
+                    AdmissionAuditEvent::MainGroupValidated,
+                    AdmissionAuditEvent::DbusDecision,
+                    AdmissionAuditEvent::ExecAccessed,
+                ],
+            ),
+            (
+                "[Desktop Entry]\nType=Application\nName=Example\nExec=example\nTryExec=two words\n",
+                vec![
+                    AdmissionAuditEvent::MainGroupValidated,
+                    AdmissionAuditEvent::DbusDecision,
+                    AdmissionAuditEvent::ExecAccessed,
+                    AdmissionAuditEvent::TryExecAccessed,
+                ],
+            ),
+        ] {
+            write_entry(temp.path(), "example.desktop", document);
+            let admission_inputs = inputs(Some(temp.path()), Some(temp.path()), &[]);
+            assert!(admit_desktop(id("example.desktop"), &admission_inputs).is_err());
+            assert_eq!(admission_inputs.downstream_attempts(), expected);
+        }
+    }
+
+    #[test]
+    fn static_preflight_refuses_invalid_base_environment_before_plan_handoff() {
+        let temp = TempDir::new().expect("temp root");
+        write_entry(temp.path(), "example.desktop", &document(None));
+        for environment in [
+            vec![
+                OsString::from("PATH=/usr/bin"),
+                OsString::from("LD_PRELOAD=x"),
+            ],
+            vec![OsString::from("HOME=/home/example")],
+            vec![OsString::from("PATH=relative")],
+            vec![OsString::from("PATH=/usr/bin:/usr/bin")],
+        ] {
+            let admission_inputs =
+                inputs(Some(temp.path()), Some(temp.path()), &[]).with_environment(environment);
+            assert!(admit_desktop(id("example.desktop"), &admission_inputs).is_err());
+            assert_eq!(
+                admission_inputs.downstream_attempts(),
+                vec![
+                    AdmissionAuditEvent::MainGroupValidated,
+                    AdmissionAuditEvent::DbusDecision,
+                    AdmissionAuditEvent::ExecAccessed,
+                    AdmissionAuditEvent::TryExecAccessed,
+                    AdmissionAuditEvent::BaseEnvironmentAccessed,
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn static_preflight_accepts_root_as_a_normalized_path_component() {
+        let temp = TempDir::new().expect("temp root");
+        write_entry(temp.path(), "example.desktop", &document(None));
+        assert!(validate_path("/").is_ok());
+        assert_eq!(
+            absolute_components("/").expect("root components"),
+            Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn static_preflight_refuses_an_exec_name_missing_from_captured_path() {
+        let temp = TempDir::new().expect("temp root");
+        write_entry(
+            temp.path(),
+            "example.desktop",
+            "[Desktop Entry]\nType=Application\nName=Example\nExec=does-not-exist\n",
+        );
+        let admission_inputs = inputs(Some(temp.path()), Some(temp.path()), &[])
+            .with_environment(vec![OsString::from("PATH=/usr/bin")]);
+
+        assert!(admit_desktop(id("example.desktop"), &admission_inputs).is_err());
+    }
+
+    #[test]
+    fn elf_preflight_refuses_a_header_with_an_invalid_elf_version_field() {
+        let mut header = [0_u8; 64];
+        header[..4].copy_from_slice(b"\x7fELF");
+        header[4] = 2;
+        header[5] = 1;
+        header[6] = 1;
+        header[16..18].copy_from_slice(&3_u16.to_le_bytes());
+        header[18..20].copy_from_slice(
+            &(if cfg!(target_arch = "x86_64") {
+                62_u16
+            } else {
+                183_u16
+            })
+            .to_le_bytes(),
+        );
+        header[20..24].copy_from_slice(&0_u32.to_le_bytes());
+
+        assert!(super::validate_elf_header(&header).is_err());
+    }
+
+    #[test]
+    fn try_exec_preflight_refuses_non_name_punctuation() {
+        let document = validate_document(
+            b"[Desktop Entry]\nType=Application\nName=Example\nExec=example\nTryExec=example;unsafe\n",
+        )
+        .expect("well-formed desktop document");
+        let inputs = inputs(None, None, &[]);
+
+        assert!(parse_try_exec(&document, &inputs).is_err());
+    }
+
+    #[test]
+    fn executable_preflight_requires_proven_effective_access() {
+        assert!(super::effective_access_is_proven(
+            Err(super::Errno::ACCESS),
+            Ok(())
+        ));
+        assert!(!super::effective_access_is_proven(Ok(()), Ok(())));
+        assert!(!super::effective_access_is_proven(
+            Err(super::Errno::NOSYS),
+            Ok(())
+        ));
+        assert!(!super::effective_access_is_proven(
+            Err(super::Errno::ACCESS),
+            Err(super::Errno::ACCESS)
+        ));
+    }
+
+    #[test]
+    #[ignore = "requires a non-root NixOS VM with a root-owned ELF fixture"]
+    fn nixos_vm_static_preflight_admits_root_owned_elf_from_non_root_user() {
+        assert_ne!(
+            rustix::process::geteuid().as_raw(),
+            0,
+            "VM test user is non-root"
+        );
+        let executable = std::env::var_os("HELM_DESKTOP_EXEC_TEST_ELF")
+            .expect("NixOS VM supplies the root-owned ELF fixture");
+        let executable = executable
+            .into_string()
+            .expect("VM fixture executable is UTF-8");
+        let executable_path = Path::new(&executable);
+        let executable_directory = executable_path.parent().expect("fixture parent");
+        let executable_name = executable_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("fixture executable name");
+        assert_eq!(
+            fs::metadata(executable_path)
+                .expect("fixture metadata")
+                .uid(),
+            0,
+            "the controlled fixture must be root-owned"
+        );
+
+        let temp = TempDir::new().expect("temp root");
+        write_entry(
+            temp.path(),
+            "example.desktop",
+            &format!(
+                "[Desktop Entry]\nType=Application\nName=Example\nExec={executable_name}\nTryExec={executable_name}\nPath=/\n"
+            ),
+        );
+        let inputs = inputs(Some(temp.path()), Some(temp.path()), &[]).with_environment(vec![
+            OsString::from(format!("PATH={}", executable_directory.display())),
+            OsString::from("LANG=C.UTF-8"),
+        ]);
+
+        let plan = admit_desktop(id("example.desktop"), &inputs).expect("accepted VM plan");
+        assert_eq!(plan.argv, vec![executable_name.as_bytes().to_vec()]);
+        assert_eq!(
+            plan.executable.identity,
+            super::FileIdentity::from_stat(
+                &rustix::fs::fstat(&plan.executable.fd).expect("exec stat")
+            )
+        );
+        assert_eq!(
+            plan.try_exec.as_ref().expect("TryExec descriptor").identity,
+            super::FileIdentity::from_stat(
+                &rustix::fs::fstat(&plan.try_exec.as_ref().expect("TryExec descriptor").fd)
+                    .expect("TryExec stat")
+            )
+        );
+        assert_eq!(
+            plan.base_environment
+                .entries
+                .iter()
+                .map(|entry| entry.as_os_str().as_bytes().to_vec())
+                .collect::<Vec<_>>(),
+            vec![
+                b"LANG=C.UTF-8".to_vec(),
+                format!("PATH={}", executable_directory.display()).into_bytes(),
+            ]
+        );
+        assert_eq!(
+            plan.cwd.identity,
+            super::FileIdentity::from_stat(&rustix::fs::fstat(&plan.cwd.fd).expect("cwd stat"))
+        );
+    }
+
     mod xdg {
         use super::*;
 
@@ -340,7 +586,9 @@ mod tests {
                     Path::new("/usr/share").to_path_buf(),
                 ]
             );
-            assert!(admit_desktop(id("example.desktop"), &inputs(Some(&home), None, &[])).is_ok());
+            assert!(
+                capture_desktop(id("example.desktop"), &inputs(Some(&home), None, &[])).is_ok()
+            );
         }
 
         #[test]
@@ -350,7 +598,7 @@ mod tests {
             let low = temp.path().join("low");
             write_entry(&high, "example.desktop", &document(None));
             write_entry(&low, "example.desktop", &document(None));
-            assert!(admit_desktop(
+            assert!(capture_desktop(
                 id("example.desktop"),
                 &inputs(Some(temp.path()), Some(&high), &[&low])
             )
@@ -368,7 +616,7 @@ mod tests {
             let temp = TempDir::new().expect("temp root");
             write_entry(temp.path(), "foo-bar.desktop", &document(None));
             write_entry(temp.path(), "foo/bar.desktop", &document(None));
-            assert!(admit_desktop(
+            assert!(capture_desktop(
                 id("foo-bar.desktop"),
                 &inputs(Some(temp.path()), Some(temp.path()), &[])
             )
@@ -383,7 +631,7 @@ mod tests {
                 "example.desktop",
                 "[Desktop Entry]\nName=A\nName=B\n",
             );
-            assert!(admit_desktop(
+            assert!(capture_desktop(
                 id("example.desktop"),
                 &inputs(Some(temp.path()), Some(temp.path()), &[])
             )
@@ -394,7 +642,7 @@ mod tests {
                 "example.desktop",
                 "[Desktop Entry]\nName=A\n[Desktop Entry]\nType=Application\n",
             );
-            assert!(admit_desktop(
+            assert!(capture_desktop(
                 id("example.desktop"),
                 &inputs(Some(temp.path()), Some(temp.path()), &[])
             )
@@ -477,7 +725,7 @@ mod tests {
             let absent = temp.path().join("absent");
             let low = temp.path().join("low");
             write_entry(&low, "example.desktop", &document(None));
-            assert!(admit_desktop(
+            assert!(capture_desktop(
                 id("example.desktop"),
                 &inputs(Some(temp.path()), Some(&absent), &[&low])
             )
@@ -584,7 +832,10 @@ mod tests {
         }
     }
 }
-use rustix::fs::{fstat, openat, statat, AtFlags, Dir, FileType, Mode, OFlags, CWD};
+use rustix::fs::{
+    accessat, fstat, openat, statat, Access, AtFlags, Dir, FileType, Mode, OFlags, CWD,
+};
+use rustix::io::pread;
 use rustix::io::Errno;
 use rustix::process::geteuid;
 use std::ffi::OsString;
@@ -622,6 +873,7 @@ struct AdmissionInputs {
     home: Option<PathBuf>,
     data_home: Option<PathBuf>,
     data_dirs: Vec<PathBuf>,
+    environment: Vec<OsString>,
     #[cfg(test)]
     post_acquisition_enoent: bool,
     #[cfg(test)]
@@ -635,6 +887,11 @@ struct AdmissionInputs {
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AdmissionAuditEvent {
+    MainGroupValidated,
+    DbusDecision,
+    ExecAccessed,
+    TryExecAccessed,
+    BaseEnvironmentAccessed,
     PlanMadeAvailable,
 }
 
@@ -649,6 +906,7 @@ impl AdmissionInputs {
             home,
             data_home,
             data_dirs,
+            environment: vec![OsString::from("PATH=/usr/bin")],
             post_acquisition_enoent: false,
             audit: std::sync::Mutex::new(Vec::new()),
             pre_open_hook: None,
@@ -659,6 +917,12 @@ impl AdmissionInputs {
     #[cfg(test)]
     fn with_post_acquisition_enoent(mut self) -> Self {
         self.post_acquisition_enoent = true;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_environment(mut self, environment: Vec<OsString>) -> Self {
+        self.environment = environment;
         self
     }
 
@@ -686,6 +950,46 @@ impl AdmissionInputs {
             .expect("test audit lock")
             .push(AdmissionAuditEvent::PlanMadeAvailable);
     }
+
+    #[cfg(test)]
+    fn record_main_group_validated(&self) {
+        self.audit
+            .lock()
+            .expect("test audit lock")
+            .push(AdmissionAuditEvent::MainGroupValidated);
+    }
+
+    #[cfg(test)]
+    fn record_dbus_decision(&self) {
+        self.audit
+            .lock()
+            .expect("test audit lock")
+            .push(AdmissionAuditEvent::DbusDecision);
+    }
+
+    #[cfg(test)]
+    fn record_exec_accessed(&self) {
+        self.audit
+            .lock()
+            .expect("test audit lock")
+            .push(AdmissionAuditEvent::ExecAccessed);
+    }
+
+    #[cfg(test)]
+    fn record_try_exec_accessed(&self) {
+        self.audit
+            .lock()
+            .expect("test audit lock")
+            .push(AdmissionAuditEvent::TryExecAccessed);
+    }
+
+    #[cfg(test)]
+    fn record_base_environment_accessed(&self) {
+        self.audit
+            .lock()
+            .expect("test audit lock")
+            .push(AdmissionAuditEvent::BaseEnvironmentAccessed);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -710,17 +1014,57 @@ impl FileIdentity {
 }
 
 #[derive(Debug)]
-struct AdmittedDesktopPlan {
+struct CapturedDesktop {
     bytes: Vec<u8>,
-    #[allow(dead_code)]
+    document: DesktopDocument,
     identity: FileIdentity,
 }
 
-impl AdmittedDesktopPlan {
+impl CapturedDesktop {
     #[cfg(test)]
     fn desktop_bytes(&self) -> &[u8] {
         &self.bytes
     }
+}
+
+#[derive(Debug)]
+struct HeldDirectory {
+    fd: OwnedFd,
+    identity: FileIdentity,
+}
+
+#[derive(Debug)]
+struct HeldExecutable {
+    fd: OwnedFd,
+    identity: FileIdentity,
+    header: [u8; 64],
+}
+
+#[derive(Debug)]
+struct BaseEnvironment {
+    entries: Vec<OsString>,
+    path_directories: Vec<HeldDirectory>,
+}
+
+#[derive(Debug)]
+struct StaticPreflight {
+    argv: Vec<Vec<u8>>,
+    executable: HeldExecutable,
+    try_exec: Option<HeldExecutable>,
+    cwd: HeldDirectory,
+    base_environment: BaseEnvironment,
+}
+
+#[derive(Debug)]
+struct AdmittedDesktopPlan {
+    bytes: Vec<u8>,
+    document: DesktopDocument,
+    identity: FileIdentity,
+    argv: Vec<Vec<u8>>,
+    executable: HeldExecutable,
+    try_exec: Option<HeldExecutable>,
+    cwd: HeldDirectory,
+    base_environment: BaseEnvironment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -738,6 +1082,27 @@ fn admit_desktop(
     id: DesktopFileId,
     inputs: &AdmissionInputs,
 ) -> Result<AdmittedDesktopPlan, AdmissionError> {
+    let captured = capture_desktop(id, inputs)?;
+    validate_main_group(&captured.document, inputs)?;
+    let static_plan = preflight_static(&captured.document, inputs)?;
+    #[cfg(test)]
+    inputs.record_plan_available();
+    Ok(AdmittedDesktopPlan {
+        bytes: captured.bytes,
+        document: captured.document,
+        identity: captured.identity,
+        argv: static_plan.argv,
+        executable: static_plan.executable,
+        try_exec: static_plan.try_exec,
+        cwd: static_plan.cwd,
+        base_environment: static_plan.base_environment,
+    })
+}
+
+fn capture_desktop(
+    id: DesktopFileId,
+    inputs: &AdmissionInputs,
+) -> Result<CapturedDesktop, AdmissionError> {
     let roots = capture_roots(inputs)?;
     for root_path in roots {
         let root = match openat(CWD, &root_path, directory_flags(), Mode::empty()) {
@@ -765,14 +1130,7 @@ fn admit_desktop(
             0 => continue,
             1 => {
                 let plan = capture_candidate(&applications, &state.matches[0], inputs)?;
-                match hidden_value(&plan.bytes)? {
-                    Some(true) => return Err(AdmissionError::Refused),
-                    _ => {
-                        #[cfg(test)]
-                        inputs.record_plan_available();
-                        return Ok(plan);
-                    }
-                }
+                return Ok(plan);
             }
             _ => return Err(AdmissionError::Refused),
         }
@@ -901,7 +1259,7 @@ fn capture_candidate(
     applications: &OwnedFd,
     relative: &[OsString],
     _inputs: &AdmissionInputs,
-) -> Result<AdmittedDesktopPlan, AdmissionError> {
+) -> Result<CapturedDesktop, AdmissionError> {
     let (name, parents) = relative.split_last().ok_or(AdmissionError::Refused)?;
     let mut parent = openat(applications, ".", directory_flags(), Mode::empty())?;
     for component in parents {
@@ -949,11 +1307,20 @@ fn capture_candidate(
     {
         return Err(AdmissionError::Refused);
     }
-    validate_document(&bytes)?;
-    Ok(AdmittedDesktopPlan { bytes, identity })
+    let document = validate_document(&bytes)?;
+    Ok(CapturedDesktop {
+        bytes,
+        document,
+        identity,
+    })
 }
 
-fn validate_document(bytes: &[u8]) -> Result<(), AdmissionError> {
+#[derive(Debug)]
+struct DesktopDocument {
+    groups: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+}
+
+fn validate_document(bytes: &[u8]) -> Result<DesktopDocument, AdmissionError> {
     if bytes.is_empty()
         || !bytes.ends_with(b"\n")
         || bytes.starts_with(&[0xef, 0xbb, 0xbf])
@@ -963,7 +1330,7 @@ fn validate_document(bytes: &[u8]) -> Result<(), AdmissionError> {
     }
     let source = std::str::from_utf8(bytes).map_err(|_| AdmissionError::Refused)?;
     let mut groups =
-        std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+        std::collections::BTreeMap::<String, std::collections::BTreeMap<String, String>>::new();
     let mut current = None::<String>;
     let mut line_count = 0usize;
     for line in source.split_terminator('\n') {
@@ -987,17 +1354,18 @@ fn validate_document(bytes: &[u8]) -> Result<(), AdmissionError> {
             {
                 return Err(AdmissionError::Refused);
             }
-            groups.insert(name.to_string(), std::collections::BTreeSet::new());
+            groups.insert(name.to_string(), std::collections::BTreeMap::new());
             current = Some(name.to_string());
             continue;
         }
-        let (key, _) = line.split_once('=').ok_or(AdmissionError::Refused)?;
+        let (key, value) = line.split_once('=').ok_or(AdmissionError::Refused)?;
         let group = current.as_ref().ok_or(AdmissionError::Refused)?;
         if !valid_key(key)
             || !groups
                 .get_mut(group)
                 .expect("current group")
-                .insert(key.to_string())
+                .insert(key.to_string(), value.to_string())
+                .is_none()
         {
             return Err(AdmissionError::Refused);
         }
@@ -1005,7 +1373,7 @@ fn validate_document(bytes: &[u8]) -> Result<(), AdmissionError> {
     if !groups.contains_key("Desktop Entry") {
         return Err(AdmissionError::Refused);
     }
-    Ok(())
+    Ok(DesktopDocument { groups })
 }
 
 fn valid_key(key: &str) -> bool {
@@ -1030,21 +1398,347 @@ fn valid_key(key: &str) -> bool {
         })
 }
 
-fn hidden_value(bytes: &[u8]) -> Result<Option<bool>, AdmissionError> {
-    let source = std::str::from_utf8(bytes).map_err(|_| AdmissionError::Refused)?;
-    let mut main = false;
-    for line in source.split_terminator('\n') {
-        if line.starts_with('[') {
-            main = line == "[Desktop Entry]";
-            continue;
-        }
-        if main && line.starts_with("Hidden=") {
-            return match &line[7..] {
-                "true" => Ok(Some(true)),
-                "false" => Ok(Some(false)),
-                _ => Err(AdmissionError::Refused),
-            };
+fn validate_main_group(
+    document: &DesktopDocument,
+    _inputs: &AdmissionInputs,
+) -> Result<(), AdmissionError> {
+    let main = document
+        .groups
+        .get("Desktop Entry")
+        .ok_or(AdmissionError::Refused)?;
+    if main.get("Type").map(String::as_str) != Some("Application")
+        || main.get("Name").is_none_or(String::is_empty)
+    {
+        return Err(AdmissionError::Refused);
+    }
+    for key in ["Hidden", "NoDisplay", "Terminal"] {
+        if let Some(value) = main.get(key) {
+            if value != "false" {
+                return Err(AdmissionError::Refused);
+            }
         }
     }
-    Ok(None)
+    #[cfg(test)]
+    _inputs.record_main_group_validated();
+    #[cfg(test)]
+    _inputs.record_dbus_decision();
+    match main.get("DBusActivatable").map(String::as_str) {
+        None | Some("false") => Ok(()),
+        Some("true") | Some(_) => Err(AdmissionError::Refused),
+    }
+}
+
+fn preflight_static(
+    document: &DesktopDocument,
+    _inputs: &AdmissionInputs,
+) -> Result<StaticPreflight, AdmissionError> {
+    #[cfg(test)]
+    _inputs.record_exec_accessed();
+    let exec = document
+        .groups
+        .get("Desktop Entry")
+        .and_then(|main| main.get("Exec"))
+        .ok_or(AdmissionError::Refused)?;
+    let argv = parse_exec(exec.as_bytes()).map_err(|_| AdmissionError::Refused)?;
+    let try_exec = parse_try_exec(document, _inputs)?;
+    let base_environment = capture_base_environment(_inputs)?;
+    let executable = resolve_executable(&argv[0], &base_environment.path_directories)?;
+    let try_exec = try_exec
+        .as_deref()
+        .map(|value| resolve_executable(value, &base_environment.path_directories))
+        .transpose()?;
+    let cwd = capture_working_directory(document)?;
+    Ok(StaticPreflight {
+        argv,
+        executable,
+        try_exec,
+        cwd,
+        base_environment,
+    })
+}
+
+fn parse_try_exec(
+    document: &DesktopDocument,
+    _inputs: &AdmissionInputs,
+) -> Result<Option<Vec<u8>>, AdmissionError> {
+    #[cfg(test)]
+    _inputs.record_try_exec_accessed();
+    let Some(try_exec) = document
+        .groups
+        .get("Desktop Entry")
+        .and_then(|main| main.get("TryExec"))
+    else {
+        return Ok(None);
+    };
+    if try_exec.is_empty()
+        || !try_exec.is_ascii()
+        || try_exec
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || matches!(byte, b'"' | b'%' | b'\\'))
+    {
+        return Err(AdmissionError::Refused);
+    }
+    if try_exec.contains('/') && !is_normalized_absolute(try_exec) {
+        return Err(AdmissionError::Refused);
+    }
+    if !try_exec.contains('/')
+        && !try_exec
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'-'))
+    {
+        return Err(AdmissionError::Refused);
+    }
+    Ok(Some(try_exec.as_bytes().to_vec()))
+}
+
+fn capture_base_environment(_inputs: &AdmissionInputs) -> Result<BaseEnvironment, AdmissionError> {
+    #[cfg(test)]
+    _inputs.record_base_environment_accessed();
+    const ALLOWED_NAMES: &[&str] = &[
+        "HOME",
+        "PATH",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "WAYLAND_DISPLAY",
+        "DISPLAY",
+        "XDG_CURRENT_DESKTOP",
+        "LANG",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+        "XDG_CONFIG_DIRS",
+        "XDG_DATA_DIRS",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+    ];
+    if _inputs.environment.len() > 256
+        || _inputs
+            .environment
+            .iter()
+            .map(|entry| entry.as_os_str().as_bytes().len())
+            .sum::<usize>()
+            > 128 * 1024
+    {
+        return Err(AdmissionError::Refused);
+    }
+    let mut names = std::collections::BTreeSet::new();
+    let mut path = None;
+    let mut entries = Vec::<OsString>::with_capacity(_inputs.environment.len());
+    for entry in &_inputs.environment {
+        let entry = entry.to_str().ok_or(AdmissionError::Refused)?;
+        let (name, value) = entry.split_once('=').ok_or(AdmissionError::Refused)?;
+        if !valid_environment_name(name)
+            || name.starts_with("LD_")
+            || !ALLOWED_NAMES.contains(&name)
+            || !names.insert(name)
+        {
+            return Err(AdmissionError::Refused);
+        }
+        if name == "PATH" {
+            path = Some(value);
+        }
+        entries.push(entry.to_owned().into());
+    }
+    let path = path.ok_or(AdmissionError::Refused)?;
+    validate_path(path)?;
+    let mut path_directories = Vec::new();
+    for component in path.split(':') {
+        path_directories.push(open_static_directory_absolute(component)?);
+    }
+    entries.sort_by(|left, right| {
+        left.as_os_str()
+            .as_bytes()
+            .cmp(right.as_os_str().as_bytes())
+    });
+    Ok(BaseEnvironment {
+        entries,
+        path_directories,
+    })
+}
+
+fn valid_environment_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    matches!(bytes.next(), Some(byte) if byte.is_ascii_alphabetic() || byte == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn validate_path(path: &str) -> Result<(), AdmissionError> {
+    if path.is_empty() || path.len() > 32 * 1024 {
+        return Err(AdmissionError::Refused);
+    }
+    let entries = path.split(':').collect::<Vec<_>>();
+    if entries.len() > 64 {
+        return Err(AdmissionError::Refused);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for entry in entries {
+        if !is_normalized_absolute(entry) || !seen.insert(entry) {
+            return Err(AdmissionError::Refused);
+        }
+    }
+    Ok(())
+}
+
+fn capture_working_directory(document: &DesktopDocument) -> Result<HeldDirectory, AdmissionError> {
+    let path = document
+        .groups
+        .get("Desktop Entry")
+        .and_then(|main| main.get("Path"))
+        .filter(|path| !path.is_empty())
+        .map(String::as_str)
+        .unwrap_or("/");
+    open_static_directory_absolute(path)
+}
+
+fn open_static_directory_absolute(path: &str) -> Result<HeldDirectory, AdmissionError> {
+    let components = absolute_components(path)?;
+    let mut fd = openat(CWD, "/", directory_flags(), Mode::empty())?;
+    validate_static_directory(&fd)?;
+    for component in components {
+        fd = openat(&fd, component, directory_flags(), Mode::empty())?;
+        validate_static_directory(&fd)?;
+    }
+    let identity = FileIdentity::from_stat(&fstat(&fd)?);
+    Ok(HeldDirectory { fd, identity })
+}
+
+fn absolute_components(path: &str) -> Result<Vec<&str>, AdmissionError> {
+    if !is_normalized_absolute(path) {
+        return Err(AdmissionError::Refused);
+    }
+    if path == "/" {
+        return Ok(Vec::new());
+    }
+    Ok(path[1..].split('/').collect())
+}
+
+fn validate_static_directory(fd: &OwnedFd) -> Result<(), AdmissionError> {
+    let stat = fstat(fd)?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+        || stat.st_uid != 0
+        || (stat.st_mode & 0o022) != 0
+    {
+        return Err(AdmissionError::Refused);
+    }
+    Ok(())
+}
+
+fn resolve_executable(
+    value: &[u8],
+    path_directories: &[HeldDirectory],
+) -> Result<HeldExecutable, AdmissionError> {
+    let value = std::str::from_utf8(value).map_err(|_| AdmissionError::Refused)?;
+    if value.contains('/') {
+        let (parent, name) = value.rsplit_once('/').ok_or(AdmissionError::Refused)?;
+        if name.is_empty() || !is_normalized_absolute(value) {
+            return Err(AdmissionError::Refused);
+        }
+        return open_static_executable(
+            &open_static_directory_absolute(if parent.is_empty() { "/" } else { parent })?,
+            name,
+        );
+    }
+    if value.is_empty() || value.bytes().any(|byte| !(b' '..=b'~').contains(&byte)) {
+        return Err(AdmissionError::Refused);
+    }
+    for directory in path_directories {
+        match statat(&directory.fd, value, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(_) => return open_static_executable(directory, value),
+            Err(Errno::NOENT) => continue,
+            Err(_) => return Err(AdmissionError::Refused),
+        }
+    }
+    Err(AdmissionError::Refused)
+}
+
+fn open_static_executable(
+    parent: &HeldDirectory,
+    name: &str,
+) -> Result<HeldExecutable, AdmissionError> {
+    let before = statat(&parent.fd, name, AtFlags::SYMLINK_NOFOLLOW)?;
+    validate_executable_stat(&before)?;
+    let flags = AtFlags::SYMLINK_NOFOLLOW | AtFlags::EACCESS;
+    if !effective_access_is_proven(
+        accessat(&parent.fd, name, Access::WRITE_OK, flags),
+        accessat(&parent.fd, name, Access::EXEC_OK, flags),
+    ) {
+        return Err(AdmissionError::Refused);
+    }
+    let fd = openat(
+        &parent.fd,
+        name,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let identity = FileIdentity::from_stat(&before);
+    let opened = fstat(&fd)?;
+    if FileIdentity::from_stat(&opened) != identity
+        || validate_executable_stat(&opened).is_err()
+        || !effective_access_is_proven(
+            accessat(&parent.fd, name, Access::WRITE_OK, flags),
+            accessat(&parent.fd, name, Access::EXEC_OK, flags),
+        )
+    {
+        return Err(AdmissionError::Refused);
+    }
+    let mut header = [0_u8; 64];
+    if pread(&fd, &mut header, 0)? != header.len() {
+        return Err(AdmissionError::Refused);
+    }
+    if FileIdentity::from_stat(&fstat(&fd)?) != identity {
+        return Err(AdmissionError::Refused);
+    }
+    validate_elf_header(&header)?;
+    Ok(HeldExecutable {
+        fd,
+        identity,
+        header,
+    })
+}
+
+fn effective_access_is_proven(
+    write_access: Result<(), Errno>,
+    execute_access: Result<(), Errno>,
+) -> bool {
+    matches!(write_access, Err(Errno::ACCESS)) && execute_access.is_ok()
+}
+
+fn validate_executable_stat(stat: &rustix::fs::Stat) -> Result<(), AdmissionError> {
+    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+        || stat.st_uid != 0
+        || stat.st_mode & 0o111 == 0
+    {
+        return Err(AdmissionError::Refused);
+    }
+    Ok(())
+}
+
+fn validate_elf_header(header: &[u8; 64]) -> Result<(), AdmissionError> {
+    let machine = if cfg!(target_arch = "x86_64") {
+        62_u16
+    } else if cfg!(target_arch = "aarch64") {
+        183_u16
+    } else {
+        return Err(AdmissionError::Refused);
+    };
+    let kind = u16::from_le_bytes([header[16], header[17]]);
+    if header[..4] != *b"\x7fELF"
+        || header[4] != 2
+        || header[5] != 1
+        || header[6] != 1
+        || u32::from_le_bytes([header[20], header[21], header[22], header[23]]) != 1
+        || !matches!(kind, 2 | 3)
+        || u16::from_le_bytes([header[18], header[19]]) != machine
+    {
+        return Err(AdmissionError::Refused);
+    }
+    Ok(())
+}
+
+fn is_normalized_absolute(path: &str) -> bool {
+    path == "/"
+        || (path.starts_with('/')
+            && path.split('/').enumerate().all(|(index, component)| {
+                index == 0 || (!component.is_empty() && component != "." && component != "..")
+            }))
 }
