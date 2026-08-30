@@ -124,6 +124,9 @@ jobs:
           ./docs/test-readme-truth-snapshot.sh
           ./docs/check-readme-truth-snapshot.sh
           ./docs/test-contribution-templates.sh
+          ./docs/test-gh-body-file.sh
+          ./docs/test-github-body-safety.sh
+          ./docs/check-github-body-safety.sh
       - run: cargo doc --workspace --no-deps
 
   msrv:

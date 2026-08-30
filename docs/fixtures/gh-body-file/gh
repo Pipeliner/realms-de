@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+[ -n "${GH_CAPTURE:-}" ]
+printf '%s\0' "$@" >"$GH_CAPTURE"

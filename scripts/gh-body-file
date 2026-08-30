@@ -3,21 +3,54 @@
 set -eu
 
 usage() {
-    echo "usage: $0 issue-comment ISSUE BODY_FILE | pr-create BASE HEAD TITLE BODY_FILE" >&2
+    echo "usage: $0 issue-create TITLE BODY_FILE | issue-comment ISSUE BODY_FILE | pr-create BASE HEAD TITLE BODY_FILE" >&2
     exit 64
+}
+
+require_body_file() {
+    body_file=$1
+    [ -f "$body_file" ] && [ -r "$body_file" ] || {
+        echo "body file must be a readable regular file: $body_file" >&2
+        exit 66
+    }
+}
+
+require_issue() {
+    issue=$1
+    case "$issue" in
+        '' | *[!0-9]* | 0)
+            echo "issue must be a positive decimal identifier" >&2
+            exit 64
+            ;;
+    esac
+}
+
+require_ref() {
+    ref=$1
+    case "$ref" in
+        '' | -*)
+            echo "Git reference must be nonempty and must not begin with -" >&2
+            exit 64
+            ;;
+    esac
 }
 
 [ "$#" -ge 1 ] || usage
 
 case "$1" in
+    issue-create)
+        [ "$#" -eq 3 ] || usage
+        title=$2
+        body_file=$3
+        require_body_file "$body_file"
+        exec gh issue create --title "$title" --body-file "$body_file"
+        ;;
     issue-comment)
         [ "$#" -eq 3 ] || usage
         issue=$2
         body_file=$3
-        [ -f "$body_file" ] && [ -r "$body_file" ] || {
-            echo "body file must be a readable regular file: $body_file" >&2
-            exit 66
-        }
+        require_issue "$issue"
+        require_body_file "$body_file"
         exec gh issue comment "$issue" --body-file "$body_file"
         ;;
     pr-create)
@@ -26,10 +59,9 @@ case "$1" in
         head=$3
         title=$4
         body_file=$5
-        [ -f "$body_file" ] && [ -r "$body_file" ] || {
-            echo "body file must be a readable regular file: $body_file" >&2
-            exit 66
-        }
+        require_ref "$base"
+        require_ref "$head"
+        require_body_file "$body_file"
         exec gh pr create --base "$base" --head "$head" --title "$title" --body-file "$body_file"
         ;;
     *) usage ;;

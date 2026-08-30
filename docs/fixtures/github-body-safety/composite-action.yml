@@ -1,0 +1,5 @@
+name: unsafe local action
+runs:
+  using: composite
+  steps:
+    - run: gh issue comment 1 --body "$text"

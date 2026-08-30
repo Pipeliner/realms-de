@@ -27,6 +27,9 @@
           ${src + "/docs/test-readme-truth-snapshot.sh"} \
           ${src + "/docs/check-contribution-templates.sh"} \
           ${src + "/docs/test-contribution-templates.sh"} \
+          ${src + "/docs/test-gh-body-file.sh"} \
+          ${src + "/docs/check-github-body-safety.sh"} \
+          ${src + "/docs/test-github-body-safety.sh"} \
           ${src + "/packaging/debian/toolchain-path.sh"} \
           ${src + "/packaging/debian/test-toolchain-path.sh"}
         touch $out
