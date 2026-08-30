@@ -76,8 +76,9 @@ Requires:       foot
 Requires:       fuzzel
 Requires:       btop
 Requires:       zsh
-# The glyph contract (ADR 0012): runes, planetary symbols and one hieroglyph.
-Requires:       google-noto-sans-symbols2-fonts
+# The glyph contract (ADR 0012): symbol coverage is optional and guarded by
+# the startup probe; neither font package is a hard runtime dependency.
+Recommends:     google-noto-sans-symbols2-fonts
 Recommends:     ibm-plex-mono-fonts
 Recommends:     gsettings-desktop-schemas
 Recommends:     xorg-x11-server-Xwayland

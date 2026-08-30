@@ -32,8 +32,8 @@ session contract — the wayland-session entry, the session wrapper, the systemd
 user units and the palette."""
 section = "x11"
 priority = "optional"
-depends = "$auto, helm-river (>= 0.4.0) | river (>= 0.4.0), dbus-user-session, systemd, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, fonts-symbola, foot, fuzzel, btop, zsh"
-recommends = "fonts-ibm-plex, gsettings-desktop-schemas, xwayland, slurp"
+depends = "$auto, helm-river (>= 0.4.0) | river (>= 0.4.0), dbus-user-session, systemd, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, foot, fuzzel, btop, zsh"
+recommends = "fonts-ibm-plex, fonts-symbola, gsettings-desktop-schemas, xwayland, slurp"
 suggests = "yazi, starship"
 
 # Paths are relative to the workspace root; the trailing component is the

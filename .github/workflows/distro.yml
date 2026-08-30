@@ -39,6 +39,8 @@ jobs:
           ./packaging/fedora/check-projections.sh
           ./packaging/fedora/test-check-baseline.sh
           ./packaging/fedora/test-check-projections.sh
+          ./packaging/font-policy-test.sh
+          ./packaging/check-font-policy.sh
 
   build:
     name: ${{ matrix.name }}
