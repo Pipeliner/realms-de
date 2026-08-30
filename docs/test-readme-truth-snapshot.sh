@@ -108,7 +108,7 @@ mv "$fixture_root/README.next" "$fixture_root/README.md"
 expect_fail changed-issue-title "$fixture_root" 'needs-human snapshot title differs from GitHub'
 
 fixture_root=$(make_fixture empty-blocker)
-sed 's/The public `theme lint` and `theme diff` JSON contracts\./ /' \
+sed "s/The public \`theme lint\` and \`theme diff\` JSON contracts\./ /" \
     "$fixture_root/README.md" >"$fixture_root/README.next"
 mv "$fixture_root/README.next" "$fixture_root/README.md"
 expect_fail empty-blocker "$fixture_root" 'needs-human snapshot blocker is empty'

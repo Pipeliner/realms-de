@@ -44,7 +44,7 @@ require_section "$intro_section" 'zero animations, one palette file' \
     'README first screen must state the motion and palette constraints'
 require_section "$rules_section" '**The ledger is the truth.**' \
     'README must use the exact ledger rule'
-require_section "$rules_section" '**No colour outside `palette.toml`.**' \
+require_section "$rules_section" "**No colour outside \`palette.toml\`.**" \
     'README must use the exact palette rule'
 require_section "$rules_section" '**Snappy is a number.**' \
     'README must use the exact frame-budget rule'
@@ -55,7 +55,7 @@ require_section "$rules_section" 'docs/adr/0005-palette-toml-single-source.md' \
 require_section "$rules_section" 'docs/adr/0009-no-animation-budget.md' \
     'README must link ADR 0009'
 require_section "$rules_section" 'helm is the *window manager* for river' \
-    'README must state that helm is river’s window manager'
+    "README must state that helm is river's window manager"
 require_section "$status_section" 'Milestone M0 is in progress' \
     'README status must state that M0 is in progress'
 require_section "$status_section" '**M3 is the MVP.**' \

@@ -81,6 +81,15 @@ through #165 reserve 0012 through 0015 even though `main` ends at 0011. Use the
 next unreserved number and reconcile the index in the same change; never reuse
 or silently collide with an in-flight specification.
 
+## Remote ShellCheck authority
+
+The Nix `shellcheck` check is a merge gate even when this host lacks a local
+ShellCheck binary. On 2026-08-30 it rejected SC2016 (a single-quoted Markdown
+literal containing backticks) and SC1112 (a typographic apostrophe). Treat
+remote Nix/ShellCheck as the authoritative verification for changed shell
+scripts; keep shell literals ASCII where practical and write quoted Markdown so
+ShellCheck can see literal intent without a suppression.
+
 ## Running it
 
 - **Manually:** `/loop` with the iteration prompt, or ask for "next issue".
