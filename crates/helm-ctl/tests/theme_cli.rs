@@ -4,6 +4,7 @@ mod helmctl;
 
 use std::process::ExitCode;
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
@@ -72,6 +73,68 @@ fn write_bad_palette(root: &Path) -> PathBuf {
     path
 }
 
+fn helmctl_at<I, S>(root: &Path, args: I) -> Output
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    Command::new(env!("CARGO_BIN_EXE_helmctl"))
+        .args(args)
+        .args(["--config-root", root.to_str().expect("UTF-8 config root")])
+        .output()
+        .expect("helmctl runs")
+}
+
+fn edit_palette(root: &Path, from: &str, to: &str) {
+    let path = root.join("helm/palette.toml");
+    let palette = std::fs::read_to_string(&path).expect("read seeded palette");
+    assert!(palette.contains(from), "palette does not contain {from}");
+    std::fs::write(&path, palette.replace(from, to)).expect("edit palette");
+}
+
+fn tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    fn visit(root: &Path, path: &Path, entries: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in std::fs::read_dir(path).expect("read generation tree") {
+            let entry = entry.expect("read tree entry");
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(root)
+                .expect("tree entry below root")
+                .to_path_buf();
+            let metadata = std::fs::symlink_metadata(&path).expect("read tree metadata");
+            if metadata.file_type().is_dir() {
+                visit(root, &path, entries);
+            } else if metadata.file_type().is_symlink() {
+                entries.insert(
+                    relative,
+                    std::fs::read_link(&path)
+                        .expect("read tree link")
+                        .into_os_string()
+                        .into_encoded_bytes(),
+                );
+            } else {
+                entries.insert(relative, std::fs::read(&path).expect("read tree file"));
+            }
+        }
+    }
+
+    let mut entries = BTreeMap::new();
+    visit(root, root, &mut entries);
+    entries
+}
+
+fn assert_sorted_change_lines(output: &str) {
+    let lines = output.lines().collect::<Vec<_>>();
+    let mut sorted = lines.clone();
+    sorted.sort_unstable();
+    assert_eq!(lines, sorted, "diff lines are not sorted");
+    assert!(lines.iter().all(|line| {
+        line.starts_with("added ")
+            || line.starts_with("removed ")
+            || line.starts_with("byte-different ")
+    }));
+}
+
 #[test]
 fn lint_explicit_palette_needs_no_home_or_xdg_config_home() {
     let temp = tempfile::tempdir().expect("temporary palette root");
@@ -106,4 +169,19 @@ fn lint_bad_explicit_palette_exits_one_and_prints_every_fatal_finding() {
     let diagnostics = stderr(&out);
     assert!(diagnostics.contains("text.bright"));
     assert!(diagnostics.contains("text.normal"));
+}
+
+#[test]
+fn diff_after_palette_edit_is_sorted_and_does_not_mutate_generation_tree() {
+    let temp = tempfile::tempdir().expect("temporary config root");
+    let root = temp.path();
+    helm_theme::apply(root).expect("apply initial generation");
+    edit_palette(root, "violet    = \"#a692ec\"", "violet    = \"#b07aff\"");
+    let before = tree(root);
+
+    let out = helmctl_at(root, ["theme", "diff"]);
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_sorted_change_lines(&stdout(&out));
+    assert_eq!(tree(root), before, "theme diff mutated the generation tree");
 }

@@ -6,6 +6,7 @@ use std::{
 
 use clap::{error::ErrorKind, Args, Parser, Subcommand};
 use helm_core::Palette;
+use helm_theme::ThemeOutputChange;
 
 #[derive(Parser)]
 #[command(name = "helmctl")]
@@ -34,7 +35,10 @@ enum ThemeCommand {
 }
 
 #[derive(Args)]
-struct RootArgs {}
+struct RootArgs {
+    #[arg(long)]
+    config_root: Option<PathBuf>,
+}
 
 #[derive(Args)]
 pub struct LintArgs {
@@ -76,10 +80,19 @@ where
     match cli.command {
         Command::Theme(Theme {
             command: ThemeCommand::Apply(_),
-        })
-        | Command::Theme(Theme {
-            command: ThemeCommand::Diff(_),
         }) => ExitCode::SUCCESS,
+        Command::Theme(Theme {
+            command: ThemeCommand::Diff(args),
+        }) => {
+            let root = match args.config_root {
+                Some(root) => root,
+                None => match default_config_root(env) {
+                    Ok(root) => root,
+                    Err(error) => return usage_error(&error),
+                },
+            };
+            run_diff(&root)
+        }
         Command::Theme(Theme {
             command: ThemeCommand::Lint(args),
         }) => {
@@ -98,6 +111,27 @@ where
                 Err(error) => failure(&error),
             }
         }
+    }
+}
+
+fn run_diff(root: &Path) -> ExitCode {
+    match helm_theme::diff(root) {
+        Ok(changes) if changes.is_empty() => ExitCode::SUCCESS,
+        Ok(changes) => {
+            for change in changes {
+                print_change(change);
+            }
+            ExitCode::from(1)
+        }
+        Err(error) => failure(&error.to_string()),
+    }
+}
+
+fn print_change(change: ThemeOutputChange) {
+    match change {
+        ThemeOutputChange::Added(path) => println!("added {}", path.display()),
+        ThemeOutputChange::Removed(path) => println!("removed {}", path.display()),
+        ThemeOutputChange::ByteDifferent(path) => println!("byte-different {}", path.display()),
     }
 }
 
