@@ -324,6 +324,46 @@ git add crates/helm-theme/src/generation/lifecycle.rs
 git commit -m "feat: reconcile lifecycle leases conservatively"
 ```
 
+### Post-review correction tranche
+
+Whole-branch adversarial review found five cross-task authority and recovery
+gaps.  These corrections remain part of this plan and must be implemented in
+the accepted-specification order before opening the implementation PR:
+
+1. Bind every `GenerationSelection` immutably to the device/inode identities
+   of its originating leases directory and activation lock.  Both `prepare`
+   and `adopt_prepared` revalidate and exact-match those identities against the
+   registry capability before any mutation.  A two-store regression with
+   coincident record bytes must fail at both boundaries. A consumed adoption
+   mismatch destructor-disarms without touching the foreign lease.
+2. Classify direct `terminal/failed`, process-lease, `exec-open no`,
+   `direct-drained no`, absent-lease evidence as the producer-reachable crash
+   after a proven gate-closed pre-exec abort and lease release.  A fresh exact
+   direct abort/empty controller proof may collect that record without an
+   owner-written lifecycle drain witness.  Its restart regression must first
+   prove the current code retains it.
+3. Split transfer-stage recovery into read-only whole-inventory
+   classification and a deferred normalization plan.  Reconciliation applies
+   that plan only after every unrelated passive and controller classification
+   is globally nonfatal and exact.  A valid stage plus unrelated fatal evidence
+   must produce zero staging mutation in either enumeration order. Safe
+   registry-temporary cleanup is part of the same deferred third phase, and
+   every inventory collector enforces entry/byte bounds while streaming before
+   retaining another item.
+4. Bound selection cleanup reads at 4097 bytes and retain payloads over the
+   4096-byte record limit.  Revalidate the exact selected pathname at final
+   proof and retain a pre-proof swap; the cooperative-writer post-proof/unlink
+   threat boundary is explicit in SPEC 0012.  Regressions cover both oversized
+   input and final cleanup swap. Cleanup acquires the saved originating-store
+   mutex and shared activation lock around proof and unlink.
+5. Reserve a launch id across both its canonical and
+   `.launch-retire-<launch-id>` names.  `prepare` rejects either collision
+   before selection, temporary, or launch mutation; the red fixture uses a
+   valid retirement-only crash artifact.
+
+Implement these as five isolated red-to-green cycles, then rerun the focused
+lifecycle suite, full workspace tests, Clippy, formatting, and diff checks.
+
 ## Spec coverage review
 
 - SPEC0012 §§2/4 record durability and lock order: Tasks 2–3.

@@ -1,10 +1,10 @@
 use super::{
-    canonical_boot_id, canonical_positive_u64, canonical_u32, canonical_u64, linux_boot_id,
-    linux_process_identity, lower_hex_32, normalized_cgroup_path, open_directory_chain,
-    record_value, recover_lease_transfer_staging_locked, validate_owned_mode, GenerationId,
+    canonical_boot_id, canonical_positive_u64, canonical_u32, canonical_u64,
+    classify_lease_transfer_staging_locked, linux_boot_id, linux_process_identity, lower_hex_32,
+    normalized_cgroup_path, open_directory_chain, record_value, validate_owned_mode, GenerationId,
     GenerationRoot, GenerationSelection, GenerationStore, LeaseFilesystem, LeaseRecord,
-    LifecycleLeaseRecord, LifecycleOwnerKind, ParsedLeaseRecord, RealLeaseFilesystem,
-    TransferCheckpoint,
+    LeaseTransferRecoveryPlan, LifecycleLeaseRecord, LifecycleOwnerKind, ParsedLeaseRecord,
+    RealLeaseFilesystem, TransferCheckpoint,
 };
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
@@ -381,11 +381,6 @@ struct PlannedReconciliation {
     lease: ReconciliationLease,
     controller: Option<ReconciliationControllerAction>,
     durable: ReconciliationDurableAction,
-}
-
-struct SelectionActivationLock<'selection> {
-    lock: OwnedFd,
-    _intra_process: MutexGuard<'selection, ()>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1336,6 +1331,40 @@ fn reconciliation_lease_inventory_is_safe(
         })
 }
 
+fn validate_selection_store_authority(
+    capability: &GenerationLeaseCapability,
+    selection: &GenerationSelection,
+) -> Result<(), String> {
+    capability.revalidate()?;
+    let leases =
+        rustix::fs::fstat(&selection.lease_directory).map_err(|error| error.to_string())?;
+    let lock = rustix::fs::fstat(&selection.activation_lock).map_err(|error| error.to_string())?;
+    validate_owned_mode(
+        "selection leases directory",
+        &leases,
+        FileType::Directory,
+        0o700,
+        rustix::process::getuid().as_raw(),
+    )?;
+    validate_owned_mode(
+        "selection activation lock",
+        &lock,
+        FileType::RegularFile,
+        0o600,
+        rustix::process::getuid().as_raw(),
+    )?;
+    let leases_identity = (leases.st_dev, leases.st_ino);
+    let lock_identity = (lock.st_dev, lock.st_ino);
+    if leases_identity != selection.lease_directory_identity
+        || lock_identity != selection.activation_lock_identity
+        || leases_identity != capability.leases_identity
+        || lock_identity != capability.lock_identity
+    {
+        return Err("generation selection belongs to another store authority".into());
+    }
+    Ok(())
+}
+
 impl ActivationRegistry {
     fn open(
         state_home: &Path,
@@ -1494,6 +1523,17 @@ impl ActivationRegistry {
         selection: &GenerationSelection,
     ) -> Result<PreparedLaunch, String> {
         let _lock = self.lock()?;
+        let _generation_lock = self.generation_leases.lock_shared()?;
+        validate_selection_store_authority(&self.generation_leases, selection)?;
+        let final_name = request.launch.encode();
+        let retirement = format!(".launch-retire-{final_name}");
+        for reserved in [final_name.as_str(), retirement.as_str()] {
+            match statat(&self.launches.fd, reserved, AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(_) => return Err("launch id already exists or is retired".into()),
+                Err(Errno::NOENT) => {}
+                Err(error) => return Err(error.to_string()),
+            }
+        }
         self.inspect_and_recover_inventory()?;
         if session.registry_device != self.device || session.registry_inode != self.inode {
             return Err("active session capability belongs to another registry".into());
@@ -1521,7 +1561,14 @@ impl ActivationRegistry {
             Some(ParsedLeaseRecord::Process(record)) if record == *identity => {}
             _ => return Err("generation selection lacks its exact process lease".into()),
         }
-        for name in directory_entries(&self.launches.fd)? {
+        let mut launch_entries = 0_usize;
+        let mut launch_bytes = 0_usize;
+        for name in bounded_directory_entries(
+            &self.launches.fd,
+            &mut launch_entries,
+            &mut launch_bytes,
+            |_| true,
+        )? {
             let existing = read_launch_record(&self.launches.fd, &name)?;
             if existing.lease == selection.lease_name {
                 return Err("generation selection lease is already referenced".into());
@@ -1565,7 +1612,6 @@ impl ActivationRegistry {
             encode_id(nonce),
         );
         write_exclusive_synced(&self.launches.fd, &temporary, &record.encode())?;
-        let final_name = request.launch.encode();
         let publication = renameat_with(
             &self.launches.fd,
             temporary.as_str(),
@@ -1606,6 +1652,12 @@ impl ActivationRegistry {
         filesystem: &mut F,
     ) -> Result<AdoptedLaunch, String> {
         let _registry_lock = self.lock()?;
+        let _generation_lock = self.generation_leases.lock_shared()?;
+        if let Err(error) = validate_selection_store_authority(&self.generation_leases, &selection)
+        {
+            selection.retain_after_authority_rejection();
+            return Err(error);
+        }
         self.inspect_and_recover_inventory()?;
         if session.registry_device != self.device || session.registry_inode != self.inode {
             return Err("active session capability belongs to another registry".into());
@@ -1631,24 +1683,9 @@ impl ActivationRegistry {
         let (lifecycle_lease, adopted_record) =
             transfer_records(&current_launch, &selection, evidence)?;
 
-        let selection_mutex = Arc::clone(&selection.intra_process_lock);
-        let selection_mutex_guard = selection_mutex
-            .lock()
-            .map_err(|_| "generation operation lock is poisoned")?;
-        let activation_lock = selection
-            .activation_lock
-            .try_clone()
-            .map_err(|error| error.to_string())?;
-        flock(&activation_lock, FlockOperation::LockShared).map_err(|error| error.to_string())?;
-        let generation_lock = SelectionActivationLock {
-            lock: activation_lock,
-            _intra_process: selection_mutex_guard,
-        };
-
         selection.revalidate_for_lifecycle_transfer()?;
         validate_selection_matches_launch(&selection, &current_launch)?;
         selection.replace_with_lifecycle_locked_with_filesystem(lifecycle_lease, filesystem)?;
-        drop(generation_lock);
 
         filesystem.checkpoint(TransferCheckpoint::BeforeAdoptedRecord)?;
         self.replace_launch_record(&current_launch, &adopted_record)?;
@@ -1711,19 +1748,10 @@ impl ActivationRegistry {
     fn ensure_capacity_for_new_record(&self, record_bytes: usize) -> Result<(), String> {
         let mut entries = 0_usize;
         let mut bytes = 0_usize;
-        for name in directory_entries(&self.activation.fd)? {
-            if matches!(name.as_bytes(), b"lifecycle.lock" | b"launches") {
-                continue;
-            }
-            let stat = statat(&self.activation.fd, &name, AtFlags::SYMLINK_NOFOLLOW)
-                .map_err(|error| error.to_string())?;
-            account_inventory(&mut entries, &mut bytes, stat.st_size)?;
-        }
-        for name in directory_entries(&self.launches.fd)? {
-            let stat = statat(&self.launches.fd, &name, AtFlags::SYMLINK_NOFOLLOW)
-                .map_err(|error| error.to_string())?;
-            account_inventory(&mut entries, &mut bytes, stat.st_size)?;
-        }
+        bounded_directory_entries(&self.activation.fd, &mut entries, &mut bytes, |raw| {
+            !matches!(raw, b"lifecycle.lock" | b"launches")
+        })?;
+        bounded_directory_entries(&self.launches.fd, &mut entries, &mut bytes, |_| true)?;
         let entries = entries
             .checked_add(1)
             .ok_or("lifecycle inventory entry count overflow")?;
@@ -1748,18 +1776,56 @@ impl ActivationRegistry {
         controller: Option<&dyn GateClosedController>,
         filesystem: &mut F,
     ) -> Result<ReconciliationReport, String> {
+        self.reconcile_with_filesystem_and_classification_checkpoint(
+            inspector,
+            controller,
+            filesystem,
+            || {},
+        )
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn reconcile_with_filesystem_and_classification_checkpoint<
+        I: OwnershipInspector,
+        F: ReconciliationFilesystem,
+        H: FnMut(),
+    >(
+        &self,
+        inspector: &I,
+        controller: Option<&dyn GateClosedController>,
+        filesystem: &mut F,
+        mut after_registry_classification: H,
+    ) -> Result<ReconciliationReport, String> {
         let _registry_lock = self.lock()?;
-        self.inspect_and_recover_inventory()?;
+        let _generation_lock = self.generation_leases.lock_shared()?;
+        let inventory_recovery = self.classify_inventory_recovery()?;
+        after_registry_classification();
         let mut records = Vec::new();
-        for name in directory_entries(&self.launches.fd)? {
+        let mut launch_entries = 0_usize;
+        let mut launch_bytes = 0_usize;
+        for name in bounded_directory_entries(
+            &self.launches.fd,
+            &mut launch_entries,
+            &mut launch_bytes,
+            |_| true,
+        )? {
+            if parse_temporary_name(name.as_bytes()).is_some() {
+                continue;
+            }
             let name = name
                 .to_str()
                 .ok_or("launch filename is not UTF-8 after inventory validation")?;
             records.push(read_reconciliation_launch(&self.launches.fd, name)?);
         }
-        let _generation_lock = self.generation_leases.lock_shared()?;
         let mut report = ReconciliationReport::default();
-        let mut lease_names = directory_entries(&self.generation_leases.leases)?;
+        let mut lease_entries = 0_usize;
+        let mut lease_bytes = 0_usize;
+        let lease_names = bounded_directory_entries(
+            &self.generation_leases.leases,
+            &mut lease_entries,
+            &mut lease_bytes,
+            |_| true,
+        )?;
         let has_retirement = lease_names.iter().any(|name| {
             name.to_str()
                 .is_some_and(|name| name.starts_with(".lease-retire-"))
@@ -1771,13 +1837,26 @@ impl ActivationRegistry {
         if has_retirement && has_transfer {
             return Err("lease retirement cannot coexist with transfer staging".into());
         }
-        if has_transfer {
-            recover_lease_transfer_staging_locked(&self.generation_leases.leases)
-                .map_err(|error| format!("transfer staging recovery failed: {error}"))?;
-            lease_names = directory_entries(&self.generation_leases.leases)?;
-        }
-        if !reconciliation_lease_inventory_is_safe(&self.generation_leases, &records, &lease_names)
-        {
+        let transfer_plan = if has_transfer {
+            classify_lease_transfer_staging_locked(&self.generation_leases.leases)
+                .map_err(|error| format!("transfer staging recovery failed: {error}"))?
+        } else {
+            LeaseTransferRecoveryPlan::default()
+        };
+        let normalized_lease_names: Vec<_> = lease_names
+            .iter()
+            .filter(|name| {
+                !name
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(".lease-transfer-"))
+            })
+            .cloned()
+            .collect();
+        if !reconciliation_lease_inventory_is_safe(
+            &self.generation_leases,
+            &records,
+            &normalized_lease_names,
+        ) {
             report.retained = records.len();
             return Ok(report);
         }
@@ -1836,6 +1915,10 @@ impl ActivationRegistry {
             report.retained = inventory_len;
             return Ok(report);
         }
+        self.normalize_inventory_recovery(inventory_recovery, || {})?;
+        transfer_plan
+            .normalize(&self.generation_leases.leases)
+            .map_err(|error| format!("transfer staging recovery failed: {error}"))?;
         for plan in plans {
             self.apply_reconciliation_plan(plan, filesystem, &mut report)?;
         }
@@ -2025,6 +2108,22 @@ impl ActivationRegistry {
                 } else {
                     (None, ReconciliationDurableAction::Retain)
                 }
+            }
+            (LaunchState::Terminal, ReconciliationLease::Missing)
+                if record.mode == OwnershipMode::Direct
+                    && record.result == LaunchResult::Failed
+                    && record.lease_kind == LeaseKind::Process
+                    && !record.exec_open
+                    && !record.direct_drained =>
+            {
+                (
+                    Some(ReconciliationControllerAction::UnadoptedDirect),
+                    ReconciliationDurableAction::Complete {
+                        terminal_result: None,
+                        transferred: None,
+                        release: false,
+                    },
+                )
             }
             (LaunchState::Terminal, ReconciliationLease::Missing) => {
                 let collectible = match record.mode {
@@ -2313,10 +2412,19 @@ impl ActivationRegistry {
     where
         H: FnMut(),
     {
-        let activation_entries = directory_entries(&self.activation.fd)?;
-        let launch_entries = directory_entries(&self.launches.fd)?;
+        let plan = self.classify_inventory_recovery()?;
+        self.normalize_inventory_recovery(plan, &mut before_delete)
+    }
+
+    fn classify_inventory_recovery(&self) -> Result<LifecycleInventoryRecoveryPlan, String> {
         let mut entries = 0_usize;
         let mut bytes = 0_usize;
+        let activation_entries =
+            bounded_directory_entries(&self.activation.fd, &mut entries, &mut bytes, |raw| {
+                !matches!(raw, b"lifecycle.lock" | b"launches")
+            })?;
+        let launch_entries =
+            bounded_directory_entries(&self.launches.fd, &mut entries, &mut bytes, |_| true)?;
         let mut session_record = None;
         let mut launch_records = Vec::<LaunchRecord>::new();
         let mut temporaries = Vec::new();
@@ -2328,7 +2436,6 @@ impl ActivationRegistry {
             }
             let stat = statat(&self.activation.fd, &name, AtFlags::SYMLINK_NOFOLLOW)
                 .map_err(|error| error.to_string())?;
-            account_inventory(&mut entries, &mut bytes, stat.st_size)?;
             if raw == b"session" {
                 session_record = Some(read_session_record(&self.activation.fd, &name)?);
             } else {
@@ -2353,7 +2460,6 @@ impl ActivationRegistry {
         for name in launch_entries {
             let stat = statat(&self.launches.fd, &name, AtFlags::SYMLINK_NOFOLLOW)
                 .map_err(|error| error.to_string())?;
-            account_inventory(&mut entries, &mut bytes, stat.st_size)?;
             let raw = name.as_bytes();
             if let Ok(text) = std::str::from_utf8(raw) {
                 let parsed = LaunchId::parse(text).map(|id| (id, false)).or_else(|_| {
@@ -2396,8 +2502,6 @@ impl ActivationRegistry {
                 descriptor,
             });
         }
-        inventory_within_bounds(entries, bytes)?;
-
         for temporary in &temporaries {
             match &temporary.kind {
                 TemporaryName::SessionClaim(_) | TemporaryName::LaunchCreate(_, _) => {}
@@ -2418,6 +2522,18 @@ impl ActivationRegistry {
             }
         }
 
+        Ok(LifecycleInventoryRecoveryPlan { temporaries })
+    }
+
+    fn normalize_inventory_recovery<H>(
+        &self,
+        plan: LifecycleInventoryRecoveryPlan,
+        mut before_delete: H,
+    ) -> Result<(), String>
+    where
+        H: FnMut(),
+    {
+        let temporaries = plan.temporaries;
         before_delete();
         for temporary in &temporaries {
             let parent = match temporary.directory {
@@ -2462,12 +2578,6 @@ impl Drop for RegistryLock<'_> {
 impl Drop for GenerationLeaseLock<'_> {
     fn drop(&mut self) {
         let _ = flock(self.lock, FlockOperation::Unlock);
-    }
-}
-
-impl Drop for SelectionActivationLock<'_> {
-    fn drop(&mut self) {
-        let _ = flock(&self.lock, FlockOperation::Unlock);
     }
 }
 
@@ -2586,6 +2696,11 @@ struct ValidatedTemporary {
     descriptor: OwnedFd,
 }
 
+#[derive(Debug)]
+struct LifecycleInventoryRecoveryPlan {
+    temporaries: Vec<ValidatedTemporary>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TemporaryName {
     SessionClaim(SessionId),
@@ -2671,17 +2786,37 @@ fn revalidate_opened_path(parent: &OwnedFd, name: &str, opened: &OwnedFd) -> Res
     Ok(())
 }
 
-fn directory_entries(directory: &OwnedFd) -> Result<Vec<OsString>, String> {
-    let mut entries = Vec::new();
+fn bounded_directory_entries<F>(
+    directory: &OwnedFd,
+    entries: &mut usize,
+    bytes: &mut usize,
+    mut counts_toward_inventory: F,
+) -> Result<Vec<OsString>, String>
+where
+    F: FnMut(&[u8]) -> bool,
+{
+    let mut names = Vec::new();
     let mut reader = Dir::read_from(directory).map_err(|error| error.to_string())?;
     while let Some(entry) = reader.read() {
         let entry = entry.map_err(|error| error.to_string())?;
-        let bytes = entry.file_name().to_bytes();
-        if !matches!(bytes, b"." | b"..") {
-            entries.push(OsString::from_vec(bytes.to_vec()));
+        let raw = entry.file_name().to_bytes();
+        if matches!(raw, b"." | b"..") {
+            continue;
         }
+        if counts_toward_inventory(raw) {
+            let stat = statat(directory, entry.file_name(), AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|error| error.to_string())?;
+            account_inventory(entries, bytes, stat.st_size)?;
+            inventory_within_bounds(*entries, *bytes)?;
+        }
+        names.push(OsString::from_vec(raw.to_vec()));
     }
-    Ok(entries)
+    canonicalize_inventory_names(&mut names);
+    Ok(names)
+}
+
+fn canonicalize_inventory_names(names: &mut [OsString]) {
+    names.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
 }
 
 fn account_inventory(entries: &mut usize, bytes: &mut usize, size: i64) -> Result<(), String> {
@@ -3487,6 +3622,38 @@ bar-process-group 0\n",
         }
     }
 
+    fn matching_foreign_selection(
+        fixture: &TransferFixture,
+    ) -> (tempfile::TempDir, GenerationStore, GenerationSelection) {
+        let generated = tempfile::tempdir().unwrap();
+        fs::set_permissions(generated.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let store = GenerationStore::open(generated.path()).unwrap();
+        let digest = "a".repeat(64);
+        let generation = fixture.selection.generation.clone();
+        store
+            .publish_with_checkpoint_and_ids(
+                || {
+                    Ok(GenerationPublication {
+                        input_digests: [
+                            digest.clone(),
+                            digest.clone(),
+                            digest.clone(),
+                            digest.clone(),
+                            digest.clone(),
+                        ],
+                        outputs: vec![("fixture".into(), b"sealed".to_vec())],
+                    })
+                },
+                |_| Ok(()),
+                || Ok(generation.clone()),
+            )
+            .unwrap();
+        let selection = store
+            .select_current_for_process(std::process::id())
+            .unwrap();
+        (generated, store, selection)
+    }
+
     fn add_systemd_running(
         fixture: &TransferFixture,
         launch_id: &str,
@@ -3960,6 +4127,51 @@ bar-process-group 0\n",
     }
 
     #[test]
+    fn bounded_inventory_enumeration_is_canonical_by_name() {
+        let mut names = [
+            OsString::from("ffffffffffffffffffffffffffffffff"),
+            OsString::from("00000000000000000000000000000000"),
+        ];
+
+        canonicalize_inventory_names(&mut names);
+
+        assert_eq!(
+            names,
+            [
+                OsString::from("00000000000000000000000000000000"),
+                OsString::from("ffffffffffffffffffffffffffffffff"),
+            ]
+        );
+    }
+
+    #[test]
+    fn transfer_stage_classifier_rejects_over_bound_inventory() {
+        let generated = tempfile::tempdir().unwrap();
+        fs::set_permissions(generated.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let store = GenerationStore::open(generated.path()).unwrap();
+        let record = LeaseRecord::for_process(
+            GenerationId::parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+            std::process::id(),
+        )
+        .unwrap()
+        .encode();
+        for index in 0..=MAX_INVENTORY_ENTRIES {
+            write_mode(
+                &generated
+                    .path()
+                    .join("leases")
+                    .join(format!("{index:032x}")),
+                &record,
+                0o600,
+            );
+        }
+
+        let error = classify_lease_transfer_staging_locked(&store.leases.fd).unwrap_err();
+
+        assert!(error.contains("bounds"), "{error}");
+    }
+
+    #[test]
     fn over_bound_inventory_retains_every_safe_temporary() {
         let root = tempfile::tempdir().unwrap();
         drop(open_test_registry(root.path()).unwrap());
@@ -4091,6 +4303,85 @@ bar-process-group 0\n",
             .path()
             .join("helm/activation/launches/66666666666666666666666666666666")
             .exists());
+    }
+
+    #[test]
+    fn prepare_rejects_a_selection_from_another_generation_store() {
+        let fixture = TransferFixture::direct();
+        let (_foreign_root, _foreign_store, foreign_selection) =
+            matching_foreign_selection(&fixture);
+        let foreign_lease = foreign_selection.lease_name.clone();
+        assert_eq!(foreign_selection.generation, fixture.selection.generation);
+        assert_eq!(
+            foreign_selection.manifest_seal_digest,
+            fixture.selection.manifest_seal_digest
+        );
+        assert_eq!(
+            foreign_selection.process_identity,
+            fixture.selection.process_identity
+        );
+
+        let result = fixture.registry.prepare(
+            &fixture.session,
+            PrepareLaunch {
+                launch: LaunchId::parse("99999999999999999999999999999999").unwrap(),
+                mode: OwnershipMode::Direct,
+            },
+            &foreign_selection,
+        );
+
+        assert!(result.is_err());
+        assert!(statat(
+            &foreign_selection.lease_directory,
+            foreign_lease.as_str(),
+            AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn adopt_rejects_a_byte_matching_selection_from_another_generation_store() {
+        let fixture = TransferFixture::direct();
+        let (_foreign_root, _foreign_store, mut foreign_selection) =
+            matching_foreign_selection(&fixture);
+        let original_foreign_name = foreign_selection.lease_name.clone();
+        let matching_name = fixture.selection.lease_name.clone();
+        renameat(
+            &foreign_selection.lease_directory,
+            original_foreign_name.as_str(),
+            &foreign_selection.lease_directory,
+            matching_name.as_str(),
+        )
+        .unwrap();
+        foreign_selection.lease_name = matching_name.clone();
+        let foreign_lease = _foreign_root.path().join("leases").join(&matching_name);
+        validate_selection_matches_launch(&foreign_selection, &fixture.prepared.record).unwrap();
+        foreign_selection
+            .revalidate_for_lifecycle_transfer()
+            .unwrap();
+        let evidence = fixture.direct_evidence();
+        let launch_path = fixture.launch_path();
+        let source_lease = fixture.lease_path();
+
+        let result = fixture.registry.adopt_prepared(
+            &fixture.session,
+            fixture.prepared,
+            foreign_selection,
+            evidence,
+        );
+
+        assert!(result.is_err());
+        assert!(foreign_lease.exists());
+        assert_eq!(
+            LaunchRecord::parse(&fs::read(launch_path).unwrap())
+                .unwrap()
+                .state,
+            LaunchState::Preparing
+        );
+        assert!(matches!(
+            ParsedLeaseRecord::parse(&fs::read(source_lease).unwrap()),
+            Ok(ParsedLeaseRecord::Process(_))
+        ));
     }
 
     #[test]
@@ -4976,6 +5267,145 @@ bar-process-group 0\n",
     }
 
     #[test]
+    fn valid_transfer_stage_is_not_normalized_when_unrelated_evidence_is_fatal() {
+        for fatal_launch in [
+            "00000000000000000000000000000000",
+            "ffffffffffffffffffffffffffffffff",
+        ] {
+            let fixture = TransferFixture::systemd();
+            let launch_path = fixture.launch_path();
+            let lease_path = fixture.lease_path();
+            let lease_name = fixture.selection.lease_name.clone();
+            let staging = lease_path
+                .parent()
+                .unwrap()
+                .join(format!(".lease-transfer-{lease_name}"));
+            let evidence = fixture.systemd_evidence();
+            let mut filesystem = FaultingLeaseFilesystem {
+                fail_at: TransferCheckpoint::AfterReplace,
+                lease_path: lease_path.clone(),
+                launch_path: launch_path.clone(),
+                observations: Vec::new(),
+            };
+            assert!(fixture
+                .registry
+                .adopt_prepared_with_filesystem(
+                    &fixture.session,
+                    fixture.prepared,
+                    fixture.selection,
+                    evidence,
+                    &mut filesystem,
+                )
+                .is_err());
+            let target_before = fs::read(&lease_path).unwrap();
+            let stage_before = fs::read(&staging).unwrap();
+
+            let second_selection = fixture
+                .store
+                .select_current_for_process(std::process::id())
+                .unwrap();
+            let second_lease = fixture
+                ._generated
+                .path()
+                .join("leases")
+                .join(&second_selection.lease_name);
+            fixture
+                .registry
+                .prepare(
+                    &fixture.session,
+                    PrepareLaunch {
+                        launch: LaunchId::parse(fatal_launch).unwrap(),
+                        mode: OwnershipMode::Direct,
+                    },
+                    &second_selection,
+                )
+                .unwrap();
+            let mut mismatched = second_selection.process_identity.clone();
+            mismatched.start_time += 1;
+            write_mode(&second_lease, &mismatched.encode(), 0o600);
+            let safe_temporary = fixture._state.path().join(
+                "helm/activation/launches/.launch-create-22222222222222222222222222222222-33333333333333333333333333333333",
+            );
+            write_mode(&safe_temporary, b"", 0o600);
+            let mut entries = 0_usize;
+            let mut bytes = 0_usize;
+            let ordered_launches: Vec<_> = bounded_directory_entries(
+                &fixture.registry.launches.fd,
+                &mut entries,
+                &mut bytes,
+                |_| true,
+            )
+            .unwrap()
+            .into_iter()
+            .filter_map(|name| {
+                let name = name.into_string().ok()?;
+                LaunchId::parse(&name).ok().map(|_| name)
+            })
+            .collect();
+            let target_position = ordered_launches
+                .iter()
+                .position(|name| name == "11111111111111111111111111111111")
+                .unwrap();
+            let fatal_position = ordered_launches
+                .iter()
+                .position(|name| name == fatal_launch)
+                .unwrap();
+            if fatal_launch.starts_with('0') {
+                assert!(fatal_position < target_position, "{ordered_launches:?}");
+            } else {
+                assert!(target_position < fatal_position, "{ordered_launches:?}");
+            }
+            let inspector = exact_empty_inspector();
+            let controller = exact_empty_controller();
+
+            let report = fixture
+                .registry
+                .reconcile(&inspector, Some(&controller))
+                .unwrap();
+
+            assert_eq!(report.released, 0, "fatal launch {fatal_launch}");
+            assert_eq!(report.collected, 0, "fatal launch {fatal_launch}");
+            assert_eq!(fs::read(&lease_path).unwrap(), target_before);
+            assert_eq!(fs::read(&staging).unwrap(), stage_before);
+            assert!(safe_temporary.exists(), "fatal launch {fatal_launch}");
+            assert_eq!(controller.direct_calls.get(), 0);
+            assert_eq!(controller.unadopted_systemd_calls.get(), 0);
+            assert_eq!(controller.adopted_systemd_calls.get(), 0);
+        }
+    }
+
+    #[test]
+    fn reconciliation_classification_holds_the_generation_lock() {
+        let fixture = TransferFixture::direct();
+        let competing_store = GenerationStore::open(fixture._generated.path()).unwrap();
+        let competing_writer_acquired = std::cell::Cell::new(false);
+        let inspector = exact_empty_inspector();
+        let controller = exact_empty_controller();
+        let mut filesystem = RealReconciliationFilesystem;
+
+        fixture
+            .registry
+            .reconcile_with_filesystem_and_classification_checkpoint(
+                &inspector,
+                Some(&controller),
+                &mut filesystem,
+                || match flock(
+                    &competing_store.lock,
+                    FlockOperation::NonBlockingLockExclusive,
+                ) {
+                    Ok(()) => {
+                        competing_writer_acquired.set(true);
+                        flock(&competing_store.lock, FlockOperation::Unlock).unwrap();
+                    }
+                    Err(error) => assert_eq!(error, Errno::WOULDBLOCK),
+                },
+            )
+            .unwrap();
+
+        assert!(!competing_writer_acquired.get());
+    }
+
+    #[test]
     fn direct_owner_death_without_witness_is_retained() {
         let fixture = TransferFixture::direct();
         let launch_path = fixture.launch_path();
@@ -5413,6 +5843,43 @@ bar-process-group 0\n",
     }
 
     #[test]
+    fn direct_preexec_abort_crash_with_absent_process_lease_collects_on_retry() {
+        let fixture = TransferFixture::direct();
+        let launch_path = fixture.launch_path();
+        let lease_path = fixture.lease_path();
+        let inspector = exact_empty_inspector();
+        let controller = exact_empty_controller();
+        let mut filesystem = FaultingReconciliationFilesystem {
+            fail_at: ReconciliationCheckpoint::BeforeRecordRemoval,
+        };
+
+        assert!(fixture
+            .registry
+            .reconcile_with_filesystem(&inspector, Some(&controller), &mut filesystem)
+            .is_err());
+        let terminal = LaunchRecord::parse(&fs::read(&launch_path).unwrap()).unwrap();
+        assert_eq!(terminal.state, LaunchState::Terminal);
+        assert_eq!(terminal.result, LaunchResult::Failed);
+        assert_eq!(terminal.lease_kind, LeaseKind::Process);
+        assert!(!terminal.exec_open);
+        assert!(!terminal.direct_drained);
+        assert!(!lease_path.exists());
+        let prior_controller_calls = controller.direct_calls.get();
+
+        let report = fixture
+            .registry
+            .reconcile(&inspector, Some(&controller))
+            .unwrap();
+
+        assert_eq!(report.collected, 1);
+        assert_eq!(report.released, 0);
+        assert_eq!(report.retained, 0);
+        assert!(!launch_path.exists());
+        assert_eq!(controller.direct_calls.get(), prior_controller_calls + 1);
+        assert_eq!(inspector.direct_calls.get(), 0);
+    }
+
+    #[test]
     fn exact_running_direct_detachment_writes_terminal_lost_and_retains_lease() {
         let fixture = TransferFixture::direct();
         let launch_path = fixture.launch_path();
@@ -5775,6 +6242,51 @@ bar-process-group 0\n",
             .exists());
         assert!(fixture.launch_path().exists());
         assert!(fixture.lease_path().exists());
+    }
+
+    #[test]
+    fn prepare_rejects_a_launch_id_reserved_by_a_retirement_record() {
+        let fixture = TransferFixture::direct();
+        let launch = fixture.prepared.record.launch;
+        let launch_path = fixture.launch_path();
+        let retirement = launch_path
+            .parent()
+            .unwrap()
+            .join(format!(".launch-retire-{}", launch.encode()));
+        let mut terminal = fixture.prepared.record.clone();
+        terminal.sequence += 1;
+        terminal.state = LaunchState::Terminal;
+        terminal.result = LaunchResult::Failed;
+        fixture
+            .registry
+            .replace_launch_record(&fixture.prepared.record, &terminal)
+            .unwrap();
+        fs::rename(&launch_path, &retirement).unwrap();
+        fs::remove_file(fixture.lease_path()).unwrap();
+        let selection = fixture
+            .store
+            .select_current_for_process(std::process::id())
+            .unwrap();
+
+        let result = fixture.registry.prepare(
+            &fixture.session,
+            PrepareLaunch {
+                launch,
+                mode: OwnershipMode::Direct,
+            },
+            &selection,
+        );
+
+        assert!(result.is_err());
+        assert!(retirement.exists());
+        assert!(!launch_path.exists());
+        assert!(fs::read_dir(launch_path.parent().unwrap())
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".launch-create-")));
     }
 
     #[test]
