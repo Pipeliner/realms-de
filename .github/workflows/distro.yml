@@ -27,6 +27,26 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  ubuntu-debian-package:
+    name: Ubuntu 24.04 Debian package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Debian build prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes \
+            cargo-1.85 \
+            rustc-1.85 \
+            debhelper \
+            pkg-config
+      - name: Build Debian package with the archive toolchain
+        run: |
+          set -euo pipefail
+          ln -s packaging/debian debian
+          dpkg-buildpackage -us -uc -b -d
+
   fedora-baseline-contract:
     name: Fedora baseline contract
     runs-on: ubuntu-24.04

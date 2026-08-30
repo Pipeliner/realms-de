@@ -26,7 +26,9 @@
           ${src + "/docs/check-readme-truth-snapshot.sh"} \
           ${src + "/docs/test-readme-truth-snapshot.sh"} \
           ${src + "/docs/check-contribution-templates.sh"} \
-          ${src + "/docs/test-contribution-templates.sh"}
+          ${src + "/docs/test-contribution-templates.sh"} \
+          ${src + "/packaging/debian/toolchain-path.sh"} \
+          ${src + "/packaging/debian/test-toolchain-path.sh"}
         touch $out
       '';
 
