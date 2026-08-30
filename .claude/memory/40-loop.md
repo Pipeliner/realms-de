@@ -90,6 +90,16 @@ remote Nix/ShellCheck as the authoritative verification for changed shell
 scripts; keep shell literals ASCII where practical and write quoted Markdown so
 ShellCheck can see literal intent without a suppression.
 
+## Pilot procedure measurement
+
+For a real local agent-SDD pilot iteration, use the three `helm-agent-sdd-*`
+skills only after the normal orient/pick/spec-first procedure. Keep the pilot
+record separate from product work and report the recovery detail it made
+available, the added record work, and any limitation in `.claude/memory/`.
+These observations are revisable operational knowledge, never product truth or
+an automatic maturity promotion. Keep #121 open until two subsequent real
+iterations supply that evidence.
+
 ## Running it
 
 - **Manually:** `/loop` with the iteration prompt, or ask for "next issue".

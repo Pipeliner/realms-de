@@ -65,3 +65,4 @@ Sequential, never reused. A superseded spec keeps its number and gains a
 | [0011](0011-theme-activation-generations.md) | Immutable theme activation generations | Accepted |
 | [0016](0016-readme-truth-snapshot.md) | README truthfulness snapshot | Accepted |
 | [0017](0017-contribution-templates.md) | Contribution templates | Accepted |
+| [0018](0018-agent-sdd-pilot-procedures.md) | Local agent-SDD pilot procedures | Accepted |
