@@ -398,7 +398,28 @@ fn lint_json_fatal_contains_every_finding() {
     assert!(report.starts_with("{\"status\":\"fatal\",\"separations\":"));
     let value: serde_json::Value = serde_json::from_str(&report).expect("one JSON object");
     assert_eq!(value["status"], "fatal");
-    assert!(value["findings"].as_array().expect("findings array").len() >= 2);
+    let findings = value["findings"].as_array().expect("findings array");
+    assert_eq!(findings.len(), 2, "unexpected fatal findings: {report}");
+    assert_eq!(
+        findings
+            .iter()
+            .map(|finding| finding["path"].as_str().expect("finding path"))
+            .collect::<Vec<_>>(),
+        ["text.bright", "text.normal"],
+    );
+    for finding in findings {
+        assert!(finding["message"]
+            .as_str()
+            .expect("finding message")
+            .contains("contrast"));
+        assert_eq!(finding["fatal"], true);
+    }
+    assert!(
+        report.contains("\"findings\":[{\"path\":")
+            && report.contains("\",\"message\":")
+            && report.contains("\",\"fatal\":true}"),
+        "fatal finding field order changed: {report}"
+    );
 }
 
 #[test]
