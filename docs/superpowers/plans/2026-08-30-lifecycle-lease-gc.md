@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement SPEC 0011's lifecycle-aware lease discrimination so generic generation GC never reclaims a transferred lifecycle lease from PID liveness.
+**Goal:** Implement SPEC 0011's lifecycle-aware lease discrimination so generic generation GC never reclaims a transferred lifecycle lease from PID liveness or deletes any lease after lifecycle evidence becomes uncertain.
 
-**Architecture:** Keep generation ownership in `helm-theme`. Add a typed lifecycle-lease record and a small injected inspection boundary; generic GC treats every present lifecycle lease as protected. The later `helm-session` M2 component owns the activation registry, lock ordering, systemd/direct proof, and supplies validation without creating a dependency from `helm-theme` back to session state.
+**Architecture:** Keep generation ownership in `helm-theme`. Add a typed lifecycle-lease record and dispatch generic GC by its discriminator before liveness; every present lifecycle lease pins its generation and freezes all lease and generation deletion for that pass. The later `helm-session` M2 component owns the activation registry, lock ordering, adoption, atomic transfer, and systemd/direct proof without creating a dependency from `helm-theme` back to session state.
 
 **Tech Stack:** Rust 2021, rustix descriptor-relative filesystem operations, existing in-file `generation.rs` unit fixtures.
 
@@ -14,7 +14,7 @@
 
 - Preserve Rust 1.85 compatibility and existing no-follow descriptor-relative filesystem rules.
 - Parse the lease discriminator before liveness; unknown, malformed, cross-kind, or unreadable lifecycle evidence retains every generation.
-- The existing `garbage_collect()` API is conservative: it retains every present lifecycle lease; only the future session owner may unlink one after its own proof.
+- The existing `garbage_collect()` API is conservative: every lifecycle parse/registry anomaly retains all leases and generations for that pass; only the future session owner may unlink a lifecycle lease after its own proof.
 - Do not select profile argv/assets, D-Bus activation, existing-owner behavior, River replay, or public lifecycle wire semantics; #133 and #135 own those decisions.
 - Direct lifecycle release is not a PID liveness decision: it requires the durable owner witness, exact-owner staleness, and recorded-group emptiness supplied by the session owner.
 
@@ -65,14 +65,11 @@ git commit -m "feat: parse lifecycle generation leases"
 - Test: `crates/helm-theme/src/generation.rs:3236-3460`
 
 **Interfaces:**
-- Produces: `pub enum LifecycleLeaseInspection { Protected, Uncertain }`.
-- Produces: `pub trait LifecycleLeaseInspector { fn inspect(&self, lease: &LifecycleLeaseRecord) -> LifecycleLeaseInspection; }`.
-- Produces: `GenerationStore::garbage_collect_with_lifecycle_inspector(&self, inspector: &impl LifecycleLeaseInspector) -> Result<GenerationGcReport, String>`.
-- Keeps: `GenerationStore::garbage_collect()` by routing lifecycle leases to `Uncertain`.
+- Keeps: `GenerationStore::garbage_collect()` as the only generic-GC API; session reconciliation owns lifecycle release and unlinks a validated lifecycle lease before GC can collect its generation.
 
 - [ ] **Step 1: Add failing GC fixtures**
 
-Use a stale supervisor PID in a valid lifecycle-v1 fixture and add two further sealed generations so collection would be observable. Assert that `garbage_collect()` reports zero reclaimed lifecycle leases and zero reclaimed generations, and the lifecycle lease plus its generation remain. Add a process-v1 stale-PID fixture in the same test module and assert its current reclaim behavior remains unchanged.
+Use a stale supervisor PID in a valid lifecycle-v1 fixture and add two further sealed generations so collection would be observable. Assert that `garbage_collect()` reports zero reclaimed lifecycle leases and zero reclaimed generations, and the lifecycle lease plus its generation remain. In the same fixture add a stale process-v1 lease and assert it also remains. Add a separate process-only fixture to prove the existing stale process reclaim behavior remains unchanged when no lifecycle evidence exists.
 
 - [ ] **Step 2: Run the focused red test**
 
@@ -82,11 +79,11 @@ Expected: FAIL because GC treats every parsed lease as a process lease.
 
 - [ ] **Step 3: Implement conservative GC dispatch**
 
-Have `reclaim_stale_leases_locked` dispatch on `ParsedLeaseRecord`. Apply `LeaseRecord::liveness()` only to `Process`; add every lifecycle generation to the protected set and set uncertainty after calling the inspector. Never unlink a lifecycle record in the generic path. Preserve the existing process-v1 stale unlink ordering and the zero-generation-deletion behavior after any uncertainty.
+Have `reclaim_stale_leases_locked` dispatch on `ParsedLeaseRecord`. Apply `LeaseRecord::liveness()` only to `Process`; add every lifecycle generation to the protected set and set uncertainty. Do not unlink queued stale process leases until the entire inventory finishes with no uncertainty. Never unlink a lifecycle record in the generic path. Preserve process-v1 stale reclaim only for an all-process, fully validated inventory; any lifecycle anomaly prevents every lease unlink and every generation deletion.
 
 - [ ] **Step 4: Add explicit inspector-result tests**
 
-Assert `Protected` and `Uncertain` both retain the lease/generation. Assert a lifecycle lease stays protected even when the inspector reports `Protected`, demonstrating that generic GC never interprets inspection as unlink authority.
+Assert valid lifecycle, malformed lifecycle, cross-kind lifecycle, and unreadable lifecycle fixtures each retain every lease and every generation, including an otherwise stale process-v1 lease. Assert the process-only stale fixture still reclaims only its stale process lease.
 
 - [ ] **Step 5: Run focused and workspace tests**
 
@@ -105,46 +102,4 @@ git add crates/helm-theme/src/generation.rs
 git commit -m "fix: retain lifecycle leases during generation GC"
 ```
 
-### Task 3: Transfer a selected process lease without drop-release authority
-
-**Files:**
-- Modify: `crates/helm-theme/src/generation.rs:93-104,773-825,1784-1825`
-- Test: `crates/helm-theme/src/generation.rs:3754-3795`
-
-**Interfaces:**
-- Produces: `GenerationSelection::transfer_to_lifecycle(self, record: LifecycleLeaseRecord) -> Result<TransferredGenerationLease, String>`.
-- Produces: `TransferredGenerationLease` exposing only the generation and opaque lease name, with no `Drop` unlink behavior.
-- Consumes: the same opaque lease filename, `renameat`/atomic replacement and directory `fsync` rules already used by lease creation.
-
-- [ ] **Step 1: Add a failing transfer crash-boundary test**
-
-Select a paused target with `select_current_for_process`, construct a matching lifecycle record, transfer it, then drop the original selection. Assert the same lease filename still exists, begins with `helm-generation-lifecycle-lease-v1`, and generic GC retains it even when the original process PID is stale.
-
-- [ ] **Step 2: Run the focused red test**
-
-Run: `cargo test -p helm-theme selection_transfer_to_lifecycle -- --nocapture`
-
-Expected: FAIL because the selection has no transfer operation and `Drop` unlinks its lease.
-
-- [ ] **Step 3: Implement atomic same-name transfer**
-
-Write and fsync a current-UID mode-0600 temporary in the existing leases directory, atomically replace the process lease at the exact opaque filename, fsync the directory, and mark the consumed `GenerationSelection` released only after the replacement is durable. Reject generation, process identity, and owner UID mismatch before mutation.
-
-- [ ] **Step 4: Run the transfer and full checks**
-
-Run: `cargo test -p helm-theme selection_transfer_to_lifecycle -- --nocapture`
-
-Expected: PASS.
-
-Run: `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add crates/helm-theme/src/generation.rs
-git commit -m "feat: transfer generation leases to lifecycle ownership"
-```
-
-The lifecycle registry is deliberately outside this first slice. Once Tasks 1–3 merge, create a separate plan for SPEC 0012 A1–A16: activation-root initialization, canonical launch records, systemd recursive cgroup proof, direct two-phase witness proof, crash-matrix recovery, and Nix VM fixtures. Do not add a placeholder `helm-session` crate before those red fixtures exist.
+The lifecycle registry and atomic transfer are deliberately outside this first slice. Create their separate plan before implementation: the registry must issue an unforgeable transfer capability only after fsynced `preparing` state, verified scope/group adoption, and all common-field equality checks. Its red fixtures must cover consumed-selection drop ordering, write/rename/fsync crash boundaries with no lease-less state, systemd descendants, and direct witness proof across SPEC 0012 A1–A3. Do not add a placeholder `helm-session` crate before those red fixtures exist.
