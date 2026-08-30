@@ -1,7 +1,7 @@
 # SPEC 0013 — Truthful fresh desktop Exec launch
 
-- **Status:** Draft — candidate for acceptance; implementation is blocked until
-  this contract is accepted, then proceeds red-first through its fixtures
+- **Status:** Accepted (2026-08-30) — implementation proceeds red-first through
+  its fixtures
 - **Milestone:** M2
 - **Decision:** [ADR 0018](../adr/0018-fresh-desktop-exec-only.md)
 - **Issue:** [#133](https://github.com/Pipeliner/realms-de/issues/133)
