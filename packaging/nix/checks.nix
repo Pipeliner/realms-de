@@ -139,11 +139,16 @@ EOF
       machine.wait_for_unit("multi-user.target")
 
       # Task 3's descriptor admission needs a positive proof that is impossible
-      # on the host test filesystem: run the private unit-test selector as an
-      # ordinary NixOS user against a root-owned native ELF in the Nix store.
+      # on the host test filesystem. The Nix store itself is group-writable in
+      # NixOS, which the admission policy deliberately refuses, so root copies
+      # a known native ELF to a test-only root-owned immutable-location fixture.
+      machine.succeed("install -d -m 0755 /opt/helm-desktop-exec-test")
+      machine.succeed(
+        "install -m 0555 ${pkgs.coreutils}/bin/true /opt/helm-desktop-exec-test/true"
+      )
       machine.succeed(
         "su -s /bin/sh alice -c "
-        + "'HELM_DESKTOP_EXEC_TEST_ELF=${pkgs.coreutils}/bin/true "
+        + "'HELM_DESKTOP_EXEC_TEST_ELF=/opt/helm-desktop-exec-test/true "
         + "${desktopAdmissionVmTest}/libexec/helm-theme-desktop-exec-tests "
         + "--exact generation::desktop_exec::tests::nixos_vm_static_preflight_admits_root_owned_elf_from_non_root_user "
         + "--ignored --nocapture'"
