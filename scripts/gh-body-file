@@ -1,0 +1,36 @@
+#!/bin/sh
+# Send GitHub Markdown only by file, never as a shell-interpreted argument.
+set -eu
+
+usage() {
+    echo "usage: $0 issue-comment ISSUE BODY_FILE | pr-create BASE HEAD TITLE BODY_FILE" >&2
+    exit 64
+}
+
+[ "$#" -ge 1 ] || usage
+
+case "$1" in
+    issue-comment)
+        [ "$#" -eq 3 ] || usage
+        issue=$2
+        body_file=$3
+        [ -f "$body_file" ] && [ -r "$body_file" ] || {
+            echo "body file must be a readable regular file: $body_file" >&2
+            exit 66
+        }
+        exec gh issue comment "$issue" --body-file "$body_file"
+        ;;
+    pr-create)
+        [ "$#" -eq 5 ] || usage
+        base=$2
+        head=$3
+        title=$4
+        body_file=$5
+        [ -f "$body_file" ] && [ -r "$body_file" ] || {
+            echo "body file must be a readable regular file: $body_file" >&2
+            exit 66
+        }
+        exec gh pr create --base "$base" --head "$head" --title "$title" --body-file "$body_file"
+        ;;
+    *) usage ;;
+esac

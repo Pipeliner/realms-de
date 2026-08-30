@@ -18,3 +18,10 @@ the same change whenever a contract changes.
 - Run `gh` outside the sandbox.
 - Commit and push completed repository work unless the user explicitly says
   otherwise.
+- **Never pass Markdown or other GitHub body content through a shell argument.**
+  In particular, never use `gh ... --body`, command substitution, a heredoc, or
+  shell interpolation for an issue or PR body. Write the exact literal content
+  to a tracked or temporary file with `apply_patch`, then call
+  `scripts/gh-body-file` so `gh --body-file` reads it without shell evaluation.
+  This rule exists because Markdown backticks are shell syntax in an inline
+  command and must be mechanically unable to execute.
