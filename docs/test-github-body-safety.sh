@@ -16,6 +16,7 @@ make_fixture() {
     fixture=$1
     mkdir -p "$fixture/scripts" "$fixture/.github/workflows" "$fixture/docs"
     cp "$root/scripts/gh-body-file" "$fixture/scripts/gh-body-file"
+    # shellcheck disable=SC2016 # The fixture deliberately contains literal shell-looking prose.
     printf '%s%s%s\n' '# allowed documentation prose: g' 'h issue comment --bo' 'dy "$text"' >"$fixture/docs/policy.md"
     printf '%s\n' 'name: fixture' >"$fixture/.github/workflows/ci.yml"
     git -C "$fixture" init -q

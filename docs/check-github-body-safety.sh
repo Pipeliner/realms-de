@@ -30,6 +30,7 @@ fail() {
 helper=$root/scripts/gh-body-file
 [ -f "$helper" ] || fail 'missing approved helper'
 
+# shellcheck disable=SC2016 # These are literal helper-source lines, not shell expressions.
 for line in \
     '        exec gh issue create --title "$title" --body-file "$body_file"' \
     '        exec gh issue comment "$issue" --body-file "$body_file"' \
@@ -40,6 +41,7 @@ done
 helper_gh_count=$(grep -c -E '^[[:space:]]*exec gh[[:space:]]' "$helper" || true)
 [ "$helper_gh_count" -eq 3 ] || fail 'helper has an unapproved GitHub CLI invocation'
 if grep -n -E '(^|[[:space:];])eval[[:space:]]|<<' "$helper" >/dev/null ||
+    # shellcheck disable=SC2016 # Literal command-substitution marker in helper source.
     grep -F -q '$(' "$helper" ||
     grep -F -q '`' "$helper"; then
     fail 'helper dynamically constructs a shell command'
