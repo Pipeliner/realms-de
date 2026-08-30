@@ -1,11 +1,11 @@
 # helm — Fedora 44 pre-alpha spec (ADR 0015 / SPEC 0009).
 #
-# PRE-ALPHA (0.1.0). The Cargo workspace contains one crate, helm-core, and it
-# is a library: this package installs NO helm binaries, because none exist yet.
-# What it installs is the session contract — the wayland-session entry, the
+# PRE-ALPHA (0.1.0). The Cargo workspace builds helmctl for the implemented
+# theme commands. This package also installs the session contract — the
+# wayland-session entry, the
 # session wrapper that performs the ADR 0011 systemd/D-Bus environment
 # handshake, the systemd user units and the palette. %install picks up
-# helm-wm, helm-bar and helm automatically once M1-M2 build them.
+# helm-wm, helm-bar and helm automatically once they build.
 #
 # BINARY NAMES ARE SETTLED (ARCHITECTURE.md, commit 4ddcc26). Fedora ships
 # Kubernetes Helm as %%{_bindir}/helm, and two packages owning one path cannot
@@ -99,11 +99,12 @@ starship, fuzzel and foot — and themes all of them from a single palette file.
 The compositor is river 0.4, driven by helm's own window manager over
 river-window-management-v1.
 
-THIS PACKAGE IS PRE-ALPHA AND DOES NOT INSTALL A WORKING DESKTOP. helm's
-binaries are not written yet. What it installs is the session contract: the
-wayland-session entry, the session wrapper that performs the systemd and D-Bus
-environment handshake, the systemd user units and the palette. Logging into the
-session gives you river with no window management attached.
+THIS PACKAGE IS PRE-ALPHA AND DOES NOT INSTALL A WORKING DESKTOP. It installs
+helmctl with `theme apply`, `theme lint`, and `theme diff`, plus the session
+contract: the wayland-session entry, the session wrapper that performs the
+systemd and D-Bus environment handshake, the systemd user units and the
+palette. Logging into the session gives you river with no window management
+attached because helm-wm and helm-bar are not written yet.
 
 %prep
 %autosetup
@@ -134,13 +135,14 @@ ln -sf ../helm-wm.service %{buildroot}%{_userunitdir}/helm-session.target.wants/
 ln -sf ../helm-bar.service %{buildroot}%{_userunitdir}/helm-session.target.wants/helm-bar.service
 
 # Install whichever helm binaries this revision actually built, and record them
-# in a generated file list. Today that is none of them.
+# in a generated file list. This revision builds helmctl.
 #
 # A generated list, rather than globs in %%files: rpmbuild treats a %%files glob
 # that matches nothing as a hard error ("File not found: .../helm-wm*"), so
 # globbing for binaries that do not exist yet fails the build. Verified the hard
-# way — that is exactly how this spec first failed. The list means M1-M2 need no
-# spec change, and it can never accidentally claim %%{_bindir}/helm, which on
+# way — that is exactly how this spec first failed. The list means helm-wm and
+# helm-bar need no spec change, and it can never accidentally claim
+# %%{_bindir}/helm, which on
 # Fedora belongs to Kubernetes Helm.
 # The list starts with the session entry, which always exists — rpm rejects an
 # *empty* -f list as firmly as it rejects a glob that matches nothing.
@@ -166,8 +168,8 @@ cargo test --release --locked --workspace
 # scriptlet.
 
 # -f: every %%{_bindir} entry this revision actually installed, recorded during
-# %%install — the session entry today, plus helmctl, helm-wm and helm-bar once
-# M1-M2 build them, with no spec change.
+# %%install — the session entry and helmctl today, plus helm-wm and helm-bar
+# once they build, with no spec change.
 %files -f %{_builddir}/helm-binaries.list
 %license LICENSE-MIT LICENSE-APACHE
 %doc docs/INSTALL.md docs/PITFALLS.md

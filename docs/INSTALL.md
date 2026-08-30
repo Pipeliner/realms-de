@@ -1,8 +1,9 @@
 # Installing helm
 
 > **helm 0.1.0 is pre-alpha and does not install a working desktop.** The
-> binaries that make helm a desktop — `helm-wm` (the window manager), `helm-bar`,
-> `helmctl` — are not written yet (M1–M2 in [docs/MVP.md](MVP.md)). What you can
+> binaries that make helm a desktop — `helm-wm` (the window manager) and
+> `helm-bar` — are not written yet (M1–M2 in [docs/MVP.md](MVP.md)). `helmctl`
+> is installed with `theme apply`, `theme lint`, and `theme diff`. What you can
 > install today is the *session contract*: the login entry, the entry script that
 > performs the systemd/D-Bus environment handshake, the systemd user units, the
 > portal policy and the palette.
@@ -109,6 +110,7 @@ For the user half — palette, generated configs, user units — add
 
 ### What this actually installs today
 
+- `bin/helmctl` — the theme CLI: `theme apply`, `theme lint`, and `theme diff`.
 - `bin/helm-session` — the session entry, with river, `systemctl`,
   `dbus-update-activation-environment`, `dbus-run-session` and `gsettings` on
   its PATH.
@@ -126,8 +128,8 @@ For the user half — palette, generated configs, user units — add
 - river 0.4.x, yazi, btop, starship, zsh, fuzzel, foot and slurp as runtime
   packages.
 
-Not installed, because they are not written: `helmctl`, `helm-wm`, `helm-bar`,
-any generated theme.
+Not installed, because they are not written: `helm-wm`, `helm-bar`, any
+generated theme.
 
 `checks.session-boots` boots a NixOS VM and asserts the login entry, the
 wrapper, the units, the palette and river's presence. The assertion it exists
@@ -179,9 +181,9 @@ install fonts-ibm-plex` fixes it.
 `/usr/bin/helm-session`, `/usr/share/wayland-sessions/helm.desktop`, the four
 user units under `/usr/lib/systemd/user/` **plus the
 `helm-session.target.wants/` symlinks**, `/usr/share/xdg-desktop-portal/helm-portals.conf`
-and `/usr/share/helm/palette.toml`. No `helmctl`, no `helm-wm`, no `helm-bar` —
-`debian/rules` installs those automatically once they build, and says so in the
-build log while they do not.
+and `/usr/share/helm/palette.toml`, plus `/usr/bin/helmctl` with `theme apply`,
+`theme lint`, and `theme diff`. `debian/rules` will also install `helm-wm` and
+`helm-bar` automatically when they build.
 
 ---
 
@@ -233,9 +235,10 @@ empty. That is the guard that would fail if the claim ever stopped being true.
 
 ### What this actually installs today
 
-The same set as the deb: session entry, login entry, four user units and their
-`.wants` symlinks, portal policy, palette. The `%install` loop picks up
-`helmctl`, `helm-wm` and `helm-bar` once they build.
+The same set as the deb: `helmctl` with its three theme commands, session
+entry, login entry, four user units and their `.wants` symlinks, portal policy,
+and palette. The `%install` loop will also pick up `helm-wm` and `helm-bar`
+when they build.
 
 ---
 

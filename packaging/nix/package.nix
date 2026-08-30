@@ -1,11 +1,11 @@
 # The helm derivation.
 #
-# PRE-ALPHA (0.1.0): desktop binaries remain pending, but the workspace's
-# metadata-only local validator is installed as helm-sdd. This derivation also
+# PRE-ALPHA (0.1.0): `helmctl theme {apply,lint,diff}` and the workspace's
+# metadata-only local validator are installed. This derivation also
 # installs the session wrapper (wrapped so it can find river, systemctl,
 # dbus-update-activation-environment and gsettings), the wayland-session entry,
-# the systemd user units and the palette. helm-bar, helm-wm and helm land
-# in M1–M2 and appear in $out/bin with no change here.
+# the systemd user units and the palette. helm-bar, helm-wm and helm remain
+# pending M1–M2 binaries.
 {
   pkgs,
   lib,
@@ -45,6 +45,7 @@
   doCheck = true;
 
   postInstall = ''
+    install -Dm755 target/release/helmctl $out/bin/helmctl
     install -Dm755 ${src + "/packaging/session/helm-session"} $out/bin/helm-session
 
     # The desktop entry must point at the store path, not /usr/bin.
