@@ -360,6 +360,19 @@ the accepted-specification order before opening the implementation PR:
    `.launch-retire-<launch-id>` names.  `prepare` rejects either collision
    before selection, temporary, or launch mutation; the red fixture uses a
    valid retirement-only crash artifact.
+6. Keep transfer-stage normalization exclusively in the full registry
+   reconciliation third phase. Generic generation GC treats every stage as
+   retained uncertainty and performs zero lease/generation mutation. The core
+   transfer retry path refuses a pre-existing stage without mutation; it may be
+   retried only after registry reconciliation has classified all rows and
+   completed every required controller proof. Regressions combine valid stage
+   A with unrelated fatal running/absent row B for both generic GC and direct
+   transfer retry, and obsolete eager-cleanup expectations become retention
+   assertions. Preserve the former classifier's safety independently of its
+   normalization authority: generic GC uses a two-pass read-only preflight that
+   enforces 4096 entries, 16 MiB total and 4096 bytes per record before payload
+   reads or bounded-name retention. Stage plus oversized and over-count
+   fixtures must freeze with zero mutation.
 
 Implement these as five isolated red-to-green cycles, then rerun the focused
 lifecycle suite, full workspace tests, Clippy, formatting, and diff checks.

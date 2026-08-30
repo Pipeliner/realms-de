@@ -213,6 +213,12 @@ struct ValidatedLeaseInventoryEntry {
     descriptor: OwnedFd,
 }
 
+#[derive(Debug)]
+struct GcLeaseInventoryPreflight {
+    canonical_names: Vec<String>,
+    has_transfer_stage: bool,
+}
+
 #[derive(Debug, Default)]
 struct LeaseTransferRecoveryPlan {
     final_entries: BTreeMap<String, ValidatedLeaseInventoryEntry>,
@@ -220,6 +226,10 @@ struct LeaseTransferRecoveryPlan {
 }
 
 impl LeaseTransferRecoveryPlan {
+    fn has_staging(&self) -> bool {
+        !self.staging_entries.is_empty()
+    }
+
     fn normalize(self, lease_directory: &OwnedFd) -> std::result::Result<(), String> {
         if self.staging_entries.is_empty() {
             return Ok(());
@@ -1176,56 +1186,19 @@ impl GenerationStore {
         let mut live_generations = BTreeSet::new();
         let mut uncertain_lease = false;
         let mut stale_leases = Vec::new();
-        if recover_lease_transfer_staging_locked(&self.leases.fd).is_err() {
+        let preflight = match gc_lease_inventory_preflight(&self.leases.fd) {
+            Ok(preflight) => preflight,
+            Err(_) => return Ok((report, live_generations, true)),
+        };
+        if preflight.has_transfer_stage {
             return Ok((report, live_generations, true));
         }
-        let current_uid = rustix::process::getuid().as_raw();
-        let mut leases = Dir::read_from(&self.leases.fd).map_err(|error| error.to_string())?;
-        while let Some(entry) = leases.read() {
-            let entry = entry.map_err(|error| error.to_string())?;
-            let bytes = entry.file_name().to_bytes();
-            if matches!(bytes, b"." | b"..") {
-                continue;
-            }
-            let Ok(name) = std::str::from_utf8(bytes) else {
+        for name in preflight.canonical_names {
+            let Ok(validated) = read_validated_lease_inventory_entry(&self.leases.fd, &name) else {
                 uncertain_lease = true;
                 continue;
             };
-            if GenerationId::parse(name).is_err() {
-                uncertain_lease = true;
-                continue;
-            }
-            let stat = match statat(&self.leases.fd, name, AtFlags::SYMLINK_NOFOLLOW) {
-                Ok(stat) => stat,
-                Err(_) => {
-                    uncertain_lease = true;
-                    continue;
-                }
-            };
-            if validate_owned_mode(
-                "generation lease",
-                &stat,
-                FileType::RegularFile,
-                0o600,
-                current_uid,
-            )
-            .is_err()
-            {
-                uncertain_lease = true;
-                continue;
-            }
-            let raw = match read_optional_regular_bytes(&self.leases, Path::new(name)) {
-                Ok(Some(raw)) => raw,
-                Ok(None) | Err(_) => {
-                    uncertain_lease = true;
-                    continue;
-                }
-            };
-            let Ok(record) = ParsedLeaseRecord::parse(&raw) else {
-                uncertain_lease = true;
-                continue;
-            };
-            match record {
+            match validated.record {
                 ParsedLeaseRecord::Process(record) => match record.liveness() {
                     LeaseLiveness::Live => {
                         live_generations.insert(record.generation);
@@ -1242,7 +1215,6 @@ impl GenerationStore {
                 }
             }
         }
-        drop(leases);
         if uncertain_lease {
             return Ok((report, live_generations, true));
         }
@@ -2041,8 +2013,11 @@ impl GenerationSelection {
         if LifecycleLeaseRecord::parse(&raw)? != record {
             return Err("lifecycle lease is not canonical".into());
         }
-        self.revalidate_for_lifecycle_transfer()?;
-        recover_lease_transfer_staging_locked(&self.lease_directory)?;
+        if self.transfer_staging_present()? {
+            return Err(
+                "generation lease transfer staging requires registry reconciliation".into(),
+            );
+        }
         self.revalidate_for_lifecycle_transfer()?;
         let source_process =
             read_validated_lease_inventory_entry(&self.lease_directory, self.lease_name.as_str())?;
@@ -2361,6 +2336,14 @@ impl GenerationSelection {
     fn retain_after_authority_rejection(&mut self) {
         self.released = true;
     }
+
+    fn retain_for_registry_reconciliation(&mut self) {
+        self.released = true;
+    }
+
+    fn transfer_staging_present(&self) -> std::result::Result<bool, String> {
+        classify_lease_transfer_staging_locked(&self.lease_directory).map(|plan| plan.has_staging())
+    }
 }
 
 fn validated_lease_record_matches(
@@ -2398,12 +2381,6 @@ fn transfer_staging_matches(
         rustix::process::getuid().as_raw(),
     )?;
     Ok(path.st_dev == opened.st_dev && path.st_ino == opened.st_ino)
-}
-
-fn recover_lease_transfer_staging_locked(
-    lease_directory: &OwnedFd,
-) -> std::result::Result<(), String> {
-    classify_lease_transfer_staging_locked(lease_directory)?.normalize(lease_directory)
 }
 
 fn classify_lease_transfer_staging_locked(
@@ -2482,6 +2459,66 @@ fn classify_lease_transfer_staging_locked(
     Ok(LeaseTransferRecoveryPlan {
         final_entries,
         staging_entries,
+    })
+}
+
+fn gc_lease_inventory_preflight(
+    lease_directory: &OwnedFd,
+) -> std::result::Result<GcLeaseInventoryPreflight, String> {
+    let mut canonical_names = Vec::new();
+    let mut has_transfer_stage = false;
+    let mut inventory_entries = 0_usize;
+    let mut inventory_bytes = 0_usize;
+    let current_uid = rustix::process::getuid().as_raw();
+    let mut entries = Dir::read_from(lease_directory).map_err(|error| error.to_string())?;
+    while let Some(entry) = entries.read() {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let bytes = entry.file_name().to_bytes();
+        if matches!(bytes, b"." | b"..") {
+            continue;
+        }
+        inventory_entries = inventory_entries
+            .checked_add(1)
+            .ok_or("generation lease inventory exceeds its scan bounds")?;
+        let stat = statat(
+            lease_directory,
+            entry.file_name(),
+            AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(|error| error.to_string())?;
+        let size = usize::try_from(stat.st_size)
+            .map_err(|_| "generation lease inventory has a negative size")?;
+        inventory_bytes = inventory_bytes
+            .checked_add(size)
+            .ok_or("generation lease inventory exceeds its scan bounds")?;
+        if inventory_entries > MAX_LEASE_INVENTORY_ENTRIES
+            || inventory_bytes > MAX_LEASE_INVENTORY_BYTES
+        {
+            return Err("generation lease inventory exceeds its scan bounds".into());
+        }
+        validate_owned_mode(
+            "generation lease inventory entry",
+            &stat,
+            FileType::RegularFile,
+            0o600,
+            current_uid,
+        )?;
+        if size > 4096 {
+            return Err("generation lease inventory entry exceeds 4096 bytes".into());
+        }
+        let name = std::str::from_utf8(bytes)
+            .map_err(|_| "generation lease inventory name is not UTF-8")?;
+        if name.starts_with(".lease-transfer-") {
+            has_transfer_stage = true;
+        } else if GenerationId::parse(name).is_ok() {
+            canonical_names.push(name.to_owned());
+        } else {
+            return Err("generation lease inventory contains an unknown name".into());
+        }
+    }
+    Ok(GcLeaseInventoryPreflight {
+        canonical_names,
+        has_transfer_stage,
     })
 }
 

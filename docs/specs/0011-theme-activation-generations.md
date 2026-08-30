@@ -158,13 +158,22 @@ generation/PID/start-time/boot/UID identity: target process plus staging
 lifecycle is **untransferred**, so recovery removes/fsyncs only the staging
 artifact; target lifecycle plus staging process is **transferred**, so recovery
 first fsyncs the exchange state and then removes/fsyncs only the displaced
-process staging artifact. Before retrying a transfer or reclaiming any
-lease/generation, Helm holds `activation.lock` and validates the whole lease
-inventory without mutation. Transfer recovery first produces a read-only
-classification and deferred normalization plan. No staging pathname may be
-removed or otherwise normalized until every registry record, passive ownership
-observation, and required gate-closed controller result in the destructive pass
-is globally nonfatal and exact. Each pair must use no-follow current-UID regular
+process staging artifact. Only SPEC 0012's `ActivationRegistry` reconciliation
+may recover either paired state. It holds `lifecycle.lock` then
+`activation.lock`, classifies the whole registry and lease inventory without
+mutation, and produces a deferred normalization plan. Generic generation GC
+never normalizes `.lease-transfer-*`: any transfer stage makes the complete
+lease inventory retained uncertainty and permits no stale-lease or generation
+GC mutation. Generic GC first performs a read-only two-pass preflight: while
+streaming it enforces at most 4096 entries, 16 MiB of declared bytes, and the
+4096-byte per-record limit before retaining any bounded canonical name or
+reading a payload. A stage, unsafe/malformed entry, or exceeded bound freezes
+the pass before payload/liveness work or mutation. The core transfer/retry path likewise refuses an already named
+transfer stage without changing either half; a retry must first pass through
+full registry reconciliation, including every passive observation and required
+gate-closed controller result. No staging pathname may be removed or otherwise
+normalized until that destructive pass is globally nonfatal and exact. Each
+pair must use no-follow current-UID regular
 exact-0600 files of at most 4096 bytes with canonical discriminators and exact
 contents. Only after every inventory entry and every staging/target pair passes
 may recovery normalize those two states and continue or retry. A missing target,

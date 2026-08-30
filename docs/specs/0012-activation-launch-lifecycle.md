@@ -497,14 +497,26 @@ stage and the exact process target, atomically exchange their names with
 `RENAME_EXCHANGE`, post-validate the lifecycle target/process staging pair,
 fsync the leases directory, then remove and fsync the displaced process staging
 name. A pre-link crash exposes no named stage and leaves only the process
-target; a post-link crash exposes one exact canonical pair. Transfer
-retry or generic GC first applies SPEC 0011's whole-inventory two-state rule:
+target; a post-link crash exposes one exact canonical pair. Registry
+reconciliation alone applies SPEC 0011's whole-inventory two-state rule:
 process-target/lifecycle-stage is untransferred, while
 lifecycle-target/process-stage is transferred. No staging payload alone is
 inferred to be adopted, and an unsafe, missing, same-kind or mismatched pair
 remains fail-closed evidence rather than cleanup authority. A detected pathname
 swap is exchanged back only with the exact inverse-pair proof SPEC 0011 permits;
 otherwise the result is retained and ambiguous.
+
+Generic generation GC does not own registry evidence or controller proofs and
+therefore never normalizes a transfer stage, even an exact valid pair. Any
+`.lease-transfer-*` makes generic GC retain every lease and generation without
+mutation. This retention path remains bounded: a read-only first pass enforces
+the complete 4096-entry, 16-MiB and 4096-byte-per-record limits before generic
+GC retains canonical names or reads any lease payload. Stage, bound, name, or
+metadata uncertainty stops before liveness evaluation or mutation. Likewise, the private core transfer operation refuses an already
+named stage and changes neither target nor stage; adoption retry may proceed
+only after a complete `ActivationRegistry` reconciliation pass has classified
+all registry/lease evidence, obtained every required exact controller result,
+and normalized the pair in its third phase.
 
 All common fields equal the prior process lease and launch record. The
 ownership-specific fields, including cgroup identity, obey the same

@@ -1658,6 +1658,19 @@ impl ActivationRegistry {
             selection.retain_after_authority_rejection();
             return Err(error);
         }
+        match selection.transfer_staging_present() {
+            Ok(false) => {}
+            Ok(true) => {
+                selection.retain_for_registry_reconciliation();
+                return Err(
+                    "generation lease transfer staging requires registry reconciliation".into(),
+                );
+            }
+            Err(error) => {
+                selection.retain_for_registry_reconciliation();
+                return Err(error);
+            }
+        }
         self.inspect_and_recover_inventory()?;
         if session.registry_device != self.device || session.registry_inode != self.inode {
             return Err("active session capability belongs to another registry".into());
@@ -1685,7 +1698,14 @@ impl ActivationRegistry {
 
         selection.revalidate_for_lifecycle_transfer()?;
         validate_selection_matches_launch(&selection, &current_launch)?;
-        selection.replace_with_lifecycle_locked_with_filesystem(lifecycle_lease, filesystem)?;
+        if let Err(error) =
+            selection.replace_with_lifecycle_locked_with_filesystem(lifecycle_lease, filesystem)
+        {
+            if selection.transfer_staging_present().unwrap_or(true) {
+                selection.retain_for_registry_reconciliation();
+            }
+            return Err(error);
+        }
 
         filesystem.checkpoint(TransferCheckpoint::BeforeAdoptedRecord)?;
         self.replace_launch_record(&current_launch, &adopted_record)?;
@@ -3055,7 +3075,7 @@ fn parse_yes_no(value: &str, field: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generation::{GenerationPublication, GenerationStore};
+    use crate::generation::{GenerationGcReport, GenerationPublication, GenerationStore};
     use std::cell::Cell;
     use std::fs;
     use std::os::unix::fs::{symlink, PermissionsExt};
@@ -4832,7 +4852,7 @@ bar-process-group 0\n",
     }
 
     #[test]
-    fn gc_recovers_exact_post_exchange_lifecycle_process_pair() {
+    fn generic_gc_retains_exact_post_exchange_lifecycle_process_pair() {
         let fixture = TransferFixture::direct();
         let lease_name = fixture.selection.lease_name.clone();
         let lease_path = fixture.lease_path();
@@ -4855,8 +4875,9 @@ bar-process-group 0\n",
         .unwrap();
         std::mem::forget(fixture.selection);
 
-        fixture.store.garbage_collect().unwrap();
-        assert!(!staging_path.exists());
+        let report = fixture.store.garbage_collect().unwrap();
+        assert_eq!(report, GenerationGcReport::default());
+        assert!(staging_path.exists());
         assert!(matches!(
             ParsedLeaseRecord::parse(&fs::read(lease_path).unwrap()),
             Ok(ParsedLeaseRecord::Lifecycle(record)) if record == lifecycle
@@ -4864,7 +4885,7 @@ bar-process-group 0\n",
     }
 
     #[test]
-    fn gc_recovers_exact_pre_exchange_process_lifecycle_pair() {
+    fn generic_gc_retains_exact_pre_exchange_process_lifecycle_pair() {
         let fixture = TransferFixture::direct();
         let lease_name = fixture.selection.lease_name.clone();
         let lease_path = fixture.lease_path();
@@ -4880,8 +4901,9 @@ bar-process-group 0\n",
         write_mode(&staging_path, &lifecycle.encode(), 0o600);
         std::mem::forget(fixture.selection);
 
-        fixture.store.garbage_collect().unwrap();
-        assert!(!staging_path.exists());
+        let report = fixture.store.garbage_collect().unwrap();
+        assert_eq!(report, GenerationGcReport::default());
+        assert!(staging_path.exists());
         assert_eq!(
             ParsedLeaseRecord::parse(&fs::read(lease_path).unwrap()),
             Ok(ParsedLeaseRecord::Process(process))
@@ -4909,6 +4931,136 @@ bar-process-group 0\n",
         assert_eq!(report.reclaimed_leases, 0);
         assert!(lease_path.exists());
         assert!(staging_path.exists());
+    }
+
+    #[test]
+    fn generic_gc_never_normalizes_valid_stage_with_unrelated_fatal_running_absent_row() {
+        let fixture = TransferFixture::direct();
+        let lease_name = fixture.selection.lease_name.clone();
+        let lease_path = fixture.lease_path();
+        let staging_path = fixture
+            ._generated
+            .path()
+            .join("leases")
+            .join(format!(".lease-transfer-{lease_name}"));
+        let (_, fatal_launch, fatal_lease) =
+            add_systemd_running(&fixture, "ffffffffffffffffffffffffffffffff");
+        fs::remove_file(&fatal_lease).unwrap();
+        let evidence = fixture.direct_evidence();
+        let (lifecycle, _) =
+            transfer_records(&fixture.prepared.record, &fixture.selection, evidence).unwrap();
+        write_mode(&staging_path, &lifecycle.encode(), 0o600);
+        let target_before = fs::read(&lease_path).unwrap();
+        let stage_before = fs::read(&staging_path).unwrap();
+        let fatal_before = fs::read(&fatal_launch).unwrap();
+        std::mem::forget(fixture.selection);
+
+        let report = fixture.store.garbage_collect().unwrap();
+
+        assert_eq!(report, GenerationGcReport::default());
+        assert_eq!(fs::read(&lease_path).unwrap(), target_before);
+        assert_eq!(fs::read(&staging_path).unwrap(), stage_before);
+        assert_eq!(fs::read(&fatal_launch).unwrap(), fatal_before);
+        assert!(!fatal_lease.exists());
+    }
+
+    #[test]
+    fn generic_gc_stage_plus_oversized_record_fails_bounded_preflight_without_mutation() {
+        let fixture = TransferFixture::direct();
+        let lease_name = fixture.selection.lease_name.clone();
+        let lease_path = fixture.lease_path();
+        let leases = fixture._generated.path().join("leases");
+        let staging_path = leases.join(format!(".lease-transfer-{lease_name}"));
+        let oversized_path = leases.join("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        write_mode(&staging_path, b"stage evidence", 0o600);
+        write_mode(&oversized_path, &vec![b'x'; 4097], 0o600);
+        let target_before = fs::read(&lease_path).unwrap();
+        let stage_before = fs::read(&staging_path).unwrap();
+        let oversized_before = fs::read(&oversized_path).unwrap();
+        std::mem::forget(fixture.selection);
+
+        let error =
+            crate::generation::gc_lease_inventory_preflight(&fixture.store.leases.fd).unwrap_err();
+        assert!(error.contains("4096 bytes"), "{error}");
+        let report = fixture.store.garbage_collect().unwrap();
+
+        assert_eq!(report, GenerationGcReport::default());
+        assert_eq!(fs::read(&lease_path).unwrap(), target_before);
+        assert_eq!(fs::read(&staging_path).unwrap(), stage_before);
+        assert_eq!(fs::read(&oversized_path).unwrap(), oversized_before);
+    }
+
+    #[test]
+    fn generic_gc_stage_plus_over_count_fails_bounded_preflight_without_mutation() {
+        let fixture = TransferFixture::direct();
+        let lease_name = fixture.selection.lease_name.clone();
+        let lease_path = fixture.lease_path();
+        let leases = fixture._generated.path().join("leases");
+        let staging_path = leases.join(format!(".lease-transfer-{lease_name}"));
+        write_mode(&staging_path, b"stage evidence", 0o600);
+        let mut created = 0_usize;
+        let mut index = 0_u64;
+        while created < MAX_INVENTORY_ENTRIES {
+            let path = leases.join(format!("{index:032x}"));
+            index += 1;
+            if path.exists() {
+                continue;
+            }
+            write_mode(&path, b"", 0o600);
+            created += 1;
+        }
+        let target_before = fs::read(&lease_path).unwrap();
+        let stage_before = fs::read(&staging_path).unwrap();
+        std::mem::forget(fixture.selection);
+
+        let error =
+            crate::generation::gc_lease_inventory_preflight(&fixture.store.leases.fd).unwrap_err();
+        assert!(error.contains("scan bounds"), "{error}");
+        let report = fixture.store.garbage_collect().unwrap();
+
+        assert_eq!(report, GenerationGcReport::default());
+        assert_eq!(fs::read(&lease_path).unwrap(), target_before);
+        assert_eq!(fs::read(&staging_path).unwrap(), stage_before);
+        assert_eq!(fs::read_dir(&leases).unwrap().count(), created + 2);
+    }
+
+    #[test]
+    fn transfer_retry_never_normalizes_valid_stage_with_unrelated_fatal_running_absent_row() {
+        let fixture = TransferFixture::direct();
+        let lease_name = fixture.selection.lease_name.clone();
+        let lease_path = fixture.lease_path();
+        let staging_path = fixture
+            ._generated
+            .path()
+            .join("leases")
+            .join(format!(".lease-transfer-{lease_name}"));
+        let (_, fatal_launch, fatal_lease) =
+            add_systemd_running(&fixture, "ffffffffffffffffffffffffffffffff");
+        fs::remove_file(&fatal_lease).unwrap();
+        let evidence = fixture.direct_evidence();
+        let (lifecycle, _) = transfer_records(
+            &fixture.prepared.record,
+            &fixture.selection,
+            fixture.direct_evidence(),
+        )
+        .unwrap();
+        write_mode(&staging_path, &lifecycle.encode(), 0o600);
+        let target_before = fs::read(&lease_path).unwrap();
+        let stage_before = fs::read(&staging_path).unwrap();
+        let fatal_before = fs::read(&fatal_launch).unwrap();
+
+        let result = fixture.registry.adopt_prepared(
+            &fixture.session,
+            fixture.prepared,
+            fixture.selection,
+            evidence,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(fs::read(&lease_path).unwrap(), target_before);
+        assert_eq!(fs::read(&staging_path).unwrap(), stage_before);
+        assert_eq!(fs::read(&fatal_launch).unwrap(), fatal_before);
+        assert!(!fatal_lease.exists());
     }
 
     #[test]
@@ -5079,7 +5231,7 @@ bar-process-group 0\n",
     }
 
     #[test]
-    fn real_pre_exchange_crash_is_recovered_before_a_new_transfer() {
+    fn real_pre_exchange_crash_requires_registry_reconciliation_before_a_new_transfer() {
         let generated = tempfile::tempdir().unwrap();
         fs::set_permissions(generated.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let store = GenerationStore::open(generated.path()).unwrap();
@@ -5122,15 +5274,10 @@ bar-process-group 0\n",
             .unwrap();
         assert_eq!(status.code(), Some(86));
 
-        let crashed = LaunchRecord::parse(
-            &fs::read(
-                state
-                    .path()
-                    .join("helm/activation/launches/88888888888888888888888888888888"),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let crashed_path = state
+            .path()
+            .join("helm/activation/launches/88888888888888888888888888888888");
+        let crashed = LaunchRecord::parse(&fs::read(&crashed_path).unwrap()).unwrap();
         let target = generated.path().join("leases").join(&crashed.lease);
         let staging = generated
             .path()
@@ -5145,18 +5292,33 @@ bar-process-group 0\n",
             Ok(ParsedLeaseRecord::Lifecycle(_))
         ));
 
-        store.garbage_collect().unwrap();
-        assert!(!staging.exists());
-        assert!(!target.exists());
+        let target_before = fs::read(&target).unwrap();
+        let stage_before = fs::read(&staging).unwrap();
+        assert_eq!(
+            store.garbage_collect().unwrap(),
+            GenerationGcReport::default()
+        );
+        assert_eq!(fs::read(&target).unwrap(), target_before);
+        assert_eq!(fs::read(&staging).unwrap(), stage_before);
 
-        let selection = store
-            .select_current_for_process(std::process::id())
-            .unwrap();
         let registry = ActivationRegistry::open(
             state.path(),
             GenerationLeaseCapability::from_store(&store).unwrap(),
         )
         .unwrap();
+        let report = registry
+            .reconcile(&exact_empty_inspector(), Some(&exact_empty_controller()))
+            .unwrap();
+        assert_eq!(report.terminalized, 1);
+        assert_eq!(report.released, 1);
+        assert_eq!(report.collected, 1);
+        assert!(!staging.exists());
+        assert!(!target.exists());
+        assert!(!crashed_path.exists());
+
+        let selection = store
+            .select_current_for_process(std::process::id())
+            .unwrap();
         let session = registry
             .open_active_session(
                 SessionId::parse("22222222222222222222222222222222").unwrap(),

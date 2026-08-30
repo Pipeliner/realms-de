@@ -132,6 +132,14 @@ A crash with only an exact retirement form resumes the same proof and cleanup.
 Stronger permanent inode preservation needs durable provenance and is deferred.
 Transfer-staging failure is an explicit frozen error,
 even with an otherwise empty registry.
+Generic generation GC treats every transfer stage as retained uncertainty and
+performs no lease or generation mutation; it never normalizes a valid pair. A
+read-only first pass incrementally enforces 4096 entries, 16 MiB total and 4096
+bytes per record before retaining a bounded canonical-name list or reading any
+payload, so stage retention does not reintroduce unbounded GC work.
+The core transfer/retry function also refuses a pre-existing named stage
+without changing it. Only full registry reconciliation, after global passive
+and controller proof, may normalize a classified pair before a later retry.
 
 Preparation reserves a launch id across both canonical and fixed
 `.launch-retire-<id>` forms. Either collision rejects before mutation.
