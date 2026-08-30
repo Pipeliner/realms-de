@@ -475,10 +475,20 @@ cgroup-inode <u64>
 
 The replacement uses SPEC 0011's reserved
 `.lease-transfer-<lease-id>` unpublished staging form. The registry fsyncs its
-canonical lifecycle bytes, holds and revalidates descriptors for it and the
-exact process target, atomically exchanges their names with `RENAME_EXCHANGE`,
-post-validates the lifecycle target/process staging pair, fsyncs the leases
-directory, then removes and fsyncs the displaced process staging name. Transfer
+canonical lifecycle bytes in a mode-0600 unnamed `O_TMPFILE`, validates the
+held descriptor and exact contents, then publishes that exact inode at the
+fixed stage name with one no-replace `linkat`: `AT_EMPTY_PATH` where permitted,
+otherwise `/proc/self/fd/<held-fd>` plus `AT_SYMLINK_FOLLOW` after proving it
+resolves to the held descriptor. Unavailable `/proc`, link failure, or identity
+mismatch fails closed with no rename and no second named stage. The registry
+revalidates the linked pathname's inode/device, current UID, exact mode,
+bounded canonical bytes and equality to the held content before fsyncing the
+leases directory. Only then does it hold and revalidate descriptors for that
+stage and the exact process target, atomically exchange their names with
+`RENAME_EXCHANGE`, post-validate the lifecycle target/process staging pair,
+fsync the leases directory, then remove and fsync the displaced process staging
+name. A pre-link crash exposes no named stage and leaves only the process
+target; a post-link crash exposes one exact canonical pair. Transfer
 retry or generic GC first applies SPEC 0011's whole-inventory two-state rule:
 process-target/lifecycle-stage is untransferred, while
 lifecycle-target/process-stage is transferred. No staging payload alone is

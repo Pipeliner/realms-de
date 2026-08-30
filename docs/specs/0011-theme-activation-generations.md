@@ -49,14 +49,27 @@ The basename `.lease-transfer-<lease-id>` is reserved as a private unpublished
 staging artifact for SPEC 0012's same-name process-to-lifecycle replacement;
 `<lease-id>` is one canonical opaque lease identifier. It is never itself a
 lease or release authority. A conforming producer creates at most that one
-fixed staging name while holding the shared `activation.lock`, with
-`O_CREAT|O_EXCL|O_NOFOLLOW`, current-UID mode 0600, bounded canonical lifecycle
-bytes, and a file fsync before `RENAME_EXCHANGE` with `<lease-id>`. Plain
-overwriting rename is forbidden. The producer holds descriptors for both the
-exact staged lifecycle inode and exact source process inode, checks both paths,
-performs the exchange, then proves the target names the held lifecycle inode
-and staging names the held process inode before directory fsync. Only after
-that fsync may it unlink the displaced process staging name and fsync again.
+fixed staging name while holding the shared `activation.lock`, but it never
+publishes an empty or partial fixed staging inode. It first creates a
+current-UID mode-0600 unnamed `O_TMPFILE` in the leases directory, writes
+bounded canonical lifecycle bytes, file-fsyncs them, and validates the exact
+held descriptor and contents. Only then may one no-replace `linkat` atomically
+publish that exact held inode at the fixed `.lease-transfer-<lease-id>` name:
+use `AT_EMPTY_PATH` where the runtime permits it, otherwise use the documented
+unprivileged `/proc/self/fd/<held-fd>` source with `AT_SYMLINK_FOLLOW` only after
+proving that source resolves to the held descriptor. Unavailable `/proc`, a
+failed hard link, or any identity mismatch fails closed; no rename and no
+second named stage is permitted. After the link, the producer revalidates the
+fixed pathname's inode/device, current UID, exact mode 0600, bounded canonical
+contents and equality to the held bytes before a leases-directory fsync. A
+crash before the link leaves only the process target; a crash after the link
+exposes one exact canonical pair. The producer then holds descriptors for both
+the exact staged lifecycle inode and exact source process inode, checks both
+paths, and performs
+`RENAME_EXCHANGE` with `<lease-id>`. Plain overwriting rename is forbidden. It
+proves the target names the held lifecycle inode and staging names the held
+process inode before directory fsync. Only after that fsync may it unlink the
+displaced process staging name and fsync again.
 
 A crash can expose only two recoverable paired states with exact common
 generation/PID/start-time/boot/UID identity: target process plus staging
