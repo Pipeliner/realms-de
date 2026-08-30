@@ -6,7 +6,8 @@
   [ADR 0011](../adr/0011-session-integration-contract.md),
   [ADR 0017](../adr/0017-immutable-theme-activation-generations.md)
 - **Issue:** [#132](https://github.com/Pipeliner/realms-de/issues/132),
-  [#168](https://github.com/Pipeliner/realms-de/issues/168)
+  [#168](https://github.com/Pipeliner/realms-de/issues/168),
+  [#133](https://github.com/Pipeliner/realms-de/issues/133)
 - **Supersedes / Superseded by:** Supplies the M2 activation-ownership and
   teardown clauses that Draft SPECs 0003 and 0005 previously left unresolved;
   it does not accept either draft as a whole.
@@ -36,15 +37,16 @@ lifecycle server restart.
 - River existing-window replay, ledger reconstruction, projection and readiness
   remain Draft [SPEC 0003](0003-helm-session.md) M2. In particular this spec does
   not answer its river replay open question.
-- Exact environment publication/restoration, `Exec` versus `DBusActivatable`,
-  existing-owner Qt behaviour, and D-Bus ownership remain
-  [#133](https://github.com/Pipeliner/realms-de/issues/133). This spec requires a
-  session claim before global mutation but does not invent D-Bus readback or
-  compare-and-swap. M2 admission is deliberately narrower: it accepts only a
-  fresh consuming process which can be placed below the lifetime owner. A
-  D-Bus activation or existing-owner result is refused before selection,
-  process creation, lease creation or record creation until #133 either maps it
-  to provable ownership or amends this contract.
+- Desktop-entry parsing and D-Bus ownership remain
+  [#133](https://github.com/Pipeliner/realms-de/issues/133).  Session-wide
+  environment publication/restoration remains ADR 0011/SPEC 0005/#117 work.
+  This spec requires a session claim before global mutation but does not invent
+  D-Bus readback or compare-and-swap.  The accepted product ruling for #133 is
+  that `DBusActivatable=true` refuses before selection, process creation,
+  lease/record creation, scope/group creation, environment mutation,
+  application-directed bus traffic, or execution.  Plain `Exec` has no
+  existing-owner result or probe.  Draft SPEC 0013 is the candidate detailed
+  admission contract; no implementation may rely on it before acceptance.
 - Exact profile assets, target packages, argument vectors and consumer
   behaviour remain [#135](https://github.com/Pipeliner/realms-de/issues/135).
   A launch prepared here treats those inputs as opaque and may use only its
@@ -367,20 +369,22 @@ in `preparing` before any per-UID systemd/D-Bus mutation or helper start.
 Therefore a `claimed` record with absent compositor/helper identities proves
 that no global environment or helper mutation was authorized by this session.
 
-The systemd path invokes an environment-publication boundary, starts
-`helm-session.target`, and verifies the required units active. #133 alone owns
-whether that boundary mutates systemd/D-Bus state and how it restores it; an M2
-lifecycle fixture may supply a no-op/fake boundary and may not claim D-Bus
-behaviour. After the boundary and helper verification, this state machine
-records `active` and opens only ownership-compatible profile admission.
+The systemd path invokes ADR 0011/SPEC 0005's session environment-publication
+boundary, starts `helm-session.target`, and verifies the required units active.
+The remaining publication/restoration integration belongs to #117 rather than
+this fresh-Exec slice; an M2 lifecycle fixture may supply a no-op/fake boundary
+and may not claim D-Bus behaviour.  #133 creates no additional global mutation
+and does not roll back prior session state.  After the boundary and helper
+verification, this state machine records `active` and opens only
+ownership-compatible profile admission.
 
 The no-systemd path uses the same claim and compositor boundary, selects
 `helper-mode direct`, and invokes the externally owned environment-publication
-boundary in no-manager mode. #133 alone decides whether that boundary performs
-any D-Bus mutation and how it is restored; an M2 lifecycle fixture may use the
-same no-op/fake boundary and may not claim D-Bus behaviour. Boundary absence
-remains SPEC 0005's named degradation and does not prevent the direct lifecycle
-from reaching `active`. It creates one bounded supervisor/process group for
+boundary in no-manager mode.  Its publication/restoration integration remains
+#117 work; #133 neither adds D-Bus mutation nor rolls back prior session state.
+An M2 lifecycle fixture may use the same no-op/fake boundary and may not claim
+D-Bus behaviour. Boundary absence remains SPEC 0005's named degradation and
+does not prevent the direct lifecycle from reaching `active`. It creates one bounded supervisor/process group for
 `helm-wm` and then `helm-bar`, records each PID/start-time/group before opening
 that helper's gate, and applies SPEC 0005's one-second delay and five-in-thirty
 restart limits. The WM restarts after every unrequested clean or failed exit
@@ -426,28 +430,37 @@ for D-Bus activation or existing-owner Qt behaviour.
 
 For either ownership mode, a launch performs these boundaries in order:
 
-1. Create exactly one inert lifetime-owner process. It remains parent-reapable,
+1. A future #133 implementation must complete its accepted immutable,
+   read-only desktop admission before this lifecycle sequence.  It must either
+   refuse with no lifecycle/generation/environment/application-D-Bus side
+   effects or yield an opaque plan consumed by the lifecycle facade; the facade
+   does not parse desktop bytes or expose owner/lease/gate authority.
+2. Create exactly one inert lifetime-owner process. It remains parent-reapable,
    has a parent-death fail-safe while ownership is local, holds no user profile
    code, and cannot pass its exec gate.
-2. With `lifecycle.lock` held before SPEC 0011's shared `activation.lock`,
-   resolve and fully validate `current`; create and fsync a process lease for
-   the owner's exact PID/start-time/boot/UID identity. Capture generation id,
-   manifest digest and the opaque lease reference from that selection.
-3. Atomically persist and fsync sequence 1 `preparing` with `exec-open no` and
+3. With `lifecycle.lock` held before SPEC 0011's shared `activation.lock`,
+   resolve and fully validate `current`, including every opaque
+   generation-bound constraint required by the consuming facade, before
+   publishing a process lease. A rejection kills and reaps the still-inert owner
+   while both locks remain held; it creates no lease or launch record. Only a
+   successful validation creates and fsyncs a process lease for the owner's
+   exact PID/start-time/boot/UID identity. Capture generation id, manifest
+   digest and the opaque lease reference from that selection.
+4. Atomically persist and fsync sequence 1 `preparing` with `exec-open no` and
    `lease-kind process` plus exactly those identities. Only after this point may
    ownership adoption be requested.
-4. Establish the selected ownership mode and verify the exact owner PID is in
+5. Establish the selected ownership mode and verify the exact owner PID is in
    it. For systemd, capture the verified cgroup path/device/inode as well as the
    invocation. Under the shared generation lock, atomically replace the process
    lease with a transferred lifecycle lease bound to the launch id and verified
    ownership evidence, and fsync the leases directory. Successful transfer
    consumes all launcher-side release authority.
-5. Durably record `adopted`, `lease-kind lifecycle`, the verified ownership
+6. Durably record `adopted`, `lease-kind lifecycle`, the verified ownership
    incarnation and cgroup evidence while `exec-open no`. Next atomically advance
    that same state/sequence to `exec-open yes` and fsync it; only then may the
    launcher send the unique gate token. `yes` is durable authorization, not an
    inference that a volatile gate survived.
-6. On receiving the token, the owner itself acquires `lifecycle.lock`, performs
+7. On receiving the token, the owner itself acquires `lifecycle.lock`, performs
    the expected-sequence transition to `running`, and fsyncs it. Only a
    successful `running` transition authorizes the owner to start the one fresh
    opaque profile prepared by #135. If EOF arrives instead, or the transition
@@ -687,6 +700,7 @@ transition, and terminal `result`.
 | `preparing`, matching process lease, pre-exec abort | registry reconciler | `terminal/failed`, process lease | revalidate and terminate/reap exact gate-closed ownership, prove emptiness, fsync terminal record, then unlink/fsync lease |
 | `preparing`, lifecycle lease, verified systemd adoption | registry reconciler | `terminal/failed`, lifecycle lease | stop only the exact gate-closed scope, prove recursive emptiness, fsync terminal record, then unlink/fsync lease |
 | `adopted`, either `exec-open` value, verified systemd adoption | registry reconciler | `terminal/failed`, lifecycle lease | abort only the exact gate-closed scope, prove recursive emptiness, fsync terminal record, then unlink/fsync lease |
+| `running`, lifetime owner reaps its exact profile child after that child reports returned `fexecve` before image replacement | lifetime owner only | `terminal/failed`, lifecycle lease | no profile code ran. The owner reads the child-only close-on-exec error channel and revalidates/reaps that exact child before record mutation. For systemd, fsync terminal record then exit; reconciler later proves recursive scope emptiness before unlink/fsync. For direct, prove zero attributed descendants, fsync `terminal/failed direct-drained yes` before owner exit; reconciler later proves exact owner stale and group empty before unlink/fsync. |
 | `running`, systemd scope reaches complete recursive emptiness | registry reconciler | `terminal/exited`, lifecycle lease | prove recursive emptiness, fsync terminal record, then unlink/fsync lease |
 | direct owner has reaped all attributed descendants and is still exact/live | lifetime owner only | `terminal/exited`, `direct-drained yes`, lifecycle lease | fsync terminal record before the owner exits; a later reconciler proves exact owner stale and group empty before unlinking/fsyncing lease |
 | direct detachment is detected | registry reconciler or the still-live owner | `terminal/lost`, `direct-drained no`, lifecycle lease | fsync the retained record; do not release the lease or collect the record |
@@ -756,7 +770,7 @@ freshly reconstructed config path are never lease-directory authority.
 | `preparing`, `lease-kind process` | matching lifecycle lease | Transfer committed before the adopted record. For systemd, use the lease's complete invocation/cgroup evidence to stop only that gate-closed ownership, prove it empty, write `terminal/failed` with `lease-kind lifecycle`, release/fsync the lifecycle lease, then collect. For direct, the nonterminal record cannot contain the owner-written terminal `direct-drained yes` witness: retain the record and lifecycle lease as uncertain rather than infer release from owner/group observation. It is never completed or executed. |
 | `preparing` | lease absent | No profile was authorized. Revalidate and terminate any exact gate-closed owner/ownership; after proven emptiness write terminal and collect the record. Uncertainty retains it. |
 | `adopted`, either `exec-open` value | matching lifecycle lease | `exec-open no` was never authorized. `exec-open yes` may have sent the token, but the owner could not start the application without first durably reaching `running`. For systemd, under the lock abort the expected sequence, terminate the exact ownership, prove emptiness, write terminal, release the lease and collect. For direct, retain the nonterminal record and lifecycle lease as uncertain because no owner-written terminal `direct-drained yes` witness exists; reconciliation never reopens the gate. |
-| `running` | matching lifecycle lease | Reconcile the same live owner/scope/group in place and never spawn. A systemd scope releases only after the section 4 complete-subtree proof. A direct group remains retained while `running`: only its still-live owner may write the terminal `direct-drained yes` witness after draining descendants; owner death or an external empty-group observation is uncertain and retains the lease. |
+| `running` | matching lifecycle lease | Reconcile the same live owner/scope/group in place and never spawn. A systemd scope releases only after the section 4 complete-subtree proof. A direct group remains retained while `running`: only its still-live owner may write the terminal `direct-drained yes` witness after draining descendants, including the zero-descendant returned-`fexecve` failure row; owner death or an external empty-group observation is uncertain and retains the lease. |
 | `terminal`, `lease-kind process` | matching process lease | Re-prove the gate-closed owner/ownership empty, unlink/fsync the process lease, then collect. This is the crash after terminal and before untransferred release. |
 | `terminal`, `lease-kind lifecycle` | matching lifecycle lease | For a systemd scope, re-prove complete ownership empty. For a direct group, validate `direct-drained yes`, prove the exact owner identity stale, then prove the recorded group empty. Only then unlink/fsync the lifecycle lease and collect; missing witness, live/reused owner, or nonempty/uncertain group retains it. |
 | `terminal`, direct, `result failed`, `lease-kind process`, `exec-open no`, `direct-drained no` | lease absent | This is the distinct reachable crash after a gate-closed pre-exec abort durably wrote terminal and removed/fsynced the process lease, but before launch collection. Re-run the exact gate-closed direct abort/empty proof; only exact empty permits record retirement. No owner-written lifecycle drain witness is required because profile execution was never authorized. Uncertainty retains the record. |
@@ -894,8 +908,8 @@ Teardown is idempotent and ordered:
    record and lease live. Lingering-off may let logind kill them; the next
    reconciliation collects only after proving death.
 4. Record `cleanup-delegated`, then perform SPEC 0005's environment,
-   compositor and runtime-tree cleanup subject to #133's eventual environment
-   ownership/restoration contract. Removing `$XDG_RUNTIME_DIR/helm` cannot
+   compositor and runtime-tree cleanup subject to ADR 0011/SPEC 0005/#117's
+   session environment-publication contract. Removing `$XDG_RUNTIME_DIR/helm` cannot
    remove any asset promised to a surviving profile launch.
 5. Record `closed`; remove the session record only after its close is durable
    and the caller still owns the same session id and sequence.
@@ -976,7 +990,7 @@ corresponding implementation.
 | # | Given / When / Then | Test |
 |---|---|---|
 | A1 | Given a launch selected on generation N, when N+1 becomes current and generation GC races launch or teardown, then the process reads only N and N is retained until the exact transferred lifetime ownership is proven empty. In particular, if the supervisor PID is stale while an attributed scoped descendant survives, GC retains both lifecycle lease and generation. | |
-| A2 | Given a fault at every owner-create, process-lease, preparing-record, scope/group adoption, lease-transfer-before-adopted-record, adopted-record, durable-exec-authorization, gate-send-before-running-record, running-record, terminal-record-before-lease-release, lease-release and record-collection boundary, when recovery runs, then the record-state/actual-lease table yields either no executed profile and eventual collection, exactly one reconciled owned launch, or retained direct lifecycle evidence where a nonterminal transfer crash lacks the owner-written `direct-drained` witness; there is never an unleased live profile, duplicate exec, or repeated-fault quota leak. | |
+| A2 | Given a fault at every owner-create, process-lease, preparing-record, scope/group adoption, lease-transfer-before-adopted-record, adopted-record, durable-exec-authorization, gate-send-before-running-record, running record, returned-`fexecve` terminal-failure record, terminal-record-before-lease-release, lease-release and record-collection boundary, when recovery runs, then the record-state/actual-lease table yields either no executed profile and eventual collection, exactly one reconciled owned launch, or retained direct lifecycle evidence where a nonterminal transfer crash lacks the owner-written `direct-drained` witness; there is never an unleased live profile, duplicate exec, or repeated-fault quota leak. | |
 | A3 | Given a child or scope that exits, ignores TERM, leaves uncertain membership, or outlives a dead direct supervisor, when teardown reconciles it, then every permitted terminal record is fsynced before cleanup, lease release follows the applicable proven emptiness rule, waits are bounded, and uncertainty preserves the record and lease. A direct lifecycle lease is releasable only after its still-live owner recorded `direct-drained yes`; a forced logout without that witness retains the nonterminal record and lease, and later reconciliation never invents the witness. | |
 | A4 | Given a live profile launch when `helm-wm` crashes and restarts, when activation reconciliation and a client reconnect complete, then the same PID/scope and generation are reported, no application is restarted, and the first status frame is a fresh current snapshot with no old-incarnation delta. | |
 | A5 | Given user-manager reexec/restart with a live scope, an unloaded old scope whose recorded cgroup path is absent, the same recorded cgroup inode reporting recursive `populated 0` or `1`, an empty root `cgroup.procs` with a populated nested child cgroup, a reused cgroup path/inode, or a same-name/different-invocation scope, when reconciliation runs, then only matching invocation plus durable cgroup identity is adopted once, only stale-owner plus absent old cgroup or verified `cgroup.events` `populated 0` permits collection, nested/live/inconsistent/reused evidence causes no duplicate launch or lease release, and only target-owned helpers may restart while the same session claim remains active. | |
@@ -987,7 +1001,7 @@ corresponding implementation.
 | A10 | Given wrong owner/mode/type, a symlink, malformed/reserved entry, stale boot/PID/start-time, reused PID, stale unit name with a new invocation, or a conflicting sequence, when reconciliation or GC runs, then it refuses signal/adoption/deletion for that evidence and leaves valid unrelated state intact. | |
 | A11 | Given teardown work still live or uncertain at 15 seconds, when the entry deadline expires, then the entry may return but the durable state does not advance falsely, every affected record and generation lease remains, and runtime removal has deleted no promised application asset. | |
 | A12 | Given the shipped source units and a live user-manager fixture, when restart, target stop and abort paths are exercised, then both views agree on `Restart=always`, `PartOf=helm-session.target`, inverse bar-before-WM stop order, profile-scope independence and exactly one abort execution after start-limit exhaustion. | |
-| A13 | Given a profile resolves to `DBusActivatable` or an already-running owner, when M2 admission evaluates either mode, then it refuses before creating a lifetime owner, selecting a generation, creating a process/lifecycle lease or record, creating a systemd scope/group, or making any D-Bus activation call or other activation side effect. | |
+| A13 | Given a desktop entry whose `DBusActivatable=true`, including a tempting valid, malformed, or absent `Exec` and any bus/owner state, when the future accepted #133 admission evaluates it, then it refuses before creating a lifetime owner, opening/selecting a generation, creating a process/lifecycle lease or record, creating a systemd scope/group, mutating launch environment, or making any application-directed D-Bus operation.  Plain `Exec` has no existing-owner probe or refusal and may create concurrent fresh launches. | |
 | A14 | Given each safe crash point before/after owned-directory creation, child fsync, parent fsync, first `lifecycle.lock` exclusive creation, lock fsync, activation-root fsync and `launches/` creation, plus concurrent same-UID initializers and separate unsafe-existing-object fixtures, when initialization retries, then every safe inventory converges from absence to verified current-UID exact-0700 directories and one persistent current-UID zero-length exact-0600 lock inode, all contenders revalidate and acquire that same inode before lifecycle mutation, each created component's child and parent durability precedes dependent mutation, and every unsafe collision fails closed without unlinking, replacing or repairing it. | |
 | A15 | Given valid independent records together with a malformed final record, malformed reserved entry, unsafe record metadata or an exceeded inventory bound, and separate byte-canonical launch-record fixtures whose actual referenced lease is absent, malformed, cross-kind or identity-mismatched or whose actual ownership evidence is inconsistent/unreadable, when a lifecycle client handshakes and subscribes, then under `lifecycle.lock` followed by SPEC 0011's `activation.lock` the server cross-validates every launch through section 5, emits neither an affected record as healthy nor any partial full snapshot or delta for that subscription, reports fatal/uncertain snapshot failure without silently omitting the evidence, leaves permitted internal read-only reconciliation distinct from public full/current truth, and emits a full snapshot only for a fresh subscription after a complete valid bounded record/lease/ownership scan. | |
 | A16 | Given no usable systemd user manager and separate direct-helper fixtures for an unrequested clean WM exit, failed WM or bar exit, clean bar exit, WM status 69 or 78, refusal of the next WM or bar start by the five-in-thirty limit, WM readiness failure, and entry death during `preparing` or `active`, when the direct supervisors or reconciler handle them, then WM clean/failure and bar failure use the one-second bounded restart policy, clean bar exit is not restarted, WM restart-prevent/limit/readiness failure enters idempotent admission-freeze and teardown exactly once, opens no new profile admission and never advances `preparing` to `active`, bar limit exhaustion remains degraded without tearing the session down, and entry death in either state freezes admission, recreates no helper, never resumes or advances `active`, and tears down only revalidated recorded groups in bar-before-WM order. | |
