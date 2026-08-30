@@ -35,29 +35,72 @@ payload, caller environment override, or terminal wrapper is not this request.
 ## 1. Immutable admission before lifecycle mutation
 
 The only request input is `DesktopFileId`: ASCII 1–255 bytes, ending in
-`.desktop`, and otherwise `[A-Za-z0-9._-]`.  Slash, control bytes, NUL, a raw
-argv, an action, or payload data is a preflight refusal.
+`.desktop`, and otherwise `[A-Za-z0-9._-]`.  It contains no `/`.  Control
+bytes, NUL, a raw argv, an action, or payload data is a preflight refusal.
 
 Admission captures the XDG data roots once: `XDG_DATA_HOME` then
-`XDG_DATA_DIRS`, using the XDG defaults whenever either is unset **or empty**.
-`HOME` is required when `XDG_DATA_HOME` defaults.  Each root is absolute,
-UTF-8, no-follow opened, and bounded to 64 roots/64 KiB combined spelling;
-empty or relative explicit components refuse.  Each path component is a
-directory owned by the effective UID or root and has no group/other write bit.
-It searches the corresponding `applications/` trees descriptor-relatively, at
-most 4096 entries and 64 levels across the entire request.  The desktop-file id
-is the applications-relative path with `/` replaced by `-`.  The first root
-containing one matching id wins; two paths in that root mapping to the id are
-an ambiguity.  A winning `Hidden=true` masks lower entries and is refused as
-absent.  A candidate is one no-follow regular file, owned by the effective UID
-or root and with no group/other write bit.
+`XDG_DATA_DIRS`, substituting `$HOME/.local/share` only when
+`XDG_DATA_HOME` is unset or empty and `/usr/local/share:/usr/share` only when
+`XDG_DATA_DIRS` is unset or empty.  `HOME` is required when the former default
+is needed.  Each root is absolute, UTF-8, no-follow opened, and bounded to 64
+roots/64 KiB combined spelling; empty or relative explicit components refuse.
+For each captured spelling Helm opens the supplied root without following its
+final component, validates that descriptor, then opens and validates only its
+direct `applications` child without following links.  The supplied-root
+descriptor is the trust boundary; ancestors used to resolve its spelling are
+not separately trusted.  That root and every directory descriptor opened below
+it are owned by the effective UID or root with no group/other write bit.  Every
+descent uses a retained parent descriptor and one normal child name, never
+`..`, a fresh root pathname, or a symlink.  Only `ENOENT` while acquiring the
+supplied root or its direct `applications` child contributes no candidate and
+continues at the next ordered root.  Once an `applications` descriptor is
+obtained, every `ENOENT`, I/O, metadata, decoding, or traversal failure,
+including after entry enumeration, refuses rather than falling through.
+
+Helm searches `applications/` descriptor-relatively in raw-byte lexicographic,
+depth-first order.  It counts every enumerated entry other than `.` and `..`
+(including non-candidates and entries whose later descriptor-relative check
+fails) as that entry is read, and refuses immediately on the 4,097th such entry
+before retaining it or reading another name.  It retains and sorts only the at
+most 4096 names already counted for a directory before descent.  `applications/`
+is depth 0; a source
+candidate may have at most 64 components below it, and Helm refuses before
+entering or accepting anything deeper.  The desktop-file id is the
+applications-relative path with every `/` replaced by `-`.  For each root Helm
+finishes the bounded scan to detect every matching mapping before considering a
+lower-priority root; a candidate found before the cap never permits early
+success.  No matching path continues scanning; exactly one matching path wins;
+two or more matching paths in that root are an ambiguity.  A winning
+`Hidden=true` masks lower entries and is refused as absent.  A malformed
+`Hidden` value refuses rather than falling through.  A matching candidate is a
+no-follow regular file, owned by the effective UID or root and with no
+group/other write bit.  An unsafe directory or a failed metadata check after
+enumeration refuses rather than silently hiding a possible matching descendant.
 
 The candidate is captured once as a no-follow regular file of at most 1 MiB.
-Device, inode, size, mtime and ctime are checked before and after the read;
-disagreement refuses.  The held bytes are UTF-8, have no BOM/NUL/CR, at most
-4096 LF-terminated lines and 16 KiB per line.  Helm never rereads the pathname.
-Duplicate groups, duplicate keys in the main group, malformed headers/keys, or
-multiple `[Desktop Entry]` groups refuse.
+After pre-read metadata establishes that bound, Helm reads exactly the recorded
+size from the retained descriptor; a short read refuses and no unbounded
+read-to-EOF operation is allowed.  Device, inode, size, mtime and ctime are
+checked before and after the read; disagreement refuses.  The held bytes are
+UTF-8, have no BOM/NUL/CR, at most 4096 LF-terminated lines and 16 KiB per
+line.  The captured byte sequence ends in LF and is parsed only as those
+LF-terminated lines.  Helm never rereads the pathname.
+Desktop-file syntax is deliberately smaller than the general desktop-entry
+grammar.  Each line is either empty; a comment whose first byte is `#` or `;`;
+a group header `[group]`; or a key/value line `key=value` after a group header.
+`group` is nonempty printable ASCII excluding `[`, `]`, `=`, and leading or
+trailing ASCII whitespace.  `key` is an ASCII base name
+`[A-Za-z0-9-]+`, optionally followed once by `[locale]` where `locale` is
+nonempty `[A-Za-z0-9@_.-]+`; no whitespace occurs in a key.  The first `=`
+separates the opaque UTF-8 value.  A key before a group, any other line form,
+or a duplicate group or exact duplicate key spelling in one group refuses.
+There is exactly one `[Desktop Entry]` group.  A localized key never substitutes
+for its unlocalized base key.  `Hidden`, when present in that group, is exactly
+lowercase `true` or `false`; `true` masks lower roots while any other value
+refuses.  Other syntactically valid groups and `Actions=` are inert: they never
+select or authorize an action because the request carries no action selector.
+These capture rules do not authorize desktop actions, field-code expansion, or
+lifecycle effects.
 
 Until admission produces an immutable `AdmittedDesktopPlan`, Helm may only do
 bounded read-only lookup/capture and diagnostics.  It must not open, initialize,
@@ -263,7 +306,7 @@ lands.
 | E1 | Given a valid, absent, or malformed tempting `Exec` with `DBusActivatable=true`, each bus state (absent, no owner, owner, racing owner), when admission runs, then every case returns the same refusal and spies observe zero owner/generation/lease/record/scope/group/gate/environment/exec or D-Bus/name-owner operations. | |
 | E2 | Given two overlapping plain-`Exec` requests and a pre-existing same-name process, when both are admitted, then each owner forks and reaches exactly one distinct fresh profile-child exec while remaining the supervisor, and spies observe no owner/deduplication probe. | |
 | E3 | Given quoting, escaping, supported field-code, and hostile shell metacharacter vectors, when `Exec` is parsed, then the final argv is byte-golden, no shell/glob/substitution/redirection runs, and malformed input refuses before lifecycle entry. | |
-| E4 | Given XDG precedence, hidden masking, same-root collision, duplicate keys/groups, unsafe/symlink candidates, bounds, and replacement before/after capture, when admission runs, then it selects only one held valid snapshot or refuses without a lifecycle side effect. | |
+| E4 | Given XDG defaults, a missing root/tree, precedence, hidden masking, a same-root flattened-ID collision (`foo-bar.desktop` and `foo/bar.desktop` for requested `foo-bar.desktop`), duplicate keys/groups, malformed syntax, unsafe/symlink candidates, byte-lexicographic boundary traversal, an entry 4097th even when the candidate sorts first, bounds including an unterminated final line, and replacement before/after capture, when admission runs, then it selects only one held valid snapshot or refuses without a lifecycle side effect.  Only missing supplied roots/direct `applications` trees continue scanning; every other capture failure refuses. | |
 | E5 | Given an admitted desktop argv/cwd/base environment, a synthetic binding to N, and a commit to N+1 before the owner receives its gate, when the child sentinel starts, then its argv/cwd/base environment equal the held desktop admission, its synthetic binding/assets are exclusively from N, and N remains protected until SPEC 0012 proves release. | |
 | E6 | Given a synthetic generation binding, when the sentinel and parent/manager/bus environments are inspected, then only the child sees the exact synthetic overlay and the three external environments are byte-identical before/after. | |
 | E7 | Given `Terminal=true`, an action/payload, unsupported code, malformed/absent/nonexecutable `TryExec`, invalid/over-bound/unallowed base environment, `LD_*` base entry, an invalid retained `/dev/null` authority, invalid PATH, user-writable executable/cwd path component, a shebang, short/header-invalid/foreign ELF, or no matching generation allowlist entry, when preflight runs, then it refuses with no leaked lease or record. | |

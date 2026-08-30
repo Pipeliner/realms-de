@@ -137,8 +137,13 @@ The mandatory test names are:
 - `capture_refuses_symlink_unsafe_mode_duplicate_group_or_duplicate_main_key`
 - `capture_revalidates_identity_and_never_rereads_replaced_path`
 - `capture_enforces_root_entry_depth_file_line_and_spelling_bounds`
+- `xdg_only_initial_root_or_direct_applications_enoent_skips`
+- `xdg_post_acquisition_enoent_refuses_without_lower_root_fallback`
+- `xdg_root_fd_is_boundary_and_all_descents_are_no_follow`
+- `xdg_scan_refuses_on_4097th_entry_even_when_candidate_is_first`
+- `capture_refuses_malformed_syntax_and_unterminated_final_line`
 
-The first fixture deletes `HOME` only when `XDG_DATA_HOME` is unset/empty and asserts refusal before filesystem/generation mutation. The precedence fixture writes a valid high-priority entry and a lower-priority decoy, then replaces the former with `Hidden=true` and asserts the lower candidate stays masked. The identity fixture swaps the pathname after byte capture through a test-only capture checkpoint and asserts the held bytes/identity either stay identical or admission refuses; it never rereads the new pathname.
+The first fixture deletes `HOME` only when `XDG_DATA_HOME` is unset/empty and asserts refusal before filesystem/generation mutation. The precedence fixture writes a valid high-priority entry and a lower-priority decoy, then replaces the former with `Hidden=true` and asserts the lower candidate stays masked. The identity fixture swaps the pathname after byte capture through a test-only capture checkpoint and asserts the held bytes/identity either stay identical or admission refuses; it never rereads the new pathname. The scan-boundary fixture proves the 4,097th raw directory entry refuses before unbounded name buffering or lower-root fallback, even if the requested candidate sorts first. The grammar fixture covers malformed headers/keys and an unterminated final line. The ENOENT fixtures distinguish only initial root or direct `applications` absence (which skips) from every post-acquisition absence (which refuses).
 
 - [ ] **Step 2: Verify red**
 
