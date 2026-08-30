@@ -142,9 +142,10 @@
       };
 
       # `checks.session-boots` is a NixOS VM test and needs a KVM-capable
-      # builder; `shellcheck`, `package`, and `helm-sdd-git-runtime` build
+      # builder; `shellcheck`, `package`, `packaged-binaries`, and
+      # `helm-sdd-git-runtime` build
       # anywhere. CI (distro.yml) falls back to `nix flake check --no-build`
-      # plus those three when /dev/kvm is absent, so keep them independently
+      # plus those four when /dev/kvm is absent, so keep them independently
       # buildable.
       checks = forAllSystems (
         pkgs:
