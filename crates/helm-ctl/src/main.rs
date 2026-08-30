@@ -83,11 +83,14 @@ where
         Command::Theme(Theme {
             command: ThemeCommand::Lint(args),
         }) => {
-            let root = match args.config_root.clone() {
-                Some(root) => root,
-                None => match default_config_root(env) {
-                    Ok(root) => root,
-                    Err(error) => return usage_error(&error),
+            let root = match &args.palette {
+                Some(_) => PathBuf::new(),
+                None => match args.config_root.clone() {
+                    Some(root) => root,
+                    None => match default_config_root(env) {
+                        Ok(root) => root,
+                        Err(error) => return usage_error(&error),
+                    },
                 },
             };
             match run_lint(&args, &root) {
