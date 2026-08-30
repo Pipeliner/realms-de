@@ -2,8 +2,11 @@
 #[path = "../src/main.rs"]
 mod helmctl;
 
-use std::process::Command;
 use std::process::ExitCode;
+use std::{
+    path::{Path, PathBuf},
+    process::{Command, Output},
+};
 
 use helmctl::run_from;
 
@@ -26,4 +29,53 @@ fn theme_help_lists_only_theme_verbs() {
     assert!(stdout.contains("  lint"));
     assert!(stdout.contains("  diff"));
     assert!(!stdout.contains("  help"));
+}
+
+fn helmctl<I, S>(args: I) -> Output
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    Command::new(env!("CARGO_BIN_EXE_helmctl"))
+        .args(args)
+        .output()
+        .expect("helmctl runs")
+}
+
+fn stdout(output: &Output) -> String {
+    String::from_utf8(output.stdout.clone()).expect("stdout is UTF-8")
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8(output.stderr.clone()).expect("stderr is UTF-8")
+}
+
+fn write_bad_palette(root: &Path) -> PathBuf {
+    let path = root.join("bad-palette.toml");
+    let palette = include_str!("../../../palette.toml")
+        .replace("normal = \"#c2cbde\"", "normal = \"#101218\"");
+    std::fs::write(&path, palette).expect("write invalid palette");
+    path
+}
+
+#[test]
+fn lint_shipped_palette_is_session_independent_and_prints_hue_separations() {
+    let temp = tempfile::tempdir().expect("temporary config root");
+    let out = helmctl([
+        "theme",
+        "lint",
+        "--config-root",
+        temp.path().to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("violet/"));
+}
+
+#[test]
+fn lint_bad_explicit_palette_exits_one_and_names_finding() {
+    let temp = tempfile::tempdir().expect("temporary palette root");
+    let bad = write_bad_palette(temp.path());
+    let out = helmctl(["theme", "lint", "--palette", bad.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("text.normal"));
 }

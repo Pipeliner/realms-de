@@ -229,6 +229,9 @@ name = "helm-ctl"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "helm-core",
+ "helm-theme",
+ "tempfile",
 ]
 
 [[package]]

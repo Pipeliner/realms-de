@@ -1,6 +1,11 @@
-use std::{ffi::OsString, process::ExitCode};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 use clap::{error::ErrorKind, Args, Parser, Subcommand};
+use helm_core::Palette;
 
 #[derive(Parser)]
 #[command(name = "helmctl")]
@@ -32,7 +37,12 @@ enum ThemeCommand {
 struct RootArgs {}
 
 #[derive(Args)]
-struct LintArgs {}
+pub struct LintArgs {
+    #[arg(long)]
+    config_root: Option<PathBuf>,
+    #[arg(long)]
+    palette: Option<PathBuf>,
+}
 
 pub trait Env {
     fn var_os(&self, name: &str) -> Option<OsString>;
@@ -46,7 +56,7 @@ impl Env for ProcessEnv {
     }
 }
 
-pub fn run<I, S>(args: I, _env: &impl Env) -> ExitCode
+pub fn run<I, S>(args: I, env: &impl Env) -> ExitCode
 where
     I: IntoIterator<Item = S>,
     S: Into<OsString> + Clone,
@@ -68,12 +78,66 @@ where
             command: ThemeCommand::Apply(_),
         })
         | Command::Theme(Theme {
-            command: ThemeCommand::Lint(_),
-        })
-        | Command::Theme(Theme {
             command: ThemeCommand::Diff(_),
         }) => ExitCode::SUCCESS,
+        Command::Theme(Theme {
+            command: ThemeCommand::Lint(args),
+        }) => {
+            let root = match args.config_root.clone() {
+                Some(root) => root,
+                None => match default_config_root(env) {
+                    Ok(root) => root,
+                    Err(error) => return usage_error(&error),
+                },
+            };
+            match run_lint(&args, &root) {
+                Ok(exit) => exit,
+                Err(error) => failure(&error),
+            }
+        }
     }
+}
+
+fn default_config_root(env: &impl Env) -> Result<PathBuf, String> {
+    env.var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            env.var_os("HOME")
+                .map(|path| PathBuf::from(path).join(".config"))
+        })
+        .ok_or_else(|| "no XDG_CONFIG_HOME or HOME for helm configuration".into())
+}
+
+pub fn run_lint(args: &LintArgs, root: &Path) -> Result<ExitCode, String> {
+    let palette = match &args.palette {
+        Some(path) => Palette::load(path).map_err(|error| error.to_string())?,
+        None => helm_theme::load_palette(root).map_err(|error| error.to_string())?,
+    };
+    let report = helm_theme::lint(&palette);
+    for separation in &report.separations {
+        println!(
+            "{}/{}: {:.1}°",
+            separation.a, separation.b, separation.degrees
+        );
+    }
+    for finding in &report.findings {
+        eprintln!("{finding}");
+    }
+    Ok(if report.is_clean() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
+}
+
+fn failure(error: &str) -> ExitCode {
+    eprintln!("error: {error}");
+    ExitCode::from(1)
+}
+
+fn usage_error(error: &str) -> ExitCode {
+    eprintln!("error: {error}");
+    ExitCode::from(2)
 }
 
 pub fn run_from<I, S>(args: I) -> ExitCode
