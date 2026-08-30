@@ -23,6 +23,15 @@
 
   package = helm;
 
+  # Keep the package output contract explicit. Unlike a source-text check,
+  # this runs against the real derivation and fails if postInstall cannot place
+  # either workspace binary in the package output.
+  packaged-binaries = pkgs.runCommand "helm-packaged-binaries" { } ''
+    test -x ${helm}/bin/helmctl
+    test -x ${helm}/bin/helm-sdd
+    touch $out
+  '';
+
   # The local agent-SDD validator reads Git objects at runtime.  Its package
   # wrapper must supply Git without adding it to the desktop session wrapper.
   helm-sdd-git-runtime =

@@ -31,6 +31,11 @@
 
   cargoLock.lockFile = src + "/Cargo.lock";
 
+  # This virtual workspace has no root package. Build every member explicitly
+  # so postInstall can copy helmctl from Cargo's target-qualified output while
+  # retaining the helm-sdd binary that is wrapped below.
+  cargoBuildFlags = [ "--workspace" ];
+
   # The complete workspace test suite includes helm-sdd integration fixtures
   # and invokes Git to construct and inspect fixture repositories.  Git is a
   # check-time tool here, not an implicit runtime-closure decision for the
@@ -45,7 +50,8 @@
   doCheck = true;
 
   postInstall = ''
-    install -Dm755 target/release/helmctl $out/bin/helmctl
+    install -Dm755 target/${pkgs.stdenv.targetPlatform.rust.cargoShortTarget}/release/helmctl \
+      $out/bin/helmctl
     install -Dm755 ${src + "/packaging/session/helm-session"} $out/bin/helm-session
 
     # The desktop entry must point at the store path, not /usr/bin.
