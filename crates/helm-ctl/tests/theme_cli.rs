@@ -9,6 +9,9 @@ use std::{
     process::{Command, Output},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+
 use helmctl::run_from;
 
 #[test]
@@ -92,29 +95,72 @@ fn edit_palette(root: &Path, from: &str, to: &str) {
     std::fs::write(&path, palette.replace(from, to)).expect("edit palette");
 }
 
-fn tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
-    fn visit(root: &Path, path: &Path, entries: &mut BTreeMap<PathBuf, Vec<u8>>) {
-        for entry in std::fs::read_dir(path).expect("read generation tree") {
-            let entry = entry.expect("read tree entry");
-            let path = entry.path();
-            let relative = path
-                .strip_prefix(root)
-                .expect("tree entry below root")
-                .to_path_buf();
-            let metadata = std::fs::symlink_metadata(&path).expect("read tree metadata");
-            if metadata.file_type().is_dir() {
-                visit(root, &path, entries);
-            } else if metadata.file_type().is_symlink() {
-                entries.insert(
-                    relative,
-                    std::fs::read_link(&path)
-                        .expect("read tree link")
-                        .into_os_string()
-                        .into_encoded_bytes(),
-                );
-            } else {
-                entries.insert(relative, std::fs::read(&path).expect("read tree file"));
+#[derive(Debug, PartialEq, Eq)]
+enum TreeEntry {
+    Directory {
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
+    File {
+        mode: u32,
+        uid: u32,
+        gid: u32,
+        contents: Vec<u8>,
+    },
+    Symlink {
+        mode: u32,
+        uid: u32,
+        gid: u32,
+        target: PathBuf,
+    },
+    Other {
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
+}
+
+#[cfg(unix)]
+fn tree(root: &Path) -> BTreeMap<PathBuf, TreeEntry> {
+    fn visit(root: &Path, path: &Path, entries: &mut BTreeMap<PathBuf, TreeEntry>) {
+        let relative = path
+            .strip_prefix(root)
+            .expect("tree entry below root")
+            .to_path_buf();
+        let metadata = std::fs::symlink_metadata(path).expect("read tree metadata without follow");
+        let mode = metadata.mode();
+        let uid = metadata.uid();
+        let gid = metadata.gid();
+
+        if metadata.file_type().is_dir() {
+            entries.insert(relative, TreeEntry::Directory { mode, uid, gid });
+            for entry in std::fs::read_dir(path).expect("read generation tree without follow") {
+                let entry = entry.expect("read tree entry");
+                visit(root, &entry.path(), entries);
             }
+        } else if metadata.file_type().is_symlink() {
+            entries.insert(
+                relative,
+                TreeEntry::Symlink {
+                    mode,
+                    uid,
+                    gid,
+                    target: std::fs::read_link(path).expect("read link target without follow"),
+                },
+            );
+        } else if metadata.file_type().is_file() {
+            entries.insert(
+                relative,
+                TreeEntry::File {
+                    mode,
+                    uid,
+                    gid,
+                    contents: std::fs::read(path).expect("read regular tree file"),
+                },
+            );
+        } else {
+            entries.insert(relative, TreeEntry::Other { mode, uid, gid });
         }
     }
 
@@ -171,6 +217,7 @@ fn lint_bad_explicit_palette_exits_one_and_prints_every_fatal_finding() {
     assert!(diagnostics.contains("text.normal"));
 }
 
+#[cfg(unix)]
 #[test]
 fn diff_after_palette_edit_is_sorted_and_does_not_mutate_generation_tree() {
     let temp = tempfile::tempdir().expect("temporary config root");
@@ -182,6 +229,42 @@ fn diff_after_palette_edit_is_sorted_and_does_not_mutate_generation_tree() {
     let out = helmctl_at(root, ["theme", "diff"]);
 
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
-    assert_sorted_change_lines(&stdout(&out));
+    let changes = stdout(&out);
+    assert_eq!(
+        changes.lines().collect::<Vec<_>>(),
+        [
+            "byte-different btop/themes/helm.theme",
+            "byte-different foot/foot.ini",
+            "byte-different fuzzel/fuzzel.ini",
+            "byte-different gtk-3.0/helm.css",
+            "byte-different gtk-4.0/helm.css",
+            "byte-different qt6ct/colors/helm.conf",
+            "byte-different starship.toml",
+            "byte-different yazi/theme.toml",
+        ],
+        "palette edit must produce the exact normalized byte-difference paths",
+    );
+    assert_sorted_change_lines(&changes);
     assert_eq!(tree(root), before, "theme diff mutated the generation tree");
+}
+
+#[cfg(unix)]
+#[test]
+fn diff_refusal_for_missing_current_does_not_mutate_generation_tree() {
+    let temp = tempfile::tempdir().expect("temporary config root");
+    let root = temp.path();
+    helm_theme::apply(root).expect("apply initial generation");
+    std::fs::remove_file(root.join("helm/generated/current"))
+        .expect("remove current generation pointer");
+    let before = tree(root);
+
+    let out = helmctl_at(root, ["theme", "diff"]);
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(stdout(&out).is_empty(), "refused diff reported changes");
+    assert_eq!(
+        tree(root),
+        before,
+        "refused theme diff mutated the generation tree"
+    );
 }
