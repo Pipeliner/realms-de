@@ -150,18 +150,29 @@ on aarch64).  A short, malformed, foreign, or shebang file refuses.  After it
 has transitioned to `running`, the lifetime owner forks exactly one profile
 child.  Only that child applies the retained cwd/stdin/environment and calls
 `fexecve(retained_fd, argv, envp)`; the owner remains the SPEC 0012 supervisor.
-The child has a child-only close-on-exec error channel to its owner: successful
-image replacement closes it, while unavailable or returned `fexecve` reports
-the failure and exits.  The owner reads that report, reaps that exact child, and
-writes SPEC 0012's terminal-failure witness.  Thus a failure before image
-replacement executes no application.  Header validation deliberately does not
-claim to predict invalid/truncated program headers, a missing interpreter,
-noexec/LSM denial, or loader failure: those are the same post-gate no-exec
-failure path.  A dynamic ELF's kernel-selected interpreter and any kernel
-binfmt configuration are privileged platform trust, not a user-controlled
-executable-path authority.  Scripts and every header-invalid/foreign kind
-refuse before lifecycle effects.  No pathname retry or `PATH` re-resolution is
-allowed after admission.
+The child has a child-only close-on-exec error channel to its owner.  It writes
+one fixed-size, versioned error frame no larger than `PIPE_BUF` in one write only
+when `fexecve` is unavailable or returns before image replacement, then exits.
+Only a complete valid frame proves that no image replacement occurred: the owner
+revalidates and reaps that exact child, then writes SPEC 0012's
+`terminal/failed` witness.  A short, malformed, unknown, or partial frame, or
+EOF without a complete frame, is not an `fexecve`-return failure.  Successful
+image replacement also closes the descriptor, but an unreported child could
+instead have died before replacement; EOF or exit status alone is neither a
+readiness signal nor proof that profile code did or did not run.  The owner
+therefore reaps that exact child and follows SPEC 0012's `terminal/lost`
+uncertainty path unless a separately accepted post-replacement witness supplies
+the needed evidence.  That result makes no execution claim; the existing
+independent empty-ownership/drain proof may still release the lease.  #133
+defines no such witness.  Header
+validation does not predict later kernel rejection, interpreter loading, or
+dynamic-loader/application failure.  An error returned by `fexecve`, including a
+missing interpreter, noexec, or LSM denial when the kernel reports it, is the
+pre-replacement path above.  A dynamic ELF's kernel-selected interpreter and any
+kernel binfmt configuration are privileged platform trust, not a user-controlled
+executable-path authority.  Scripts and every header-invalid/foreign kind refuse
+before lifecycle effects.  No pathname retry or `PATH` re-resolution is allowed
+after admission.
 
 Header validity is necessary but not sufficient for admission.  During the
 facade's locked resolution of N, before it publishes a process lease or a launch
@@ -257,8 +268,8 @@ lands.
 | E6 | Given a synthetic generation binding, when the sentinel and parent/manager/bus environments are inspected, then only the child sees the exact synthetic overlay and the three external environments are byte-identical before/after. | |
 | E7 | Given `Terminal=true`, an action/payload, unsupported code, malformed/absent/nonexecutable `TryExec`, invalid/over-bound/unallowed base environment, `LD_*` base entry, an invalid retained `/dev/null` authority, invalid PATH, user-writable executable/cwd path component, a shebang, short/header-invalid/foreign ELF, or no matching generation allowlist entry, when preflight runs, then it refuses with no leaked lease or record. | |
 | E8 | Given an external integration-test crate, when it tries to name or construct the `pub(crate)` lifecycle ownership evidence, transfer/release/state/gate types, or bypass the facade, then compilation fails.  Existing public generation-selection APIs do not gain lifecycle-transfer/release/gate authority. | |
-| E9 | Given failpoints from preflight through owner, lease, preparation, adoption, authorization, gate receipt, running transition, profile-child fork, child error report, and child exec (including `fexecve` unavailable, kernel, or loader failure after a header-valid ELF), when recovery runs, then there is at most one profile-child exec, no unleased live profile, no reopened gate, a returned child `fexecve` starts no application and makes the owner reap that exact child before it reaches SPEC 0012 terminal cleanup, and its existing recovery rows remain authoritative. | |
-| E10 | Given a synthetic generation allowlist containing one root-owned matching-architecture header-valid ELF64, a shebang, arbitrary non-shebang text, short/header-invalid/foreign ELF, an unlisted root-owned interpreter, post-gate child `fexecve`/kernel/loader failure, and in-place/path replacement attempts by the invoking UID, when admission and child execution run, then only the listed ELF may run by the retained descriptor; every other candidate refuses before lifecycle effects; a post-gate failure executes no application and reaches terminal cleanup after the owner reaps the exact child; and a replacement cannot redirect executable or retained cwd. | |
+| E9 | Given failpoints from preflight through owner, lease, preparation, adoption, authorization, gate receipt, running transition, profile-child fork, child error report, and child exec (including unavailable or returned `fexecve` after a header-valid ELF), when recovery runs, then there is at most one profile-child exec, no unleased live profile, and no reopened gate; a complete valid child report from returned/unavailable `fexecve` proves no image replacement and makes the owner reap that exact child before `terminal/failed`; a short/malformed/partial report or EOF/no report makes the owner reap that exact child then record `terminal/lost` uncertainty without a no-application claim; and only the existing independent empty-ownership/drain proof may release that lease. | |
+| E10 | Given a synthetic generation allowlist containing one root-owned matching-architecture header-valid ELF64, a shebang, arbitrary non-shebang text, short/header-invalid/foreign ELF, an unlisted root-owned interpreter, a returned/unavailable `fexecve` failure, a partial child report, a post-replacement dynamic-loader failure, an application nonzero exit, and in-place/path replacement attempts by the invoking UID, when admission and child execution run, then only the listed ELF may run by the retained descriptor; every other candidate refuses before lifecycle effects; a complete returned-`fexecve` report reaches `terminal/failed` with no replacement; a partial report or post-replacement loader/application exit without a separately accepted post-replacement witness reaches `terminal/lost` uncertainty after exact-child reap, whose lease releases only after the existing independent empty-ownership/drain proof; and a replacement cannot redirect executable or retained cwd. | |
 | E11 | Given invalid, duplicate, oversized, `LD_*`, PATH-shadowed, unallowed, or overlay-colliding environment entries, an inherited stdin sentinel, and a synthetic binding, when admission/merge runs, then invalid input refuses before lifecycle entry; otherwise sentinel argv/envp are byte-exact/sorted and stdin is `/dev/null`. | |
 | E12 | Given an admitted profile child with synthetic lifecycle, generation, lease/lock, gate, desktop-snapshot, cwd, `/dev/null`, and control descriptors, when its sentinel reaches the retained-descriptor `fexecve` boundary, then `/proc/self/fd` shows only fd 0, approved stdout/stderr, and explicitly authorized surviving assets; it contains no internal authority, and the executable/error-report descriptors have closed on successful image replacement. | |
 
