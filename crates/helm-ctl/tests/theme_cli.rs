@@ -241,6 +241,52 @@ fn lint_ignores_a_symlinked_helm_directory() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn lint_uses_the_shipped_palette_for_every_symlinked_root_spelling_without_touching_outside() {
+    use std::{ffi::OsString, os::unix::fs::symlink};
+
+    let temp = tempfile::tempdir().expect("temporary config root");
+    let root = temp.path().join("config");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(outside.join("helm")).expect("create outside helm directory");
+    let bad_palette = write_bad_palette(&outside.join("helm"));
+    std::fs::rename(bad_palette, outside.join("helm/palette.toml")).expect("name outside palette");
+    symlink(&outside, &root).expect("link outside config root");
+    let before = tree(&outside);
+
+    for suffix in ["", "/", "/.", "/.//"] {
+        let mut spelling = OsString::from(root.as_os_str());
+        spelling.push(suffix);
+        let out = helmctl(
+            ["theme", "lint", "--config-root"]
+                .into_iter()
+                .map(OsString::from)
+                .chain(std::iter::once(spelling)),
+        );
+
+        assert!(
+            out.status.success(),
+            "default lint followed symlinked root spelling {suffix:?}: {}",
+            stderr(&out)
+        );
+        assert!(
+            stdout(&out).contains("violet/"),
+            "default lint did not use the shipped palette for root spelling {suffix:?}"
+        );
+        assert!(
+            !stderr(&out).contains("text.bright") && !stderr(&out).contains("text.normal"),
+            "default lint selected the invalid outside palette for root spelling {suffix:?}: {}",
+            stderr(&out)
+        );
+        assert_eq!(
+            tree(&outside),
+            before,
+            "default lint altered the symlink destination for root spelling {suffix:?}"
+        );
+    }
+}
+
 #[test]
 fn lint_bad_explicit_palette_exits_one_and_prints_every_fatal_finding() {
     let temp = tempfile::tempdir().expect("temporary palette root");
