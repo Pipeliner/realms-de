@@ -20,7 +20,9 @@
         shellcheck --shell=bash ${src + "/packaging/session/helm-session"}
         shellcheck --shell=sh \
           ${src + "/packaging/check-font-policy.sh"} \
-          ${src + "/packaging/font-policy-test.sh"}
+          ${src + "/packaging/font-policy-test.sh"} \
+          ${src + "/packaging/nix/check-root-flake-ci.sh"} \
+          ${src + "/packaging/nix/test-root-flake-ci.sh"}
         touch $out
       '';
 

@@ -102,58 +102,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # ADR 0010 makes the flake the reference build; deb/rpm use tracked native
-      # definitions with planned overlap consistency checks. This job is
-      # load-bearing — but packaging/nix/ is scaffolded in M3
-      # (docs/MVP.md), and a job that fails for eight weeks because its input
-      # does not exist yet trains everyone to ignore red. It skips cleanly until
-      # the flake lands, then starts gating with no edit to this file.
-      # ADR 0010 makes the flake the reference build, so this job is
-      # load-bearing — but it gates on a flake at the *repository root*, not on
-      # packaging/nix/flake.nix, and that is a Nix constraint rather than a
-      # preference: a flake cannot reference sources above its own directory, so
-      # one rooted in packaging/nix/ cannot see ../../Cargo.toml and throws on
-      # evaluation. The flake's own header says the same thing and asks for
-      # `git mv packaging/nix/flake.nix flake.nix`.
-      #
-      # Until that move happens this job skips and says why. Afterwards it
-      # gates, with no edit here.
-      - name: Locate the flake
-        id: flake
+      # ADR 0010 makes the committed root flake and lock the reference build.
+      # This preflight fails rather than skipping if either disappears.
+      - name: Require root reference flake
         run: |
           set -euo pipefail
-          if [ -f flake.nix ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "flake.nix found at the repository root — running the reference build."
-            if [ ! -f flake.lock ]; then
-              # ADR 0010's claim is reproducibility, and an unlocked flake
-              # resolves nixos-unstable afresh on every run. The check still
-              # means something without a lock; it just does not mean *that*.
-              echo "::warning file=flake.nix::no flake.lock committed; this evaluation is not reproducible. Run 'nix flake lock' and commit the result."
-            fi
-          elif [ -f packaging/nix/flake.nix ]; then
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::packaging/nix/flake.nix exists but a flake cannot see sources above its own directory. Move it to the repository root to enable this job."
-            {
-              echo "### Nix check skipped"
-              echo
-              echo "\`packaging/nix/flake.nix\` is scaffolded but cannot be"
-              echo "evaluated where it sits: a flake cannot reference sources"
-              echo "above its own directory, so it cannot see \`Cargo.toml\`."
-              echo
-              echo "\`\`\`"
-              echo "git mv packaging/nix/flake.nix flake.nix && nix flake lock"
-              echo "\`\`\`"
-              echo
-              echo "This job starts gating as soon as that lands."
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "No flake yet (lands in M3); skipping." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          ./packaging/nix/test-root-flake-ci.sh
+          ./packaging/nix/check-root-flake-ci.sh
 
       - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
-        if: steps.flake.outputs.present == 'true'
 
       # NEEDS-HUMAN: verify this action is still the right one before M3.
       # magic-nix-cache was sunset by Determinate Systems in favour of
@@ -163,13 +120,11 @@ jobs:
       # flakehub-cache-action (and add the permission) or drop caching — the
       # flake check is correct either way, only slower.
       - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
-        if: steps.flake.outputs.present == 'true'
 
       # KVM availability is detected, not assumed. A KVM-capable runner executes
       # the NixOS VM; a runner without KVM still evaluates the flake and builds the
       # independent ShellCheck, package, and runtime-validator checks.
       - name: Run the reference build
-        if: steps.flake.outputs.present == 'true'
         run: |
           set -euo pipefail
           if [ -e /dev/kvm ]; then
