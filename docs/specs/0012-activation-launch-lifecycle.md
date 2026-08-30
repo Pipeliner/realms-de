@@ -480,6 +480,31 @@ replacement leaves the conservative process lease and a gate-closed owner; a
 crash after it leaves the lifecycle lease. There is no filesystem state in
 which the selected generation has no lease.
 
+The selection-to-lifecycle handoff is one linear registry operation, not a
+public standalone lease API.  Only the activation registry may invoke it after
+the `preparing` record and its parent directory are fsynced and after exact
+ownership adoption has been verified.  The operation consumes the selection's
+only release authority, revalidates every common process-lease and launch-record
+field under `lifecycle.lock` then SPEC 0011's shared `activation.lock`, performs
+the same-name atomic replacement and lease-directory fsync, and only then
+disarms the consumed selection's drop/release path.  Before replacement fails,
+the original process lease and its release authority remain intact.  After
+replacement succeeds, only registry reconciliation may release the lifecycle
+lease according to this specification.  No caller can obtain a transferable
+capability, independently replace a lease, or release a transferred lease.
+
+The selection cleanup path is destructor-safe at every transfer boundary: before
+unlinking, it reopens the same opaque filename with no-follow validation, parses
+its discriminator, and unlinks only a canonical process lease whose generation,
+PID, start time, boot id and UID still exactly equal the selection it owns.  A
+lifecycle discriminator, malformed/unreadable/unsafe record, missing record, or
+any identity mismatch is retained and makes cleanup a no-op.  Thus a panic,
+error or unwind after replacement or lease-directory fsync but before in-memory
+disarm cannot remove the transferred lifecycle lease.  Red fixtures inject
+failure before replacement, after replacement, after directory fsync and before
+disarm, proving both that a pre-transfer matching process lease is released and
+that no post-transfer lifecycle lease is unlinked.
+
 Failure before transfer keeps the gate closed, kills and reaps the inert owner,
 durably records `terminal/failed` with `lease-kind process`, and then releases
 only that process lease. If the launcher itself dies, the parent-death fail-safe
@@ -562,6 +587,41 @@ The one permitted same-state launch transition is
 `adopted/exec-open no -> adopted/exec-open yes` with a sequence increment and
 all other identity fields unchanged. It durably authorizes the unique token; it
 is not a claim that the volatile gate or application already ran.
+
+`result` is an internal registry classification, not a public status DTO.  It
+is `none` in every nonterminal record.  Every record transition is performed by
+the stated writer while holding `lifecycle.lock`, with the record's observed
+sequence, and atomically replaces/fsyncs the record before its next external
+side effect.  The generation lock is acquired only after `lifecycle.lock` when
+the transition also reads or replaces a lease.  Generation, manifest, lease
+name, owner UID/boot/PID/start-time and owner kind are immutable after the
+initial `preparing` record.  The selected mode is known before that record: a
+direct `preparing` record has `owner-kind process-group`, `process-group` equal
+to the exact owner PID, and all unit/cgroup fields `none`/`0`; a systemd
+`preparing` record has `owner-kind systemd-scope`, the exact future
+`helm-launch-<launch-id>.scope` unit name, `process-group 0`, and
+invocation/cgroup fields `none`/`0`.  `preparing -> adopted` fills the verified
+systemd invocation/cgroup incarnation exactly once; direct ownership fields are
+already complete.  Those fields are immutable after `adopted`.  The only other
+permitted changes are the monotonic state/sequence, `lease-kind` at transfer,
+`exec-open` at authorization, `direct-drained` in the owner's direct terminal
+transition, and terminal `result`.
+
+| From state and proof | Permitted writer | Durable successor and result | Required ordering |
+|---|---|---|---|
+| `preparing`, matching process lease, pre-exec abort | registry reconciler | `terminal/failed`, process lease | revalidate and terminate/reap exact gate-closed ownership, prove emptiness, fsync terminal record, then unlink/fsync lease |
+| `preparing`, lifecycle lease, verified systemd adoption | registry reconciler | `terminal/failed`, lifecycle lease | stop only the exact gate-closed scope, prove recursive emptiness, fsync terminal record, then unlink/fsync lease |
+| `adopted`, either `exec-open` value, verified systemd adoption | registry reconciler | `terminal/failed`, lifecycle lease | abort only the exact gate-closed scope, prove recursive emptiness, fsync terminal record, then unlink/fsync lease |
+| `running`, systemd scope reaches complete recursive emptiness | registry reconciler | `terminal/exited`, lifecycle lease | prove recursive emptiness, fsync terminal record, then unlink/fsync lease |
+| direct owner has reaped all attributed descendants and is still exact/live | lifetime owner only | `terminal/exited`, `direct-drained yes`, lifecycle lease | fsync terminal record before the owner exits; a later reconciler proves exact owner stale and group empty before unlinking/fsyncing lease |
+| direct detachment is detected | registry reconciler or the still-live owner | `terminal/lost`, `direct-drained no`, lifecycle lease | fsync the retained record; do not release the lease or collect the record |
+| direct owner dies, is killed, or lacks a valid drain witness | no terminal transition is authorized | retained nonterminal record and lifecycle lease | do not infer a result, release, or collection from PID/group observation |
+
+A crash after any terminal record fsync and before lease removal retries the
+applicable proof and removal.  A crash after lease-directory fsync and before
+record removal retries only collection after the same proof.  A missing,
+malformed, cross-kind, or identity-mismatched lease/evidence selects the
+existing uncertain recovery row and never permits a transition from this table.
 
 `collectible` is a predicate, not a persisted backward transition: owner
 emptiness is proven, `terminal` is fsynced, the actual process or lifecycle
@@ -657,9 +717,14 @@ Teardown is idempotent and ordered:
    later reconciler.
 3. Reconcile profile launches. Systemd scopes remain independent and release
    only after exact emptiness proof. Because the direct path promises no logout
-   survival, teardown sends bounded TERM/KILL to every revalidated direct
-   lifetime-owner group, records terminal only after proven emptiness, and
-   preserves uncertain records/leases. Lingering-on may leave systemd scope,
+   survival, teardown first requests and waits, within its bounded deadline,
+   for the still-live direct owner to reap descendants and fsync its own
+   `terminal/exited direct-drained yes` witness. If that cooperative completion
+   does not arrive, teardown may send bounded TERM/KILL to the revalidated
+   direct lifetime-owner group, but it leaves the nonterminal record and
+   lifecycle lease retained as uncertain: an external actor must not write a
+   terminal record, synthesize the witness, release the lease, or collect the
+   record from a forced-empty group. Lingering-on may leave systemd scope,
    record and lease live. Lingering-off may let logind kill them; the next
    reconciliation collects only after proving death.
 4. Record `cleanup-delegated`, then perform SPEC 0005's environment,
@@ -746,13 +811,13 @@ corresponding implementation.
 |---|---|---|
 | A1 | Given a launch selected on generation N, when N+1 becomes current and generation GC races launch or teardown, then the process reads only N and N is retained until the exact transferred lifetime ownership is proven empty. In particular, if the supervisor PID is stale while an attributed scoped descendant survives, GC retains both lifecycle lease and generation. | |
 | A2 | Given a fault at every owner-create, process-lease, preparing-record, scope/group adoption, lease-transfer-before-adopted-record, adopted-record, durable-exec-authorization, gate-send-before-running-record, running-record, terminal-record-before-lease-release, lease-release and record-collection boundary, when recovery runs, then the record-state/actual-lease table yields either no executed profile and eventual collection, exactly one reconciled owned launch, or retained direct lifecycle evidence where a nonterminal transfer crash lacks the owner-written `direct-drained` witness; there is never an unleased live profile, duplicate exec, or repeated-fault quota leak. | |
-| A3 | Given a child or scope that exits, ignores TERM, leaves uncertain membership, or outlives a dead direct supervisor, when teardown reconciles it, then `terminal` is fsynced before cleanup, lease release follows proven emptiness, waits are bounded, and uncertainty preserves the record and lease. A direct lifecycle lease is releasable only after its still-live owner recorded `direct-drained yes`; later reconciliation never invents that witness. | |
+| A3 | Given a child or scope that exits, ignores TERM, leaves uncertain membership, or outlives a dead direct supervisor, when teardown reconciles it, then every permitted terminal record is fsynced before cleanup, lease release follows the applicable proven emptiness rule, waits are bounded, and uncertainty preserves the record and lease. A direct lifecycle lease is releasable only after its still-live owner recorded `direct-drained yes`; a forced logout without that witness retains the nonterminal record and lease, and later reconciliation never invents the witness. | |
 | A4 | Given a live profile launch when `helm-wm` crashes and restarts, when activation reconciliation and a client reconnect complete, then the same PID/scope and generation are reported, no application is restarted, and the first status frame is a fresh current snapshot with no old-incarnation delta. | |
 | A5 | Given user-manager reexec/restart with a live scope, an unloaded old scope whose recorded cgroup path is absent, the same recorded cgroup inode reporting recursive `populated 0` or `1`, an empty root `cgroup.procs` with a populated nested child cgroup, a reused cgroup path/inode, or a same-name/different-invocation scope, when reconciliation runs, then only matching invocation plus durable cgroup identity is adopted once, only stale-owner plus absent old cgroup or verified `cgroup.events` `populated 0` permits collection, nested/live/inconsistent/reused evidence causes no duplicate launch or lease release, and only target-owned helpers may restart while the same session claim remains active. | |
 | A6 | Given a running target and independent profile scope, when logout stops `helm-session.target`, then an executable unit-graph fixture proves the bar stops before the WM and every helper stops before environment cleanup while the profile scope remains untouched. | |
 | A7 | Given equivalent live launches with lingering off and on, when logout and later reconciliation run, then off permits logind cleanup followed only by proven-stale record/lease collection, while on preserves the live scope, record and lease until real exit. | |
 | A8 | Given faults after temporary creation, during/after temporary write/fsync, before/after no-replace rename and parent fsync for session claim, launch create and record update, plus an early same-boot entry crash and concurrent same-UID claimants, when recovery holds the lifecycle lock, then discardability is decided only from exact basename grammar, current-UID no-follow exact-0600 regular-file metadata, the 4096-byte size bound and the applicable inventory's final-record condition; every artifact satisfying those conditions is discarded and fsynced without payload decoding or replay even when empty, partial, non-UTF-8 or noncanonical, every malformed final or malformed-reserved name/metadata fails closed, no partial final appears, natural crash temporaries cannot permanently block claim/GC or exhaust quota, exactly one healthy session claim wins before compositor/global-environment/helper/profile mutation, and a stale id/sequence cannot clear it. | |
-| A9 | Given no usable systemd user manager, when the entry claims, records its compositor, invokes the externally owned environment-publication boundary in no-manager mode, starts/records/verifies bounded direct WM and bar supervisors, admits a profile, and then the profile exits, detaches, or receives logout, then the direct session reaches `active` without a target, an M2 fake boundary makes no D-Bus-behaviour claim, helper/profile teardown uses the recorded groups in bar-before-WM bounded order, the launch honors lease-before-exec and collects only after proven emptiness, detachment is degraded/uncertain, and no systemd-equivalent survival is claimed. | |
+| A9 | Given no usable systemd user manager, when the entry claims, records its compositor, invokes the externally owned environment-publication boundary in no-manager mode, starts/records/verifies bounded direct WM and bar supervisors, admits a profile, and then the profile exits, detaches, or receives logout, then the direct session reaches `active` without a target, an M2 fake boundary makes no D-Bus-behaviour claim, helper/profile teardown uses the recorded groups in bar-before-WM bounded order, the launch honors lease-before-exec, normal direct collection requires the owner-written drain witness plus proven emptiness, forced logout without that witness retains evidence, detachment is degraded/uncertain, and no systemd-equivalent survival is claimed. | |
 | A10 | Given wrong owner/mode/type, a symlink, malformed/reserved entry, stale boot/PID/start-time, reused PID, stale unit name with a new invocation, or a conflicting sequence, when reconciliation or GC runs, then it refuses signal/adoption/deletion for that evidence and leaves valid unrelated state intact. | |
 | A11 | Given teardown work still live or uncertain at 15 seconds, when the entry deadline expires, then the entry may return but the durable state does not advance falsely, every affected record and generation lease remains, and runtime removal has deleted no promised application asset. | |
 | A12 | Given the shipped source units and a live user-manager fixture, when restart, target stop and abort paths are exercised, then both views agree on `Restart=always`, `PartOf=helm-session.target`, inverse bar-before-WM stop order, profile-scope independence and exactly one abort execution after start-limit exhaustion. | |
