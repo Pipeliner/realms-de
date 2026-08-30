@@ -128,6 +128,15 @@ values matching `[a-f0-9]{32}`. A generation lease reference has the same
 grammar and names its existing record below SPEC 0011's `leases/` directory; it
 is not a mutable generated path.
 
+Opening the activation registry also requires the private validated lease
+capability derived from the already opened SPEC 0011 `GenerationStore`. The
+registry stores cloned `leases/` and `activation.lock` descriptors plus the
+store's original in-process mutex, never a generated-root pathname from state
+or launch-record data. Restart bootstrap therefore reopens and validates the
+configured generated root first and passes only that sealed capability into
+registry open. A launch record's generation or lease text cannot select a
+different filesystem root.
+
 Helm creates each owned directory descriptor-relatively at mode 0700 and the
 persistent `lifecycle.lock` once at mode 0600. Every existing component must be
 owned by the current UID and have exactly that type and mode. All traversal and
@@ -652,25 +661,61 @@ transition, and terminal `result`.
 
 A crash after any terminal record fsync and before lease removal retries the
 applicable proof and removal.  A crash after lease-directory fsync and before
-record removal retries only collection after the same proof.  A missing,
-malformed, cross-kind, or identity-mismatched lease/evidence selects the
-existing uncertain recovery row and never permits a transition from this table.
+record removal retries only collection after the same proof. Malformed,
+cross-kind, or identity-mismatched lease/evidence selects the existing
+uncertain recovery row and never permits a transition from this table. Absence
+follows only the explicit state-sensitive recovery rows below: `preparing`
+abort/collection, `terminal` collection retry, or fatal `adopted`/`running`.
 
 `collectible` is a predicate, not a persisted backward transition: owner
 emptiness is proven, `terminal` is fsynced, the actual process or lifecycle
-lease is unlinked and the leases directory fsynced, and only then may the
-record be removed and the launches directory fsynced. A crash after terminal
+lease is atomically retired and the leases directory fsynced, and only then may
+the record be atomically retired and the launches directory fsynced. Retirement
+uses fixed `.lease-retire-<lease-id>` and `.launch-retire-<launch-id>` siblings:
+one no-replace rename moves the canonical name, post-move descriptor/inode and
+canonical-content proof selects the exact moved object, and only that retirement
+name may then be unlinked. A replacement that wins the final-name race is moved
+and retained in that detecting pass; stale held-inode authority never deletes
+it. A later fresh complete reconciliation may treat semantically identical
+canonical retirement evidence as current evidence and retire it only after all
+inventory, record, and ownership proofs pass again. The canonical and retirement forms may not coexist.
+After a crash with only an exact retirement form, reconciliation treats it as
+the still-present lease or terminal record, repeats the applicable proof, and
+finishes the same retirement. Malformed, duplicate, mismatched, or unsafe
+retirement evidence freezes the destructive pass. A crash after terminal
 but before lease removal retries removal; a crash after lease removal but
 before record removal recognizes the terminal/missing-lease case below. If any
 proof is uncertain or an operation fails, the remaining record/lease stays.
 TERM refusal is bounded; it leaks safe evidence rather than authorizing
 deletion.
 
+Permanent preservation of the replacement inode itself is not an M2 guarantee:
+an identical quarantined replacement and a legitimate retirement-only crash are
+indistinguishable without additional durable transaction provenance. M2 defers
+that stronger protocol and requires same-pass retention plus fresh-proof
+semantic equivalence instead.
+
+The retirement unlink threat model is cooperative among Helm writers: every
+conforming writer holds `lifecycle.lock` then the shared generation lock and
+does not mutate reserved retirement names. Pre-/at-retirement replacement is
+tested and fails closed. Hostile same-UID mutation of the retirement name after
+post-move proof is outside M2's account-compromise boundary because Linux does
+not provide ordinary unlink-by-descriptor. No stronger hostile-same-UID unlink
+defense is claimed.
+
 Reconciliation runs at activation-root open, before a restarted `helm-wm`
 accepts a launch, and after user-manager reconnect. It opens the referenced
 lease without following links and dispatches on durable record state plus the
 lease's actual parsed format; `lease-kind` is an expected value whose mismatch
 selects a recovery row rather than being guessed away:
+
+Every destructive lease inspection uses the registry's private SPEC 0011
+lease capability. While already holding `lifecycle.lock`, reconciliation
+takes the capability's original in-process generation mutex and shared
+`activation.lock`, revalidates the held descriptors, and only then opens the
+opaque lease name descriptor-relatively. It unlinks and fsyncs only within
+that held leases directory. State-home paths, launch-record fields, and a
+freshly reconstructed config path are never lease-directory authority.
 
 | Durable record | Actual lease | Recovery |
 |---|---|---|
@@ -699,6 +744,45 @@ been reused never authorizes action; stale identity may prove death but never
 identifies a replacement owner. Whenever evidence is provably terminal, the
 table reaches collection and cannot consume the 4096-record quota forever.
 
+Reconciliation is three-phase under one `lifecycle.lock` then generation-lock
+critical section. First it validates and classifies the complete bounded
+record/lease/retirement inventory and performs every read-only ownership
+observation; any fatal row or uncertain observation freezes the whole pass
+before a controller call or filesystem mutation. Second, only when passive
+classification is globally safe, it may invoke bounded controllers for exact
+gate-closed `preparing`/`adopted` rows. These abort attempts may stop their
+already-unexecutable owners, but no registry or lease mutation occurs until
+every requested controller returns an exact empty proof; any uncertain result
+retains the entire durable inventory for retry. Third, it applies the already
+classified durable transitions and retirements. Directory enumeration order
+must not change this rule.
+
+Complete inventory means an unconditional scan of every lease-directory entry,
+not only the names referenced by launch records and not only inventories that
+contain staging. Unknown/non-UTF-8 names, unsafe or malformed unreferenced
+entries, orphan lifecycle leases, canonical-plus-retirement forms, and two
+launch records that reference one lease name are fatal. They freeze the pass
+before any ownership observation or controller call. A valid unreferenced
+process lease remains outside lifecycle authority and is left to generic GC.
+A lease retirement form is reachable only after its sole matching launch record
+is durably `terminal`; retirement paired with any nonterminal state is fatal. A
+launch retirement form is reachable only after its referenced lease is absent
+and the leases-directory fsync completed; retired launch plus present lease is
+fatal. These ordering violations freeze before ownership adapters.
+
+`preparing` plus an absent lease is a safe controller row because the gate
+cannot have opened: exact abort/proof permits `terminal/failed` and record
+collection without a lease release. In contrast, `adopted` or `running` plus
+an absent lease is fatal evidence and freezes every destructive row. Only
+`terminal` plus absent is the ordinary post-lease-fsync collection retry.
+
+A read-only direct observation may identify exact detachment separately from
+owner death, group emptiness, and uncertainty. For a matching `running`
+direct lifecycle lease, exact detachment durably writes `terminal/lost` with
+`direct-drained no` and retains both record and lease. It never authorizes
+release or collection. Other witness-free running-direct observations remain
+nonterminal and retained.
+
 A WM crash/restart reconciles these activation records independently of its
 runtime ledger snapshot. It does not restart a profile application. Whether
 river replays existing windows and how SPEC 0003 rebuilds rectangles remain its
@@ -715,6 +799,10 @@ collisions and uncertain liveness authorize no signal, adoption, record
 deletion or lease release. Read-only reconciliation of independent valid
 records may continue, but a destructive registry-GC pass stops; valid unrelated
 state is left intact.
+
+Failure to normalize SPEC 0011 transfer staging is fatal retained evidence,
+including when there are zero launch records. Reconciliation returns an
+explicit error/frozen outcome rather than a clean zero-count report.
 
 ### 6. Unit graph and teardown
 

@@ -1,9 +1,10 @@
 use super::{
     canonical_boot_id, canonical_positive_u64, canonical_u32, canonical_u64, linux_boot_id,
     linux_process_identity, lower_hex_32, normalized_cgroup_path, open_directory_chain,
-    record_value, validate_owned_mode, GenerationId, GenerationRoot, GenerationSelection,
-    LeaseFilesystem, LifecycleLeaseRecord, LifecycleOwnerKind, ParsedLeaseRecord,
-    RealLeaseFilesystem, TransferCheckpoint,
+    record_value, recover_lease_transfer_staging_locked, validate_owned_mode, GenerationId,
+    GenerationRoot, GenerationSelection, GenerationStore, LeaseFilesystem, LeaseRecord,
+    LifecycleLeaseRecord, LifecycleOwnerKind, ParsedLeaseRecord, RealLeaseFilesystem,
+    TransferCheckpoint,
 };
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
@@ -26,10 +27,116 @@ const MAX_INVENTORY_BYTES: usize = 16 * 1024 * 1024;
 struct ActivationRegistry {
     activation: GenerationRoot,
     launches: GenerationRoot,
+    generation_leases: GenerationLeaseCapability,
     lock: OwnedFd,
     intra_process_lock: Mutex<()>,
     device: u64,
     inode: u64,
+}
+
+#[derive(Debug)]
+struct GenerationLeaseCapability {
+    generated_root: OwnedFd,
+    leases: OwnedFd,
+    activation_lock: OwnedFd,
+    intra_process_lock: Arc<Mutex<()>>,
+    root_identity: (u64, u64),
+    leases_identity: (u64, u64),
+    lock_identity: (u64, u64),
+}
+
+struct GenerationLeaseLock<'capability> {
+    lock: &'capability OwnedFd,
+    _intra_process: MutexGuard<'capability, ()>,
+}
+
+impl GenerationLeaseCapability {
+    fn from_store(store: &GenerationStore) -> Result<Self, String> {
+        let generated_root = store
+            .root
+            .fd
+            .try_clone()
+            .map_err(|error| error.to_string())?;
+        let leases = store
+            .leases
+            .fd
+            .try_clone()
+            .map_err(|error| error.to_string())?;
+        let activation_lock = store.lock.try_clone().map_err(|error| error.to_string())?;
+        let root_stat = rustix::fs::fstat(&generated_root).map_err(|error| error.to_string())?;
+        let leases_stat = rustix::fs::fstat(&leases).map_err(|error| error.to_string())?;
+        let lock_stat = rustix::fs::fstat(&activation_lock).map_err(|error| error.to_string())?;
+        let capability = Self {
+            generated_root,
+            leases,
+            activation_lock,
+            intra_process_lock: Arc::clone(&store.intra_process_lock),
+            root_identity: (root_stat.st_dev, root_stat.st_ino),
+            leases_identity: (leases_stat.st_dev, leases_stat.st_ino),
+            lock_identity: (lock_stat.st_dev, lock_stat.st_ino),
+        };
+        capability.revalidate()?;
+        Ok(capability)
+    }
+
+    fn revalidate(&self) -> Result<(), String> {
+        let uid = rustix::process::getuid().as_raw();
+        let root_stat =
+            rustix::fs::fstat(&self.generated_root).map_err(|error| error.to_string())?;
+        let leases_stat = rustix::fs::fstat(&self.leases).map_err(|error| error.to_string())?;
+        let lock_stat =
+            rustix::fs::fstat(&self.activation_lock).map_err(|error| error.to_string())?;
+        validate_owned_mode(
+            "generated root",
+            &root_stat,
+            FileType::Directory,
+            0o700,
+            uid,
+        )?;
+        validate_owned_mode(
+            "leases directory",
+            &leases_stat,
+            FileType::Directory,
+            0o700,
+            uid,
+        )?;
+        validate_owned_mode(
+            "generation activation lock",
+            &lock_stat,
+            FileType::RegularFile,
+            0o600,
+            uid,
+        )?;
+        if (root_stat.st_dev, root_stat.st_ino) != self.root_identity
+            || (leases_stat.st_dev, leases_stat.st_ino) != self.leases_identity
+            || (lock_stat.st_dev, lock_stat.st_ino) != self.lock_identity
+        {
+            return Err("generation lease capability identity changed".into());
+        }
+        revalidate_opened_path(&self.generated_root, "leases", &self.leases)?;
+        revalidate_opened_path(
+            &self.generated_root,
+            "activation.lock",
+            &self.activation_lock,
+        )
+    }
+
+    fn lock_shared(&self) -> Result<GenerationLeaseLock<'_>, String> {
+        let intra_process = self
+            .intra_process_lock
+            .lock()
+            .map_err(|_| "generation store lock is poisoned")?;
+        flock(&self.activation_lock, FlockOperation::LockShared)
+            .map_err(|error| error.to_string())?;
+        if let Err(error) = self.revalidate() {
+            let _ = flock(&self.activation_lock, FlockOperation::Unlock);
+            return Err(error);
+        }
+        Ok(GenerationLeaseLock {
+            lock: &self.activation_lock,
+            _intra_process: intra_process,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -127,6 +234,153 @@ mod ownership_verifier {
 
 trait OwnershipVerifier: ownership_verifier::Sealed {
     fn verify(&self, prepared: &PreparedLaunch) -> Result<VerifiedOwnership, String>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VerifiedSystemd {
+    record: LaunchRecord,
+    lease: Option<LifecycleLeaseRecord>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SystemdObservation {
+    ExactRecursiveEmpty,
+    ExactLive,
+    Uncertain,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectObservation {
+    Exact {
+        owner_written_witness: bool,
+        exact_owner_stale: bool,
+        recorded_group_empty: bool,
+    },
+    Detached,
+    Live,
+    Uncertain,
+}
+
+mod ownership_inspector {
+    pub(super) trait Sealed {}
+}
+
+trait OwnershipInspector: ownership_inspector::Sealed {
+    fn inspect_systemd(&self, ownership: &VerifiedSystemd) -> SystemdObservation;
+    fn inspect_direct(&self, record: &LaunchRecord) -> DirectObservation;
+}
+
+mod gate_closed_controller {
+    pub(super) trait Sealed {}
+}
+
+trait GateClosedController: gate_closed_controller::Sealed {
+    fn abort_unadopted_direct(&self, record: &LaunchRecord) -> DirectObservation;
+    fn abort_unadopted_systemd(&self, record: &LaunchRecord) -> SystemdObservation;
+    fn abort_adopted_systemd(&self, ownership: &VerifiedSystemd) -> SystemdObservation;
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ReconciliationReport {
+    terminalized: usize,
+    released: usize,
+    collected: usize,
+    retained: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconciliationCheckpoint {
+    AfterTerminalRecordFsync,
+    BeforeLeaseRetire,
+    AfterLeaseRetire,
+    AfterLeaseUnlink,
+    AfterLeaseDirectoryFsync,
+    BeforeRecordRemoval,
+    BeforeLaunchRetire,
+    AfterLaunchRetire,
+}
+
+trait ReconciliationFilesystem {
+    fn checkpoint(&mut self, checkpoint: ReconciliationCheckpoint) -> Result<(), String>;
+}
+
+struct RealReconciliationFilesystem;
+
+impl ReconciliationFilesystem for RealReconciliationFilesystem {
+    fn checkpoint(&mut self, _checkpoint: ReconciliationCheckpoint) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct ValidatedReconciliationLease {
+    record: ParsedLeaseRecord,
+    descriptor: OwnedFd,
+    storage_name: String,
+    retired: bool,
+}
+
+#[derive(Debug)]
+struct ValidatedReconciliationLaunch {
+    record: LaunchRecord,
+    descriptor: OwnedFd,
+    storage_name: String,
+    retired: bool,
+}
+
+#[derive(Debug)]
+enum ReconciliationLease {
+    Missing,
+    Valid(Box<ValidatedReconciliationLease>),
+    Uncertain,
+}
+
+impl ReconciliationLease {
+    fn process(&self) -> Option<&LeaseRecord> {
+        match self {
+            Self::Valid(validated) => match &validated.record {
+                ParsedLeaseRecord::Process(record) => Some(record),
+                ParsedLeaseRecord::Lifecycle(_) => None,
+            },
+            Self::Missing | Self::Uncertain => None,
+        }
+    }
+
+    fn lifecycle(&self) -> Option<&LifecycleLeaseRecord> {
+        match self {
+            Self::Valid(validated) => match &validated.record {
+                ParsedLeaseRecord::Lifecycle(record) => Some(record),
+                ParsedLeaseRecord::Process(_) => None,
+            },
+            Self::Missing | Self::Uncertain => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ReconciliationControllerAction {
+    UnadoptedDirect,
+    UnadoptedSystemd,
+    AdoptedSystemd(Box<VerifiedSystemd>),
+}
+
+#[derive(Debug, Clone)]
+enum ReconciliationDurableAction {
+    Retain,
+    TerminalizeAndRetain(LaunchResult),
+    Complete {
+        terminal_result: Option<LaunchResult>,
+        transferred: Option<LifecycleLeaseRecord>,
+        release: bool,
+    },
+}
+
+#[derive(Debug)]
+struct PlannedReconciliation {
+    launch: ValidatedReconciliationLaunch,
+    lease: ReconciliationLease,
+    controller: Option<ReconciliationControllerAction>,
+    durable: ReconciliationDurableAction,
 }
 
 struct SelectionActivationLock<'selection> {
@@ -786,11 +1040,311 @@ fn yes_no(value: bool) -> &'static str {
     }
 }
 
+fn read_reconciliation_lease(
+    capability: &GenerationLeaseCapability,
+    name: &str,
+) -> ReconciliationLease {
+    let retirement = format!(".lease-retire-{name}");
+    let canonical_exists = match statat(&capability.leases, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(_) => true,
+        Err(Errno::NOENT) => false,
+        Err(_) => return ReconciliationLease::Uncertain,
+    };
+    let retirement_exists = match statat(
+        &capability.leases,
+        retirement.as_str(),
+        AtFlags::SYMLINK_NOFOLLOW,
+    ) {
+        Ok(_) => true,
+        Err(Errno::NOENT) => false,
+        Err(_) => return ReconciliationLease::Uncertain,
+    };
+    match (canonical_exists, retirement_exists) {
+        (false, false) => ReconciliationLease::Missing,
+        (true, true) => ReconciliationLease::Uncertain,
+        (true, false) => read_reconciliation_lease_at(capability, name, false),
+        (false, true) => read_reconciliation_lease_at(capability, &retirement, true),
+    }
+}
+
+fn read_reconciliation_lease_at(
+    capability: &GenerationLeaseCapability,
+    storage_name: &str,
+    retired: bool,
+) -> ReconciliationLease {
+    let descriptor = match openat(
+        &capability.leases,
+        storage_name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(descriptor) => descriptor,
+        Err(_) => return ReconciliationLease::Uncertain,
+    };
+    let stat = match rustix::fs::fstat(&descriptor) {
+        Ok(stat) => stat,
+        Err(_) => return ReconciliationLease::Uncertain,
+    };
+    if validate_owned_mode(
+        "generation lease",
+        &stat,
+        FileType::RegularFile,
+        0o600,
+        rustix::process::getuid().as_raw(),
+    )
+    .is_err()
+        || stat.st_size > MAX_RECORD_BYTES as i64
+    {
+        return ReconciliationLease::Uncertain;
+    }
+    let mut file = std::fs::File::from(descriptor);
+    let mut raw = Vec::new();
+    if Read::by_ref(&mut file)
+        .take((MAX_RECORD_BYTES + 1) as u64)
+        .read_to_end(&mut raw)
+        .is_err()
+    {
+        return ReconciliationLease::Uncertain;
+    }
+    let Ok(record) = ParsedLeaseRecord::parse(&raw) else {
+        return ReconciliationLease::Uncertain;
+    };
+    ReconciliationLease::Valid(Box::new(ValidatedReconciliationLease {
+        record,
+        descriptor: file.into(),
+        storage_name: storage_name.to_owned(),
+        retired,
+    }))
+}
+
+fn read_reconciliation_launch(
+    launches: &OwnedFd,
+    storage_name: &str,
+) -> Result<ValidatedReconciliationLaunch, String> {
+    let (name, retired) = match storage_name.strip_prefix(".launch-retire-") {
+        Some(name) => (name, true),
+        None => (storage_name, false),
+    };
+    LaunchId::parse(name)?;
+    let descriptor = openat(
+        launches,
+        storage_name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| error.to_string())?;
+    let stat = rustix::fs::fstat(&descriptor).map_err(|error| error.to_string())?;
+    validate_owned_mode(
+        "launch record",
+        &stat,
+        FileType::RegularFile,
+        0o600,
+        rustix::process::getuid().as_raw(),
+    )?;
+    if stat.st_size > MAX_RECORD_BYTES as i64 {
+        return Err("launch record exceeds 4096 bytes".into());
+    }
+    let mut file = std::fs::File::from(descriptor);
+    let mut raw = Vec::new();
+    Read::by_ref(&mut file)
+        .take((MAX_RECORD_BYTES + 1) as u64)
+        .read_to_end(&mut raw)
+        .map_err(|error| error.to_string())?;
+    let record = LaunchRecord::parse(&raw)?;
+    if record.launch.encode() != name {
+        return Err("launch filename and record id disagree".into());
+    }
+    Ok(ValidatedReconciliationLaunch {
+        record,
+        descriptor: file.into(),
+        storage_name: storage_name.to_owned(),
+        retired,
+    })
+}
+
+fn process_lease_matches(record: &LaunchRecord, lease: &LeaseRecord) -> bool {
+    lease.generation == record.generation
+        && lease.pid == record.owner_pid
+        && lease.start_time == record.owner_start_time
+        && lease.boot_id == record.boot_id
+        && lease.owner_uid == record.owner_uid
+}
+
+fn lifecycle_lease_matches(record: &LaunchRecord, lease: &LifecycleLeaseRecord) -> bool {
+    if lease.generation != record.generation
+        || lease.launch.as_str() != record.launch.encode()
+        || lease.pid != record.owner_pid
+        || lease.start_time != record.owner_start_time
+        || lease.boot_id != record.boot_id
+        || lease.owner_uid != record.owner_uid
+    {
+        return false;
+    }
+    match (record.mode, lease.owner_kind) {
+        (OwnershipMode::Direct, LifecycleOwnerKind::ProcessGroup) => {
+            lease.unit == "none"
+                && lease.unit_invocation == "none"
+                && lease.process_group == record.process_group
+                && lease.cgroup == "none"
+                && lease.cgroup_device == 0
+                && lease.cgroup_inode == 0
+        }
+        (OwnershipMode::Systemd, LifecycleOwnerKind::SystemdScope) => {
+            lease.unit == record.unit
+                && lease.process_group == 0
+                && (record.state == LaunchState::Preparing
+                    || (lease.unit_invocation == record.unit_invocation
+                        && lease.cgroup == record.cgroup
+                        && lease.cgroup_device == record.cgroup_device
+                        && lease.cgroup_inode == record.cgroup_inode))
+        }
+        _ => false,
+    }
+}
+
+fn direct_empty_after_abort(observation: DirectObservation) -> bool {
+    matches!(
+        observation,
+        DirectObservation::Exact {
+            exact_owner_stale: true,
+            recorded_group_empty: true,
+            ..
+        }
+    )
+}
+
+fn direct_terminal_releasable(record: &LaunchRecord, observation: DirectObservation) -> bool {
+    record.direct_drained
+        && matches!(
+            observation,
+            DirectObservation::Exact {
+                owner_written_witness: true,
+                exact_owner_stale: true,
+                recorded_group_empty: true,
+            }
+        )
+}
+
+fn systemd_empty(observation: SystemdObservation) -> bool {
+    observation == SystemdObservation::ExactRecursiveEmpty
+}
+
+fn reconciliation_lease_relation_is_known(
+    record: &LaunchRecord,
+    lease: &ReconciliationLease,
+) -> bool {
+    match lease {
+        ReconciliationLease::Missing => matches!(
+            (record.state, record.lease_kind),
+            (LaunchState::Preparing, LeaseKind::Process) | (LaunchState::Terminal, _)
+        ),
+        ReconciliationLease::Uncertain => false,
+        ReconciliationLease::Valid(_) => {
+            lease.process().is_some_and(|process| {
+                process_lease_matches(record, process)
+                    && matches!(
+                        (record.state, record.lease_kind),
+                        (
+                            LaunchState::Preparing | LaunchState::Terminal,
+                            LeaseKind::Process
+                        )
+                    )
+            }) || lease.lifecycle().is_some_and(|lifecycle| {
+                lifecycle_lease_matches(record, lifecycle)
+                    && (record.lease_kind == LeaseKind::Lifecycle
+                        || (record.state == LaunchState::Preparing
+                            && record.lease_kind == LeaseKind::Process))
+            })
+        }
+    }
+}
+
+fn reconciliation_lease_inventory_is_safe(
+    capability: &GenerationLeaseCapability,
+    records: &[ValidatedReconciliationLaunch],
+    names: &[OsString],
+) -> bool {
+    for (index, record) in records.iter().enumerate() {
+        if records[index + 1..]
+            .iter()
+            .any(|other| other.record.lease == record.record.lease)
+        {
+            return false;
+        }
+    }
+
+    let mut logical_names = Vec::<String>::new();
+    let mut entries = 0_usize;
+    let mut bytes = 0_usize;
+    for name in names {
+        let Some(storage_name) = name.to_str() else {
+            return false;
+        };
+        let (logical_name, retired) = if GenerationId::parse(storage_name).is_ok() {
+            (storage_name, false)
+        } else {
+            let Some(logical_name) = storage_name.strip_prefix(".lease-retire-") else {
+                return false;
+            };
+            if GenerationId::parse(logical_name).is_err() {
+                return false;
+            }
+            (logical_name, true)
+        };
+        if logical_names
+            .iter()
+            .any(|existing| existing == logical_name)
+        {
+            return false;
+        }
+        logical_names.push(logical_name.to_owned());
+        let Ok(stat) = statat(&capability.leases, storage_name, AtFlags::SYMLINK_NOFOLLOW) else {
+            return false;
+        };
+        if account_inventory(&mut entries, &mut bytes, stat.st_size).is_err() {
+            return false;
+        }
+        let ReconciliationLease::Valid(validated) =
+            read_reconciliation_lease_at(capability, storage_name, retired)
+        else {
+            return false;
+        };
+        let references: Vec<_> = records
+            .iter()
+            .filter(|record| record.record.lease == logical_name)
+            .collect();
+        if retired
+            && (references.len() != 1
+                || references[0].retired
+                || references[0].record.state != LaunchState::Terminal)
+        {
+            return false;
+        }
+        if let ParsedLeaseRecord::Lifecycle(lifecycle) = &validated.record {
+            if references.len() != 1 || !lifecycle_lease_matches(&references[0].record, lifecycle) {
+                return false;
+            }
+        }
+    }
+    inventory_within_bounds(entries, bytes).is_ok()
+        && records.iter().all(|record| {
+            !record.retired
+                || (record.record.state == LaunchState::Terminal
+                    && !logical_names
+                        .iter()
+                        .any(|name| name == &record.record.lease))
+        })
+}
+
 impl ActivationRegistry {
-    fn open(state_home: &Path) -> Result<Self, String> {
+    fn open(
+        state_home: &Path,
+        generation_leases: GenerationLeaseCapability,
+    ) -> Result<Self, String> {
         if state_home.as_os_str().is_empty() || !state_home.is_absolute() {
             return Err("state home must be a non-empty absolute path".into());
         }
+        generation_leases.revalidate()?;
         let state = open_directory_chain(state_home)?;
         let state_stat = rustix::fs::fstat(&state).map_err(|error| error.to_string())?;
         if FileType::from_raw_mode(state_stat.st_mode) != FileType::Directory
@@ -817,6 +1371,7 @@ impl ActivationRegistry {
             let registry = Self {
                 activation,
                 launches,
+                generation_leases,
                 lock,
                 intra_process_lock: Mutex::new(()),
                 device: activation_stat.st_dev,
@@ -965,6 +1520,12 @@ impl ActivationRegistry {
         match selection.read_current_lease()? {
             Some(ParsedLeaseRecord::Process(record)) if record == *identity => {}
             _ => return Err("generation selection lacks its exact process lease".into()),
+        }
+        for name in directory_entries(&self.launches.fd)? {
+            let existing = read_launch_record(&self.launches.fd, &name)?;
+            if existing.lease == selection.lease_name {
+                return Err("generation selection lease is already referenced".into());
+            }
         }
         let (unit, process_group) = match request.mode {
             OwnershipMode::Direct => ("none".to_owned(), identity.pid),
@@ -1172,6 +1733,574 @@ impl ActivationRegistry {
         inventory_within_bounds(entries, bytes)
     }
 
+    fn reconcile<I: OwnershipInspector>(
+        &self,
+        inspector: &I,
+        controller: Option<&dyn GateClosedController>,
+    ) -> Result<ReconciliationReport, String> {
+        let mut filesystem = RealReconciliationFilesystem;
+        self.reconcile_with_filesystem(inspector, controller, &mut filesystem)
+    }
+
+    fn reconcile_with_filesystem<I: OwnershipInspector, F: ReconciliationFilesystem>(
+        &self,
+        inspector: &I,
+        controller: Option<&dyn GateClosedController>,
+        filesystem: &mut F,
+    ) -> Result<ReconciliationReport, String> {
+        let _registry_lock = self.lock()?;
+        self.inspect_and_recover_inventory()?;
+        let mut records = Vec::new();
+        for name in directory_entries(&self.launches.fd)? {
+            let name = name
+                .to_str()
+                .ok_or("launch filename is not UTF-8 after inventory validation")?;
+            records.push(read_reconciliation_launch(&self.launches.fd, name)?);
+        }
+        let _generation_lock = self.generation_leases.lock_shared()?;
+        let mut report = ReconciliationReport::default();
+        let mut lease_names = directory_entries(&self.generation_leases.leases)?;
+        let has_retirement = lease_names.iter().any(|name| {
+            name.to_str()
+                .is_some_and(|name| name.starts_with(".lease-retire-"))
+        });
+        let has_transfer = lease_names.iter().any(|name| {
+            name.to_str()
+                .is_some_and(|name| name.starts_with(".lease-transfer-"))
+        });
+        if has_retirement && has_transfer {
+            return Err("lease retirement cannot coexist with transfer staging".into());
+        }
+        if has_transfer {
+            recover_lease_transfer_staging_locked(&self.generation_leases.leases)
+                .map_err(|error| format!("transfer staging recovery failed: {error}"))?;
+            lease_names = directory_entries(&self.generation_leases.leases)?;
+        }
+        if !reconciliation_lease_inventory_is_safe(&self.generation_leases, &records, &lease_names)
+        {
+            report.retained = records.len();
+            return Ok(report);
+        }
+        let evidence: Vec<_> = records
+            .into_iter()
+            .map(|launch| {
+                let lease =
+                    read_reconciliation_lease(&self.generation_leases, &launch.record.lease);
+                (launch, lease)
+            })
+            .collect();
+        if evidence
+            .iter()
+            .any(|(launch, lease)| !reconciliation_lease_relation_is_known(&launch.record, lease))
+        {
+            report.retained = evidence.len();
+            return Ok(report);
+        }
+        let inventory_len = evidence.len();
+        let mut plans = Vec::with_capacity(inventory_len);
+        let mut passive_uncertain = false;
+        for (launch, lease) in evidence {
+            match self.plan_reconciliation(launch, lease, inspector) {
+                Some(plan) => plans.push(plan),
+                None => passive_uncertain = true,
+            }
+        }
+        if passive_uncertain {
+            report.retained = inventory_len;
+            return Ok(report);
+        }
+        if plans.iter().any(|plan| plan.controller.is_some()) && controller.is_none() {
+            report.retained = inventory_len;
+            return Ok(report);
+        }
+        let mut controller_uncertain = false;
+        for plan in &plans {
+            let Some(action) = &plan.controller else {
+                continue;
+            };
+            let controller = controller.expect("controller availability was checked");
+            let empty = match action {
+                ReconciliationControllerAction::UnadoptedDirect => {
+                    direct_empty_after_abort(controller.abort_unadopted_direct(&plan.launch.record))
+                }
+                ReconciliationControllerAction::UnadoptedSystemd => {
+                    systemd_empty(controller.abort_unadopted_systemd(&plan.launch.record))
+                }
+                ReconciliationControllerAction::AdoptedSystemd(ownership) => {
+                    systemd_empty(controller.abort_adopted_systemd(ownership))
+                }
+            };
+            controller_uncertain |= !empty;
+        }
+        if controller_uncertain {
+            report.retained = inventory_len;
+            return Ok(report);
+        }
+        for plan in plans {
+            self.apply_reconciliation_plan(plan, filesystem, &mut report)?;
+        }
+        Ok(report)
+    }
+
+    fn plan_reconciliation<I: OwnershipInspector>(
+        &self,
+        launch: ValidatedReconciliationLaunch,
+        lease: ReconciliationLease,
+        inspector: &I,
+    ) -> Option<PlannedReconciliation> {
+        let record = launch.record.clone();
+        let (controller, durable) = match (&record.state, &lease) {
+            (LaunchState::Preparing, actual)
+                if record.lease_kind == LeaseKind::Process
+                    && actual
+                        .process()
+                        .is_some_and(|process| process_lease_matches(&record, process)) =>
+            {
+                let controller = match record.mode {
+                    OwnershipMode::Direct => ReconciliationControllerAction::UnadoptedDirect,
+                    OwnershipMode::Systemd => ReconciliationControllerAction::UnadoptedSystemd,
+                };
+                (
+                    Some(controller),
+                    ReconciliationDurableAction::Complete {
+                        terminal_result: Some(LaunchResult::Failed),
+                        transferred: None,
+                        release: true,
+                    },
+                )
+            }
+            (LaunchState::Preparing, actual)
+                if record.lease_kind == LeaseKind::Process
+                    && record.mode == OwnershipMode::Systemd
+                    && actual
+                        .lifecycle()
+                        .is_some_and(|lifecycle| lifecycle_lease_matches(&record, lifecycle)) =>
+            {
+                let lifecycle = actual.lifecycle().expect("guard validated lifecycle lease");
+                (
+                    Some(ReconciliationControllerAction::AdoptedSystemd(Box::new(
+                        VerifiedSystemd {
+                            record: record.clone(),
+                            lease: Some(lifecycle.clone()),
+                        },
+                    ))),
+                    ReconciliationDurableAction::Complete {
+                        terminal_result: Some(LaunchResult::Failed),
+                        transferred: Some(lifecycle.clone()),
+                        release: true,
+                    },
+                )
+            }
+            (LaunchState::Preparing, ReconciliationLease::Missing)
+                if record.lease_kind == LeaseKind::Process =>
+            {
+                let controller = match record.mode {
+                    OwnershipMode::Direct => ReconciliationControllerAction::UnadoptedDirect,
+                    OwnershipMode::Systemd => ReconciliationControllerAction::UnadoptedSystemd,
+                };
+                (
+                    Some(controller),
+                    ReconciliationDurableAction::Complete {
+                        terminal_result: Some(LaunchResult::Failed),
+                        transferred: None,
+                        release: false,
+                    },
+                )
+            }
+            (LaunchState::Adopted, actual)
+                if record.lease_kind == LeaseKind::Lifecycle
+                    && record.mode == OwnershipMode::Systemd
+                    && actual
+                        .lifecycle()
+                        .is_some_and(|lifecycle| lifecycle_lease_matches(&record, lifecycle)) =>
+            {
+                let lifecycle = actual.lifecycle().expect("guard validated lifecycle lease");
+                (
+                    Some(ReconciliationControllerAction::AdoptedSystemd(Box::new(
+                        VerifiedSystemd {
+                            record: record.clone(),
+                            lease: Some(lifecycle.clone()),
+                        },
+                    ))),
+                    ReconciliationDurableAction::Complete {
+                        terminal_result: Some(LaunchResult::Failed),
+                        transferred: None,
+                        release: true,
+                    },
+                )
+            }
+            (LaunchState::Running, actual)
+                if record.lease_kind == LeaseKind::Lifecycle
+                    && actual
+                        .lifecycle()
+                        .is_some_and(|lifecycle| lifecycle_lease_matches(&record, lifecycle)) =>
+            {
+                let lifecycle = actual.lifecycle().expect("guard validated lifecycle lease");
+                match record.mode {
+                    OwnershipMode::Systemd => match inspector.inspect_systemd(&VerifiedSystemd {
+                        record: record.clone(),
+                        lease: Some(lifecycle.clone()),
+                    }) {
+                        SystemdObservation::ExactRecursiveEmpty => (
+                            None,
+                            ReconciliationDurableAction::Complete {
+                                terminal_result: Some(LaunchResult::Exited),
+                                transferred: None,
+                                release: true,
+                            },
+                        ),
+                        SystemdObservation::ExactLive => {
+                            (None, ReconciliationDurableAction::Retain)
+                        }
+                        SystemdObservation::Uncertain => return None,
+                    },
+                    OwnershipMode::Direct => match inspector.inspect_direct(&record) {
+                        DirectObservation::Detached => (
+                            None,
+                            ReconciliationDurableAction::TerminalizeAndRetain(LaunchResult::Lost),
+                        ),
+                        DirectObservation::Live => (None, ReconciliationDurableAction::Retain),
+                        DirectObservation::Exact { .. } | DirectObservation::Uncertain => {
+                            return None;
+                        }
+                    },
+                }
+            }
+            (LaunchState::Terminal, actual)
+                if record.lease_kind == LeaseKind::Process
+                    && actual
+                        .process()
+                        .is_some_and(|process| process_lease_matches(&record, process)) =>
+            {
+                let controller = match record.mode {
+                    OwnershipMode::Direct => ReconciliationControllerAction::UnadoptedDirect,
+                    OwnershipMode::Systemd => ReconciliationControllerAction::UnadoptedSystemd,
+                };
+                (
+                    Some(controller),
+                    ReconciliationDurableAction::Complete {
+                        terminal_result: None,
+                        transferred: None,
+                        release: true,
+                    },
+                )
+            }
+            (LaunchState::Terminal, actual)
+                if record.lease_kind == LeaseKind::Lifecycle
+                    && actual
+                        .lifecycle()
+                        .is_some_and(|lifecycle| lifecycle_lease_matches(&record, lifecycle)) =>
+            {
+                let lifecycle = actual.lifecycle().expect("guard validated lifecycle lease");
+                let releasable = match record.mode {
+                    OwnershipMode::Systemd => match inspector.inspect_systemd(&VerifiedSystemd {
+                        record: record.clone(),
+                        lease: Some(lifecycle.clone()),
+                    }) {
+                        SystemdObservation::ExactRecursiveEmpty => true,
+                        SystemdObservation::ExactLive => false,
+                        SystemdObservation::Uncertain => return None,
+                    },
+                    OwnershipMode::Direct => match inspector.inspect_direct(&record) {
+                        observation @ DirectObservation::Exact { .. } => {
+                            if direct_terminal_releasable(&record, observation) {
+                                true
+                            } else {
+                                return None;
+                            }
+                        }
+                        DirectObservation::Live => false,
+                        DirectObservation::Detached | DirectObservation::Uncertain => return None,
+                    },
+                };
+                if releasable {
+                    (
+                        None,
+                        ReconciliationDurableAction::Complete {
+                            terminal_result: None,
+                            transferred: None,
+                            release: true,
+                        },
+                    )
+                } else {
+                    (None, ReconciliationDurableAction::Retain)
+                }
+            }
+            (LaunchState::Terminal, ReconciliationLease::Missing) => {
+                let collectible = match record.mode {
+                    OwnershipMode::Systemd => match inspector.inspect_systemd(&VerifiedSystemd {
+                        record: record.clone(),
+                        lease: None,
+                    }) {
+                        SystemdObservation::ExactRecursiveEmpty => true,
+                        SystemdObservation::ExactLive => false,
+                        SystemdObservation::Uncertain => return None,
+                    },
+                    OwnershipMode::Direct => match inspector.inspect_direct(&record) {
+                        observation @ DirectObservation::Exact { .. } => {
+                            if direct_terminal_releasable(&record, observation) {
+                                true
+                            } else {
+                                return None;
+                            }
+                        }
+                        DirectObservation::Live => false,
+                        DirectObservation::Detached | DirectObservation::Uncertain => return None,
+                    },
+                };
+                if collectible {
+                    (
+                        None,
+                        ReconciliationDurableAction::Complete {
+                            terminal_result: None,
+                            transferred: None,
+                            release: false,
+                        },
+                    )
+                } else {
+                    (None, ReconciliationDurableAction::Retain)
+                }
+            }
+            _ => return None,
+        };
+        Some(PlannedReconciliation {
+            launch,
+            lease,
+            controller,
+            durable,
+        })
+    }
+
+    fn apply_reconciliation_plan<F: ReconciliationFilesystem>(
+        &self,
+        plan: PlannedReconciliation,
+        filesystem: &mut F,
+        report: &mut ReconciliationReport,
+    ) -> Result<(), String> {
+        let PlannedReconciliation {
+            launch,
+            lease,
+            durable,
+            ..
+        } = plan;
+        if matches!(durable, ReconciliationDurableAction::Retain) {
+            report.retained += 1;
+            return Ok(());
+        }
+        let record = launch.record.clone();
+        let (terminal_result, transferred, release, retain_after_terminal) = match durable {
+            ReconciliationDurableAction::TerminalizeAndRetain(result) => {
+                (Some(result), None, false, true)
+            }
+            ReconciliationDurableAction::Complete {
+                terminal_result,
+                transferred,
+                release,
+            } => (terminal_result, transferred, release, false),
+            ReconciliationDurableAction::Retain => unreachable!(),
+        };
+        let terminal = terminal_result
+            .and_then(|result| self.terminal_successor(&record, result, transferred.as_ref()));
+        if terminal_result.is_some() && terminal.is_none() {
+            report.retained += 1;
+            return Ok(());
+        }
+
+        let current = if let Some(successor) = terminal {
+            self.replace_launch_record(&record, &successor)?;
+            let current =
+                read_reconciliation_launch(&self.launches.fd, successor.launch.encode().as_str())?;
+            if current.record != successor {
+                return Err("terminal launch successor changed after replacement".into());
+            }
+            filesystem.checkpoint(ReconciliationCheckpoint::AfterTerminalRecordFsync)?;
+            report.terminalized += 1;
+            current
+        } else {
+            launch
+        };
+
+        if retain_after_terminal {
+            report.retained += 1;
+            return Ok(());
+        }
+
+        if release {
+            let ReconciliationLease::Valid(expected) = &lease else {
+                return Err("reconciliation release lacks validated lease evidence".into());
+            };
+            if !self.unlink_exact_lease(&current.record, expected, filesystem)? {
+                report.retained += 1;
+                return Ok(());
+            }
+            report.released += 1;
+        } else {
+            fsync(&self.generation_leases.leases).map_err(|error| error.to_string())?;
+            filesystem.checkpoint(ReconciliationCheckpoint::AfterLeaseDirectoryFsync)?;
+        }
+        filesystem.checkpoint(ReconciliationCheckpoint::BeforeRecordRemoval)?;
+        if !self.unlink_exact_launch_record(&current, filesystem)? {
+            report.retained += 1;
+            return Ok(());
+        }
+        report.collected += 1;
+        Ok(())
+    }
+
+    fn terminal_successor(
+        &self,
+        record: &LaunchRecord,
+        result: LaunchResult,
+        transferred: Option<&LifecycleLeaseRecord>,
+    ) -> Option<LaunchRecord> {
+        let mut successor = record.clone();
+        successor.sequence = successor.sequence.checked_add(1)?;
+        successor.state = LaunchState::Terminal;
+        successor.result = result;
+        if let Some(lease) = transferred {
+            successor.lease_kind = LeaseKind::Lifecycle;
+            successor.unit_invocation = lease.unit_invocation.clone();
+            successor.cgroup = lease.cgroup.clone();
+            successor.cgroup_device = lease.cgroup_device;
+            successor.cgroup_inode = lease.cgroup_inode;
+        }
+        Some(successor)
+    }
+
+    fn unlink_exact_lease<F: ReconciliationFilesystem>(
+        &self,
+        current: &LaunchRecord,
+        expected: &ValidatedReconciliationLease,
+        filesystem: &mut F,
+    ) -> Result<bool, String> {
+        self.generation_leases.revalidate()?;
+        let ReconciliationLease::Valid(observed) =
+            read_reconciliation_lease(&self.generation_leases, &current.lease)
+        else {
+            return Ok(false);
+        };
+        let expected_stat =
+            rustix::fs::fstat(&expected.descriptor).map_err(|error| error.to_string())?;
+        let observed_stat =
+            rustix::fs::fstat(&observed.descriptor).map_err(|error| error.to_string())?;
+        if observed.record != expected.record
+            || observed_stat.st_dev != expected_stat.st_dev
+            || observed_stat.st_ino != expected_stat.st_ino
+        {
+            return Ok(false);
+        }
+        let retirement = format!(".lease-retire-{}", current.lease);
+        if !expected.retired {
+            revalidate_opened_path(
+                &self.generation_leases.leases,
+                expected.storage_name.as_str(),
+                &expected.descriptor,
+            )?;
+            filesystem.checkpoint(ReconciliationCheckpoint::BeforeLeaseRetire)?;
+            match renameat_with(
+                &self.generation_leases.leases,
+                expected.storage_name.as_str(),
+                &self.generation_leases.leases,
+                retirement.as_str(),
+                RenameFlags::NOREPLACE,
+            ) {
+                Ok(()) => {}
+                Err(Errno::EXIST | Errno::NOENT) => return Ok(false),
+                Err(error) => return Err(error.to_string()),
+            }
+            filesystem.checkpoint(ReconciliationCheckpoint::AfterLeaseRetire)?;
+        } else if expected.storage_name != retirement {
+            return Ok(false);
+        }
+        let ReconciliationLease::Valid(retired) =
+            read_reconciliation_lease(&self.generation_leases, &current.lease)
+        else {
+            return Ok(false);
+        };
+        let retired_stat =
+            rustix::fs::fstat(&retired.descriptor).map_err(|error| error.to_string())?;
+        if !retired.retired
+            || retired.record != expected.record
+            || retired_stat.st_dev != expected_stat.st_dev
+            || retired_stat.st_ino != expected_stat.st_ino
+        {
+            return Ok(false);
+        }
+        unlinkat(
+            &self.generation_leases.leases,
+            retirement.as_str(),
+            AtFlags::empty(),
+        )
+        .map_err(|error| error.to_string())?;
+        filesystem.checkpoint(ReconciliationCheckpoint::AfterLeaseUnlink)?;
+        fsync(&self.generation_leases.leases).map_err(|error| error.to_string())?;
+        filesystem.checkpoint(ReconciliationCheckpoint::AfterLeaseDirectoryFsync)?;
+        Ok(true)
+    }
+
+    fn unlink_exact_launch_record(
+        &self,
+        expected: &ValidatedReconciliationLaunch,
+        filesystem: &mut impl ReconciliationFilesystem,
+    ) -> Result<bool, String> {
+        let name = expected.record.launch.encode();
+        let observed =
+            match read_reconciliation_launch(&self.launches.fd, expected.storage_name.as_str()) {
+                Ok(observed) => observed,
+                Err(_) => return Ok(false),
+            };
+        let expected_stat =
+            rustix::fs::fstat(&expected.descriptor).map_err(|error| error.to_string())?;
+        let observed_stat =
+            rustix::fs::fstat(&observed.descriptor).map_err(|error| error.to_string())?;
+        if observed.record != expected.record
+            || observed_stat.st_dev != expected_stat.st_dev
+            || observed_stat.st_ino != expected_stat.st_ino
+        {
+            return Ok(false);
+        }
+        let retirement = format!(".launch-retire-{name}");
+        if !expected.retired {
+            revalidate_opened_path(
+                &self.launches.fd,
+                expected.storage_name.as_str(),
+                &expected.descriptor,
+            )?;
+            filesystem.checkpoint(ReconciliationCheckpoint::BeforeLaunchRetire)?;
+            match renameat_with(
+                &self.launches.fd,
+                expected.storage_name.as_str(),
+                &self.launches.fd,
+                retirement.as_str(),
+                RenameFlags::NOREPLACE,
+            ) {
+                Ok(()) => {}
+                Err(Errno::EXIST | Errno::NOENT) => return Ok(false),
+                Err(error) => return Err(error.to_string()),
+            }
+            filesystem.checkpoint(ReconciliationCheckpoint::AfterLaunchRetire)?;
+        } else if expected.storage_name != retirement {
+            return Ok(false);
+        }
+        let retired = match read_reconciliation_launch(&self.launches.fd, retirement.as_str()) {
+            Ok(retired) => retired,
+            Err(_) => return Ok(false),
+        };
+        let retired_stat =
+            rustix::fs::fstat(&retired.descriptor).map_err(|error| error.to_string())?;
+        if !retired.retired
+            || retired.record != expected.record
+            || retired_stat.st_dev != expected_stat.st_dev
+            || retired_stat.st_ino != expected_stat.st_ino
+        {
+            return Ok(false);
+        }
+        unlinkat(&self.launches.fd, retirement.as_str(), AtFlags::empty())
+            .map_err(|error| error.to_string())?;
+        fsync(&self.launches.fd).map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+
     fn inspect_and_recover_inventory(&self) -> Result<(), String> {
         self.inspect_and_recover_inventory_with_checkpoint(|| {})
     }
@@ -1189,7 +2318,7 @@ impl ActivationRegistry {
         let mut entries = 0_usize;
         let mut bytes = 0_usize;
         let mut session_record = None;
-        let mut launch_records = Vec::new();
+        let mut launch_records = Vec::<LaunchRecord>::new();
         let mut temporaries = Vec::new();
 
         for name in activation_entries {
@@ -1227,10 +2356,25 @@ impl ActivationRegistry {
             account_inventory(&mut entries, &mut bytes, stat.st_size)?;
             let raw = name.as_bytes();
             if let Ok(text) = std::str::from_utf8(raw) {
-                if let Ok(id) = LaunchId::parse(text) {
+                let parsed = LaunchId::parse(text).map(|id| (id, false)).or_else(|_| {
+                    text.strip_prefix(".launch-retire-")
+                        .ok_or_else(|| "not a launch retirement".to_owned())
+                        .and_then(LaunchId::parse)
+                        .map(|id| (id, true))
+                });
+                if let Ok((id, retired)) = parsed {
                     let record = read_launch_record(&self.launches.fd, &name)?;
                     if record.launch != id {
                         return Err("launch filename and record id disagree".into());
+                    }
+                    if retired && record.state != LaunchState::Terminal {
+                        return Err("launch retirement is not terminal".into());
+                    }
+                    if launch_records
+                        .iter()
+                        .any(|existing| existing.launch == record.launch)
+                    {
+                        return Err("launch inventory contains canonical and retired forms".into());
                     }
                     launch_records.push(record);
                     continue;
@@ -1310,6 +2454,12 @@ impl ActivationRegistry {
 }
 
 impl Drop for RegistryLock<'_> {
+    fn drop(&mut self) {
+        let _ = flock(self.lock, FlockOperation::Unlock);
+    }
+}
+
+impl Drop for GenerationLeaseLock<'_> {
     fn drop(&mut self) {
         let _ = flock(self.lock, FlockOperation::Unlock);
     }
@@ -1771,6 +2921,7 @@ fn parse_yes_no(value: &str, field: &str) -> Result<bool, String> {
 mod tests {
     use super::*;
     use crate::generation::{GenerationPublication, GenerationStore};
+    use std::cell::Cell;
     use std::fs;
     use std::os::unix::fs::{symlink, PermissionsExt};
     use std::path::Path;
@@ -1849,8 +3000,150 @@ bar-process-group 0\n",
         fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
     }
 
+    fn open_test_registry(state_home: &Path) -> Result<ActivationRegistry, String> {
+        let generated = state_home.join(".test-generated");
+        if !generated.exists() {
+            fs::create_dir(&generated).map_err(|error| error.to_string())?;
+            fs::set_permissions(&generated, fs::Permissions::from_mode(0o700))
+                .map_err(|error| error.to_string())?;
+        }
+        let store = GenerationStore::open(&generated)?;
+        ActivationRegistry::open(state_home, GenerationLeaseCapability::from_store(&store)?)
+    }
+
     struct TestOwnershipVerifier {
         proof: TestOwnershipProof,
+    }
+
+    struct TestOwnershipInspector {
+        systemd: SystemdObservation,
+        direct: DirectObservation,
+        systemd_calls: Cell<usize>,
+        direct_calls: Cell<usize>,
+    }
+
+    impl ownership_inspector::Sealed for TestOwnershipInspector {}
+
+    impl OwnershipInspector for TestOwnershipInspector {
+        fn inspect_systemd(&self, _ownership: &VerifiedSystemd) -> SystemdObservation {
+            self.systemd_calls.set(self.systemd_calls.get() + 1);
+            self.systemd
+        }
+
+        fn inspect_direct(&self, _record: &LaunchRecord) -> DirectObservation {
+            self.direct_calls.set(self.direct_calls.get() + 1);
+            self.direct
+        }
+    }
+
+    struct TestGateClosedController {
+        direct: DirectObservation,
+        unadopted_systemd: SystemdObservation,
+        adopted_systemd: SystemdObservation,
+        direct_calls: Cell<usize>,
+        unadopted_systemd_calls: Cell<usize>,
+        adopted_systemd_calls: Cell<usize>,
+    }
+
+    struct SelectiveSystemdInspector {
+        uncertain_launch: LaunchId,
+        systemd_calls: Cell<usize>,
+    }
+
+    impl ownership_inspector::Sealed for SelectiveSystemdInspector {}
+
+    impl OwnershipInspector for SelectiveSystemdInspector {
+        fn inspect_systemd(&self, ownership: &VerifiedSystemd) -> SystemdObservation {
+            self.systemd_calls.set(self.systemd_calls.get() + 1);
+            if ownership.record.launch == self.uncertain_launch {
+                SystemdObservation::Uncertain
+            } else {
+                SystemdObservation::ExactRecursiveEmpty
+            }
+        }
+
+        fn inspect_direct(&self, _record: &LaunchRecord) -> DirectObservation {
+            DirectObservation::Uncertain
+        }
+    }
+
+    struct SelectiveDirectController {
+        uncertain_launch: LaunchId,
+        direct_calls: Cell<usize>,
+    }
+
+    impl gate_closed_controller::Sealed for SelectiveDirectController {}
+
+    impl GateClosedController for SelectiveDirectController {
+        fn abort_unadopted_direct(&self, record: &LaunchRecord) -> DirectObservation {
+            self.direct_calls.set(self.direct_calls.get() + 1);
+            if record.launch == self.uncertain_launch {
+                DirectObservation::Uncertain
+            } else {
+                DirectObservation::Exact {
+                    owner_written_witness: false,
+                    exact_owner_stale: true,
+                    recorded_group_empty: true,
+                }
+            }
+        }
+
+        fn abort_unadopted_systemd(&self, _record: &LaunchRecord) -> SystemdObservation {
+            SystemdObservation::Uncertain
+        }
+
+        fn abort_adopted_systemd(&self, _ownership: &VerifiedSystemd) -> SystemdObservation {
+            SystemdObservation::Uncertain
+        }
+    }
+
+    impl gate_closed_controller::Sealed for TestGateClosedController {}
+
+    impl GateClosedController for TestGateClosedController {
+        fn abort_unadopted_direct(&self, _record: &LaunchRecord) -> DirectObservation {
+            self.direct_calls.set(self.direct_calls.get() + 1);
+            self.direct
+        }
+
+        fn abort_unadopted_systemd(&self, _record: &LaunchRecord) -> SystemdObservation {
+            self.unadopted_systemd_calls
+                .set(self.unadopted_systemd_calls.get() + 1);
+            self.unadopted_systemd
+        }
+
+        fn abort_adopted_systemd(&self, _ownership: &VerifiedSystemd) -> SystemdObservation {
+            self.adopted_systemd_calls
+                .set(self.adopted_systemd_calls.get() + 1);
+            self.adopted_systemd
+        }
+    }
+
+    fn exact_empty_inspector() -> TestOwnershipInspector {
+        TestOwnershipInspector {
+            systemd: SystemdObservation::ExactRecursiveEmpty,
+            direct: DirectObservation::Exact {
+                owner_written_witness: true,
+                exact_owner_stale: true,
+                recorded_group_empty: true,
+            },
+            systemd_calls: Cell::new(0),
+            direct_calls: Cell::new(0),
+        }
+    }
+
+    fn exact_empty_controller() -> TestGateClosedController {
+        TestGateClosedController {
+            direct: DirectObservation::Exact {
+                owner_written_witness: false,
+                exact_owner_stale: true,
+                recorded_group_empty: true,
+            },
+            unadopted_systemd: SystemdObservation::ExactRecursiveEmpty,
+            adopted_systemd: SystemdObservation::ExactRecursiveEmpty,
+            direct_calls: Cell::new(0),
+            unadopted_systemd_calls: Cell::new(0),
+            adopted_systemd_calls: Cell::new(0),
+        }
     }
 
     enum TestOwnershipProof {
@@ -1901,6 +3194,37 @@ bar-process-group 0\n",
     struct ExitAtTransferCheckpointFilesystem {
         checkpoint: TransferCheckpoint,
         code: i32,
+    }
+
+    struct FaultingReconciliationFilesystem {
+        fail_at: ReconciliationCheckpoint,
+    }
+
+    struct SwappingReconciliationFilesystem {
+        swap_at: ReconciliationCheckpoint,
+        path: std::path::PathBuf,
+        displaced: std::path::PathBuf,
+    }
+
+    impl ReconciliationFilesystem for FaultingReconciliationFilesystem {
+        fn checkpoint(&mut self, checkpoint: ReconciliationCheckpoint) -> Result<(), String> {
+            if checkpoint == self.fail_at {
+                Err(format!("injected reconciliation fault at {checkpoint:?}"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl ReconciliationFilesystem for SwappingReconciliationFilesystem {
+        fn checkpoint(&mut self, checkpoint: ReconciliationCheckpoint) -> Result<(), String> {
+            if checkpoint == self.swap_at {
+                let bytes = fs::read(&self.path).unwrap();
+                fs::rename(&self.path, &self.displaced).unwrap();
+                write_mode(&self.path, &bytes, 0o600);
+            }
+            Ok(())
+        }
     }
 
     impl LeaseFilesystem for ExitAtTransferCheckpointFilesystem {
@@ -2083,13 +3407,23 @@ bar-process-group 0\n",
             let selection = store.select_current_for_process(owner_pid).unwrap();
 
             let state = tempfile::tempdir().unwrap();
-            drop(ActivationRegistry::open(state.path()).unwrap());
+            drop(
+                ActivationRegistry::open(
+                    state.path(),
+                    GenerationLeaseCapability::from_store(&store).unwrap(),
+                )
+                .unwrap(),
+            );
             write_mode(
                 &state.path().join("helm/activation/session"),
                 &exact_session_record("active", 7),
                 0o600,
             );
-            let registry = ActivationRegistry::open(state.path()).unwrap();
+            let registry = ActivationRegistry::open(
+                state.path(),
+                GenerationLeaseCapability::from_store(&store).unwrap(),
+            )
+            .unwrap();
             let session = registry
                 .open_active_session(
                     SessionId::parse("22222222222222222222222222222222").unwrap(),
@@ -2151,6 +3485,118 @@ bar-process-group 0\n",
             .verify(&self.prepared)
             .unwrap()
         }
+    }
+
+    fn add_systemd_running(
+        fixture: &TransferFixture,
+        launch_id: &str,
+    ) -> (LaunchId, std::path::PathBuf, std::path::PathBuf) {
+        let selection = fixture
+            .store
+            .select_current_for_process(std::process::id())
+            .unwrap();
+        let lease_path = fixture
+            ._generated
+            .path()
+            .join("leases")
+            .join(&selection.lease_name);
+        let launch = LaunchId::parse(launch_id).unwrap();
+        let prepared = fixture
+            .registry
+            .prepare(
+                &fixture.session,
+                PrepareLaunch {
+                    launch,
+                    mode: OwnershipMode::Systemd,
+                },
+                &selection,
+            )
+            .unwrap();
+        let evidence = TestOwnershipVerifier {
+            proof: TestOwnershipProof::Systemd {
+                unit_invocation: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                cgroup: format!("app.slice/helm-launch-{}.scope", launch.encode()),
+                cgroup_device: 17,
+                cgroup_inode: 19,
+            },
+        }
+        .verify(&prepared)
+        .unwrap();
+        let adopted = fixture
+            .registry
+            .adopt_prepared(&fixture.session, prepared, selection, evidence)
+            .unwrap();
+        authorize_and_run(&fixture.registry, &adopted);
+        let launch_path = fixture
+            ._state
+            .path()
+            .join("helm/activation/launches")
+            .join(launch.encode());
+        (launch, launch_path, lease_path)
+    }
+
+    fn add_direct_preparing(
+        fixture: &TransferFixture,
+        launch_id: &str,
+    ) -> (
+        LaunchId,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        GenerationSelection,
+    ) {
+        let selection = fixture
+            .store
+            .select_current_for_process(std::process::id())
+            .unwrap();
+        let lease_path = fixture
+            ._generated
+            .path()
+            .join("leases")
+            .join(&selection.lease_name);
+        let launch = LaunchId::parse(launch_id).unwrap();
+        let prepared = fixture
+            .registry
+            .prepare(
+                &fixture.session,
+                PrepareLaunch {
+                    launch,
+                    mode: OwnershipMode::Direct,
+                },
+                &selection,
+            )
+            .unwrap();
+        let launch_path = fixture
+            ._state
+            .path()
+            .join("helm/activation/launches")
+            .join(prepared.record.launch.encode());
+        (launch, launch_path, lease_path, selection)
+    }
+
+    fn authorize_and_run(registry: &ActivationRegistry, adopted: &AdoptedLaunch) -> LaunchRecord {
+        let mut authorized = adopted.record.clone();
+        authorized.sequence += 1;
+        authorized.exec_open = true;
+        registry
+            .replace_launch_record(&adopted.record, &authorized)
+            .unwrap();
+        let mut running = authorized.clone();
+        running.sequence += 1;
+        running.state = LaunchState::Running;
+        registry
+            .replace_launch_record(&authorized, &running)
+            .unwrap();
+        running
+    }
+
+    fn terminal_direct(registry: &ActivationRegistry, running: &LaunchRecord) -> LaunchRecord {
+        let mut terminal = running.clone();
+        terminal.sequence += 1;
+        terminal.state = LaunchState::Terminal;
+        terminal.result = LaunchResult::Exited;
+        terminal.direct_drained = true;
+        registry.replace_launch_record(running, &terminal).unwrap();
+        terminal
     }
 
     #[test]
@@ -2288,7 +3734,7 @@ bar-process-group 0\n",
     #[test]
     fn open_initializes_descriptor_safe_activation_root() {
         let root = tempfile::tempdir().unwrap();
-        let registry = ActivationRegistry::open(root.path()).unwrap();
+        let registry = open_test_registry(root.path()).unwrap();
         drop(registry);
 
         for directory in [
@@ -2309,9 +3755,20 @@ bar-process-group 0\n",
 
     #[test]
     fn open_rejects_empty_or_relative_state_home_without_mutation() {
-        assert!(ActivationRegistry::open(Path::new("")).is_err());
+        let generated = tempfile::tempdir().unwrap();
+        fs::set_permissions(generated.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let store = GenerationStore::open(generated.path()).unwrap();
+        assert!(ActivationRegistry::open(
+            Path::new(""),
+            GenerationLeaseCapability::from_store(&store).unwrap(),
+        )
+        .is_err());
         let relative = format!("relative-activation-test-{}", std::process::id());
-        assert!(ActivationRegistry::open(Path::new(&relative)).is_err());
+        assert!(ActivationRegistry::open(
+            Path::new(&relative),
+            GenerationLeaseCapability::from_store(&store).unwrap(),
+        )
+        .is_err());
         assert!(!Path::new(&relative).exists());
     }
 
@@ -2329,12 +3786,12 @@ bar-process-group 0\n",
                 let target = root.path().join("target");
                 write_mode(&target, b"sentinel", 0o600);
                 symlink(&target, &lock).unwrap();
-                assert!(ActivationRegistry::open(root.path()).is_err());
+                assert!(open_test_registry(root.path()).is_err());
                 assert_eq!(fs::read(target).unwrap(), b"sentinel");
                 assert!(fs::symlink_metadata(lock).unwrap().file_type().is_symlink());
             } else {
                 write_mode(&lock, b"", 0o644);
-                assert!(ActivationRegistry::open(root.path()).is_err());
+                assert!(open_test_registry(root.path()).is_err());
                 assert_eq!(
                     fs::symlink_metadata(lock).unwrap().permissions().mode() & 0o777,
                     0o644
@@ -2346,7 +3803,7 @@ bar-process-group 0\n",
     #[test]
     fn failed_lock_path_revalidation_releases_kernel_lock() {
         let root = tempfile::tempdir().unwrap();
-        let registry = ActivationRegistry::open(root.path()).unwrap();
+        let registry = open_test_registry(root.path()).unwrap();
         let activation = root.path().join("helm/activation");
         let lock = activation.join("lifecycle.lock");
         let displaced = activation.join("displaced-lock");
@@ -2366,7 +3823,7 @@ bar-process-group 0\n",
     #[test]
     fn session_claim_is_exact_and_active_reopen_revalidates_live_identity() {
         let root = tempfile::tempdir().unwrap();
-        let registry = ActivationRegistry::open(root.path()).unwrap();
+        let registry = open_test_registry(root.path()).unwrap();
         let session = SessionId::parse("22222222222222222222222222222222").unwrap();
         let claim = registry
             .claim_session(SessionClaimRequest {
@@ -2390,7 +3847,7 @@ bar-process-group 0\n",
             &exact_session_record("active", 7),
             0o600,
         );
-        let registry = ActivationRegistry::open(root.path()).unwrap();
+        let registry = open_test_registry(root.path()).unwrap();
         assert!(registry.open_active_session(session, 7).is_ok());
         assert!(registry.open_active_session(session, 6).is_err());
 
@@ -2405,7 +3862,7 @@ bar-process-group 0\n",
     #[test]
     fn inventory_discards_only_exact_safe_unpublished_temporaries() {
         let root = tempfile::tempdir().unwrap();
-        drop(ActivationRegistry::open(root.path()).unwrap());
+        drop(open_test_registry(root.path()).unwrap());
         let activation = root.path().join("helm/activation");
         let claim = activation.join(".session-claim-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         let create = activation.join(
@@ -2413,13 +3870,13 @@ bar-process-group 0\n",
         );
         write_mode(&claim, b"", 0o600);
         write_mode(&create, &[0xff, 0xfe], 0o600);
-        drop(ActivationRegistry::open(root.path()).unwrap());
+        drop(open_test_registry(root.path()).unwrap());
         assert!(!claim.exists());
         assert!(!create.exists());
 
         let malformed = activation.join(".session-claim-not-an-id");
         write_mode(&malformed, b"", 0o600);
-        assert!(ActivationRegistry::open(root.path()).is_err());
+        assert!(open_test_registry(root.path()).is_err());
         assert!(malformed.exists());
     }
 
@@ -2427,7 +3884,7 @@ bar-process-group 0\n",
     fn cross_namespace_temporaries_are_retained_and_fail_closed() {
         for activation_name in [true, false] {
             let root = tempfile::tempdir().unwrap();
-            drop(ActivationRegistry::open(root.path()).unwrap());
+            drop(open_test_registry(root.path()).unwrap());
             let path = if activation_name {
                 root.path().join(
                     "helm/activation/.launch-create-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-cccccccccccccccccccccccccccccccc",
@@ -2438,7 +3895,7 @@ bar-process-group 0\n",
                 )
             };
             write_mode(&path, b"", 0o600);
-            assert!(ActivationRegistry::open(root.path()).is_err());
+            assert!(open_test_registry(root.path()).is_err());
             assert!(path.exists());
         }
     }
@@ -2446,12 +3903,12 @@ bar-process-group 0\n",
     #[test]
     fn inventory_retains_unsafe_temporary_and_fails_closed() {
         let root = tempfile::tempdir().unwrap();
-        drop(ActivationRegistry::open(root.path()).unwrap());
+        drop(open_test_registry(root.path()).unwrap());
         let temporary = root.path().join(
             "helm/activation/launches/.launch-create-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-cccccccccccccccccccccccccccccccc",
         );
         write_mode(&temporary, b"", 0o644);
-        assert!(ActivationRegistry::open(root.path()).is_err());
+        assert!(open_test_registry(root.path()).is_err());
         assert!(temporary.exists());
         assert_eq!(
             fs::symlink_metadata(temporary)
@@ -2466,20 +3923,20 @@ bar-process-group 0\n",
     #[test]
     fn inventory_retains_reserved_temporary_with_wrong_type() {
         let root = tempfile::tempdir().unwrap();
-        drop(ActivationRegistry::open(root.path()).unwrap());
+        drop(open_test_registry(root.path()).unwrap());
         let temporary = root.path().join(
             "helm/activation/launches/.launch-create-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-cccccccccccccccccccccccccccccccc",
         );
         fs::create_dir(&temporary).unwrap();
         fs::set_permissions(&temporary, fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(ActivationRegistry::open(root.path()).is_err());
+        assert!(open_test_registry(root.path()).is_err());
         assert!(temporary.is_dir());
     }
 
     #[test]
     fn temporary_inode_replacement_before_delete_is_retained() {
         let root = tempfile::tempdir().unwrap();
-        let registry = ActivationRegistry::open(root.path()).unwrap();
+        let registry = open_test_registry(root.path()).unwrap();
         let temporary = root
             .path()
             .join("helm/activation/.session-claim-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -2505,7 +3962,7 @@ bar-process-group 0\n",
     #[test]
     fn over_bound_inventory_retains_every_safe_temporary() {
         let root = tempfile::tempdir().unwrap();
-        drop(ActivationRegistry::open(root.path()).unwrap());
+        drop(open_test_registry(root.path()).unwrap());
         let launches = root.path().join("helm/activation/launches");
         for index in 0..=MAX_INVENTORY_ENTRIES {
             let temporary = launches.join(format!(
@@ -2513,7 +3970,7 @@ bar-process-group 0\n",
             ));
             write_mode(&temporary, b"", 0o600);
         }
-        assert!(ActivationRegistry::open(root.path()).is_err());
+        assert!(open_test_registry(root.path()).is_err());
         assert_eq!(
             fs::read_dir(launches).unwrap().count(),
             MAX_INVENTORY_ENTRIES + 1
@@ -2545,13 +4002,23 @@ bar-process-group 0\n",
             .unwrap();
 
         let state = tempfile::tempdir().unwrap();
-        drop(ActivationRegistry::open(state.path()).unwrap());
+        drop(
+            ActivationRegistry::open(
+                state.path(),
+                GenerationLeaseCapability::from_store(&store).unwrap(),
+            )
+            .unwrap(),
+        );
         write_mode(
             &state.path().join("helm/activation/session"),
             &exact_session_record("active", 7),
             0o600,
         );
-        let registry = ActivationRegistry::open(state.path()).unwrap();
+        let registry = ActivationRegistry::open(
+            state.path(),
+            GenerationLeaseCapability::from_store(&store).unwrap(),
+        )
+        .unwrap();
         let session = registry
             .open_active_session(
                 SessionId::parse("22222222222222222222222222222222").unwrap(),
@@ -3164,7 +4631,11 @@ bar-process-group 0\n",
         let selection = store
             .select_current_for_process(std::process::id())
             .unwrap();
-        let registry = ActivationRegistry::open(Path::new(&state)).unwrap();
+        let registry = ActivationRegistry::open(
+            Path::new(&state),
+            GenerationLeaseCapability::from_store(&store).unwrap(),
+        )
+        .unwrap();
         let session = registry
             .open_active_session(
                 SessionId::parse("22222222222222222222222222222222").unwrap(),
@@ -3211,7 +4682,11 @@ bar-process-group 0\n",
         let selection = store
             .select_current_for_process(std::process::id())
             .unwrap();
-        let registry = ActivationRegistry::open(Path::new(&state)).unwrap();
+        let registry = ActivationRegistry::open(
+            Path::new(&state),
+            GenerationLeaseCapability::from_store(&store).unwrap(),
+        )
+        .unwrap();
         let session = registry
             .open_active_session(
                 SessionId::parse("22222222222222222222222222222222").unwrap(),
@@ -3268,7 +4743,13 @@ bar-process-group 0\n",
             })
             .unwrap();
         let state = tempfile::tempdir().unwrap();
-        drop(ActivationRegistry::open(state.path()).unwrap());
+        drop(
+            ActivationRegistry::open(
+                state.path(),
+                GenerationLeaseCapability::from_store(&store).unwrap(),
+            )
+            .unwrap(),
+        );
         write_mode(
             &state.path().join("helm/activation/session"),
             &exact_session_record("active", 7),
@@ -3327,7 +4808,13 @@ bar-process-group 0\n",
             })
             .unwrap();
         let state = tempfile::tempdir().unwrap();
-        drop(ActivationRegistry::open(state.path()).unwrap());
+        drop(
+            ActivationRegistry::open(
+                state.path(),
+                GenerationLeaseCapability::from_store(&store).unwrap(),
+            )
+            .unwrap(),
+        );
         write_mode(
             &state.path().join("helm/activation/session"),
             &exact_session_record("active", 7),
@@ -3374,7 +4861,11 @@ bar-process-group 0\n",
         let selection = store
             .select_current_for_process(std::process::id())
             .unwrap();
-        let registry = ActivationRegistry::open(state.path()).unwrap();
+        let registry = ActivationRegistry::open(
+            state.path(),
+            GenerationLeaseCapability::from_store(&store).unwrap(),
+        )
+        .unwrap();
         let session = registry
             .open_active_session(
                 SessionId::parse("22222222222222222222222222222222").unwrap(),
@@ -3482,5 +4973,1245 @@ bar-process-group 0\n",
                 .state,
             LaunchState::Preparing
         );
+    }
+
+    #[test]
+    fn direct_owner_death_without_witness_is_retained() {
+        let fixture = TransferFixture::direct();
+        let launch_path = fixture.launch_path();
+        let lease_path = fixture.lease_path();
+        let evidence = fixture.direct_evidence();
+        let adopted = fixture
+            .registry
+            .adopt_prepared(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+            )
+            .unwrap();
+        let mut authorized = adopted.record.clone();
+        authorized.sequence += 1;
+        authorized.exec_open = true;
+        fixture
+            .registry
+            .replace_launch_record(&adopted.record, &authorized)
+            .unwrap();
+        let mut running = authorized.clone();
+        running.sequence += 1;
+        running.state = LaunchState::Running;
+        fixture
+            .registry
+            .replace_launch_record(&authorized, &running)
+            .unwrap();
+
+        let inspector = TestOwnershipInspector {
+            systemd: SystemdObservation::Uncertain,
+            direct: DirectObservation::Exact {
+                owner_written_witness: false,
+                exact_owner_stale: true,
+                recorded_group_empty: true,
+            },
+            systemd_calls: Cell::new(0),
+            direct_calls: Cell::new(0),
+        };
+        let report = fixture.registry.reconcile(&inspector, None).unwrap();
+
+        assert_eq!(report.released, 0);
+        assert!(launch_path.exists());
+        assert!(lease_path.exists());
+        assert_eq!(inspector.direct_calls.get(), 1);
+        assert_eq!(inspector.systemd_calls.get(), 0);
+    }
+
+    #[test]
+    fn preparing_process_lease_uses_only_matching_gate_closed_controller() {
+        for mode in [OwnershipMode::Direct, OwnershipMode::Systemd] {
+            let fixture = TransferFixture::new("55555555555555555555555555555555", mode);
+            let launch_path = fixture.launch_path();
+            let lease_path = fixture.lease_path();
+            let inspector = exact_empty_inspector();
+            let controller = exact_empty_controller();
+
+            let report = fixture
+                .registry
+                .reconcile(&inspector, Some(&controller))
+                .unwrap();
+
+            assert_eq!(
+                report,
+                ReconciliationReport {
+                    terminalized: 1,
+                    released: 1,
+                    collected: 1,
+                    retained: 0,
+                }
+            );
+            assert!(!launch_path.exists());
+            assert!(!lease_path.exists());
+            assert_eq!(
+                controller.direct_calls.get(),
+                usize::from(mode == OwnershipMode::Direct)
+            );
+            assert_eq!(
+                controller.unadopted_systemd_calls.get(),
+                usize::from(mode == OwnershipMode::Systemd)
+            );
+            assert_eq!(controller.adopted_systemd_calls.get(), 0);
+            assert_eq!(inspector.direct_calls.get(), 0);
+            assert_eq!(inspector.systemd_calls.get(), 0);
+        }
+    }
+
+    #[test]
+    fn transferred_preparing_and_adopted_systemd_use_only_adopted_abort() {
+        for stop_before_adopted_record in [true, false] {
+            let fixture = TransferFixture::systemd();
+            let launch_path = fixture.launch_path();
+            let lease_path = fixture.lease_path();
+            let evidence = fixture.systemd_evidence();
+            if stop_before_adopted_record {
+                let mut filesystem = FaultingLeaseFilesystem {
+                    fail_at: TransferCheckpoint::BeforeAdoptedRecord,
+                    lease_path: lease_path.clone(),
+                    launch_path: launch_path.clone(),
+                    observations: Vec::new(),
+                };
+                assert!(fixture
+                    .registry
+                    .adopt_prepared_with_filesystem(
+                        &fixture.session,
+                        fixture.prepared,
+                        fixture.selection,
+                        evidence,
+                        &mut filesystem,
+                    )
+                    .is_err());
+            } else {
+                fixture
+                    .registry
+                    .adopt_prepared(
+                        &fixture.session,
+                        fixture.prepared,
+                        fixture.selection,
+                        evidence,
+                    )
+                    .unwrap();
+            }
+            let inspector = exact_empty_inspector();
+            let controller = exact_empty_controller();
+
+            let report = fixture
+                .registry
+                .reconcile(&inspector, Some(&controller))
+                .unwrap();
+
+            assert_eq!(report.terminalized, 1);
+            assert_eq!(report.released, 1);
+            assert_eq!(report.collected, 1);
+            assert!(!launch_path.exists());
+            assert!(!lease_path.exists());
+            assert_eq!(controller.adopted_systemd_calls.get(), 1);
+            assert_eq!(controller.direct_calls.get(), 0);
+            assert_eq!(controller.unadopted_systemd_calls.get(), 0);
+            assert_eq!(inspector.systemd_calls.get(), 0);
+        }
+    }
+
+    #[test]
+    fn running_systemd_is_never_stopped_and_collects_only_after_recursive_empty_proof() {
+        let fixture = TransferFixture::systemd();
+        let launch_path = fixture.launch_path();
+        let lease_path = fixture.lease_path();
+        let evidence = fixture.systemd_evidence();
+        let adopted = fixture
+            .registry
+            .adopt_prepared(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+            )
+            .unwrap();
+        authorize_and_run(&fixture.registry, &adopted);
+        let inspector = exact_empty_inspector();
+        let controller = exact_empty_controller();
+
+        let report = fixture
+            .registry
+            .reconcile(&inspector, Some(&controller))
+            .unwrap();
+
+        assert_eq!(report.terminalized, 1);
+        assert_eq!(report.released, 1);
+        assert_eq!(report.collected, 1);
+        assert!(!launch_path.exists());
+        assert!(!lease_path.exists());
+        assert_eq!(inspector.systemd_calls.get(), 1);
+        assert_eq!(controller.direct_calls.get(), 0);
+        assert_eq!(controller.unadopted_systemd_calls.get(), 0);
+        assert_eq!(controller.adopted_systemd_calls.get(), 0);
+    }
+
+    #[test]
+    fn running_systemd_live_or_uncertain_observation_retains_without_controller_call() {
+        for observation in [SystemdObservation::ExactLive, SystemdObservation::Uncertain] {
+            let fixture = TransferFixture::systemd();
+            let launch_path = fixture.launch_path();
+            let lease_path = fixture.lease_path();
+            let evidence = fixture.systemd_evidence();
+            let adopted = fixture
+                .registry
+                .adopt_prepared(
+                    &fixture.session,
+                    fixture.prepared,
+                    fixture.selection,
+                    evidence,
+                )
+                .unwrap();
+            authorize_and_run(&fixture.registry, &adopted);
+            let mut inspector = exact_empty_inspector();
+            inspector.systemd = observation;
+            let controller = exact_empty_controller();
+
+            let report = fixture
+                .registry
+                .reconcile(&inspector, Some(&controller))
+                .unwrap();
+
+            assert_eq!(report.released, 0);
+            assert_eq!(report.collected, 0);
+            assert!(launch_path.exists());
+            assert!(lease_path.exists());
+            assert_eq!(inspector.systemd_calls.get(), 1);
+            assert_eq!(controller.direct_calls.get(), 0);
+            assert_eq!(controller.unadopted_systemd_calls.get(), 0);
+            assert_eq!(controller.adopted_systemd_calls.get(), 0);
+        }
+    }
+
+    #[test]
+    fn terminal_direct_requires_durable_witness_stale_owner_and_empty_exact_group() {
+        for observation in [
+            DirectObservation::Exact {
+                owner_written_witness: true,
+                exact_owner_stale: true,
+                recorded_group_empty: true,
+            },
+            DirectObservation::Exact {
+                owner_written_witness: false,
+                exact_owner_stale: true,
+                recorded_group_empty: true,
+            },
+            DirectObservation::Exact {
+                owner_written_witness: true,
+                exact_owner_stale: false,
+                recorded_group_empty: true,
+            },
+            DirectObservation::Exact {
+                owner_written_witness: true,
+                exact_owner_stale: true,
+                recorded_group_empty: false,
+            },
+            DirectObservation::Live,
+            DirectObservation::Uncertain,
+        ] {
+            let fixture = TransferFixture::direct();
+            let launch_path = fixture.launch_path();
+            let lease_path = fixture.lease_path();
+            let evidence = fixture.direct_evidence();
+            let adopted = fixture
+                .registry
+                .adopt_prepared(
+                    &fixture.session,
+                    fixture.prepared,
+                    fixture.selection,
+                    evidence,
+                )
+                .unwrap();
+            let running = authorize_and_run(&fixture.registry, &adopted);
+            terminal_direct(&fixture.registry, &running);
+            let mut inspector = exact_empty_inspector();
+            inspector.direct = observation;
+
+            let report = fixture.registry.reconcile(&inspector, None).unwrap();
+            let releasable = matches!(
+                observation,
+                DirectObservation::Exact {
+                    owner_written_witness: true,
+                    exact_owner_stale: true,
+                    recorded_group_empty: true,
+                }
+            );
+            assert_eq!(report.released, usize::from(releasable));
+            assert_eq!(launch_path.exists(), !releasable);
+            assert_eq!(lease_path.exists(), !releasable);
+            assert_eq!(inspector.direct_calls.get(), 1);
+        }
+    }
+
+    #[test]
+    fn restart_reconciliation_uses_descriptor_capability_not_state_config_path() {
+        let fixture = TransferFixture::direct();
+        let state_path = fixture._state.path().to_path_buf();
+        let generated_path = fixture._generated.path().to_path_buf();
+        let launch_path = fixture.launch_path();
+        let lease_path = fixture.lease_path();
+        let lease_name = fixture.prepared.record.lease.clone();
+        let evidence = fixture.direct_evidence();
+        let adopted = fixture
+            .registry
+            .adopt_prepared(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+            )
+            .unwrap();
+        let running = authorize_and_run(&fixture.registry, &adopted);
+        terminal_direct(&fixture.registry, &running);
+        let lifecycle_bytes = fs::read(&lease_path).unwrap();
+
+        drop(fixture.registry);
+        drop(fixture.store);
+        let decoy_generated = state_path.join("helm/generated");
+        fs::create_dir(&decoy_generated).unwrap();
+        fs::set_permissions(&decoy_generated, fs::Permissions::from_mode(0o700)).unwrap();
+        let decoy_leases = decoy_generated.join("leases");
+        fs::create_dir(&decoy_leases).unwrap();
+        fs::set_permissions(&decoy_leases, fs::Permissions::from_mode(0o700)).unwrap();
+        let decoy = decoy_leases.join(&lease_name);
+        write_mode(&decoy, &lifecycle_bytes, 0o600);
+
+        let reopened_store = GenerationStore::open(&generated_path).unwrap();
+        let reopened = ActivationRegistry::open(
+            &state_path,
+            GenerationLeaseCapability::from_store(&reopened_store).unwrap(),
+        )
+        .unwrap();
+        let inspector = exact_empty_inspector();
+        let report = reopened.reconcile(&inspector, None).unwrap();
+
+        assert_eq!(report.released, 1);
+        assert_eq!(report.collected, 1);
+        assert!(!launch_path.exists());
+        assert!(!lease_path.exists());
+        assert_eq!(fs::read(decoy).unwrap(), lifecycle_bytes);
+    }
+
+    #[test]
+    fn replaced_generation_capability_path_fails_before_observation_or_mutation() {
+        let fixture = TransferFixture::direct();
+        let launch_path = fixture.launch_path();
+        let lease_name = fixture.selection.lease_name.clone();
+        let leases_path = fixture._generated.path().join("leases");
+        let displaced = fixture._generated.path().join("displaced-leases");
+        fs::rename(&leases_path, &displaced).unwrap();
+        fs::create_dir(&leases_path).unwrap();
+        fs::set_permissions(&leases_path, fs::Permissions::from_mode(0o700)).unwrap();
+        let inspector = exact_empty_inspector();
+        let controller = exact_empty_controller();
+
+        assert!(fixture
+            .registry
+            .reconcile(&inspector, Some(&controller))
+            .is_err());
+        assert!(launch_path.exists());
+        assert!(displaced.join(lease_name).exists());
+        assert!(fs::read_dir(&leases_path).unwrap().next().is_none());
+        assert_eq!(inspector.direct_calls.get(), 0);
+        assert_eq!(inspector.systemd_calls.get(), 0);
+        assert_eq!(controller.direct_calls.get(), 0);
+        assert_eq!(controller.unadopted_systemd_calls.get(), 0);
+        assert_eq!(controller.adopted_systemd_calls.get(), 0);
+    }
+
+    #[test]
+    fn malformed_cross_kind_and_mismatched_leases_retain_without_adapter_calls() {
+        for case in ["malformed", "cross-kind", "mismatched"] {
+            let fixture = TransferFixture::direct();
+            let launch_path = fixture.launch_path();
+            let lease_path = fixture.lease_path();
+            match case {
+                "malformed" => write_mode(&lease_path, b"malformed lease\n", 0o600),
+                "cross-kind" => {
+                    let evidence = fixture.direct_evidence();
+                    let mut filesystem = FaultingLeaseFilesystem {
+                        fail_at: TransferCheckpoint::BeforeAdoptedRecord,
+                        lease_path: lease_path.clone(),
+                        launch_path: launch_path.clone(),
+                        observations: Vec::new(),
+                    };
+                    assert!(fixture
+                        .registry
+                        .adopt_prepared_with_filesystem(
+                            &fixture.session,
+                            fixture.prepared,
+                            fixture.selection,
+                            evidence,
+                            &mut filesystem,
+                        )
+                        .is_err());
+                }
+                "mismatched" => {
+                    let mut process = fixture.selection.process_identity.clone();
+                    process.start_time += 1;
+                    write_mode(&lease_path, &process.encode(), 0o600);
+                }
+                _ => unreachable!(),
+            }
+            let inspector = exact_empty_inspector();
+            let controller = exact_empty_controller();
+
+            let report = fixture
+                .registry
+                .reconcile(&inspector, Some(&controller))
+                .unwrap();
+
+            assert_eq!(report.released, 0, "case {case}");
+            assert_eq!(report.collected, 0, "case {case}");
+            assert!(launch_path.exists(), "case {case}");
+            assert!(lease_path.exists(), "case {case}");
+            assert_eq!(inspector.direct_calls.get(), 0, "case {case}");
+            assert_eq!(inspector.systemd_calls.get(), 0, "case {case}");
+            assert_eq!(controller.direct_calls.get(), 0, "case {case}");
+            assert_eq!(controller.unadopted_systemd_calls.get(), 0, "case {case}");
+            assert_eq!(controller.adopted_systemd_calls.get(), 0, "case {case}");
+        }
+    }
+
+    #[test]
+    fn preparing_absent_lease_aborts_then_collects_without_release() {
+        for mode in [OwnershipMode::Direct, OwnershipMode::Systemd] {
+            let fixture = TransferFixture::new("77777777777777777777777777777777", mode);
+            let launch_path = fixture.launch_path();
+            let lease_path = fixture.lease_path();
+            fs::remove_file(&lease_path).unwrap();
+            let inspector = exact_empty_inspector();
+            let controller = exact_empty_controller();
+
+            let report = fixture
+                .registry
+                .reconcile(&inspector, Some(&controller))
+                .unwrap();
+
+            assert_eq!(report.terminalized, 1);
+            assert_eq!(report.released, 0);
+            assert_eq!(report.collected, 1);
+            assert_eq!(report.retained, 0);
+            assert!(!launch_path.exists());
+            assert!(!lease_path.exists());
+            assert_eq!(
+                controller.direct_calls.get(),
+                usize::from(mode == OwnershipMode::Direct)
+            );
+            assert_eq!(
+                controller.unadopted_systemd_calls.get(),
+                usize::from(mode == OwnershipMode::Systemd)
+            );
+        }
+    }
+
+    #[test]
+    fn exact_running_direct_detachment_writes_terminal_lost_and_retains_lease() {
+        let fixture = TransferFixture::direct();
+        let launch_path = fixture.launch_path();
+        let lease_path = fixture.lease_path();
+        let evidence = fixture.direct_evidence();
+        let adopted = fixture
+            .registry
+            .adopt_prepared(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+            )
+            .unwrap();
+        authorize_and_run(&fixture.registry, &adopted);
+        let mut inspector = exact_empty_inspector();
+        inspector.direct = DirectObservation::Detached;
+
+        let report = fixture.registry.reconcile(&inspector, None).unwrap();
+
+        assert_eq!(report.terminalized, 1);
+        assert_eq!(report.released, 0);
+        assert_eq!(report.collected, 0);
+        assert_eq!(report.retained, 1);
+        let terminal = LaunchRecord::parse(&fs::read(&launch_path).unwrap()).unwrap();
+        assert_eq!(terminal.state, LaunchState::Terminal);
+        assert_eq!(terminal.result, LaunchResult::Lost);
+        assert!(!terminal.direct_drained);
+        assert!(lease_path.exists());
+    }
+
+    #[test]
+    fn empty_registry_with_malformed_transfer_staging_returns_frozen_error() {
+        let generated = tempfile::tempdir().unwrap();
+        fs::set_permissions(generated.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let store = GenerationStore::open(generated.path()).unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let registry = ActivationRegistry::open(
+            state.path(),
+            GenerationLeaseCapability::from_store(&store).unwrap(),
+        )
+        .unwrap();
+        let staging = generated
+            .path()
+            .join("leases/.lease-transfer-88888888888888888888888888888888");
+        write_mode(&staging, b"malformed retained evidence\n", 0o600);
+        let inspector = exact_empty_inspector();
+
+        let error = registry.reconcile(&inspector, None).unwrap_err();
+
+        assert!(error.contains("transfer staging"));
+        assert!(staging.exists());
+    }
+
+    #[test]
+    fn one_mismatched_lease_freezes_all_destructive_reconciliation() {
+        let fixture = TransferFixture::direct();
+        let first_launch = fixture.launch_path();
+        let first_lease = fixture.lease_path();
+        let second_selection = fixture
+            .store
+            .select_current_for_process(std::process::id())
+            .unwrap();
+        let second_lease = fixture
+            ._generated
+            .path()
+            .join("leases")
+            .join(&second_selection.lease_name);
+        let second = fixture
+            .registry
+            .prepare(
+                &fixture.session,
+                PrepareLaunch {
+                    launch: LaunchId::parse("66666666666666666666666666666666").unwrap(),
+                    mode: OwnershipMode::Direct,
+                },
+                &second_selection,
+            )
+            .unwrap();
+        let second_launch = fixture
+            ._state
+            .path()
+            .join("helm/activation/launches")
+            .join(second.record.launch.encode());
+        let mut mismatched = second_selection.process_identity.clone();
+        mismatched.start_time += 1;
+        write_mode(&second_lease, &mismatched.encode(), 0o600);
+        let inspector = exact_empty_inspector();
+        let controller = exact_empty_controller();
+
+        let report = fixture
+            .registry
+            .reconcile(&inspector, Some(&controller))
+            .unwrap();
+
+        assert_eq!(report.retained, 2);
+        assert_eq!(report.released, 0);
+        assert!(first_launch.exists());
+        assert!(first_lease.exists());
+        assert!(second_launch.exists());
+        assert!(second_lease.exists());
+        assert_eq!(controller.direct_calls.get(), 0);
+    }
+
+    #[test]
+    fn unreferenced_lease_inventory_uncertainty_freezes_all_valid_rows() {
+        for case in ["orphan-lifecycle", "unknown", "non-utf8", "malformed"] {
+            let fixture = TransferFixture::systemd();
+            let first_launch = fixture.launch_path();
+            let first_lease = fixture.lease_path();
+            let (_, second_launch, second_lease) =
+                add_systemd_running(&fixture, "99999999999999999999999999999999");
+            let evidence = fixture.systemd_evidence();
+            let adopted = fixture
+                .registry
+                .adopt_prepared(
+                    &fixture.session,
+                    fixture.prepared,
+                    fixture.selection,
+                    evidence,
+                )
+                .unwrap();
+            authorize_and_run(&fixture.registry, &adopted);
+            let leases = fixture._generated.path().join("leases");
+            let uncertain = match case {
+                "orphan-lifecycle" => {
+                    let path = leases.join("88888888888888888888888888888888");
+                    write_mode(&path, &fs::read(&first_lease).unwrap(), 0o600);
+                    path
+                }
+                "unknown" => {
+                    let path = leases.join("unknown-retained-evidence");
+                    write_mode(&path, b"unknown\n", 0o600);
+                    path
+                }
+                "non-utf8" => {
+                    let path = leases.join(OsString::from_vec(vec![0xff, 0xfe]));
+                    write_mode(&path, b"unknown\n", 0o600);
+                    path
+                }
+                "malformed" => {
+                    let path = leases.join("88888888888888888888888888888888");
+                    write_mode(&path, b"malformed canonical lease\n", 0o600);
+                    path
+                }
+                _ => unreachable!(),
+            };
+            let inspector = exact_empty_inspector();
+
+            let report = fixture.registry.reconcile(&inspector, None).unwrap();
+
+            assert_eq!(report.retained, 2, "case {case}");
+            assert_eq!(report.released, 0, "case {case}");
+            assert_eq!(report.collected, 0, "case {case}");
+            assert!(first_launch.exists(), "case {case}");
+            assert!(first_lease.exists(), "case {case}");
+            assert!(second_launch.exists(), "case {case}");
+            assert!(second_lease.exists(), "case {case}");
+            assert!(uncertain.exists(), "case {case}");
+            assert_eq!(inspector.systemd_calls.get(), 0, "case {case}");
+        }
+    }
+
+    #[test]
+    fn retired_lease_with_nonterminal_record_freezes_unrelated_collectible_state() {
+        let fixture = TransferFixture::direct();
+        let first_launch = fixture.launch_path();
+        let first_lease = fixture.lease_path();
+        let (_, second_launch, second_lease) =
+            add_systemd_running(&fixture, "99999999999999999999999999999999");
+        let retired = first_lease
+            .parent()
+            .unwrap()
+            .join(format!(".lease-retire-{}", fixture.prepared.record.lease));
+        fs::rename(&first_lease, &retired).unwrap();
+        let inspector = exact_empty_inspector();
+        let controller = exact_empty_controller();
+
+        let report = fixture
+            .registry
+            .reconcile(&inspector, Some(&controller))
+            .unwrap();
+
+        assert_eq!(report.retained, 2);
+        assert!(first_launch.exists());
+        assert!(retired.exists());
+        assert!(second_launch.exists());
+        assert!(second_lease.exists());
+        assert_eq!(inspector.systemd_calls.get(), 0);
+        assert_eq!(controller.direct_calls.get(), 0);
+
+        let fixture = TransferFixture::systemd();
+        let first_launch = fixture.launch_path();
+        let first_lease = fixture.lease_path();
+        let (_, second_launch, second_lease) =
+            add_systemd_running(&fixture, "99999999999999999999999999999999");
+        let evidence = fixture.systemd_evidence();
+        let adopted = fixture
+            .registry
+            .adopt_prepared(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+            )
+            .unwrap();
+        authorize_and_run(&fixture.registry, &adopted);
+        let retired = first_lease
+            .parent()
+            .unwrap()
+            .join(format!(".lease-retire-{}", adopted.record.lease));
+        fs::rename(&first_lease, &retired).unwrap();
+        let inspector = exact_empty_inspector();
+        let controller = exact_empty_controller();
+
+        let report = fixture
+            .registry
+            .reconcile(&inspector, Some(&controller))
+            .unwrap();
+
+        assert_eq!(report.retained, 2);
+        assert!(first_launch.exists());
+        assert!(retired.exists());
+        assert!(second_launch.exists());
+        assert!(second_lease.exists());
+        assert_eq!(inspector.systemd_calls.get(), 0);
+        assert_eq!(controller.adopted_systemd_calls.get(), 0);
+    }
+
+    #[test]
+    fn retired_launch_with_present_lease_freezes_unrelated_collectible_state() {
+        let fixture = TransferFixture::direct();
+        let first_launch = fixture.launch_path();
+        let first_lease = fixture.lease_path();
+        let (_, second_launch, second_lease) =
+            add_systemd_running(&fixture, "99999999999999999999999999999999");
+        let mut terminal = fixture.prepared.record.clone();
+        terminal.sequence += 1;
+        terminal.state = LaunchState::Terminal;
+        terminal.result = LaunchResult::Failed;
+        fixture
+            .registry
+            .replace_launch_record(&fixture.prepared.record, &terminal)
+            .unwrap();
+        let retired = first_launch
+            .parent()
+            .unwrap()
+            .join(format!(".launch-retire-{}", terminal.launch.encode()));
+        fs::rename(&first_launch, &retired).unwrap();
+        let inspector = exact_empty_inspector();
+        let controller = exact_empty_controller();
+
+        let report = fixture
+            .registry
+            .reconcile(&inspector, Some(&controller))
+            .unwrap();
+
+        assert_eq!(report.retained, 2);
+        assert!(retired.exists());
+        assert!(first_lease.exists());
+        assert!(second_launch.exists());
+        assert!(second_lease.exists());
+        assert_eq!(inspector.systemd_calls.get(), 0);
+        assert_eq!(controller.direct_calls.get(), 0);
+
+        let fixture = TransferFixture::systemd();
+        let first_launch = fixture.launch_path();
+        let first_lease = fixture.lease_path();
+        let (_, second_launch, second_lease) =
+            add_systemd_running(&fixture, "99999999999999999999999999999999");
+        let evidence = fixture.systemd_evidence();
+        let adopted = fixture
+            .registry
+            .adopt_prepared(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+            )
+            .unwrap();
+        let running = authorize_and_run(&fixture.registry, &adopted);
+        let mut terminal = running.clone();
+        terminal.sequence += 1;
+        terminal.state = LaunchState::Terminal;
+        terminal.result = LaunchResult::Exited;
+        fixture
+            .registry
+            .replace_launch_record(&running, &terminal)
+            .unwrap();
+        let retired = first_launch
+            .parent()
+            .unwrap()
+            .join(format!(".launch-retire-{}", terminal.launch.encode()));
+        fs::rename(&first_launch, &retired).unwrap();
+        let inspector = exact_empty_inspector();
+
+        let report = fixture.registry.reconcile(&inspector, None).unwrap();
+
+        assert_eq!(report.retained, 2);
+        assert!(retired.exists());
+        assert!(first_lease.exists());
+        assert!(second_launch.exists());
+        assert!(second_lease.exists());
+        assert_eq!(inspector.systemd_calls.get(), 0);
+    }
+
+    #[test]
+    fn duplicate_launch_references_to_one_process_lease_freeze_before_controller() {
+        let fixture = TransferFixture::direct();
+        let first_launch = fixture.launch_path();
+        let lease_path = fixture.lease_path();
+        let mut duplicate = fixture.prepared.record.clone();
+        duplicate.launch = LaunchId::parse("99999999999999999999999999999999").unwrap();
+        let second_launch = first_launch
+            .parent()
+            .unwrap()
+            .join(duplicate.launch.encode());
+        write_mode(&second_launch, &duplicate.encode(), 0o600);
+        let inspector = exact_empty_inspector();
+        let controller = exact_empty_controller();
+
+        let report = fixture
+            .registry
+            .reconcile(&inspector, Some(&controller))
+            .unwrap();
+
+        assert_eq!(report.retained, 2);
+        assert_eq!(report.terminalized, 0);
+        assert_eq!(report.released, 0);
+        assert_eq!(report.collected, 0);
+        assert!(first_launch.exists());
+        assert!(second_launch.exists());
+        assert!(lease_path.exists());
+        assert_eq!(controller.direct_calls.get(), 0);
+    }
+
+    #[test]
+    fn prepare_rejects_reusing_a_selection_lease_already_in_a_launch_record() {
+        let fixture = TransferFixture::direct();
+        let second_launch = LaunchId::parse("99999999999999999999999999999999").unwrap();
+
+        let error = fixture
+            .registry
+            .prepare(
+                &fixture.session,
+                PrepareLaunch {
+                    launch: second_launch,
+                    mode: OwnershipMode::Direct,
+                },
+                &fixture.selection,
+            )
+            .unwrap_err();
+
+        assert!(error.contains("lease is already referenced"));
+        assert!(!fixture
+            ._state
+            .path()
+            .join("helm/activation/launches")
+            .join(second_launch.encode())
+            .exists());
+        assert!(fixture.launch_path().exists());
+        assert!(fixture.lease_path().exists());
+    }
+
+    #[test]
+    fn later_passive_uncertainty_freezes_all_rows_in_both_enumeration_orders() {
+        for uncertain_id in [
+            "00000000000000000000000000000000",
+            "ffffffffffffffffffffffffffffffff",
+        ] {
+            let fixture = TransferFixture::systemd();
+            let first_launch = fixture.launch_path();
+            let first_lease = fixture.lease_path();
+            let (uncertain_launch, second_launch, second_lease) =
+                add_systemd_running(&fixture, uncertain_id);
+            let evidence = fixture.systemd_evidence();
+            let adopted = fixture
+                .registry
+                .adopt_prepared(
+                    &fixture.session,
+                    fixture.prepared,
+                    fixture.selection,
+                    evidence,
+                )
+                .unwrap();
+            authorize_and_run(&fixture.registry, &adopted);
+            let inspector = SelectiveSystemdInspector {
+                uncertain_launch,
+                systemd_calls: Cell::new(0),
+            };
+
+            let report = fixture.registry.reconcile(&inspector, None).unwrap();
+
+            assert_eq!(report.retained, 2, "uncertain {uncertain_id}");
+            assert_eq!(report.terminalized, 0, "uncertain {uncertain_id}");
+            assert_eq!(report.released, 0, "uncertain {uncertain_id}");
+            assert_eq!(report.collected, 0, "uncertain {uncertain_id}");
+            assert!(first_launch.exists(), "uncertain {uncertain_id}");
+            assert!(first_lease.exists(), "uncertain {uncertain_id}");
+            assert!(second_launch.exists(), "uncertain {uncertain_id}");
+            assert!(second_lease.exists(), "uncertain {uncertain_id}");
+            assert_eq!(inspector.systemd_calls.get(), 2, "uncertain {uncertain_id}");
+        }
+    }
+
+    #[test]
+    fn absent_running_lease_fatal_freezes_unrelated_valid_row_in_both_orders() {
+        for absent_id in [
+            "00000000000000000000000000000000",
+            "ffffffffffffffffffffffffffffffff",
+        ] {
+            let fixture = TransferFixture::systemd();
+            let first_launch = fixture.launch_path();
+            let first_lease = fixture.lease_path();
+            let (_, second_launch, second_lease) = add_systemd_running(&fixture, absent_id);
+            let evidence = fixture.systemd_evidence();
+            let adopted = fixture
+                .registry
+                .adopt_prepared(
+                    &fixture.session,
+                    fixture.prepared,
+                    fixture.selection,
+                    evidence,
+                )
+                .unwrap();
+            authorize_and_run(&fixture.registry, &adopted);
+            fs::remove_file(&second_lease).unwrap();
+            let inspector = exact_empty_inspector();
+
+            let report = fixture.registry.reconcile(&inspector, None).unwrap();
+
+            assert_eq!(report.retained, 2, "absent {absent_id}");
+            assert_eq!(report.terminalized, 0, "absent {absent_id}");
+            assert_eq!(report.released, 0, "absent {absent_id}");
+            assert_eq!(report.collected, 0, "absent {absent_id}");
+            assert!(first_launch.exists(), "absent {absent_id}");
+            assert!(first_lease.exists(), "absent {absent_id}");
+            assert!(second_launch.exists(), "absent {absent_id}");
+            assert!(!second_lease.exists(), "absent {absent_id}");
+            assert_eq!(inspector.systemd_calls.get(), 0, "absent {absent_id}");
+        }
+    }
+
+    #[test]
+    fn later_controller_uncertainty_allows_abort_attempts_but_zero_durable_mutation() {
+        for uncertain_id in [
+            "00000000000000000000000000000000",
+            "ffffffffffffffffffffffffffffffff",
+        ] {
+            let fixture = TransferFixture::direct();
+            let first_launch = fixture.launch_path();
+            let first_lease = fixture.lease_path();
+            let (uncertain_launch, second_launch, second_lease, _second_selection) =
+                add_direct_preparing(&fixture, uncertain_id);
+            let inspector = exact_empty_inspector();
+            let controller = SelectiveDirectController {
+                uncertain_launch,
+                direct_calls: Cell::new(0),
+            };
+
+            let report = fixture
+                .registry
+                .reconcile(&inspector, Some(&controller))
+                .unwrap();
+
+            assert_eq!(report.retained, 2, "uncertain {uncertain_id}");
+            assert_eq!(report.terminalized, 0, "uncertain {uncertain_id}");
+            assert_eq!(report.released, 0, "uncertain {uncertain_id}");
+            assert_eq!(report.collected, 0, "uncertain {uncertain_id}");
+            assert!(first_launch.exists(), "uncertain {uncertain_id}");
+            assert!(first_lease.exists(), "uncertain {uncertain_id}");
+            assert!(second_launch.exists(), "uncertain {uncertain_id}");
+            assert!(second_lease.exists(), "uncertain {uncertain_id}");
+            assert_eq!(controller.direct_calls.get(), 2, "uncertain {uncertain_id}");
+        }
+    }
+
+    #[test]
+    fn unavailable_or_uncertain_gate_closed_controller_retains_preparing_state() {
+        for unavailable in [true, false] {
+            let fixture = TransferFixture::direct();
+            let launch_path = fixture.launch_path();
+            let lease_path = fixture.lease_path();
+            let inspector = exact_empty_inspector();
+            let mut controller = exact_empty_controller();
+            controller.direct = DirectObservation::Uncertain;
+            let controller_ref = if unavailable {
+                None
+            } else {
+                Some(&controller as &dyn GateClosedController)
+            };
+
+            let report = fixture
+                .registry
+                .reconcile(&inspector, controller_ref)
+                .unwrap();
+
+            assert_eq!(report.released, 0);
+            assert_eq!(report.collected, 0);
+            assert!(launch_path.exists());
+            assert!(lease_path.exists());
+            assert_eq!(controller.direct_calls.get(), usize::from(!unavailable));
+        }
+    }
+
+    #[test]
+    fn terminal_release_crash_boundaries_reopen_into_exact_retry_row() {
+        for fail_at in [
+            ReconciliationCheckpoint::AfterTerminalRecordFsync,
+            ReconciliationCheckpoint::AfterLeaseUnlink,
+            ReconciliationCheckpoint::AfterLeaseDirectoryFsync,
+            ReconciliationCheckpoint::BeforeRecordRemoval,
+        ] {
+            let fixture = TransferFixture::systemd();
+            let launch_path = fixture.launch_path();
+            let lease_path = fixture.lease_path();
+            let evidence = fixture.systemd_evidence();
+            let adopted = fixture
+                .registry
+                .adopt_prepared(
+                    &fixture.session,
+                    fixture.prepared,
+                    fixture.selection,
+                    evidence,
+                )
+                .unwrap();
+            authorize_and_run(&fixture.registry, &adopted);
+            let inspector = exact_empty_inspector();
+            let mut filesystem = FaultingReconciliationFilesystem { fail_at };
+
+            assert!(fixture
+                .registry
+                .reconcile_with_filesystem(&inspector, None, &mut filesystem)
+                .is_err());
+            let durable = LaunchRecord::parse(&fs::read(&launch_path).unwrap()).unwrap();
+            assert_eq!(durable.state, LaunchState::Terminal);
+            assert_eq!(durable.result, LaunchResult::Exited);
+            assert_eq!(
+                lease_path.exists(),
+                fail_at == ReconciliationCheckpoint::AfterTerminalRecordFsync
+            );
+
+            let report = fixture.registry.reconcile(&inspector, None).unwrap();
+            assert_eq!(report.terminalized, 0);
+            assert_eq!(
+                report.released,
+                usize::from(fail_at == ReconciliationCheckpoint::AfterTerminalRecordFsync)
+            );
+            assert_eq!(report.collected, 1);
+            assert!(!launch_path.exists());
+            assert!(!lease_path.exists());
+        }
+    }
+
+    #[test]
+    fn retirement_only_crash_states_reopen_into_the_same_exact_proof_row() {
+        let fixture = TransferFixture::systemd();
+        let launch_path = fixture.launch_path();
+        let lease_path = fixture.lease_path();
+        let retired_lease = lease_path
+            .parent()
+            .unwrap()
+            .join(format!(".lease-retire-{}", fixture.prepared.record.lease));
+        let evidence = fixture.systemd_evidence();
+        let adopted = fixture
+            .registry
+            .adopt_prepared(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+            )
+            .unwrap();
+        authorize_and_run(&fixture.registry, &adopted);
+        let inspector = exact_empty_inspector();
+        let mut filesystem = FaultingReconciliationFilesystem {
+            fail_at: ReconciliationCheckpoint::AfterLeaseRetire,
+        };
+
+        assert!(fixture
+            .registry
+            .reconcile_with_filesystem(&inspector, None, &mut filesystem)
+            .is_err());
+        assert!(launch_path.exists());
+        assert!(!lease_path.exists());
+        assert!(retired_lease.exists());
+        let report = fixture.registry.reconcile(&inspector, None).unwrap();
+        assert_eq!(report.released, 1);
+        assert_eq!(report.collected, 1);
+        assert!(!launch_path.exists());
+        assert!(!retired_lease.exists());
+
+        let fixture = TransferFixture::direct();
+        let launch_path = fixture.launch_path();
+        let lease_path = fixture.lease_path();
+        let retired_launch = launch_path.parent().unwrap().join(format!(
+            ".launch-retire-{}",
+            fixture.prepared.record.launch.encode()
+        ));
+        let evidence = fixture.direct_evidence();
+        let adopted = fixture
+            .registry
+            .adopt_prepared(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+            )
+            .unwrap();
+        let running = authorize_and_run(&fixture.registry, &adopted);
+        terminal_direct(&fixture.registry, &running);
+        let inspector = exact_empty_inspector();
+        let mut filesystem = FaultingReconciliationFilesystem {
+            fail_at: ReconciliationCheckpoint::AfterLaunchRetire,
+        };
+
+        assert!(fixture
+            .registry
+            .reconcile_with_filesystem(&inspector, None, &mut filesystem)
+            .is_err());
+        assert!(!launch_path.exists());
+        assert!(!lease_path.exists());
+        assert!(retired_launch.exists());
+        let report = fixture.registry.reconcile(&inspector, None).unwrap();
+        assert_eq!(report.released, 0);
+        assert_eq!(report.collected, 1);
+        assert!(!retired_launch.exists());
+    }
+
+    #[test]
+    fn reconciliation_never_unlinks_same_byte_replacement_inodes() {
+        let fixture = TransferFixture::systemd();
+        let launch_path = fixture.launch_path();
+        let lease_path = fixture.lease_path();
+        let displaced_lease = fixture._generated.path().join("displaced-reconcile-lease");
+        let evidence = fixture.systemd_evidence();
+        let adopted = fixture
+            .registry
+            .adopt_prepared(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+            )
+            .unwrap();
+        authorize_and_run(&fixture.registry, &adopted);
+        let inspector = exact_empty_inspector();
+        let mut lease_swap = SwappingReconciliationFilesystem {
+            swap_at: ReconciliationCheckpoint::AfterTerminalRecordFsync,
+            path: lease_path.clone(),
+            displaced: displaced_lease.clone(),
+        };
+
+        let report = fixture
+            .registry
+            .reconcile_with_filesystem(&inspector, None, &mut lease_swap)
+            .unwrap();
+        assert_eq!(report.terminalized, 1);
+        assert_eq!(report.released, 0);
+        assert_eq!(report.collected, 0);
+        assert_eq!(report.retained, 1);
+        assert!(launch_path.exists());
+        assert!(lease_path.exists());
+        assert!(displaced_lease.exists());
+
+        let fixture = TransferFixture::direct();
+        let launch_path = fixture.launch_path();
+        let lease_path = fixture.lease_path();
+        let displaced_launch = fixture._state.path().join("displaced-reconcile-launch");
+        let evidence = fixture.direct_evidence();
+        let adopted = fixture
+            .registry
+            .adopt_prepared(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+            )
+            .unwrap();
+        let running = authorize_and_run(&fixture.registry, &adopted);
+        terminal_direct(&fixture.registry, &running);
+        let inspector = exact_empty_inspector();
+        let mut launch_swap = SwappingReconciliationFilesystem {
+            swap_at: ReconciliationCheckpoint::BeforeRecordRemoval,
+            path: launch_path.clone(),
+            displaced: displaced_launch.clone(),
+        };
+
+        let report = fixture
+            .registry
+            .reconcile_with_filesystem(&inspector, None, &mut launch_swap)
+            .unwrap();
+        assert_eq!(report.released, 1);
+        assert_eq!(report.collected, 0);
+        assert_eq!(report.retained, 1);
+        assert!(launch_path.exists());
+        assert!(!lease_path.exists());
+        assert!(displaced_launch.exists());
+        assert_eq!(
+            fixture
+                .registry
+                .reconcile(&inspector, None)
+                .unwrap()
+                .collected,
+            1
+        );
+        assert!(!launch_path.exists());
+    }
+
+    #[test]
+    fn exact_final_gap_swaps_are_retained_then_retired_only_after_fresh_proof() {
+        let fixture = TransferFixture::systemd();
+        let launch_path = fixture.launch_path();
+        let lease_path = fixture.lease_path();
+        let lease_name = fixture.prepared.record.lease.clone();
+        let retired_lease = lease_path
+            .parent()
+            .unwrap()
+            .join(format!(".lease-retire-{lease_name}"));
+        let displaced_lease = fixture._generated.path().join("held-original-lease");
+        let evidence = fixture.systemd_evidence();
+        let adopted = fixture
+            .registry
+            .adopt_prepared(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+            )
+            .unwrap();
+        authorize_and_run(&fixture.registry, &adopted);
+        let inspector = exact_empty_inspector();
+        let mut lease_swap = SwappingReconciliationFilesystem {
+            swap_at: ReconciliationCheckpoint::BeforeLeaseRetire,
+            path: lease_path.clone(),
+            displaced: displaced_lease.clone(),
+        };
+
+        let report = fixture
+            .registry
+            .reconcile_with_filesystem(&inspector, None, &mut lease_swap)
+            .unwrap();
+
+        assert_eq!(report.released, 0);
+        assert_eq!(report.collected, 0);
+        assert_eq!(report.retained, 1);
+        assert!(launch_path.exists());
+        assert!(!lease_path.exists());
+        assert!(retired_lease.exists());
+        assert!(displaced_lease.exists());
+        let fresh_report = fixture.registry.reconcile(&inspector, None).unwrap();
+        assert_eq!(fresh_report.released, 1);
+        assert_eq!(fresh_report.collected, 1);
+        assert!(!launch_path.exists());
+        assert!(!retired_lease.exists());
+        assert!(displaced_lease.exists());
+
+        let fixture = TransferFixture::direct();
+        let launch_path = fixture.launch_path();
+        let launch_name = fixture.prepared.record.launch.encode();
+        let retired_launch = launch_path
+            .parent()
+            .unwrap()
+            .join(format!(".launch-retire-{launch_name}"));
+        let displaced_launch = fixture._state.path().join("held-original-launch");
+        let evidence = fixture.direct_evidence();
+        let adopted = fixture
+            .registry
+            .adopt_prepared(
+                &fixture.session,
+                fixture.prepared,
+                fixture.selection,
+                evidence,
+            )
+            .unwrap();
+        let running = authorize_and_run(&fixture.registry, &adopted);
+        terminal_direct(&fixture.registry, &running);
+        let inspector = exact_empty_inspector();
+        let mut launch_swap = SwappingReconciliationFilesystem {
+            swap_at: ReconciliationCheckpoint::BeforeLaunchRetire,
+            path: launch_path.clone(),
+            displaced: displaced_launch.clone(),
+        };
+
+        let report = fixture
+            .registry
+            .reconcile_with_filesystem(&inspector, None, &mut launch_swap)
+            .unwrap();
+
+        assert_eq!(report.released, 1);
+        assert_eq!(report.collected, 0);
+        assert_eq!(report.retained, 1);
+        assert!(!launch_path.exists());
+        assert!(retired_launch.exists());
+        assert!(displaced_launch.exists());
+        let fresh_report = fixture.registry.reconcile(&inspector, None).unwrap();
+        assert_eq!(fresh_report.released, 0);
+        assert_eq!(fresh_report.collected, 1);
+        assert!(!retired_launch.exists());
+        assert!(displaced_launch.exists());
     }
 }

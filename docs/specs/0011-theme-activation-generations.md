@@ -45,6 +45,76 @@ descendant-drain witness before exit; only then may reconciliation validate the
 exact owner stale and recorded group empty. A later reconciler must never invent
 the witness.
 
+Lifecycle lease retirement is a recoverable atomic move, never a checked
+pathname followed by a separate unlink of that pathname. While holding the
+shared generation lock, the reconciler moves the canonical `<lease-id>` to the
+fixed reserved `.lease-retire-<lease-id>` sibling with one no-replace rename,
+then opens the retired name without following links and proves that it is the
+same held device/inode and canonical record. A final-name replacement that wins
+before the rename is therefore moved aside and retained for that detecting
+pass rather than deleted under stale inode authority. Only the post-move exact
+inode may be unlinked, followed by a leases-directory fsync. On a later fresh
+reconciliation, semantically identical canonical retirement evidence may be
+selected anew and removed only after the complete inventory, record relation,
+and ownership proofs pass again. The canonical and retirement names may never coexist in a valid
+inventory. A crash may leave only the retirement name; lifecycle reconciliation
+treats that exact canonical payload as the still-present lease, repeats the
+applicable ownership proof, and completes retirement. A malformed, unsafe,
+duplicate, mismatched, or canonical-plus-retirement inventory freezes all lease
+and generation deletion. Generic GC recognizes the retirement namespace only
+as lifecycle-owned retained evidence and never removes it.
+
+This semantic-equivalence rule does not promise permanent preservation of the
+replacement inode identity. Distinguishing a legitimate retirement-only crash
+from an identically encoded object quarantined after a final-gap race would
+require additional durable transaction provenance; that stronger identity
+preservation is deferred beyond M2.
+
+The M2 retirement authority assumes conforming Helm writers obey the global
+`lifecycle.lock` then generation-lock order and never mutate reserved
+`.lease-retire-*` names while those locks are held. Pre-retirement and
+at-retirement pathname replacement remain in scope and fail closed by the
+atomic move plus post-move inode proof. A hostile or nonconforming process under
+the same UID that mutates a reserved retirement name after that proof is an
+account-compromise boundary outside M2: ordinary Linux APIs provide no
+unlink-by-file-descriptor primitive. M2 does not claim defense against that
+post-retirement attacker; stronger isolation or durable privileged authority is
+deferred.
+
+The lifecycle reconciler performs one unconditional bounded validation of every
+lease-directory name, type, owner, mode, size, discriminator, canonical payload,
+transfer/retirement relation and registry reference before ownership observation
+or control. This scan is required even when no staging or retirement name is
+present. Every lifecycle lease has exactly one matching launch record; every
+launch lease name is referenced by at most one launch record. An orphan
+lifecycle lease, duplicate record reference, unknown/non-UTF-8 name, unsafe or
+malformed unreferenced entry, or any other incomplete relation freezes the whole
+destructive pass. Valid unreferenced process leases remain generic-GC evidence
+and are not lifecycle-registry errors.
+
+Every `.lease-retire-*` entry must have exactly one matching durable `terminal`
+launch record; retirement beside `preparing`, `adopted`, or `running` is not
+producer-reachable and freezes the pass. Conversely, a `.launch-retire-*`
+record is reachable only after the referenced lease has been durably removed;
+a retired launch plus any present canonical or retired lease is fatal.
+
+Launch preparation independently rejects a `GenerationSelection` lease name
+already referenced by any durable launch record. Reconciliation still enforces
+the uniqueness invariant because filesystem recovery may encounter records not
+created by the current process.
+
+Lifecycle reconciliation never derives or reopens the generated root from an
+activation-registry pathname. At process bootstrap Helm first opens and
+revalidates the existing generated root as a `GenerationStore`, then derives a
+private lease capability by cloning that store's validated `leases/` and
+`activation.lock` descriptors and sharing its original in-process mutex. The
+capability contains no path supplied by a launch record and cannot be
+constructed from registry bytes. Reconciliation holds `lifecycle.lock`, then
+the capability's shared `activation.lock`, before it opens, classifies,
+unlinks, or fsyncs an exact referenced lease. This preserves the global lock
+order and lets a restarted process release only evidence beneath the same
+descriptor-validated generated root that generic GC uses.
+
 The basename `.lease-transfer-<lease-id>` is reserved as a private unpublished
 staging artifact for SPEC 0012's same-name process-to-lifecycle replacement;
 `<lease-id>` is one canonical opaque lease identifier. It is never itself a

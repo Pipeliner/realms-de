@@ -235,14 +235,52 @@ git commit -m "feat: transfer generation leases through lifecycle registry"
 - Test: `crates/helm-theme/src/generation/lifecycle.rs` `#[cfg(test)]`
 
 **Interfaces:**
+- Consumes a private `GenerationLeaseCapability` derived only from an already
+  validated `GenerationStore`; `ActivationRegistry::open(state_home,
+  capability)` stores cloned leases/activation-lock descriptors and the
+  store's original in-process mutex, never a generated-root path.
 - Produces sealed child-module `OwnershipInspector` with `inspect_systemd(&VerifiedSystemd) -> SystemdObservation` and `inspect_direct(&LaunchRecord) -> DirectObservation`.
 - Produces sealed child-module `GateClosedController::{abort_unadopted_direct, abort_unadopted_systemd, abort_adopted_systemd}`; no external caller can manufacture it.  It receives the exact owner PID/start/UID/boot and deterministic direct group or systemd unit, and must return a fresh exact ownership observation after a bounded gate-closed abort/reap attempt.
-- Produces private `ActivationRegistry::reconcile(inspector: &impl OwnershipInspector, controller: Option<&impl GateClosedController>) -> Result<ReconciliationReport, String>`.
+- Produces private `ActivationRegistry::reconcile(inspector: &impl OwnershipInspector, controller: Option<&impl GateClosedController>) -> Result<ReconciliationReport, String>`; it takes `lifecycle.lock` and then the stored capability's original generation mutex/shared `activation.lock` before exact lease inspection or mutation.
 - `SystemdObservation` distinguishes exact recursive-empty, exact-live, and every invocation/cgroup/path/device/inode/permission/parser uncertainty. `DirectObservation` independently carries `owner_written_witness`, exact-owner-stale, recorded-group-empty, live, and uncertainty; there is no generic `Empty` release token.
+- Reconciliation classifies the whole inventory and gathers all passive
+  observations before controllers or mutation; it then runs every required
+  exact gate-closed controller and mutates records/leases only if all controller
+  proofs are exact-empty. Controller abort attempts are allowed in phase two,
+  but partial durable mutation is not. `DirectObservation` also has an exact
+  detachment result that can write only retained `terminal/lost`.
+- The first phase unconditionally scans every lease entry even without staging:
+  validate names/types/modes/sizes/canonical payloads, require each lifecycle
+  lease to have exactly one matching launch, reject duplicate launch references
+  to one lease, and freeze on orphan/unknown/non-UTF-8/malformed evidence. Valid
+  unreferenced process leases remain untouched for generic GC.
+- `.lease-retire-*` requires one exact durable `terminal` record;
+  `.launch-retire-*` requires its referenced lease absent. Reversed ordering
+  fatal-freezes before adapters.
+- `prepare` rejects a selection lease name already referenced by any durable
+  launch record; reconciliation independently freezes duplicate references.
+- Deletion is a recoverable fixed-name retirement protocol: no-replace rename
+  to `.lease-retire-<lease-id>` / `.launch-retire-<launch-id>`, post-move exact
+  descriptor/inode/content validation, then unlink/fsync only the retirement
+  name. Exact retirement-only crash state resumes; canonical-plus-retirement or
+  malformed retirement evidence freezes all deletion. A final-gap replacement
+  is retained for the detecting pass; a later fresh full proof may retire
+  semantically identical evidence. Permanent inode provenance is deferred.
+- Threat boundary: conforming Helm writers hold the required locks and never
+  mutate reserved retirement names. Pre-/at-retirement replacement must fail
+  closed. Hostile same-UID post-proof mutation is out of M2 account-compromise
+  scope; do not claim an unavailable Linux unlink-by-descriptor guarantee.
 
 - [ ] **Step 1: Write red reconciliation tests**
 
-Test exact rows: `preparing` plus matching process lease for direct and deterministic systemd ownership invokes only the matching gate-closed controller, proves emptiness, writes `terminal/failed`, then releases the process lease; `preparing` plus matching lifecycle systemd lease and `adopted` systemd rows use only their exact controllers; running systemd empty becomes `terminal/exited` without a controller call; direct `running` without owner-written `direct-drained yes` stays record+lease even if fake group is empty; terminal direct releases only with witness, exact owner stale, and exact recorded group empty; cross-kind/malformed/missing/mismatched lease, unavailable controller, or any observation uncertainty retains all state. Include post-lease-fsync/pre-adopt and terminal-fsync/pre-release/release-fsync/pre-record-removal fault fixtures; reopening must retry only the applicable row and prove final terminal record collection after lease-directory fsync.
+Test exact rows: `preparing` plus matching process lease for direct and deterministic systemd ownership invokes only the matching gate-closed controller, proves emptiness, writes `terminal/failed`, then releases the process lease; `preparing` plus matching lifecycle systemd lease and `adopted` systemd rows use only their exact controllers; `preparing` plus absent invokes the exact controller then terminalizes/collects without release, while `adopted`/`running` plus absent fatal-freezes unrelated valid rows; running systemd empty becomes `terminal/exited` without a controller call; direct `running` without owner-written `direct-drained yes` stays record+lease even if fake group is empty, while exact detachment writes retained `terminal/lost`; terminal direct releases only with witness, exact owner stale, and exact recorded-group empty; cross-kind/malformed/mismatched lease, unavailable controller, or any observation uncertainty retains all state. Include both record enumeration orders for later passive/controller uncertainty and prove zero durable mutation, orphan lifecycle/unknown/malformed unreferenced inventory and duplicate lease-reference freeze, empty-registry staging failure, final revalidate-to-retire lease/launch swap injection with same-pass retention and next-pass fresh-proof retirement, and retirement-only crash recovery in addition to post-lease-fsync/pre-adopt and terminal-fsync/pre-release/release-fsync/pre-record-removal faults.
+
+Add a restart fixture that drops the original registry, reopens and validates
+the existing `GenerationStore`, derives a fresh private lease capability, and
+reopens the registry with it. Put a decoy `helm/generated/leases` path below
+state home and prove reconciliation ignores it while releasing only the exact
+lease through the descriptor-derived capability. No record field or state
+path may supply config-root authority.
 
 ```rust
 assert_eq!(report.released, 0);
@@ -258,7 +296,12 @@ Expected: FAIL because reconciliation does not exist.
 
 - [ ] **Step 3: Implement only accepted proof transitions**
 
-Dispatch record/actual lease through SPEC0012 §5. Use `GateClosedController` only before profile execution: matching process-lease `preparing` direct/systemd ownership and matching lifecycle-lease `preparing`/`adopted` systemd rows. Never stop a running systemd profile scope; it may only collect after `OwnershipInspector` returns exact recursive-empty with matching incarnation. For direct, only an already durable `terminal/exited direct-drained yes` plus exact stale owner and exact recorded-group empty releases. Any malformed/cross-kind/mismatch/inspector uncertainty returns retained evidence without unlinking. After each permitted terminal record fsync, unlink/fsync the exact lease, then remove/fsync the exact terminal launch record; injected failures leave the matching retry state intact.
+Dispatch record/actual lease through SPEC0012 §5 in three phases: global passive classification, all required gate-closed controller proofs, then durable mutation. Use `GateClosedController` only before profile execution: matching process-lease or absent-lease `preparing` direct/systemd ownership and matching lifecycle-lease `preparing`/`adopted` systemd rows. Never stop a running systemd profile scope; it may only collect after `OwnershipInspector` returns exact recursive-empty with matching incarnation. For direct, only an already durable `terminal/exited direct-drained yes` plus exact stale owner and exact recorded-group empty releases; exact running detachment writes retained `terminal/lost`. Any malformed/cross-kind/mismatch/inspector or controller uncertainty freezes all durable mutation. A transfer-staging recovery failure returns an explicit error. After each permitted terminal record fsync, atomically move the exact lease to its fixed retirement name, post-validate and unlink/fsync only that retired inode, then do the same for the exact terminal launch record. Retirement-only crashes retry the same row; canonical-plus-retirement, a final-gap swap, or malformed retirement evidence retains everything.
+
+Derive `GenerationLeaseCapability` only from `&GenerationStore` by cloning its
+validated descriptors and sharing its existing mutex. The registry must never
+open a generated/config path itself. Revalidate the capability under the
+specified lock order before every destructive lease pass.
 
 - [ ] **Step 4: Verify green and run full repository checks**
 

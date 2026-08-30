@@ -20,6 +20,15 @@ The registry is the sole owner of:
 - consuming a `GenerationSelection` into one lifecycle lease;
 - terminal/recovery classification and proof-before-release.
 
+Registry construction receives a private capability derived from an already
+validated `GenerationStore`. The capability clones the store's `leases/` and
+`activation.lock` descriptors and shares its original in-process mutex. It
+does not contain a path reconstructed from activation state. Restart
+bootstrap must open and revalidate the generated store first; the registry can
+then reconcile launch-record lease names only below that descriptor-held root.
+All reconciliation holds `lifecycle.lock` before taking the capability's
+shared generation lock, matching transfer and generic-GC serialization.
+
 `helm-theme` remains the sealed-generation and generic-GC owner.  Generic GC
 only retains lifecycle evidence; it does not query, create, replace, or release
 registry leases.  Systemd and direct process observations live behind adapters;
@@ -70,6 +79,43 @@ nonterminal and retained.  External teardown may request cooperative direct
 completion, but it cannot forge a witness, terminal transition, lease release,
 or collection after killing the owner.
 
+Reconciliation uses a whole-inventory three-phase protocol. It first validates
+all record/lease relations and retirement forms and gathers every passive
+ownership observation. Fatal or uncertain evidence freezes the pass before
+controllers or durable mutation. It then runs only exact gate-closed abort
+controllers; those bounded abort attempts are permitted before the final
+global controller result is known, but no record/lease mutation occurs unless
+all results prove empty. Only the final phase persists transitions and
+retirements. Missing leases are state-sensitive: `preparing` is an abort and
+record-collection row, `adopted`/`running` is fatal, and `terminal` is a
+post-release collection retry.
+
+The first phase always scans the complete lease directory, even when no staging
+name exists. It rejects unknown/non-UTF-8 names, unsafe or malformed
+unreferenced entries, orphan lifecycle leases, and duplicate launch references
+to one lease before any observation or controller call. Valid unreferenced
+process leases remain generic-GC evidence and are outside registry authority.
+Lease retirement requires its sole exact durable `terminal` record. Launch
+retirement requires the referenced lease to be absent. Either reversed ordering
+is non-producer-reachable and freezes before adapters.
+
+Lease and terminal-record deletion use fixed recoverable retirement siblings,
+not revalidate-then-unlink. A no-replace rename to the retirement name is the
+linearization point; the moved inode is post-validated and only that name may
+be unlinked. Same-name replacements and all malformed/duplicate retirement
+states are retained in the detecting pass. A later fresh pass may retire
+semantically identical canonical evidence only after repeating the whole proof.
+A crash with only an exact retirement form resumes the same proof and cleanup.
+Stronger permanent inode preservation needs durable provenance and is deferred.
+Transfer-staging failure is an explicit frozen error,
+even with an otherwise empty registry.
+
+M2 assumes conforming same-UID Helm writers respect the lock order and reserved
+retirement namespace. Atomic retirement and post-move proof cover races before
+or at the move. Hostile same-UID mutation after retirement proof is explicitly
+outside the account-compromise boundary; the design claims no unlink-by-fd
+property that Linux cannot provide.
+
 ## Verification obligations
 
 Red-first tests must cover:
@@ -82,6 +128,12 @@ Red-first tests must cover:
 - systemd unit/invocation/cgroup recursive-population proof and identity races;
 - direct normal self-drain, forced logout, owner death, and detachment retention;
 - cross-kind, missing, malformed and identity-mismatched record/lease recovery.
+- exact final-gap lease and launch swaps, retirement crash recovery, whole-pass
+  ownership uncertainty in both enumeration orders, state-sensitive absent
+  leases, direct-detachment terminal retention, and empty-registry staging
+  failure reporting;
+- restart reconciliation through the descriptor-derived lease capability,
+  proving that activation records cannot redirect cleanup to a config path.
 
 The first implementation PR must stop at a testable registry core with fake
 ownership adapters.  It must not claim real D-Bus activation, profile launch,
