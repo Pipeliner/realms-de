@@ -45,6 +45,45 @@ descendant-drain witness before exit; only then may reconciliation validate the
 exact owner stale and recorded group empty. A later reconciler must never invent
 the witness.
 
+The basename `.lease-transfer-<lease-id>` is reserved as a private unpublished
+staging artifact for SPEC 0012's same-name process-to-lifecycle replacement;
+`<lease-id>` is one canonical opaque lease identifier. It is never itself a
+lease or release authority. A conforming producer creates at most that one
+fixed staging name while holding the shared `activation.lock`, with
+`O_CREAT|O_EXCL|O_NOFOLLOW`, current-UID mode 0600, bounded canonical lifecycle
+bytes, and a file fsync before `RENAME_EXCHANGE` with `<lease-id>`. Plain
+overwriting rename is forbidden. The producer holds descriptors for both the
+exact staged lifecycle inode and exact source process inode, checks both paths,
+performs the exchange, then proves the target names the held lifecycle inode
+and staging names the held process inode before directory fsync. Only after
+that fsync may it unlink the displaced process staging name and fsync again.
+
+A crash can expose only two recoverable paired states with exact common
+generation/PID/start-time/boot/UID identity: target process plus staging
+lifecycle is **untransferred**, so recovery removes/fsyncs only the staging
+artifact; target lifecycle plus staging process is **transferred**, so recovery
+first fsyncs the exchange state and then removes/fsyncs only the displaced
+process staging artifact. Before retrying a transfer or reclaiming any
+lease/generation, Helm holds `activation.lock` and validates the whole lease
+inventory without mutation. Each pair must use no-follow current-UID regular
+exact-0600 files of at most 4096 bytes with canonical discriminators and exact
+contents. Only after every inventory entry and every staging/target pair passes
+may recovery normalize those two states and continue or retry. A missing target,
+same-kind pair, malformed/cross-kind or identity-mismatched pair, unsafe
+mode/owner/type, oversized payload, malformed reserved basename, or any other
+inventory uncertainty retains all evidence and permits no staging, lease or
+generation deletion.
+
+If a pathname changes between pre-exchange validation and exchange, the
+producer may exchange back only when post-exchange descriptor/content proof
+shows the exact inverse pair and the rollback restores the held source process
+inode at `<lease-id>`. It then validates that restored target and retains the
+other evidence. If that proof or rollback is unavailable, it retains all paths
+and returns an ambiguous fail-closed outcome; it never guesses, blindly unlinks,
+or publishes an unchecked inode. Thus pre-replacement crashes retain the
+original process lease without creating an unbounded or permanently blocking
+producer artifact, while a committed exchange is tied to the checked inodes.
+
 No read or write follows symlinks; all operations are descriptor-relative below
 Helm's owned generated subtree. `current` cannot name absent, staging, malformed
 or digest-mismatched content. An apply that cannot finish before pointer commit

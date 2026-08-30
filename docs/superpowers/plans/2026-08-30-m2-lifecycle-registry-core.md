@@ -152,14 +152,28 @@ git commit -m "feat: add lifecycle registry record core"
 
 **Interfaces:**
 - Produces private `ActivationRegistry::adopt_prepared(session: &ActiveSessionCapability, prepared: PreparedLaunch, selection: GenerationSelection, evidence: VerifiedOwnership) -> Result<AdoptedLaunch, String>`.
-- Produces private `VerifiedOwnership::{Direct, Systemd}` only from the sealed child-module `OwnershipVerifier`; production construction is intentionally absent from this core and test construction is confined to `#[cfg(test)]` fixtures.
+- Produces private `VerifiedOwnership::{Direct, Systemd}` only from the sealed child-module `OwnershipVerifier`; each variant carries the exact prepared launch id, owner PID/start-time/UID/boot identity, selected mode and deterministic unit/process group binding as well as its mode-specific proof. Production construction is intentionally absent from this core and test construction is confined to `#[cfg(test)]` fixtures; evidence for launch A must be rejected for launch B even when its invocation/cgroup spelling is otherwise canonical.
 - Produces private parent-module `GenerationSelection::replace_with_lifecycle_locked(record: LifecycleLeaseRecord) -> Result<(), String>` and `GenerationSelection::disarm_after_transfer()`; the child module accesses them through ordinary parent-private visibility, and no public/crate-visible bridge or token exists.
 - Consumes the exact `PreparedLaunch` final-record identity/sequence, an `ActiveSessionCapability` whose on-disk session id/sequence remains exact, and selection metadata; it fails without mutation if any session, launch, generation, manifest, process-lease, or expected-sequence field differs.
-- Produces private `enum TransferCheckpoint { BeforeReplace, AfterReplace, AfterLeaseDirectoryFsync, BeforeSelectionDisarm }` and test-only `LeaseFilesystem` callbacks at each checkpoint.
+- Produces private `enum TransferCheckpoint { BeforeReplace, BeforeExchange, AfterReplace, AfterLeaseDirectoryFsync, BeforeAdoptedRecord, BeforeSelectionDisarm }` and test-only `LeaseFilesystem` callbacks at each checkpoint.
 
 - [ ] **Step 1: Write red transfer-boundary fixtures**
 
 Use an injected `LeaseFilesystem` checkpoint enum with `BeforeReplace`, `AfterReplace`, `AfterLeaseDirectoryFsync`, `BeforeAdoptedRecord`, and `BeforeSelectionDisarm`. For each fault, assert: the generation always has either the exact process lease or exact lifecycle lease; pre-replace drop releases only the process lease; post-replace drop leaves lifecycle lease present; no `adopted` record precedes replacement+fsync. Add negative cases for wrong session claim, stale expected sequence, a second prepared launch id, absent/cross-kind/mismatched process lease, and a valid lifecycle lease whose record identity mismatches. Task 4 owns all reopen/recovery-row assertions.
+
+Also simulate a real pre-rename process crash that bypasses Rust error/drop
+cleanup: retain the original process target plus the exact fixed
+`.lease-transfer-<lease-id>` staging artifact, reopen under `activation.lock`,
+and prove whole-inventory validation removes/fsyncs only its lifecycle staging
+half before retry. Also inject a crash after `RENAME_EXCHANGE`: recovery must
+recognize the exact lifecycle-target/process-stage pair as transferred, fsync
+it, then remove/fsync only its displaced process half. Unsafe, missing,
+same-kind or mismatched staging/target evidence must retain the entire inventory
+and fail closed. Add a post-final-validation pathname-swap fixture: rollback is
+allowed only when descriptor/content proof establishes the exact inverse pair
+and restores the held source inode; otherwise retain an ambiguous result. This
+staging recovery belongs to Task 3; Task 4 still owns only post-lease-fsync
+record/actual-lease rows.
 
 ```rust
 assert!(process_lease_exists || lifecycle_lease_exists);
@@ -175,6 +189,14 @@ Expected: FAIL because no registry transfer operation exists.
 - [ ] **Step 3: Implement private linear transfer**
 
 Acquire one `RegistryLock`, revalidate the active session capability and `PreparedLaunch` sequence under it, then take the selection's cloned generated-root `activation.lock` shared lock through its original `Arc<Mutex<()>>`. Revalidate exact process lease/selection identity, generation, manifest and sealed ownership evidence. Atomically replace the same lease name with canonical lifecycle bytes and fsync the lease directory. The selection cleanup guard must parse/revalidate before every unlink, so an unwind before disarm is safe. Atomically replace/fsync the matching launch record as `adopted`, `lease-kind lifecycle`, with verified direct/systemd fields. Return an internal `AdoptedLaunch` with no raw lease-release method. Task 4 owns post-lease-fsync recovery assertions.
+
+Before creating the fixed transfer staging file, validate the complete lease
+inventory and recover only SPEC 0011's two exact canonical paired states. Use
+`RENAME_EXCHANGE`, held source/staging descriptors, post-exchange identity and
+content proof, directory fsync, then displaced-process cleanup/fsync; plain
+overwriting rename is forbidden. Never treat a staging payload by itself as an
+adopted lease. Generic GC applies the same whole-inventory proof before any
+stale-lease or generation deletion.
 
 - [ ] **Step 4: Verify green**
 

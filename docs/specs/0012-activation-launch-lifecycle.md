@@ -473,6 +473,20 @@ cgroup-device <u64>
 cgroup-inode <u64>
 ```
 
+The replacement uses SPEC 0011's reserved
+`.lease-transfer-<lease-id>` unpublished staging form. The registry fsyncs its
+canonical lifecycle bytes, holds and revalidates descriptors for it and the
+exact process target, atomically exchanges their names with `RENAME_EXCHANGE`,
+post-validates the lifecycle target/process staging pair, fsyncs the leases
+directory, then removes and fsyncs the displaced process staging name. Transfer
+retry or generic GC first applies SPEC 0011's whole-inventory two-state rule:
+process-target/lifecycle-stage is untransferred, while
+lifecycle-target/process-stage is transferred. No staging payload alone is
+inferred to be adopted, and an unsafe, missing, same-kind or mismatched pair
+remains fail-closed evidence rather than cleanup authority. A detected pathname
+swap is exchanged back only with the exact inverse-pair proof SPEC 0011 permits;
+otherwise the result is retained and ambiguous.
+
 All common fields equal the prior process lease and launch record. The
 ownership-specific fields, including cgroup identity, obey the same
 systemd/direct restrictions as the launch record. A crash before the atomic
@@ -492,6 +506,15 @@ the original process lease and its release authority remain intact.  After
 replacement succeeds, only registry reconciliation may release the lifecycle
 lease according to this specification.  No caller can obtain a transferable
 capability, independently replace a lease, or release a transferred lease.
+
+The verifier's internal ownership evidence is sealed to the exact prepared
+launch: it carries and matches the launch id, owner PID/start-time/UID/boot
+identity, selected owner kind, and deterministic unit or process group in
+addition to the verified systemd incarnation/cgroup fields. Evidence verified
+for one launch, owner incarnation or unit is invalid for every other prepared
+record and cannot be rebound by copying only its invocation/cgroup payload.
+The registry compares that complete binding under `lifecycle.lock` before any
+lease mutation.
 
 The selection cleanup path is destructor-safe at every transfer boundary: before
 unlinking, it reopens the same opaque filename with no-follow validation, parses
