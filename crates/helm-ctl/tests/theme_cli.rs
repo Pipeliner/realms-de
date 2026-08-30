@@ -7,6 +7,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     process::{Command, Output},
+    time::{Duration, Instant},
 };
 
 #[cfg(unix)]
@@ -243,6 +244,43 @@ fn lint_refuses_a_symlinked_helm_directory_without_touching_its_destination() {
         tree(&root),
         before,
         "lint must not follow a symlinked helm directory"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn lint_refuses_a_fifo_palette_promptly_without_mutating_the_config_tree() {
+    let temp = tempfile::tempdir().expect("temporary config root");
+    let root = temp.path().join("config");
+    std::fs::create_dir_all(root.join("helm")).expect("create config root");
+    let palette = root.join("helm/palette.toml");
+    let created = Command::new("mkfifo")
+        .arg(&palette)
+        .status()
+        .expect("mkfifo is available on Unix test hosts");
+    assert!(created.success(), "mkfifo failed: {created}");
+    let before = tree(&root);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_helmctl"))
+        .args(["theme", "lint", "--config-root", root.to_str().unwrap()])
+        .spawn()
+        .expect("helmctl starts");
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while child.try_wait().expect("poll helmctl").is_none() {
+        if Instant::now() >= deadline {
+            child.kill().expect("stop blocked helmctl");
+            let _ = child.wait();
+            panic!("default lint blocked opening a FIFO palette");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().expect("collect helmctl output");
+
+    assert!(!output.status.success(), "lint accepted a FIFO palette");
+    assert_eq!(
+        tree(&root),
+        before,
+        "default lint must not write while refusing a FIFO palette"
     );
 }
 

@@ -565,7 +565,7 @@ impl ConfigRoot {
         let palette = match openat(
             &helm,
             "palette.toml",
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
         ) {
             Ok(fd) => fd,
