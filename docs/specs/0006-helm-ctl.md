@@ -142,8 +142,9 @@ else on the stream — a warning that would have gone to stdout goes to stderr
 instead. The object's shape is the `Response` it came from wherever there is
 one, so `helm ctl ledger show --json` round-trips `Response::Ledger` and a
 script can rely on `helm-core`'s serde definitions rather than on a format
-invented here. Where a command has no `Response` (`theme lint`, `doctor`), the
-shape is defined in this spec and is versioned by `PROTOCOL_VERSION`.
+invented here. `theme lint` and `theme diff` shapes are refined by
+[SPEC 0020](0020-helmctl-theme-json.md); `doctor` remains defined here and
+versioned by `PROTOCOL_VERSION`.
 
 **Colour** only when stdout is a terminal and `NO_COLOR` is unset, and only as
 ANSI indices — never a truecolor literal. The generated ANSI theme already maps

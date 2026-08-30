@@ -345,6 +345,81 @@ fn lint_bad_explicit_palette_exits_one_and_prints_every_fatal_finding() {
 }
 
 #[test]
+fn lint_json_clean_is_one_ordered_object() {
+    let temp = tempfile::tempdir().expect("temporary palette root");
+    let palette = temp.path().join("palette.toml");
+    std::fs::write(&palette, include_str!("../../../palette.toml")).expect("write palette");
+
+    let out = helmctl([
+        "theme",
+        "lint",
+        "--json",
+        "--palette",
+        palette.to_str().unwrap(),
+    ]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stderr(&out).is_empty());
+    let report = stdout(&out);
+    assert!(report.starts_with("{\"status\":\"clean\",\"separations\":"));
+    assert!(report.ends_with("\"findings\":[]}\n"));
+    let separation = report.find("{\"a\":").expect("separation object");
+    let b = report[separation..]
+        .find(",\"b\":")
+        .expect("separation b field");
+    let degrees = report[separation..]
+        .find(",\"degrees\":")
+        .expect("separation degrees field");
+    assert!(b < degrees, "separation field order changed: {report}");
+    let value: serde_json::Value = serde_json::from_str(&report).expect("one JSON object");
+    assert_eq!(value["status"], "clean");
+    assert_eq!(value["findings"], serde_json::json!([]));
+    assert!(!value["separations"]
+        .as_array()
+        .expect("separations array")
+        .is_empty());
+}
+
+#[test]
+fn lint_json_fatal_contains_every_finding() {
+    let temp = tempfile::tempdir().expect("temporary palette root");
+    let bad = write_bad_palette(temp.path());
+    let out = helmctl([
+        "theme",
+        "lint",
+        "--json",
+        "--palette",
+        bad.to_str().unwrap(),
+    ]);
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(stderr(&out).is_empty());
+    let report = stdout(&out);
+    assert!(report.starts_with("{\"status\":\"fatal\",\"separations\":"));
+    let value: serde_json::Value = serde_json::from_str(&report).expect("one JSON object");
+    assert_eq!(value["status"], "fatal");
+    assert!(value["findings"].as_array().expect("findings array").len() >= 2);
+}
+
+#[test]
+fn lint_json_input_failure_has_no_result_object() {
+    let temp = tempfile::tempdir().expect("temporary palette root");
+    let malformed = temp.path().join("malformed.toml");
+    std::fs::write(&malformed, "not a palette").expect("write malformed palette");
+    let out = helmctl([
+        "theme",
+        "lint",
+        "--json",
+        "--palette",
+        malformed.to_str().unwrap(),
+    ]);
+
+    assert!(!out.status.success());
+    assert!(stdout(&out).is_empty());
+    assert!(!stderr(&out).is_empty());
+}
+
+#[test]
 fn apply_reports_selected_future_generation_without_reload_or_session() {
     let temp = tempfile::tempdir().expect("temporary config root");
 
@@ -428,5 +503,60 @@ fn diff_refusal_for_missing_current_exits_six_without_mutating_generation_tree()
         tree(root),
         before,
         "refused theme diff mutated the generation tree"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn diff_json_reports_identical_and_sorted_changes() {
+    let temp = tempfile::tempdir().expect("temporary config root");
+    let root = temp.path();
+    helm_theme::apply(root).expect("apply initial generation");
+
+    let identical = helmctl_at(root, ["theme", "diff", "--json"]);
+    assert!(identical.status.success(), "{}", stderr(&identical));
+    assert!(stderr(&identical).is_empty());
+    assert_eq!(
+        stdout(&identical),
+        "{\"status\":\"identical\",\"changes\":[]}\n"
+    );
+
+    edit_palette(root);
+    let changed = helmctl_at(root, ["theme", "diff", "--json"]);
+    assert_eq!(changed.status.code(), Some(1), "{}", stderr(&changed));
+    assert!(stderr(&changed).is_empty());
+    let report = stdout(&changed);
+    assert!(report.starts_with("{\"status\":\"different\",\"changes\":["));
+    assert!(report.contains("{\"kind\":\"byte-different\",\"path\":"));
+    let value: serde_json::Value = serde_json::from_str(&report).expect("one JSON object");
+    let changes = value["changes"].as_array().expect("changes array");
+    assert!(!changes.is_empty());
+    let paths = changes
+        .iter()
+        .map(|change| change["path"].as_str().expect("change path"))
+        .collect::<Vec<_>>();
+    let mut sorted = paths.clone();
+    sorted.sort_unstable();
+    assert_eq!(paths, sorted);
+}
+
+#[cfg(unix)]
+#[test]
+fn diff_json_refusal_has_no_result_object() {
+    let temp = tempfile::tempdir().expect("temporary config root");
+    let root = temp.path();
+    helm_theme::apply(root).expect("apply initial generation");
+    std::fs::remove_file(root.join("helm/generated/current")).expect("remove current pointer");
+    let before = tree(root);
+
+    let out = helmctl_at(root, ["theme", "diff", "--json"]);
+
+    assert_eq!(out.status.code(), Some(6), "{}", stderr(&out));
+    assert!(stdout(&out).is_empty());
+    assert!(!stderr(&out).is_empty());
+    assert_eq!(
+        tree(root),
+        before,
+        "refused JSON diff mutated the generation tree"
     );
 }

@@ -31,7 +31,7 @@ struct Theme {
 enum ThemeCommand {
     Apply(RootArgs),
     Lint(LintArgs),
-    Diff(RootArgs),
+    Diff(DiffArgs),
 }
 
 #[derive(Args)]
@@ -41,11 +41,21 @@ struct RootArgs {
 }
 
 #[derive(Args)]
+struct DiffArgs {
+    #[arg(long)]
+    config_root: Option<PathBuf>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
 pub struct LintArgs {
     #[arg(long)]
     config_root: Option<PathBuf>,
     #[arg(long)]
     palette: Option<PathBuf>,
+    #[arg(long)]
+    json: bool,
 }
 
 pub trait Env {
@@ -100,7 +110,7 @@ where
                     Err(error) => return usage_error(&error),
                 },
             };
-            run_diff(&root)
+            run_diff(&root, args.json)
         }
         Command::Theme(Theme {
             command: ThemeCommand::Lint(args),
@@ -178,17 +188,47 @@ fn escaped_cause(cause: &str) -> String {
     serde_json::to_string(cause).expect("serializing a string cannot fail")
 }
 
-fn run_diff(root: &Path) -> ExitCode {
+fn run_diff(root: &Path, json: bool) -> ExitCode {
     match helm_theme::diff(root) {
-        Ok(changes) if changes.is_empty() => ExitCode::SUCCESS,
+        Ok(changes) if changes.is_empty() => {
+            if json {
+                println!("{{\"status\":\"identical\",\"changes\":[]}}");
+            }
+            ExitCode::SUCCESS
+        }
         Ok(changes) => {
-            for change in changes {
-                print_change(change);
+            if json {
+                print_diff_json(&changes);
+            } else {
+                for change in changes {
+                    print_change(change);
+                }
             }
             ExitCode::from(1)
         }
         Err(error) => operational_failure("diff", &error.to_string()),
     }
+}
+
+fn print_diff_json(changes: &[ThemeOutputChange]) {
+    print!("{{\"status\":\"different\",\"changes\":[");
+    for (index, change) in changes.iter().enumerate() {
+        if index != 0 {
+            print!(",");
+        }
+        let (kind, path) = match change {
+            ThemeOutputChange::Added(path) => ("added", path),
+            ThemeOutputChange::Removed(path) => ("removed", path),
+            ThemeOutputChange::ByteDifferent(path) => ("byte-different", path),
+        };
+        print!(
+            "{{\"kind\":{},\"path\":{}}}",
+            serde_json::to_string(kind).expect("serializing a static string cannot fail"),
+            serde_json::to_string(&path.to_string_lossy())
+                .expect("serializing a path display string cannot fail"),
+        );
+    }
+    println!("]}}");
 }
 
 fn print_change(change: ThemeOutputChange) {
@@ -215,20 +255,56 @@ pub fn run_lint(args: &LintArgs, root: &Path) -> Result<ExitCode, String> {
         None => helm_theme::load_lint_palette(root).map_err(|error| error.to_string())?,
     };
     let report = helm_theme::lint(&palette);
-    for separation in &report.separations {
-        println!(
-            "{}/{}: {:.1}°",
-            separation.a, separation.b, separation.degrees
-        );
-    }
-    for finding in &report.findings {
-        eprintln!("{finding}");
+    if args.json {
+        print_lint_json(&report);
+    } else {
+        for separation in &report.separations {
+            println!(
+                "{}/{}: {:.1}°",
+                separation.a, separation.b, separation.degrees
+            );
+        }
+        for finding in &report.findings {
+            eprintln!("{finding}");
+        }
     }
     Ok(if report.is_clean() {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
     })
+}
+
+fn print_lint_json(report: &helm_theme::LintReport) {
+    let status = if report.is_clean() { "clean" } else { "fatal" };
+    print!(
+        "{{\"status\":{},\"separations\":[",
+        serde_json::to_string(status).unwrap()
+    );
+    for (index, separation) in report.separations.iter().enumerate() {
+        if index != 0 {
+            print!(",");
+        }
+        print!(
+            "{{\"a\":{},\"b\":{},\"degrees\":{}}}",
+            serde_json::to_string(separation.a).unwrap(),
+            serde_json::to_string(separation.b).unwrap(),
+            serde_json::to_string(&separation.degrees).unwrap(),
+        );
+    }
+    print!("],\"findings\":[");
+    for (index, finding) in report.findings.iter().enumerate() {
+        if index != 0 {
+            print!(",");
+        }
+        print!(
+            "{{\"path\":{},\"message\":{},\"fatal\":{}}}",
+            serde_json::to_string(&finding.path).unwrap(),
+            serde_json::to_string(&finding.message).unwrap(),
+            finding.fatal,
+        );
+    }
+    println!("]}}");
 }
 
 fn failure(error: &str) -> ExitCode {
