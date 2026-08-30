@@ -100,6 +100,17 @@ These observations are revisable operational knowledge, never product truth or
 an automatic maturity promotion. Keep #121 open until two subsequent real
 iterations supply that evidence.
 
+### Pilot observation: #104
+
+On 2026-08-30, #104 used bootstrap, checkpoint, and evidence-capture procedures
+after its accepted SPEC 0019 and code commit. The separate record carrier added
+exactly two tracked files and 31 lines; both report-only assessments passed.
+There was no compaction or fresh-agent handoff, so recovery detail and
+re-derivation tax were not measurable in this iteration. The second iteration
+must deliberately record whether a checkpoint changes the next correct action
+or leaves recovery measurement unavailable. This is one revisable pilot
+observation, not an automatic promotion or a product fact.
+
 ## Running it
 
 - **Manually:** `/loop` with the iteration prompt, or ask for "next issue".
