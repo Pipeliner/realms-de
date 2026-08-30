@@ -13,7 +13,12 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
+use helm_core::Palette;
 use helmctl::run_from;
+
+fn shipped_palette() -> Palette {
+    Palette::from_toml(helm_theme::SHIPPED_PALETTE).expect("shipped palette must parse")
+}
 
 #[test]
 fn rejects_missing_or_unknown_theme_verb() {
@@ -70,10 +75,10 @@ fn stderr(output: &Output) -> String {
 
 fn write_bad_palette(root: &Path) -> PathBuf {
     let path = root.join("bad-palette.toml");
-    let palette = include_str!("../../../palette.toml")
-        .replace("bright = \"#f2f5fb\"", "bright = \"#101218\"")
-        .replace("normal = \"#c2cbde\"", "normal = \"#101218\"");
-    std::fs::write(&path, palette).expect("write invalid palette");
+    let mut palette = shipped_palette();
+    palette.text.bright = palette.background.void;
+    palette.text.normal = palette.background.void;
+    std::fs::write(&path, palette.to_toml()).expect("write invalid palette");
     path
 }
 
@@ -89,11 +94,11 @@ where
         .expect("helmctl runs")
 }
 
-fn edit_palette(root: &Path, from: &str, to: &str) {
+fn edit_palette(root: &Path) {
     let path = root.join("helm/palette.toml");
-    let palette = std::fs::read_to_string(&path).expect("read seeded palette");
-    assert!(palette.contains(from), "palette does not contain {from}");
-    std::fs::write(&path, palette.replace(from, to)).expect("edit palette");
+    let mut palette = Palette::load(&path).expect("read seeded palette");
+    palette.accent.violet = palette.accent.red;
+    std::fs::write(&path, palette.to_toml()).expect("edit palette");
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -375,7 +380,7 @@ fn diff_after_palette_edit_is_sorted_and_does_not_mutate_generation_tree() {
     let temp = tempfile::tempdir().expect("temporary config root");
     let root = temp.path();
     helm_theme::apply(root).expect("apply initial generation");
-    edit_palette(root, "violet    = \"#a692ec\"", "violet    = \"#b07aff\"");
+    edit_palette(root);
     let before = tree(root);
 
     let out = helmctl_at(root, ["theme", "diff"]);
