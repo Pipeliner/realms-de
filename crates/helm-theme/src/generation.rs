@@ -6,7 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use rustix::fs::{
     flock, fsync, mkdirat, openat, renameat, renameat_with, statat, unlinkat, AtFlags, Dir,
@@ -63,7 +63,7 @@ pub struct GenerationStore {
     generations: GenerationRoot,
     leases: GenerationRoot,
     lock: OwnedFd,
-    intra_process_lock: Mutex<()>,
+    intra_process_lock: Arc<Mutex<()>>,
 }
 
 /// Existing generation controls opened without creating or repairing state.
@@ -96,6 +96,14 @@ pub struct GenerationSelection {
     path: PathBuf,
     lease_directory: OwnedFd,
     lease_name: String,
+    process_identity: LeaseRecord,
+    // Private lifecycle transfer state consumed by the following M2 tranche.
+    #[allow(dead_code)]
+    manifest_seal_digest: String,
+    #[allow(dead_code)]
+    activation_lock: OwnedFd,
+    #[allow(dead_code)]
+    intra_process_lock: Arc<Mutex<()>>,
     released: bool,
 }
 
@@ -759,7 +767,7 @@ impl GenerationStore {
             generations,
             leases,
             lock,
-            intra_process_lock: Mutex::new(()),
+            intra_process_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -816,7 +824,8 @@ impl GenerationStore {
                 .ok_or_else(|| "current generation is absent".to_owned()),
             _ => Err("pointer transaction requires exclusive recovery".into()),
         }?;
-        let generation_root = self.open_validated_generation(&generation)?;
+        let (generation_root, manifest) =
+            self.open_validated_generation_with_manifest(&generation)?;
         let path = std::fs::read_link(format!("/proc/self/fd/{}", generation_root.fd.as_raw_fd()))
             .map_err(|error| error.to_string())?;
         let identity = LeaseRecord::for_process(generation.clone(), pid)?;
@@ -825,6 +834,7 @@ impl GenerationStore {
             .fd
             .try_clone()
             .map_err(|error| error.to_string())?;
+        let activation_lock = self.lock.try_clone().map_err(|error| error.to_string())?;
         let lease_name = self.create_lease_locked(&identity)?;
         lease_synced();
         Ok(GenerationSelection {
@@ -833,6 +843,10 @@ impl GenerationStore {
             path,
             lease_directory,
             lease_name,
+            process_identity: identity,
+            manifest_seal_digest: digest_hex(manifest.v1.raw.as_bytes()),
+            activation_lock,
+            intra_process_lock: Arc::clone(&self.intra_process_lock),
             released: false,
         })
     }
@@ -1552,14 +1566,6 @@ impl GenerationStore {
         Self::open_validated_generation_with_manifest_from(generations, generation).map(|_| ())
     }
 
-    fn open_validated_generation(
-        &self,
-        generation: &GenerationId,
-    ) -> std::result::Result<GenerationRoot, String> {
-        self.open_validated_generation_with_manifest(generation)
-            .map(|(root, _)| root)
-    }
-
     fn open_validated_generation_with_manifest(
         &self,
         generation: &GenerationId,
@@ -1834,30 +1840,58 @@ impl GenerationSelection {
 
     /// Durably release this launch's lease after its target has exited.
     pub fn release(mut self) -> std::result::Result<(), String> {
-        self.release_inner()
+        self.release_matching_process_lease()
     }
 
-    fn release_inner(&mut self) -> std::result::Result<(), String> {
+    fn read_current_lease(&self) -> std::result::Result<Option<ParsedLeaseRecord>, String> {
+        let lease_directory = GenerationRoot {
+            fd: self
+                .lease_directory
+                .try_clone()
+                .map_err(|error| error.to_string())?,
+        };
+        read_optional_regular_bytes(&lease_directory, Path::new(&self.lease_name))?
+            .map(|raw| ParsedLeaseRecord::parse(&raw))
+            .transpose()
+    }
+
+    fn release_matching_process_lease(&mut self) -> std::result::Result<(), String> {
         if self.released {
             return Ok(());
         }
-        match unlinkat(
-            &self.lease_directory,
-            self.lease_name.as_str(),
-            AtFlags::empty(),
-        ) {
-            Ok(()) | Err(Errno::NOENT) => {}
-            Err(error) => return Err(error.to_string()),
+
+        let current = match self.read_current_lease() {
+            Ok(current) => current,
+            Err(_) => return Ok(()),
+        };
+        match current {
+            Some(ParsedLeaseRecord::Process(record)) if record == self.process_identity => {
+                match unlinkat(
+                    &self.lease_directory,
+                    self.lease_name.as_str(),
+                    AtFlags::empty(),
+                ) {
+                    Ok(()) | Err(Errno::NOENT) => {}
+                    Err(error) => return Err(error.to_string()),
+                }
+                fsync(&self.lease_directory).map_err(|error| error.to_string())?;
+            }
+            Some(_) => {}
+            None => fsync(&self.lease_directory).map_err(|error| error.to_string())?,
         }
-        fsync(&self.lease_directory).map_err(|error| error.to_string())?;
         self.released = true;
         Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn disarm_after_transfer(&mut self) {
+        self.released = true;
     }
 }
 
 impl Drop for GenerationSelection {
     fn drop(&mut self) {
-        let _ = self.release_inner();
+        let _ = self.release_matching_process_lease();
     }
 }
 
@@ -3150,6 +3184,38 @@ mod tests {
         let path = root.join("leases").join(name);
         std::fs::write(&path, contents).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    fn lifecycle_direct_fixture(generation: &str) -> Vec<u8> {
+        let launch = "00000000000000000000000000000002";
+        let pid = std::process::id();
+        let start_time = linux_start_time(pid);
+        let boot_id = linux_boot_id();
+        let owner_uid = rustix::process::getuid().as_raw();
+        format!(
+            "helm-generation-lifecycle-lease-v1\ngeneration {generation}\nlaunch {launch}\npid {pid}\nstart-time {start_time}\nboot-id {boot_id}\nowner-uid {owner_uid}\nowner-kind process-group\nunit none\nunit-invocation none\nprocess-group {pid}\ncgroup none\ncgroup-device 0\ncgroup-inode 0\n"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn selection_drop_never_unlinks_a_replaced_lifecycle_lease() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let selection = store.select_current().unwrap();
+        let name = selection.lease_name.clone();
+        write_raw_lease_fixture(
+            root.path(),
+            &name,
+            &lifecycle_direct_fixture(selection.as_str()),
+        );
+        drop(selection);
+        let path = root.path().join("leases").join(name);
+        assert!(path.exists());
+        assert!(matches!(
+            ParsedLeaseRecord::parse(&std::fs::read(path).unwrap()),
+            Ok(ParsedLeaseRecord::Lifecycle(_))
+        ));
     }
 
     #[test]
