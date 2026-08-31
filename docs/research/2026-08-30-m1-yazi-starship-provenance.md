@@ -21,6 +21,20 @@ authorize package publication.
 | Debian build policy | [Debian Policy §4.9](https://www.debian.org/doc/debian-policy/ch-source.html) says required `debian/rules` targets must not attempt network access to other hosts, except for the specified non-free / non-autobuild exception and loopback services started by the build. | A Debian-archive-compatible Helm package build cannot fetch Yazi or Starship from a live upstream URL. Its reviewed source or artifact must be available before the build begins. |
 | Fedora source handling | Fedora's [packaging guidelines](https://docs.fedoraproject.org/en-US/packaging-guidelines/) state that source code must not be downloaded from external sources during a build, only from the Fedora lookaside cache and/or Fedora Git. Its [source-control policy](https://fedoraproject.org/wiki/Package_Source_Control) describes the lookaside cache as retained, hash-addressed upstream archives. | A Fedora-guideline-compatible Helm package build likewise needs a prior, hash-verified source-intake and retention path; a live release download in the spec build is not sufficient. |
 
+## 2026-08-31 compatibility spike
+
+This is feasibility evidence, not a release-selection decision. The temporary
+probe used the official tagged source and Rust 1.85.0; its Cargo cache and build
+outputs were kept outside the repository.
+
+| Subject | Evidence | Consequence |
+|---|---|---|
+| Starship v1.23.0 | Its [tagged manifest](https://raw.githubusercontent.com/starship/starship/v1.23.0/Cargo.toml) declares `rust-version = "1.85"` and the `starship` binary. The Helm Starship template's modules and fields were checked against that tagged source. | v1.23.0 is an evidence-backed Rust-1.85 candidate for a future source route; its intake, dependency closure, license review, and package integration remain unimplemented. |
+| Newer Starship candidate | The [v1.24.2 manifest](https://raw.githubusercontent.com/starship/starship/v1.24.2/Cargo.toml) declares Rust 1.90. | Do not select v1.24.2 or newer merely by copying the current intake record into a Rust-1.85 route. |
+| Yazi v25.4.8 compiler feasibility | `cargo +1.85.0 check --locked --package yazi-fm --package yazi-cli` completed successfully in 6m49s against the official v25.4.8 source. The source-build output warned that its `vergen` metadata fell back outside a Git worktree. | v25.4.8 is a compiler-feasible candidate only; a retained-build design must specify deterministic VCS/version metadata. |
+| Yazi v25.4.8 theme schema | Its [theme struct](https://raw.githubusercontent.com/sxyazi/yazi/v25.4.8/yazi-config/src/theme/theme.rs) and [shipped dark preset](https://raw.githubusercontent.com/sxyazi/yazi/v25.4.8/yazi-config/preset/theme-dark.toml) use `manager`, `normal_main`/`normal_alt`, and `perm_type`/`perm_read`/`perm_write`/`perm_exec`. Helm's current template uses different section/key names. | A Rust-1.85-compatible Yazi selection requires a jointly reviewed template rewrite and parser/render compatibility test. Pinning v25.4.8 alone would not make the emitted Helm configuration supported. |
+| Yazi v25.5.31 | Cargo reports `yazi-shared@25.5.31 requires rustc 1.86.0` under Rust 1.85. | The newer candidate is outside the existing native-package compiler floor. |
+
 ## Decision boundary
 
 The remaining choices are normative product/distribution commitments, not facts
@@ -73,6 +87,10 @@ package build consume retained fixed inputs without a live upstream fetch.
 - [constraint] Debian-archive and Fedora-guideline-compatible package builds need fixed source inputs and cannot make a live upstream fetch their source of truth #packaging #provenance
 - [decision-required] The package source policy must define reviewed intake, fixed-input retention, and ownership separately from package builds #m1 #packaging
 - [decision-required] A supported cross-target Yazi and Starship claim needs an accepted source and lifecycle policy #mvp
+- [fact] Starship v1.23.0 declares Rust 1.85 and matches the current Helm Starship template's checked modules and fields #m1 #packaging
+- [fact] Yazi v25.4.8 passes the selected Rust 1.85 Cargo check, but its theme schema differs from the current Helm Yazi template #m1 #compatibility
+- [risk] Source-only Yazi builds fall back for VCS metadata outside a Git worktree unless the retained-build policy supplies deterministic metadata #reproducibility #packaging
+- [decision-required] Select Yazi version and compatible Helm template together, backed by an actual parser/render test #m1 #specification
 
 ## Relations
 
