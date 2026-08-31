@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""Refuse hard-coded colour values in Helm's shipped template sources."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+
+EXPECTED = {
+    "gtk3.css",
+    "gtk4.css",
+    "foot.ini",
+    "yazi-theme.toml",
+    "btop.theme",
+    "starship.toml",
+    "fuzzel.ini",
+    "qt6ct-colors.conf",
+}
+PLACEHOLDER = r"\{\{[^{}\r\n]*\.bare\s*\}\}"
+PLACEHOLDER_RE = re.compile(PLACEHOLDER)
+PLACEHOLDER_ANY = r"\{\{[^{}\r\n]*\}\}"
+PLACEHOLDER_ANY_RE = re.compile(PLACEHOLDER_ANY)
+HEX_RE = re.compile(r"#[0-9A-Fa-f]+")
+
+
+class Checker:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.errors: list[str] = []
+
+    def error(self, path: Path, text: str, offset: int, token: str) -> None:
+        line = text.count("\n", 0, offset) + 1
+        self.errors.append(f"{path.as_posix()}:{line}: colour literal or malformed value: {token}")
+
+    def fail(self, path: Path, text: str, offset: int, token: str) -> None:
+        self.error(path, text, offset, token)
+
+    def inventory(self) -> None:
+        templates = self.root / "configs/templates"
+        actual = {
+            path.relative_to(templates).as_posix()
+            for path in templates.rglob("*")
+            if path.is_file()
+        } if templates.is_dir() else set()
+        if actual != EXPECTED:
+            self.errors.append(
+                "configs/templates: template inventory differs from SPEC 0022: "
+                f"expected {sorted(EXPECTED)!r}, got {sorted(actual)!r}"
+            )
+
+        catalogue = self.root / "crates/helm-theme/src/template.rs"
+        try:
+            source = catalogue.read_text(encoding="utf-8")
+        except OSError as exc:
+            self.errors.append(f"crates/helm-theme/src/template.rs: cannot read catalogue: {exc}")
+            return
+        operands = self.catalogue_operands(source)
+        if operands is None:
+            self.errors.append("crates/helm-theme/src/template.rs: malformed templates() catalogue")
+            return
+        expected_operands = {f"../../../configs/templates/{name}" for name in EXPECTED}
+        if len(operands) != len(EXPECTED) or set(operands) != expected_operands:
+            self.errors.append(
+                "crates/helm-theme/src/template.rs: embedded template inventory differs from SPEC 0022: "
+                f"expected {sorted(expected_operands)!r}, got {operands!r}"
+            )
+
+    @staticmethod
+    def rust_tokens(source: str) -> list[tuple[str, str]] | None:
+        """Return enough Rust tokens to inspect the fixed template catalogue safely."""
+        tokens: list[tuple[str, str]] = []
+        index = 0
+        while index < len(source):
+            char = source[index]
+            if char.isspace():
+                index += 1
+            elif source.startswith("//", index):
+                newline = source.find("\n", index + 2)
+                index = len(source) if newline < 0 else newline + 1
+            elif source.startswith("/*", index):
+                depth = 1
+                index += 2
+                while index < len(source) and depth:
+                    if source.startswith("/*", index):
+                        depth += 1
+                        index += 2
+                    elif source.startswith("*/", index):
+                        depth -= 1
+                        index += 2
+                    else:
+                        index += 1
+                if depth:
+                    return None
+            elif raw_string := re.match(r"(?:br|cr|r)(#{0,255})\"", source[index:]):
+                hashes = raw_string.group(1)
+                content = index + len(raw_string.group())
+                closing = source.find(f'"{hashes}', content)
+                if closing < 0:
+                    return None
+                index = closing + 1 + len(hashes)
+            elif char == '"':
+                start = index + 1
+                index += 1
+                while index < len(source):
+                    if source[index] == "\\":
+                        index += 2
+                    elif source[index] == '"':
+                        tokens.append(("string", source[start:index]))
+                        index += 1
+                        break
+                    else:
+                        index += 1
+                else:
+                    return None
+            elif char == "'":
+                if index + 1 < len(source) and source[index + 1] == "\\":
+                    index += 2
+                    while index < len(source) and source[index] != "'":
+                        index += 1
+                    if index >= len(source):
+                        return None
+                    index += 1
+                elif index + 2 < len(source) and source[index + 2] == "'":
+                    index += 3
+                else:
+                    tokens.append(("punctuation", char))
+                    index += 1
+            elif char.isalpha() or char == "_":
+                start = index
+                index += 1
+                while index < len(source) and (source[index].isalnum() or source[index] == "_"):
+                    index += 1
+                tokens.append(("identifier", source[start:index]))
+            else:
+                tokens.append(("punctuation", char))
+                index += 1
+        return tokens
+
+    @classmethod
+    def catalogue_operands(cls, source: str) -> list[str] | None:
+        tokens = cls.rust_tokens(source)
+        if tokens is None:
+            return None
+        starts: list[int] = []
+        scope_depth = 0
+        for index in range(len(tokens) - 2):
+            if scope_depth == 0 and tokens[index:index + 3] == [
+                ("identifier", "pub"),
+                ("identifier", "fn"),
+                ("identifier", "templates"),
+            ]:
+                starts.append(index)
+            if tokens[index] == ("punctuation", "{"):
+                scope_depth += 1
+            elif tokens[index] == ("punctuation", "}"):
+                scope_depth -= 1
+        if len(starts) != 1:
+            return None
+        start = starts[0]
+        opening = next((index for index in range(start + 3, len(tokens)) if tokens[index] == ("punctuation", "{")), None)
+        if opening is None:
+            return None
+        depth = 0
+        closing = None
+        for index in range(opening, len(tokens)):
+            if tokens[index] == ("punctuation", "{"):
+                depth += 1
+            elif tokens[index] == ("punctuation", "}"):
+                depth -= 1
+                if depth == 0:
+                    closing = index
+                    break
+        if closing is None:
+            return None
+        body = tokens[opening + 1:closing]
+        if body[:3] != [
+            ("identifier", "vec"),
+            ("punctuation", "!"),
+            ("punctuation", "["),
+        ]:
+            return None
+        vector_closing = cls.matching_delimiter(body, 2, "[", "]")
+        if vector_closing is None or vector_closing != len(body) - 1:
+            return None
+        records = body[3:vector_closing]
+        operands: list[str] = []
+        index = 0
+        while index < len(records):
+            if records[index:index + 2] != [("identifier", "Template"), ("punctuation", "{")]:
+                return None
+            record_closing = cls.matching_delimiter(records, index + 1, "{", "}")
+            if record_closing is None:
+                return None
+            record = records[index + 2:record_closing]
+            source_index = next(
+                (
+                    offset
+                    for offset in range(len(record) - 10)
+                    if record[offset:offset + 8] == [
+                        ("identifier", "source"),
+                        ("punctuation", ":"),
+                        ("punctuation", ":"),
+                        ("punctuation", ":"),
+                        ("identifier", "core"),
+                        ("punctuation", ":"),
+                        ("punctuation", ":"),
+                        ("identifier", "include_str"),
+                    ]
+                    and record[offset + 8] == ("punctuation", "!")
+                    and record[offset + 9] == ("punctuation", "(")
+                    and record[offset + 10][0] == "string"
+                ),
+                None,
+            )
+            if source_index is None:
+                return None
+            operands.append(record[source_index + 10][1])
+            index = record_closing + 1
+            if index < len(records):
+                if records[index] != ("punctuation", ","):
+                    return None
+                index += 1
+        return operands
+
+    @staticmethod
+    def matching_delimiter(
+        tokens: list[tuple[str, str]], start: int, opening: str, closing: str,
+    ) -> int | None:
+        depth = 0
+        for index in range(start, len(tokens)):
+            if tokens[index] == ("punctuation", opening):
+                depth += 1
+            elif tokens[index] == ("punctuation", closing):
+                depth -= 1
+                if depth == 0:
+                    return index
+        return None
+
+    @staticmethod
+    def mask_placeholders(text: str) -> str:
+        return re.sub(r"\{\{.*?\}\}", lambda m: "".join("\n" if c == "\n" else "\r" if c == "\r" else " " for c in m.group()), text, flags=re.DOTALL)
+
+    @staticmethod
+    def split_outside_placeholders(value: str) -> list[str] | None:
+        parts: list[str] = []
+        start = 0
+        depth = 0
+        index = 0
+        while index < len(value):
+            if value.startswith("{{", index):
+                depth += 1
+                index += 2
+            elif value.startswith("}}", index):
+                if depth == 0:
+                    return None
+                depth -= 1
+                index += 2
+            elif value[index] == "," and depth == 0:
+                parts.append(value[start:index])
+                start = index + 1
+                index += 1
+            else:
+                index += 1
+        if depth:
+            return None
+        parts.append(value[start:])
+        return parts
+
+    def css(self, path: Path, text: str) -> None:
+        masked = self.mask_placeholders(text)
+        for match in HEX_RE.finditer(masked):
+            token = match.group()
+            if len(token) - 1 not in {3, 4, 6, 8}:
+                self.fail(path, text, match.start(), token)
+            else:
+                self.fail(path, text, match.start(), token)
+        function = re.compile(r"(?i)(?<![A-Za-z0-9_-])(rgb|rgba)(?![A-Za-z0-9_-])\s*\(")
+        for match in function.finditer(masked):
+            depth = 0
+            end = None
+            for index in range(match.end() - 1, len(masked)):
+                if masked[index] == "(":
+                    depth += 1
+                elif masked[index] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        end = index + 1
+                        break
+            self.fail(path, text, match.start(), text[match.start():end])
+
+    def foot(self, path: Path, text: str) -> None:
+        in_colours = False
+        colour_keys = {
+            "background", "foreground", "selection-background", "selection-foreground", "urls",
+            *(f"regular{number}" for number in range(8)),
+            *(f"bright{number}" for number in range(8)),
+        }
+        seen: set[str] = set()
+        offset = 0
+        for raw in text.splitlines(keepends=True):
+            line = raw.rstrip("\r\n")
+            if line.startswith("[") and line.endswith("]"):
+                in_colours = line == "[colors]"
+            elif in_colours and "=" in line:
+                key, value = line.split("=", 1)
+                value = value.strip()
+                if key == "alpha":
+                    if value != "1.0":
+                        self.fail(path, text, offset, line)
+                elif key not in colour_keys:
+                    self.fail(path, text, offset, line)
+                else:
+                    if key in seen:
+                        self.fail(path, text, offset, line)
+                        offset += len(raw)
+                        continue
+                    seen.add(key)
+                    allowed = re.compile(rf"{PLACEHOLDER}(?:\s+{PLACEHOLDER})?")
+                    if not allowed.fullmatch(value):
+                        self.fail(path, text, offset, line)
+            offset += len(raw)
+        if seen != colour_keys:
+            self.errors.append(f"{path.as_posix()}: missing required [colors] key")
+
+    def fuzzel(self, path: Path, text: str) -> None:
+        self.ini_colour_section(path, text, re.compile(rf"{PLACEHOLDER}ff"), "fuzzel")
+
+    def ini_colour_section(self, path: Path, text: str, allowed: re.Pattern[str], name: str) -> None:
+        in_colours = False
+        offset = 0
+        for raw in text.splitlines(keepends=True):
+            line = raw.rstrip("\r\n")
+            if line.startswith("[") and line.endswith("]"):
+                in_colours = line == "[colors]"
+            elif in_colours and "=" in line:
+                _, value = line.split("=", 1)
+                if not allowed.fullmatch(value.strip()):
+                    self.fail(path, text, offset, line)
+            offset += len(raw)
+
+    def qt(self, path: Path, text: str) -> None:
+        in_scheme = False
+        saw_scheme = False
+        offset = 0
+        allowed = re.compile(rf"#ff{PLACEHOLDER}")
+        expected_keys = {"active_colors", "disabled_colors", "inactive_colors"}
+        seen: set[str] = set()
+        for raw in text.splitlines(keepends=True):
+            line = raw.rstrip("\r\n")
+            if line.startswith("[") and line.endswith("]"):
+                in_scheme = line == "[ColorScheme]"
+                saw_scheme = saw_scheme or in_scheme
+            elif in_scheme and "=" in line:
+                key, value = line.split("=", 1)
+                if key not in expected_keys or key in seen:
+                    self.fail(path, text, offset, line)
+                else:
+                    seen.add(key)
+                    values = self.split_outside_placeholders(value)
+                    if not values or any(not allowed.fullmatch(item.strip()) for item in values):
+                        self.fail(path, text, offset, line)
+            offset += len(raw)
+        if not saw_scheme or seen != expected_keys:
+            self.errors.append(f"{path.as_posix()}: missing required ColorScheme key")
+
+    def btop(self, path: Path, text: str) -> None:
+        allowed = re.compile(rf'theme\[[^\]]+\]="{PLACEHOLDER_ANY}"')
+        self.line_values(path, text, lambda line: line.startswith("theme["), allowed)
+        self.raw_hex(path, text)
+
+    def yazi(self, path: Path, text: str) -> None:
+        allowed = re.compile(rf'"(?:reset|{PLACEHOLDER_ANY})"')
+        for match in re.finditer(r'\b(?:fg|bg)\s*=\s*', text):
+            start = match.end()
+            if start >= len(text) or text[start] != '"':
+                end = next((index for index in range(start, len(text)) if text[index] in ",}\r\n"), len(text))
+                self.fail(path, text, match.start(), text[match.start():end])
+                continue
+            end = text.find('"', start + 1)
+            if end < 0:
+                self.fail(path, text, match.start(), text[match.start():])
+                continue
+            value = text[start:end + 1]
+            if not allowed.fullmatch(value) or (end + 1 < len(text) and text[end + 1] not in ",}\r\n "):
+                self.fail(path, text, match.start(), text[match.start():end + 1])
+        self.raw_hex(path, text)
+
+    def starship(self, path: Path, text: str) -> None:
+        for match in re.finditer(r"fg:", text):
+            start = match.end()
+            if text.startswith("{{", start):
+                close = text.find("}}", start)
+                end = len(text) if close < 0 else close + 2
+                value = text[start:end]
+                if not PLACEHOLDER_ANY_RE.fullmatch(value) or (end < len(text) and text[end] not in " \t\r\n\"])"):
+                    self.fail(path, text, match.start(), text[match.start():end])
+            else:
+                end = start
+                while end < len(text) and text[end] not in " \t\r\n\"]":
+                    end += 1
+                self.fail(path, text, match.start(), text[match.start():end])
+        self.raw_hex(path, text)
+
+    def line_values(self, path: Path, text: str, selected, allowed: re.Pattern[str]) -> None:
+        offset = 0
+        for raw in text.splitlines(keepends=True):
+            line = raw.rstrip("\r\n")
+            if selected(line) and not allowed.fullmatch(line):
+                self.fail(path, text, offset, line)
+            offset += len(raw)
+
+    def raw_hex(self, path: Path, text: str) -> None:
+        masked = self.mask_placeholders(text)
+        for match in HEX_RE.finditer(masked):
+            self.fail(path, text, match.start(), match.group())
+
+    def run(self) -> int:
+        self.inventory()
+        templates = self.root / "configs/templates"
+        handlers = {
+            "gtk3.css": self.css,
+            "gtk4.css": self.css,
+            "foot.ini": self.foot,
+            "fuzzel.ini": self.fuzzel,
+            "qt6ct-colors.conf": self.qt,
+            "btop.theme": self.btop,
+            "yazi-theme.toml": self.yazi,
+            "starship.toml": self.starship,
+        }
+        for name, handler in handlers.items():
+            path = templates / name
+            if path.is_file():
+                handler(Path("configs/templates") / name, path.read_text(encoding="utf-8"))
+        for error in self.errors:
+            print(error, file=sys.stderr)
+        return 1 if self.errors else 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", default=".")
+    args = parser.parse_args()
+    return Checker(Path(args.root).resolve()).run()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

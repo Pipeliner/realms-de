@@ -127,6 +127,7 @@ jobs:
           ./docs/test-gh-body-file.sh
           ./docs/test-github-body-safety.sh
           ./docs/check-github-body-safety.sh
+          ./docs/test-colour-template-literals.sh
       - run: cargo doc --workspace --no-deps
 
   msrv:
