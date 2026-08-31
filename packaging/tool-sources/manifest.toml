@@ -1,0 +1,27 @@
+# Reviewed retained upstream source inputs, reserved for the future offline
+# package route in SPEC 0023 A2. URLs are provenance only and never build-time
+# fetch targets; no native package consumes these archives yet.
+
+[[input]]
+tool = "yazi"
+version = "26.8.15"
+source = "inputs/yazi-v26.8.15.tar.gz"
+sha256 = "60bd4ca56398f0f6ea6dcf88cc18e325583bf5328aeec51d396070944a9495c8"
+source_url = "https://github.com/sxyazi/yazi/archive/refs/tags/v26.8.15.tar.gz"
+license = "MIT"
+notice = "notices/yazi-MIT.txt"
+intake_date = "2026-08-31"
+provenance = "GitHub verified signed tag v26.8.15 (commit 1f3588d)"
+rollback_to = "none"
+
+[[input]]
+tool = "starship"
+version = "1.26.0"
+source = "inputs/starship-v1.26.0.tar.gz"
+sha256 = "8c95e8a6c596b29ac192104eae00dd991e8c8fd66083fd2b34d6b223a5803a59"
+source_url = "https://github.com/starship/starship/archive/refs/tags/v1.26.0.tar.gz"
+license = "ISC"
+notice = "notices/starship-ISC.txt"
+intake_date = "2026-08-31"
+provenance = "GitHub verified signed tag v1.26.0 (commit fca92d8)"
+rollback_to = "none"

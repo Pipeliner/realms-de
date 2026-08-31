@@ -72,3 +72,4 @@ Sequential, never reused. A superseded spec keeps its number and gains a
 | [0020](0020-helmctl-theme-json.md) | helmctl theme JSON output | Accepted |
 | [0021](0021-github-publication-body-safety.md) | GitHub publication body safety | Accepted |
 | [0022](0022-colour-template-literal-guard.md) | Colour-template literal guard | Accepted |
+| [0023](0023-m1-tool-source-intake.md) | M1 Yazi and Starship source intake | Accepted |

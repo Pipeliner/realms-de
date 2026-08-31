@@ -128,6 +128,8 @@ jobs:
           ./docs/test-github-body-safety.sh
           ./docs/check-github-body-safety.sh
           ./docs/test-colour-template-literals.sh
+          ./packaging/tool-sources/test-intake.sh
+          ./packaging/tool-sources/test-no-live-fetch.sh
       - run: cargo doc --workspace --no-deps
 
   msrv:
