@@ -1,0 +1,16 @@
+# Planned target mappings. A retained source is not a supported route until its
+# locked dependency closure and native package integration pass SPEC 0023 A2-A4.
+[[target]]
+name = "nixos"
+yazi = "locked-nixpkgs"
+starship = "locked-nixpkgs"
+
+[[target]]
+name = "debian"
+yazi = "retained:yazi@26.8.15"
+starship = "retained:starship@1.26.0"
+
+[[target]]
+name = "fedora"
+yazi = "retained:yazi@26.8.15"
+starship = "retained:starship@1.26.0"
