@@ -27,13 +27,26 @@ record = quoted_record(root / "bundle.toml")
 required = {"name", "lockfile", "cargo_config", "license_report"}
 vendor_fields = {"vendor"}
 archive_fields = {"vendor_archive", "vendor_archive_sha256", "vendor_archive_format"}
-if set(record) != required | vendor_fields and set(record) != required | archive_fields:
+bound_fields = {
+    "version", "commit", "commit_timestamp", "source", "source_sha256",
+    "lockfile_sha256", "cargo_config_sha256", "license_report_sha256",
+}
+basic_fields = required | vendor_fields
+basic_archive_fields = required | archive_fields
+bound_archive_fields = basic_archive_fields | bound_fields
+if set(record) != basic_fields and set(record) != basic_archive_fields and set(record) != bound_archive_fields:
     raise SystemExit("bundle manifest fields differ from policy")
 
 paths = {key: root / record[key] for key in required - {"name"}}
+if "source" in record:
+    paths["source"] = root / record["source"]
 for key, path in paths.items():
     if not path.exists() or path.is_symlink():
         raise SystemExit(f"bundle {key} is missing or symlinked")
+for key in ("source", "lockfile", "cargo_config", "license_report"):
+    hash_key = f"{key}_sha256"
+    if hash_key in record and hashlib.sha256(paths[key].read_bytes()).hexdigest() != record[hash_key]:
+        raise SystemExit(f"{key} SHA-256 mismatch")
 
 config = paths["cargo_config"].read_text()
 temporary = None

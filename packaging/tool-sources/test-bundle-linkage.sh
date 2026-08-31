@@ -6,6 +6,8 @@ checker=$root/packaging/tool-sources/check-bundle-linkage.py
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/helm-bundle-linkage.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
+"$checker" "$root/packaging/tool-sources/bundles/starship-1.23.0"
+
 mkdir -p "$tmp/bundle/vendor/example-1.0.0" "$tmp/bundle/.cargo"
 printf 'source = "registry+https://github.com/rust-lang/crates.io-index"\n' >"$tmp/bundle/Cargo.lock"
 cat >"$tmp/bundle/.cargo/config.toml" <<'EOF'
