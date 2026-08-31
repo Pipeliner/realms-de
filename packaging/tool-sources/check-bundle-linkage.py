@@ -66,6 +66,8 @@ else:
     vendor = unpacked / "vendor"
     if not vendor.is_dir() or vendor.is_symlink():
         raise SystemExit("vendor archive did not unpack a regular vendor tree")
+    if any(entry.is_symlink() for entry in vendor.rglob("*")):
+        raise SystemExit("vendor tree contains symlink")
 if 'replace-with = "vendored-sources"' not in config or 'directory = "vendor"' not in config:
     raise SystemExit("Cargo source replacement does not select vendor directory")
 if not any(vendor.glob("*/.cargo-checksum.json")):

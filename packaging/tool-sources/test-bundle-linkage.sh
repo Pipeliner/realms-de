@@ -43,6 +43,20 @@ EOF
 
 "$checker" "$tmp"
 
+rm -f "$tmp/bundle/vendor.tar.zst"
+mkdir -p "$tmp/malicious/vendor" "$tmp/malicious/target"
+printf '{"files":{}}\n' >"$tmp/malicious/target/.cargo-checksum.json"
+ln -s ../target "$tmp/malicious/vendor/example-1.0.0"
+tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+    -C "$tmp/malicious" -cf - vendor | zstd -3 -q -o "$tmp/bundle/vendor.tar.zst"
+archive_sha256=$(sha256sum "$tmp/bundle/vendor.tar.zst" | awk '{print $1}')
+sed -i "s/^vendor_archive_sha256 = .*/vendor_archive_sha256 = \"$archive_sha256\"/" "$tmp/bundle.toml"
+if "$checker" "$tmp" >"$tmp/out" 2>"$tmp/err"; then
+    echo 'vendor archive with symlinked crate unexpectedly passed' >&2
+    exit 1
+fi
+grep -F 'vendor tree contains symlink' "$tmp/err"
+
 printf 'source = "git+https://example.invalid/unrepresented#abc"\n' >>"$tmp/bundle/Cargo.lock"
 if "$checker" "$tmp" >"$tmp/out" 2>"$tmp/err"; then
     echo 'unrepresented Cargo source unexpectedly passed' >&2
