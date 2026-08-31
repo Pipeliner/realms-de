@@ -34,6 +34,7 @@ StartLimitBurst=5
 OnFailure=helm-session-abort.service
 
 [Service]
+Environment=PATH=/usr/lib/helm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 # Type=exec until the daemon exists. In M2 this becomes Type=notify with
 # sd_notify(READY=1) sent once the window-management global *and* the
 # layer-shell manager global are bound, so that "the target is active" and

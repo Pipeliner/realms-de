@@ -58,6 +58,7 @@ set -euo pipefail
 readonly HELM_VERSION='0.1.0'
 readonly PROGNAME="${0##*/}"
 readonly MAIN_PID=$$
+readonly HELM_PRIVATE_BIN=/usr/lib/helm/bin
 
 HELM_COMPOSITOR="${HELM_COMPOSITOR:-river}"
 HELM_COMPOSITOR_ARGS="${HELM_COMPOSITOR_ARGS:-}"
@@ -72,6 +73,7 @@ HELM_IMPORT_PATH="${HELM_IMPORT_PATH:-0}"
 HELM_ALLOW_NO_WM="${HELM_ALLOW_NO_WM:-0}"
 HELM_STRICT="${HELM_STRICT:-0}"
 HELM_DBUS_REEXEC="${HELM_DBUS_REEXEC:-0}"
+HELM_CALLER_PATH="${PATH:-}"
 
 # The unit that supervises the window manager. Named for the daemon rather than
 # generically, per SPEC 0005 OQ-4.
@@ -211,7 +213,9 @@ set_identity() {
 	# top-left corner under every tiling WM.
 	export _JAVA_AWT_WM_NONREPARENTING="${_JAVA_AWT_WM_NONREPARENTING:-1}"
 
-	((HELM_IMPORT_PATH)) && SESSION_ENV_VARS+=(PATH)
+	# The session itself owns the private tools. Activation environments are
+	# handled separately below so they only ever receive the caller's PATH.
+	export PATH="$HELM_PRIVATE_BIN:$HELM_CALLER_PATH"
 	return 0
 }
 
@@ -383,9 +387,16 @@ detect_session_services() {
 # environment, which is what bus-activated services inherit. A desktop that does
 # only the first still has hanging portals.
 import_session_environment() {
+	local -a imported_vars=("${SESSION_ENV_VARS[@]}")
+	((HELM_IMPORT_PATH)) && imported_vars+=(PATH)
 	if ((have_systemd_user)); then
-		systemctl --user import-environment "${SESSION_ENV_VARS[@]}" ||
-			log "systemctl --user import-environment failed; user units may not find the display"
+		if ((HELM_IMPORT_PATH)); then
+			PATH="$HELM_CALLER_PATH" systemctl --user import-environment "${imported_vars[@]}" ||
+				log "systemctl --user import-environment failed; user units may not find the display"
+		else
+			systemctl --user import-environment "${imported_vars[@]}" ||
+				log "systemctl --user import-environment failed; user units may not find the display"
+		fi
 	fi
 
 	if ((have_dbus_update)); then
@@ -396,11 +407,16 @@ import_session_environment() {
 		# that decides whether portals work — succeeded at all.
 		local -a dbus_args=()
 		((have_systemd_user)) && dbus_args+=(--systemd)
-		dbus-update-activation-environment "${dbus_args[@]}" "${SESSION_ENV_VARS[@]}" ||
-			log "dbus-update-activation-environment failed; portals may hang"
+		if ((HELM_IMPORT_PATH)); then
+			PATH="$HELM_CALLER_PATH" dbus-update-activation-environment "${dbus_args[@]}" "${imported_vars[@]}" ||
+				log "dbus-update-activation-environment failed; portals may hang"
+		else
+			dbus-update-activation-environment "${dbus_args[@]}" "${imported_vars[@]}" ||
+				log "dbus-update-activation-environment failed; portals may hang"
+		fi
 	fi
 
-	log "session environment published: systemd=${have_systemd_user} dbus=${have_dbus_update} vars=${SESSION_ENV_VARS[*]}"
+	log "session environment published: systemd=${have_systemd_user} dbus=${have_dbus_update} vars=${imported_vars[*]}"
 }
 
 # Step 5. Mirror the cursor into gsettings — after step 4, never before.
