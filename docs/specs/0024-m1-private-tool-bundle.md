@@ -39,12 +39,22 @@ machine-readable intake record SHALL bind by digest:
 
 1. the upstream tagged source archive and its provenance/notice record;
 2. the exact `Cargo.lock` used for the build;
-3. the complete `cargo vendor` dependency tree generated from that lockfile;
+3. the complete `cargo vendor` dependency tree generated from that lockfile,
+   retained either as regular Git-tracked files or as a deterministic,
+   Git-tracked `.tar.zst` archive of that tree;
 4. a Cargo source-replacement configuration which addresses every resolved
    Cargo source through retained input (registry, Git, and any applicable path
    source); and
 5. a dependency license and notice report identifying every dependency in the
    resolved closure and the source used for its licensing information.
+
+An archived vendor tree SHALL record its compression algorithm, archive digest,
+and deterministic tar metadata (sorted names, epoch mtime, numeric owner/group).
+The package build SHALL unpack it into an empty bundle-local directory before
+Cargo runs; the linkage test SHALL reject a digest mismatch, path escape,
+symlink, missing Cargo checksum, or unpacked tree differing from the archived
+tree. Compression changes storage representation only: it must not weaken the
+complete-closure, source-replacement, or offline-build requirements.
 
 This rule applies equally to **every Cargo invocation performed by the native
 package recipes**, including the Helm workspace build and test commands already

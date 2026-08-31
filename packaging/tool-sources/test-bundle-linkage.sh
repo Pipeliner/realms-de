@@ -27,6 +27,19 @@ EOF
 
 "$checker" "$tmp"
 
+tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+    -C "$tmp/bundle" -cf - vendor | zstd -3 -q -o "$tmp/bundle/vendor.tar.zst"
+archive_sha256=$(sha256sum "$tmp/bundle/vendor.tar.zst" | awk '{print $1}')
+rm -rf "$tmp/bundle/vendor"
+sed -i '/^vendor = /d' "$tmp/bundle.toml"
+cat >>"$tmp/bundle.toml" <<EOF
+vendor_archive = "bundle/vendor.tar.zst"
+vendor_archive_sha256 = "$archive_sha256"
+vendor_archive_format = "tar.zst"
+EOF
+
+"$checker" "$tmp"
+
 printf 'source = "git+https://example.invalid/unrepresented#abc"\n' >>"$tmp/bundle/Cargo.lock"
 if "$checker" "$tmp" >"$tmp/out" 2>"$tmp/err"; then
     echo 'unrepresented Cargo source unexpectedly passed' >&2

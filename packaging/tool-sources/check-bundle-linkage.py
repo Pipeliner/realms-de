@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Validate one retained Cargo bundle without consulting the network."""
+import hashlib
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -21,8 +24,10 @@ def quoted_record(path: Path) -> dict[str, str]:
 
 root = Path(sys.argv[1]).resolve() if len(sys.argv) == 2 else Path(__file__).resolve().parent
 record = quoted_record(root / "bundle.toml")
-required = {"name", "lockfile", "vendor", "cargo_config", "license_report"}
-if set(record) != required:
+required = {"name", "lockfile", "cargo_config", "license_report"}
+vendor_fields = {"vendor"}
+archive_fields = {"vendor_archive", "vendor_archive_sha256", "vendor_archive_format"}
+if set(record) != required | vendor_fields and set(record) != required | archive_fields:
     raise SystemExit("bundle manifest fields differ from policy")
 
 paths = {key: root / record[key] for key in required - {"name"}}
@@ -31,7 +36,23 @@ for key, path in paths.items():
         raise SystemExit(f"bundle {key} is missing or symlinked")
 
 config = paths["cargo_config"].read_text()
-vendor = paths["vendor"]
+temporary = None
+if "vendor" in record:
+    vendor = root / record["vendor"]
+else:
+    archive = root / record["vendor_archive"]
+    if archive.is_symlink() or not archive.is_file():
+        raise SystemExit("vendor archive is missing or symlinked")
+    if record["vendor_archive_format"] != "tar.zst":
+        raise SystemExit("vendor archive format is not tar.zst")
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != record["vendor_archive_sha256"]:
+        raise SystemExit("vendor archive SHA-256 mismatch")
+    temporary = tempfile.TemporaryDirectory()
+    unpacked = Path(temporary.name)
+    subprocess.run(["tar", "--zstd", "-xf", str(archive), "-C", str(unpacked)], check=True)
+    vendor = unpacked / "vendor"
+    if not vendor.is_dir() or vendor.is_symlink():
+        raise SystemExit("vendor archive did not unpack a regular vendor tree")
 if 'replace-with = "vendored-sources"' not in config or 'directory = "vendor"' not in config:
     raise SystemExit("Cargo source replacement does not select vendor directory")
 if not any(vendor.glob("*/.cargo-checksum.json")):
