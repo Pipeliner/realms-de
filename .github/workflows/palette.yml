@@ -46,6 +46,11 @@ jobs:
           # quotes palette values to explain them, which is documenting the one
           # source of truth rather than duplicating it.
           #
+          # Retained Cargo source closures are immutable third-party inputs,
+          # not Helm-rendered consumers. Their compressed bytes can contain
+          # accidental hex-looking sequences and are covered by their own
+          # provenance and checksum gates.
+          #
           # configs/templates/ is deliberately NOT here. Those land in M1 and are
           # rendered *from* palette.toml, so they hold placeholders, not colours
           # — a literal in a template is exactly the drift this job exists to
@@ -57,6 +62,7 @@ jobs:
             'docs/*'
             '.github/*'
             '.claude/*'
+            'packaging/tool-sources/bundles/*'
             'README.md'
           )
           # ───────────────────────────────────────────────────────────────────
