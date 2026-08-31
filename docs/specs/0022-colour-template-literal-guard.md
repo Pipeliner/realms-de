@@ -35,12 +35,20 @@ allowlists.
 1. One checked-in checker receives a repository root, scans the complete fixed
    template inventory, and exits nonzero on a violation. The inventory is
    exactly the eight paths named above and must equal the set of literal
-   `include_str!("../../../configs/templates/<path>")` operands in
+   `::core::include_str!("../../../configs/templates/<path>")` operands in
    `crates/helm-theme/src/template.rs`. A missing expected file, duplicate or
    additional template operand, additional file under `configs/templates/`, or
    a template without a declared target grammar is a refusal. Adding or
    removing a shipped template requires an accepted amendment and fixture
-   update.
+   update. The one top-level `pub fn templates()` definition is itself the
+   catalogue: its body must be a direct tail `vec![Template { ... }, ...]`
+   expression containing only the eight direct `Template` records. Nested
+   functions, conditionally disabled records, helper-return indirection, and
+   records outside that direct vector are not catalogue evidence and cause a
+   refusal. The source guard is lexical only: a compiled `helm_theme` unit
+   test separately proves the actual `templates()` id-to-source-byte mapping
+   against the eight qualified built-in includes, so macro expansion cannot
+   substitute different compiled sources while preserving lexical text.
 2. Every diagnostic names the repository-relative path, one-based line, and
    the complete offending token or value. The palette workflow invokes this
    checker, and the fixture test invokes the same entry point.
@@ -97,11 +105,11 @@ allowlists.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| A1 | Given the exact shipped eight-template inventory and its literal Rust catalogue operands, when the checker runs, then it passes and detects a missing, additional, unclassified, or catalogue-divergent template source. | |
-| A2 | Given a GTK template with literal or malformed hex, or case-insensitive boundary-valid `rgb`/`rgba` outside a placeholder across CSS lexical spellings and lines, when the checker runs, then it fails with path, line, and complete token; a placeholder transform passes. | |
-| A3 | Given a Foot `[colors]` literal or invalid `alpha` setting, a Fuzzel raw/malformed opacity composition, and a Qt raw/incorrect-alpha/empty/unclassified colour field, when the checker runs, then each fails; the shipped placeholder compositions pass. | |
-| A4 | Given btop, Yazi, or Starship with a target-position literal or malformed value outside a placeholder, including CRLF and repeated-literal fixtures, when the checker runs, then every violation is reported. | |
-| A5 | Given the palette CI workflow, when it runs on a pull request, then it invokes the same checker; a hostile fixture proves a checker failure is surfaced. | |
+| A1 | Given the exact shipped eight-template inventory and its literal Rust catalogue operands, when the checker runs, then it passes and detects a missing, additional, unclassified, catalogue-divergent, comment-spoofed, raw-string-spoofed, nested-function-spoofed, disabled-top-level-function-spoofed, or disabled-inner-decoy template source; the compiled mapping test also rejects macro-generated source substitution. | `docs/test-colour-template-literals.sh` — `shipped`, `missing-template`, `additional-template`, `catalogue-duplicate-operand`, `catalogue-redirected-source`, `catalogue-comment-spoof`, `catalogue-raw-string-spoof`, `catalogue-raw-byte-string-spoof`, `catalogue-raw-c-string-spoof`, `catalogue-nested-function-spoof`, `catalogue-cfg-disabled-top-level-spoof`, `catalogue-disabled-inner-decoy-spoof`; `template::tests::compiled_catalogue_embeds_the_declared_template_sources` |
+| A2 | Given a GTK template with literal or malformed hex, or case-insensitive boundary-valid `rgb`/`rgba` outside a placeholder across CSS lexical spellings and lines, when the checker runs, then it fails with path, line, and complete token; a placeholder transform passes. | `docs/test-colour-template-literals.sh` — `gtk-rgb-across-crlf`, `gtk-malformed-hex` |
+| A3 | Given a Foot `[colors]` literal or invalid `alpha` setting, a Fuzzel raw/malformed opacity composition, and a Qt raw/incorrect-alpha/empty/unclassified colour field, when the checker runs, then each fails; the shipped placeholder compositions pass. | `docs/test-colour-template-literals.sh` — `foot-invalid-alpha`, `foot-raw-colour`, `fuzzel-raw-colour`, `fuzzel-invalid-opacity`, `qt-raw-colour`, `qt-unclassified-colour-field` |
+| A4 | Given btop, Yazi, or Starship with a target-position literal or malformed value outside a placeholder, including CRLF and repeated-literal fixtures, when the checker runs, then every violation is reported. | `docs/test-colour-template-literals.sh` — `btop-raw-colour`, `yazi-raw-colour`, `yazi-unquoted-colour`, `starship-literal`, `starship-non-placeholder-style` |
+| A5 | Given the palette CI workflow, when it runs on a pull request, then it invokes the same checker; a hostile fixture proves a checker failure is surfaced. | `docs/test-colour-template-literals.sh` — `ci-invokes-checker` |
 
 ## Failure modes
 

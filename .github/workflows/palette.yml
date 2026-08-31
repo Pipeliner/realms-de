@@ -29,6 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Guard target-format template colour literals
+        run: scripts/check-colour-template-literals
+
       - name: Grep for hex colour literals
         run: |
           set -uo pipefail

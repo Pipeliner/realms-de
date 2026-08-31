@@ -82,19 +82,19 @@ pub fn templates() -> Vec<Template> {
     vec![
         Template {
             id: "gtk4",
-            source: include_str!("../../../configs/templates/gtk4.css"),
+            source: ::core::include_str!("../../../configs/templates/gtk4.css"),
             target: PathBuf::from("gtk-4.0/helm.css"),
             reload: gtk_restyle(),
         },
         Template {
             id: "gtk3",
-            source: include_str!("../../../configs/templates/gtk3.css"),
+            source: ::core::include_str!("../../../configs/templates/gtk3.css"),
             target: PathBuf::from("gtk-3.0/helm.css"),
             reload: gtk_restyle(),
         },
         Template {
             id: "foot",
-            source: include_str!("../../../configs/templates/foot.ini"),
+            source: ::core::include_str!("../../../configs/templates/foot.ini"),
             target: PathBuf::from("foot/foot.ini"),
             reload: Reload::Signal {
                 process: "foot",
@@ -103,33 +103,83 @@ pub fn templates() -> Vec<Template> {
         },
         Template {
             id: "yazi",
-            source: include_str!("../../../configs/templates/yazi-theme.toml"),
+            source: ::core::include_str!("../../../configs/templates/yazi-theme.toml"),
             target: PathBuf::from("yazi/theme.toml"),
             reload: Reload::None,
         },
         Template {
             id: "btop",
-            source: include_str!("../../../configs/templates/btop.theme"),
+            source: ::core::include_str!("../../../configs/templates/btop.theme"),
             target: PathBuf::from("btop/themes/helm.theme"),
             reload: Reload::None,
         },
         Template {
             id: "starship",
-            source: include_str!("../../../configs/templates/starship.toml"),
+            source: ::core::include_str!("../../../configs/templates/starship.toml"),
             target: PathBuf::from("starship.toml"),
             reload: Reload::None,
         },
         Template {
             id: "fuzzel",
-            source: include_str!("../../../configs/templates/fuzzel.ini"),
+            source: ::core::include_str!("../../../configs/templates/fuzzel.ini"),
             target: PathBuf::from("fuzzel/fuzzel.ini"),
             reload: Reload::None,
         },
         Template {
             id: "qt6ct",
-            source: include_str!("../../../configs/templates/qt6ct-colors.conf"),
+            source: ::core::include_str!("../../../configs/templates/qt6ct-colors.conf"),
             target: PathBuf::from("qt6ct/colors/helm.conf"),
             reload: Reload::None,
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::templates;
+
+    #[test]
+    fn compiled_catalogue_embeds_the_declared_template_sources() {
+        let actual: Vec<(&str, &str)> = templates()
+            .into_iter()
+            .map(|template| (template.id, template.source))
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    "gtk4",
+                    ::core::include_str!("../../../configs/templates/gtk4.css")
+                ),
+                (
+                    "gtk3",
+                    ::core::include_str!("../../../configs/templates/gtk3.css")
+                ),
+                (
+                    "foot",
+                    ::core::include_str!("../../../configs/templates/foot.ini")
+                ),
+                (
+                    "yazi",
+                    ::core::include_str!("../../../configs/templates/yazi-theme.toml")
+                ),
+                (
+                    "btop",
+                    ::core::include_str!("../../../configs/templates/btop.theme")
+                ),
+                (
+                    "starship",
+                    ::core::include_str!("../../../configs/templates/starship.toml")
+                ),
+                (
+                    "fuzzel",
+                    ::core::include_str!("../../../configs/templates/fuzzel.ini")
+                ),
+                (
+                    "qt6ct",
+                    ::core::include_str!("../../../configs/templates/qt6ct-colors.conf")
+                ),
+            ],
+        );
+    }
 }
