@@ -192,7 +192,7 @@ CARGO_HOME=%{helm_cargo_home} CARGO_TARGET_DIR=%{helm_target_dir} \
 # once they build, with no spec change.
 %files -f %{_builddir}/helm-binaries.list
 %license .helm-workspace/source/LICENSE-MIT .helm-workspace/source/LICENSE-APACHE
-%doc .helm-workspace/source/docs/INSTALL.md .helm-workspace/source/docs/PITFALLS.md
+%doc packaging/package-docs/INSTALL.md .helm-workspace/source/docs/PITFALLS.md
 %{_datadir}/wayland-sessions/helm.desktop
 %{_userunitdir}/helm-session.target
 %{_userunitdir}/helm-wm.service

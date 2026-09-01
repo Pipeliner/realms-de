@@ -1,5 +1,5 @@
 #!/bin/sh
-# B2: the real Debian and RPM drivers must consume only the retained Helm authority.
+# Helm-workspace B2: real Debian/RPM drivers consume only retained authority.
 set -eu
 
 root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
@@ -13,7 +13,7 @@ fail() {
     failures=$((failures + 1))
 }
 
-for command in dh rpmbuild python3 tar zstd; do
+for command in dh dpkg-deb gzip rpm2archive rpmbuild python3 tar zstd; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "required native-build test command is missing: $command" >&2
         exit 1
@@ -106,7 +106,31 @@ run_debian() {
         HELM_REAL_RUSTC="$real_rustc" \
         CARGO_INCREMENTAL=0 \
         CARGO_PROFILE_RELEASE_DEBUG=0 \
-        make -C "$kit" -f debian/rules build RUST_VERSIONED_BIN="$sentinels"
+        make -C "$kit" -f debian/rules binary RUST_VERSIONED_BIN="$sentinels"
+}
+
+assert_current_package_guide() {
+    guide_name=$1
+    guide_root=$2
+    guide_output=$3
+    guide_path=$(find "$guide_root/usr/share/doc" -type f \
+        \( -name 'INSTALL.md' -o -name 'INSTALL.md.gz' \) -print -quit)
+    if [ -z "$guide_path" ]; then
+        fail "$guide_name package omitted its installed build guide"
+        return
+    fi
+    case $guide_path in
+        *.gz) gzip -cd "$guide_path" >"$guide_output" ;;
+        *) cp "$guide_path" "$guide_output" ;;
+    esac
+    if grep -F 'ln -s packaging/debian' "$guide_output" >/dev/null \
+        || grep -F 'git archive' "$guide_output" >/dev/null; then
+        fail "$guide_name package installed a guide with a forbidden build workflow"
+    fi
+    if ! grep -F 'packaging/tool-sources/build-native-source-kits.sh' \
+        "$guide_output" >/dev/null; then
+        fail "$guide_name package installed a guide without the retained-kit producer"
+    fi
 }
 
 run_rpm() {
@@ -198,6 +222,16 @@ accepts_offline_cargo() {
             if [ ! -x "$HELM_EXPECTED_TARGET_DIR/release/helmctl" ]; then
                 fail "$name Cargo build did not produce the staged workspace helmctl"
             fi
+            deb_artifact=$(find "$HELM_EXPECTED_PACKAGE_ROOT" -maxdepth 1 \
+                -type f -name 'helm_*_*.deb' -print -quit)
+            if [ -z "$deb_artifact" ]; then
+                fail "$name native driver did not emit a package artifact"
+            else
+                mkdir -p "$output.deb-root"
+                dpkg-deb -x "$deb_artifact" "$output.deb-root"
+                assert_current_package_guide "$name" "$output.deb-root" \
+                    "$output.package-guide"
+            fi
             ;;
         RPM)
             rpm_artifact=$(find "$HELM_EXPECTED_PACKAGE_ROOT" -type f \
@@ -206,6 +240,16 @@ accepts_offline_cargo() {
                 fail "$name native driver did not emit a package artifact"
             elif ! rpm -qpl "$rpm_artifact" | grep -Fx '/usr/bin/helmctl' >/dev/null; then
                 fail "$name package did not contain the staged workspace helmctl"
+            else
+                mkdir -p "$output.rpm-archive" "$output.rpm-root"
+                rpm_tar=$output.rpm-archive/package.tgz
+                if ! rpm2archive "$rpm_artifact" >"$rpm_tar"; then
+                    fail "$name package could not be converted for guide inspection"
+                else
+                    tar -C "$output.rpm-root" -xzf "$rpm_tar"
+                    assert_current_package_guide "$name" "$output.rpm-root" \
+                        "$output.package-guide"
+                fi
             fi
             ;;
     esac
@@ -263,7 +307,9 @@ make_debian_kit "$tmp/debian-valid"
 HELM_EXPECTED_SOURCE="$tmp/debian-valid/debian/helm-workspace/source"
 HELM_EXPECTED_CARGO_HOME="$tmp/debian-valid/debian/.cargo-home"
 HELM_EXPECTED_TARGET_DIR="$tmp/debian-valid/debian/cargo-target"
-export HELM_EXPECTED_SOURCE HELM_EXPECTED_CARGO_HOME HELM_EXPECTED_TARGET_DIR
+HELM_EXPECTED_PACKAGE_ROOT="$tmp"
+export HELM_EXPECTED_SOURCE HELM_EXPECTED_CARGO_HOME HELM_EXPECTED_TARGET_DIR \
+    HELM_EXPECTED_PACKAGE_ROOT
 accepts_offline_cargo Debian run_debian "$tmp/debian-valid" \
     "$tmp/debian-valid.log" "$tmp/debian-valid.out"
 

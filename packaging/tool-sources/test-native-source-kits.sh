@@ -47,6 +47,34 @@ tar -C "$tmp/rpm" -xzf "$rpm_archive"
 rpm=$tmp/rpm/helm-0.1.0
 "$checker" rpm "$rpm"
 
+guide_failures=0
+for guide in \
+    "$debian/packaging/package-docs/INSTALL.md" \
+    "$rpm/packaging/package-docs/INSTALL.md"; do
+    if [ ! -f "$guide" ]; then
+        echo "native source kit omitted the current package build guide: $guide" >&2
+        guide_failures=$((guide_failures + 1))
+        continue
+    fi
+    if ! cmp "$root/docs/INSTALL.md" "$guide"; then
+        echo "native source-kit package guide differs from tracked guidance" >&2
+        guide_failures=$((guide_failures + 1))
+    fi
+    if grep -F 'ln -s packaging/debian' "$guide" >/dev/null \
+        || grep -F 'git archive' "$guide" >/dev/null; then
+        echo "native source-kit package guide retained a forbidden build workflow" >&2
+        guide_failures=$((guide_failures + 1))
+    fi
+    if ! grep -F 'packaging/tool-sources/build-native-source-kits.sh' \
+        "$guide" >/dev/null; then
+        echo "native source-kit package guide omitted the retained-kit producer" >&2
+        guide_failures=$((guide_failures + 1))
+    fi
+done
+if [ "$guide_failures" -ne 0 ]; then
+    exit 1
+fi
+
 if "$checker" debian "$root" >"$tmp/out" 2>"$tmp/err"; then
     echo "full checkout was accepted as a Debian source kit" >&2
     exit 1
@@ -61,6 +89,46 @@ if "$checker" rpm "$root" >"$tmp/out" 2>"$tmp/err"; then
 elif ! grep -F 'RPM source kit top-level inventory differs from policy' "$tmp/err" >/dev/null; then
     echo "full checkout RPM rejection had the wrong reason" >&2
     cat "$tmp/err" >&2
+    exit 1
+fi
+
+shadow_failures=0
+cp -R "$debian" "$tmp/debian-shadow"
+mkdir -p "$tmp/debian-shadow/debian/source/shadow-workspace/crates/shadow/src"
+printf '[workspace]\nmembers = ["crates/shadow"]\n' > \
+    "$tmp/debian-shadow/debian/source/shadow-workspace/Cargo.toml"
+printf '[package]\nname = "shadow"\nversion = "0.0.0"\n' > \
+    "$tmp/debian-shadow/debian/source/shadow-workspace/crates/shadow/Cargo.toml"
+printf 'pub fn shadow() {}\n' > \
+    "$tmp/debian-shadow/debian/source/shadow-workspace/crates/shadow/src/lib.rs"
+if "$checker" debian "$tmp/debian-shadow" >"$tmp/out" 2>"$tmp/err"; then
+    echo "nested Debian shadow workspace was accepted" >&2
+    shadow_failures=$((shadow_failures + 1))
+elif ! grep -F 'DEBIAN source kit contains forbidden workspace marker' \
+    "$tmp/err" >/dev/null; then
+    echo "nested Debian shadow workspace rejection had the wrong reason" >&2
+    cat "$tmp/err" >&2
+    shadow_failures=$((shadow_failures + 1))
+fi
+
+cp -R "$rpm" "$tmp/rpm-shadow"
+mkdir -p "$tmp/rpm-shadow/packaging/fedora/shadow-workspace/crates/shadow/src"
+printf '[workspace]\nmembers = ["crates/shadow"]\n' > \
+    "$tmp/rpm-shadow/packaging/fedora/shadow-workspace/Cargo.toml"
+printf '[package]\nname = "shadow"\nversion = "0.0.0"\n' > \
+    "$tmp/rpm-shadow/packaging/fedora/shadow-workspace/crates/shadow/Cargo.toml"
+printf 'pub fn shadow() {}\n' > \
+    "$tmp/rpm-shadow/packaging/fedora/shadow-workspace/crates/shadow/src/lib.rs"
+if "$checker" rpm "$tmp/rpm-shadow" >"$tmp/out" 2>"$tmp/err"; then
+    echo "nested RPM shadow workspace was accepted" >&2
+    shadow_failures=$((shadow_failures + 1))
+elif ! grep -F 'RPM source kit contains forbidden workspace marker' \
+    "$tmp/err" >/dev/null; then
+    echo "nested RPM shadow workspace rejection had the wrong reason" >&2
+    cat "$tmp/err" >&2
+    shadow_failures=$((shadow_failures + 1))
+fi
+if [ "$shadow_failures" -ne 0 ]; then
     exit 1
 fi
 

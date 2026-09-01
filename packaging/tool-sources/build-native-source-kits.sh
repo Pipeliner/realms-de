@@ -36,11 +36,19 @@ copy_authority() {
         "$kit/packaging/tool-sources/bundles/helm-workspace"
 }
 
+copy_package_docs() {
+    kit=$1
+    mkdir -p "$kit/packaging/package-docs"
+    cp "$root/docs/INSTALL.md" "$kit/packaging/package-docs/INSTALL.md"
+}
+
 mkdir -p "$debian/debian" "$rpm/packaging"
 cp -R "$root/packaging/debian/." "$debian/debian/"
 copy_authority "$debian"
+copy_package_docs "$debian"
 cp -R "$root/packaging/fedora" "$rpm/packaging/fedora"
 copy_authority "$rpm"
+copy_package_docs "$rpm"
 
 "$root/packaging/tool-sources/check-native-source-kit.py" debian "$debian"
 "$root/packaging/tool-sources/check-native-source-kit.py" rpm "$rpm"

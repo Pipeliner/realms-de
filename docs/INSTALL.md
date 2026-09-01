@@ -32,7 +32,7 @@ target ([ARCHITECTURE.md §5](ARCHITECTURE.md)):
 |---|---|---|
 | NixOS / Nix | flake: `packages.default`, `nixosModules.helm`, `homeManagerModules.helm` | Reference build. Evaluates; VM test asserts the contract, not the desktop |
 | Ubuntu 24.04 LTS + | `.deb` from `packaging/debian/` | Builds; three runtime dependencies are not in the Ubuntu archive (below) |
-| Fedora 44 (pre-alpha) | RPM skeleton at `packaging/fedora/helm.spec` | Cargo smoke only, using a pinned base/current packages image; the RPM and graphical session are unverified |
+| Fedora 44 (pre-alpha) | RPM from the retained-only source kit | Builds in a pinned Fedora 44 image; package installation and the graphical session are unverified |
 
 Anything else is best-effort. The flake is the definition; the deb and the rpm
 follow from the same tree.
@@ -203,10 +203,10 @@ and `/usr/share/helm/palette.toml`, plus `/usr/bin/helmctl` with `theme apply`,
 
 ## Fedora 44 (pre-alpha)
 
-There is no Helm Fedora repository. The tracked RPM is a pre-alpha skeleton and
-does not install a working desktop; its only current Fedora evidence is the
-Fedora 44 Cargo-smoke lane. The RPM has not been built or installed as
-acceptance evidence. To investigate the skeleton locally:
+There is no Helm Fedora repository. The tracked RPM is pre-alpha and does not
+install a working desktop. The pinned Fedora 44 lane builds the RPM from the
+retained-only source kit; package installation and a graphical session remain
+unverified. To investigate the package locally:
 
 ```sh
 sudo dnf install rpm-build rust cargo systemd-rpm-macros python3 zstd
