@@ -136,6 +136,15 @@ jobs:
           ./packaging/tool-sources/test-bundle-linkage.sh
           ./packaging/tool-sources/test-no-live-fetch.sh
           ./packaging/tool-sources/test-native-source-kits.sh
+      - name: Prepare lifecycle-capable native package temporary directory
+        id: native-temp
+        run: |
+          set -euo pipefail
+          native_temp=$(mktemp -d /tmp/helm-native-builds.XXXXXX)
+          chmod 755 "$native_temp"
+          sudo test -d "$native_temp"
+          sudo test -w "$native_temp"
+          printf 'path=%s\n' "$native_temp" >> "$GITHUB_OUTPUT"
       - name: Stage root-readable real Rust toolchain for native package fixture
         id: native-rust
         run: |
@@ -156,6 +165,7 @@ jobs:
       - name: Check network-isolated native package paths
         run: |
           sudo env \
+            HELM_NATIVE_TMPDIR="${{ steps.native-temp.outputs.path }}" \
             HELM_REAL_CARGO="${{ steps.native-rust.outputs.path }}/bin/cargo" \
             HELM_REAL_RUSTC="${{ steps.native-rust.outputs.path }}/bin/rustc" \
             ./packaging/tool-sources/test-native-builds.sh

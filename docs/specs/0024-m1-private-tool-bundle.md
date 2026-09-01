@@ -130,6 +130,13 @@ Fedora RPM build phase with networking disabled and empty Cargo registry/Git
 caches, reject a closure/configuration/lockfile mismatch, and fail when an
 adversarial injected-fetch attempt is present in either recipe.
 
+The fixture's disposable build tree SHALL be on a Linux filesystem that
+supports `O_TMPFILE` with file `fsync`, atomic `renameat2` publication/exchange,
+and directory `fsync`, as required by the retained lifecycle tests. CI SHALL
+select that tree explicitly and preflight those operations before invoking
+either native package driver; it SHALL NOT skip or weaken the lifecycle tests
+when the selected filesystem lacks any capability.
+
 The fixture SHALL invoke its supplied real Cargo and rustc executables, not a
 stand-in. It SHALL bind Cargo to that supplied rustc and clear inherited
 compiler-wrapper selection. Transparent instrumentation may record a Cargo

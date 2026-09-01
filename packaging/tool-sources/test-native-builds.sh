@@ -4,8 +4,7 @@ set -eu
 
 root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 kit_builder=$root/packaging/tool-sources/build-native-source-kits.sh
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/helm-native-builds.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+native_tmp=${HELM_NATIVE_TMPDIR:-${TMPDIR:-/tmp}}
 failures=0
 
 fail() {
@@ -32,6 +31,57 @@ for command in dh dpkg-deb gzip rpm2archive rpmbuild python3 tar zstd; do
         exit 1
     fi
 done
+
+if ! python3 - "$native_tmp" <<'PY'
+import ctypes
+import errno
+import os
+import platform
+import sys
+import tempfile
+
+syscalls = {
+    "aarch64": 276,
+    "armv7l": 382,
+    "ppc64le": 353,
+    "s390x": 347,
+    "x86_64": 316,
+}
+directory = sys.argv[1]
+number = syscalls.get(platform.machine())
+if number is None:
+    raise SystemExit(f"unsupported architecture for renameat2 preflight: {platform.machine()}")
+with tempfile.TemporaryDirectory(dir=directory) as probe:
+    temporary = os.path.join(probe, "temporary")
+    final = os.path.join(probe, "final")
+    with open(temporary, "w", encoding="utf-8") as stream:
+        stream.write("native-build-preflight")
+    libc = ctypes.CDLL(None, use_errno=True)
+    result = libc.syscall(number, -100, temporary.encode(), -100, final.encode(), 1)
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    if os.path.exists(temporary) or open(final, encoding="utf-8").read() != "native-build-preflight":
+        raise OSError(errno.EIO, "renameat2 no-replace did not publish the probe file")
+    descriptor = os.open(probe, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    unnamed = os.open(probe, os.O_RDWR | os.O_TMPFILE, 0o600)
+    try:
+        os.write(unnamed, b"native-build-preflight")
+        os.fsync(unnamed)
+    finally:
+        os.close(unnamed)
+PY
+then
+    echo "native-build temporary directory lacks lifecycle filesystem capabilities: $native_tmp" >&2
+    exit 1
+fi
+
+tmp=$(mktemp -d "$native_tmp/helm-native-builds.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 "$kit_builder" "$tmp/production"
 
