@@ -43,11 +43,13 @@ write_fixture() {
 name = "alpha"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 [[package]]
 name = "beta"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 EOF
     cat >"$tmp/bundle/.cargo/config.toml" <<'EOF'
 [source.crates-io]
@@ -55,8 +57,8 @@ replace-with = "vendored-sources"
 [source.vendored-sources]
 directory = "vendor"
 EOF
-    printf '{"files":{}}\n' >"$tmp/bundle/vendor/alpha-1.0.0/.cargo-checksum.json"
-    printf '{"files":{}}\n' >"$tmp/bundle/vendor/beta-2.0.0/.cargo-checksum.json"
+    printf '{"files":{},"package":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n' >"$tmp/bundle/vendor/alpha-1.0.0/.cargo-checksum.json"
+    printf '{"files":{},"package":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}\n' >"$tmp/bundle/vendor/beta-2.0.0/.cargo-checksum.json"
     cat >"$tmp/bundle/vendor/alpha-1.0.0/Cargo.toml" <<'EOF'
 [package]
 name = "alpha"
@@ -93,6 +95,23 @@ EOF
 write_fixture
 "$checker" "$tmp"
 
+# Comments that look like source settings do not configure Cargo.
+cp "$tmp/bundle/.cargo/config.toml" "$tmp/clean-config.toml"
+cat >"$tmp/bundle/.cargo/config.toml" <<'EOF'
+[source.crates-io]
+# replace-with = "vendored-sources"
+[source.vendored-sources]
+# directory = "vendor"
+EOF
+rejects 'Cargo source replacement does not select vendor directory' "$tmp"
+mv "$tmp/clean-config.toml" "$tmp/bundle/.cargo/config.toml"
+
+# A crates-io replacement cannot account for a separate private registry.
+cp "$tmp/bundle/Cargo.lock" "$tmp/clean-Cargo.lock"
+sed -i 's|registry+https://github.com/rust-lang/crates.io-index|registry+https://example.invalid/private-index|' "$tmp/bundle/Cargo.lock"
+rejects 'Cargo.lock registry source is not crates.io' "$tmp"
+mv "$tmp/clean-Cargo.lock" "$tmp/bundle/Cargo.lock"
+
 # A vendor directory is unusable until crates-io explicitly replaces itself.
 sed -i '/replace-with/d' "$tmp/bundle/.cargo/config.toml"
 rejects 'Cargo source replacement does not select vendor directory' "$tmp"
@@ -119,7 +138,14 @@ sed -i 's|lockfile = "../[^\"]*"|lockfile = "bundle/Cargo.lock"|' "$tmp/bundle.t
 # Checking one checksum is insufficient when Cargo.lock resolves two crates.
 rm "$tmp/bundle/vendor/beta-2.0.0/.cargo-checksum.json"
 rejects 'vendor tree lacks Cargo checksum for beta 2.0.0' "$tmp"
-printf '{"files":{}}\n' >"$tmp/bundle/vendor/beta-2.0.0/.cargo-checksum.json"
+printf '{"files":{},"package":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}\n' >"$tmp/bundle/vendor/beta-2.0.0/.cargo-checksum.json"
+
+# Cargo's vendor checksum record must be parseable and bind the lock checksum.
+printf '{}\n' >"$tmp/bundle/vendor/beta-2.0.0/.cargo-checksum.json"
+rejects 'vendor Cargo checksum is invalid for beta 2.0.0' "$tmp"
+printf '{"files":{},"package":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}\n' >"$tmp/bundle/vendor/beta-2.0.0/.cargo-checksum.json"
+rejects 'vendor Cargo checksum disagrees with Cargo.lock for beta 2.0.0' "$tmp"
+printf '{"files":{},"package":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}\n' >"$tmp/bundle/vendor/beta-2.0.0/.cargo-checksum.json"
 
 # A report with a non-empty row still fails if another resolved crate is absent.
 sed -i '/^beta\t/d' "$tmp/bundle/licenses.tsv"
@@ -129,11 +155,39 @@ printf 'beta\t2.0.0\tMIT\tvendor/beta-2.0.0/Cargo.toml\n' >>"$tmp/bundle/license
 archive_vendor
 "$checker" "$tmp"
 cp "$tmp/bundle/vendor.tar.zst" "$tmp/valid-vendor.tar.zst"
+mkdir -p "$tmp/archive-input"
+tar --zstd -xf "$tmp/valid-vendor.tar.zst" -C "$tmp/archive-input"
+
+# Deterministic archives sort member names, including their directories.
+tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+    -C "$tmp/archive-input" -cf - vendor/beta-2.0.0 vendor/alpha-1.0.0 \
+    | zstd -3 -q -f -o "$tmp/bundle/vendor.tar.zst"
+archive_sha256=$(sha256sum "$tmp/bundle/vendor.tar.zst" | awk '{print $1}')
+sed -i "s/^vendor_archive_sha256 = .*/vendor_archive_sha256 = \"$archive_sha256\"/" "$tmp/bundle.toml"
+rejects 'vendor archive members are not sorted' "$tmp"
+
+# Archive metadata must retain the epoch and numeric uid/gid, not host values.
+touch "$tmp/archive-input/vendor/alpha-1.0.0/Cargo.toml"
+tar -C "$tmp/archive-input" -cf - vendor | zstd -3 -q -f -o "$tmp/bundle/vendor.tar.zst"
+archive_sha256=$(sha256sum "$tmp/bundle/vendor.tar.zst" | awk '{print $1}')
+sed -i "s/^vendor_archive_sha256 = .*/vendor_archive_sha256 = \"$archive_sha256\"/" "$tmp/bundle.toml"
+rejects 'vendor archive member metadata is not deterministic' "$tmp"
+
+# Duplicate archive members make the retained tree ambiguous.
+tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner --hard-dereference \
+    -C "$tmp/archive-input" -cf - vendor vendor | zstd -3 -q -f -o "$tmp/bundle/vendor.tar.zst"
+archive_sha256=$(sha256sum "$tmp/bundle/vendor.tar.zst" | awk '{print $1}')
+sed -i "s/^vendor_archive_sha256 = .*/vendor_archive_sha256 = \"$archive_sha256\"/" "$tmp/bundle.toml"
+rejects 'vendor archive has duplicate member' "$tmp"
+cp "$tmp/valid-vendor.tar.zst" "$tmp/bundle/vendor.tar.zst"
+archive_sha256=$(sha256sum "$tmp/bundle/vendor.tar.zst" | awk '{print $1}')
+sed -i "s/^vendor_archive_sha256 = .*/vendor_archive_sha256 = \"$archive_sha256\"/" "$tmp/bundle.toml"
 
 # Reject traversal based on archive metadata, before tar extraction can act.
 mkdir -p "$tmp/traversal/vendor/alpha-1.0.0"
 printf x >"$tmp/traversal/vendor/alpha-1.0.0/file"
-tar --sort=name --transform='s|^vendor/|vendor/../|' -C "$tmp/traversal" -cf - vendor \
+tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+    --transform='s|^vendor/|vendor/../|' -C "$tmp/traversal" -cf - vendor \
     | zstd -3 -q -f -o "$tmp/bundle/vendor.tar.zst"
 archive_sha256=$(sha256sum "$tmp/bundle/vendor.tar.zst" | awk '{print $1}')
 sed -i "s/^vendor_archive_sha256 = .*/vendor_archive_sha256 = \"$archive_sha256\"/" "$tmp/bundle.toml"

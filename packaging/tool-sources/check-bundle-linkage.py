@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validate one retained Cargo bundle without consulting the network."""
 import hashlib
+import json
 import subprocess
 import sys
 import tarfile
@@ -45,9 +46,27 @@ def cargo_packages(lockfile: Path) -> list[dict[str, str]]:
         if " = " not in line:
             continue
         key, value = line.split(" = ", 1)
-        if key in {"name", "version", "source"} and value.startswith('"') and value.endswith('"'):
+        if key in {"name", "version", "source", "checksum"} and value.startswith('"') and value.endswith('"'):
             package[key] = value[1:-1]
     return [package for package in packages if "source" in package]
+
+
+def cargo_source_config(path: Path) -> dict[tuple[str, str], str]:
+    values: dict[tuple[str, str], str] = {}
+    section = ""
+    for raw in path.read_text().splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1]
+            continue
+        if " = " not in line:
+            continue
+        key, value = line.split(" = ", 1)
+        if value.startswith('"') and value.endswith('"'):
+            values[(section, key)] = value[1:-1]
+    return values
 
 
 def package_metadata(path: Path) -> dict[str, str]:
@@ -90,10 +109,27 @@ def vendor_packages(vendor: Path) -> dict[tuple[str, str], Path]:
     return packages
 
 
+def cargo_checksum(crate: Path, name: str, version: str) -> str:
+    path = crate / ".cargo-checksum.json"
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit(f"vendor tree lacks Cargo checksum for {name} {version}")
+    try:
+        record = json.loads(path.read_text())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise SystemExit(f"vendor Cargo checksum is invalid for {name} {version}")
+    package = record.get("package") if isinstance(record, dict) else None
+    files = record.get("files") if isinstance(record, dict) else None
+    if not isinstance(package, str) or not package or not isinstance(files, dict):
+        raise SystemExit(f"vendor Cargo checksum is invalid for {name} {version}")
+    return package
+
+
 def safe_archive_members(archive: Path) -> None:
     process = subprocess.Popen(["zstd", "-dc", str(archive)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     assert process.stdout is not None
     error = None
+    previous = None
+    names: set[str] = set()
     try:
         with tarfile.open(fileobj=process.stdout, mode="r|") as contents:
             for member in contents:
@@ -105,6 +141,19 @@ def safe_archive_members(archive: Path) -> None:
                 if not (member.isdir() or member.isreg()):
                     error = "vendor archive contains unsafe member"
                     break
+                if member.name in names:
+                    error = "vendor archive has duplicate member"
+                    break
+                order = tuple(member.name.split("/"))
+                if previous is not None and order <= previous:
+                    error = "vendor archive members are not sorted"
+                    break
+                if (member.mtime != 0 or member.uid != 0 or member.gid != 0 or
+                        member.uname or member.gname):
+                    error = "vendor archive member metadata is not deterministic"
+                    break
+                names.add(member.name)
+                previous = order
     except tarfile.TarError:
         error = "vendor archive cannot be read"
     finally:
@@ -176,7 +225,7 @@ for key in ("source", "lockfile", "cargo_config", "license_report"):
     if hash_key in record and hashlib.sha256(paths[key].read_bytes()).hexdigest() != record[hash_key]:
         raise SystemExit(f"{key} SHA-256 mismatch")
 
-config = paths["cargo_config"].read_text()
+config = cargo_source_config(paths["cargo_config"])
 temporary = None
 if "vendor" in record:
     vendor = under_root(root, "vendor", record["vendor"])
@@ -197,18 +246,24 @@ else:
     vendor = unpacked / "vendor"
     if vendor.is_symlink() or not vendor.is_dir():
         raise SystemExit("vendor archive did not unpack a regular vendor tree")
-if 'replace-with = "vendored-sources"' not in config or 'directory = "vendor"' not in config:
+if (config.get(("source.crates-io", "replace-with")) != "vendored-sources" or
+        config.get(("source.vendored-sources", "directory")) != "vendor"):
     raise SystemExit("Cargo source replacement does not select vendor directory")
 
 resolved = cargo_packages(paths["lockfile"])
 for package in resolved:
-    if not package["source"].startswith("registry+"):
+    if package["source"] != "registry+https://github.com/rust-lang/crates.io-index":
+        if package["source"].startswith("registry+"):
+            raise SystemExit("Cargo.lock registry source is not crates.io")
         raise SystemExit("Cargo.lock source is not represented by vendor configuration")
 packages = vendor_packages(vendor)
 for package in resolved:
     key = (package.get("name", ""), package.get("version", ""))
     if key not in packages:
         raise SystemExit(f"vendor tree lacks Cargo checksum for {key[0]} {key[1]}")
+    checksum = cargo_checksum(packages[key], key[0], key[1])
+    if "checksum" in package and checksum != package["checksum"]:
+        raise SystemExit(f"vendor Cargo checksum disagrees with Cargo.lock for {key[0]} {key[1]}")
 covered = license_rows(paths["license_report"], vendor)
 for package in resolved:
     key = (package.get("name", ""), package.get("version", ""))
