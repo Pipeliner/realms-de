@@ -70,8 +70,13 @@ own Cargo commands to rely on a pre-populated cache or live registry.
 The Helm workspace closure SHALL bind to the immutable package source archive
 at `packaging/tool-sources/bundles/helm-workspace/source.tar.gz`. That archive
 is the source authority and SHALL be the exact archive unpacked for Helm's
-Cargo build by both native package paths; no second source copy or locally
-created `git archive` is permitted. Its tracked
+Cargo build by both native package paths; no second source copy or build-time,
+unbound `git archive` is permitted. A controlled intake MAY create this one
+canonical archive from the record-bound repository commit, but it SHALL retain
+the resulting bytes and digest as this source authority outside, and before,
+either native package path. Debian/RPM preparation and build phases SHALL NOT
+invoke `git`, `git archive`, archive creation, or any fetch operation, even if
+the resulting bytes would match the recorded digest. Its tracked
 `packaging/tool-sources/bundles/helm-workspace/bundle.toml` record SHALL bind
 the archive SHA-256 to the repository commit, commit timestamp, and
 provenance/notice record used at intake. The linkage fixture SHALL unpack the
