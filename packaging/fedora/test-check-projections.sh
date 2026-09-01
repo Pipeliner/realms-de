@@ -66,6 +66,10 @@ make_canonical_fixture() {
     for path in $current_inputs $historical_inputs; do
         copy_input "$destination" "$path"
     done
+    for path in $(find "$repo_root/.github/workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) \
+        | sed "s#^$repo_root/##" | sort); do
+        copy_input "$destination" "$path"
+    done
 }
 
 # Pin every exceptional matching line independently of the guard. This checks
@@ -125,7 +129,7 @@ docs/specs/0009-fedora-44-pre-alpha-baseline.md:::third-party historical facts, 
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::1. ADR 0010's header/index must mark its Fedora 41-or-later baseline and the
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::The correction must not describe a direct Fedora 41 to Fedora 44 operating
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A1 | Given the machine-checked inventory of live Fedora claims, when `status = "pre-alpha"` it is validated, then the only admitted release is exactly `44`; when `status = "unsupported"`, no Fedora release is admitted; `41`, `42`, `43`, `44+`, `latest`, Rawhide, and implicit newer releases are always rejected as current Helm targets | *Planned (#138):* `fedora_baseline::only_fedora_44_is_a_live_target`; includes one failing fixture per rejected form and one unsupported-state fixture |
-docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A2 | Given the required distro workflow, when `status = "pre-alpha"`, then exactly one `fedora-44-cargo-smoke` Cargo lane and exactly one `fedora-rpm-package` retained-source RPM build lane resolve to the exact official Fedora 44 digest above; no other Fedora-family container image is present, regardless of scalar or mapping YAML syntax. The RPM lane runs the retained-source-kit producer, copies `Source0` and the RPM spec into the build tree, and invokes `rpmbuild -bb --nodeps`, but does not clean-install the resulting package. Cargo and RPM build facts are allowed; neither lane is graphical-session or SELinux evidence. When `status = "unsupported"`, it contains no required Fedora lane; neither state adds a Fedora 41/Fedora 43 lane, runner, or architecture claim | `packaging/fedora/test-check-projections.sh`: `fedora_baseline::required_ci_uses_one_pinned_f44_cargo_smoke_and_one_retained_source_rpm_build` |
+docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A2 | Given the repository workflow files, when `status = "pre-alpha"`, then exactly one `fedora-44-cargo-smoke` Cargo lane and exactly one `fedora-rpm-package` retained-source RPM build lane resolve to the exact official Fedora 44 digest above; no other Fedora-family container image is present anywhere under `.github/workflows/`, regardless of scalar or mapping YAML syntax. The RPM lane runs the retained-source-kit producer, copies `Source0` and the RPM spec into the build tree, and invokes `rpmbuild -bb --nodeps`, but does not clean-install the resulting package. Cargo and RPM build facts are allowed; neither lane is graphical-session or SELinux evidence. When `status = "unsupported"`, it contains no required Fedora lane; neither state adds a Fedora 41/Fedora 43 lane, runner, or architecture claim | `packaging/fedora/test-check-projections.sh`: `fedora_baseline::required_ci_uses_one_pinned_f44_cargo_smoke_and_one_retained_source_rpm_build` |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A3 | Given the Fedora RPM metadata, when it is inspected, then it identifies Fedora 44, requires Fedora's `river >= 0.4.0`, contains no `helm-river` alternative or false “River unavailable on Fedora” claim, and continues to state that the package is pre-alpha and not a working desktop | *Planned (#138):* `fedora_baseline::rpm_metadata_matches_the_f44_pre_alpha_contract` |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A6 | Given a seeded stale live-support claim such as `Fedora 41+`, when the consistency guard runs, then it fails; given an exact reviewed historical exception in a superseded ADR or third-party history, then it passes without treating that text as current support | *Planned (#138):* `fedora_baseline::stale_live_claims_fail_and_exact_history_exceptions_pass` |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A8 | Given current user-facing and normative documentation, when the consistency guard and doc review run, then Fedora 41 is absent from live Helm support/install examples, Fedora 44 is described as the sole pre-alpha baseline, no text upgrades the Cargo smoke to RPM/session evidence, and no direct Fedora 41 to Fedora 44 OS upgrade is called supported | *Planned (#138):* `fedora_baseline::docs_state_the_evidence_level_truthfully` plus review of rendered Markdown |
@@ -364,6 +368,19 @@ replace_once "$case_root/.github/workflows/distro.yml" '  fedora-baseline-contra
 expect_fail_message mapping-extra-fedora-container "$case_root" \
     'exactly one Fedora 44 Cargo-smoke lane and one retained-source RPM build lane are required'
 
+# The exact-two-container rule applies to every repository workflow, not only
+# distro.yml. A new CI file must not hide a Fedora-family container.
+case_root=$(clone_case extra-fedora-container-in-other-workflow)
+write_file "$case_root/.github/workflows/extra-fedora.yml" 'name: extra-fedora
+on: workflow_dispatch
+jobs:
+  fedora-minimal:
+    runs-on: ubuntu-24.04
+    container: { image: registry.fedoraproject.org/fedora-minimal:44 }
+    steps: []'
+expect_fail_message extra-fedora-container-in-other-workflow "$case_root" \
+    'exactly one Fedora 44 Cargo-smoke lane and one retained-source RPM build lane are required'
+
 # The two canonical jobs may use any equivalent YAML container spelling when
 # their resolved images remain the exact admitted digest.
 case_root=$(clone_case quoted-canonical-rpm-container)
@@ -413,18 +430,32 @@ append_line "$case_root/README.md" 'Fedora 44 retained-source RPM build copies S
 expect_pass truthful-retained-source-rpm-evidence "$case_root"
 
 case_root=$(clone_case false-fedora-clean-install-evidence)
-append_line "$case_root/README.md" 'Fedora 44 RPM clean-install is supported.'
+write_file "$case_root/docs/fedora-clean-install-claim.md" 'Fedora 44 RPM clean-install is supported.'
 expect_fail_message false-fedora-clean-install-evidence "$case_root" \
     'Fedora evidence exceeds build-only contract'
 
 case_root=$(clone_case false-fedora-graphical-evidence)
-append_line "$case_root/README.md" 'Fedora 44 graphical session is supported.'
+write_file "$case_root/docs/fedora-graphical-claim.md" 'Fedora 44 graphical session is supported.'
 expect_fail_message false-fedora-graphical-evidence "$case_root" \
     'Fedora evidence exceeds build-only contract'
 
 case_root=$(clone_case false-fedora-selinux-evidence)
-append_line "$case_root/README.md" 'Fedora 44 SELinux support is verified.'
+write_file "$case_root/docs/fedora-selinux-claim.md" 'Fedora 44 SELinux support is verified.'
 expect_fail_message false-fedora-selinux-evidence "$case_root" \
+    'Fedora evidence exceeds build-only contract'
+
+# Projection discovery and paragraph context prevent a runtime claim from
+# escaping by moving to a new file or separating its Fedora identity from the
+# prohibited claim across lines.
+case_root=$(clone_case unlisted-fedora-runtime-evidence)
+write_file "$case_root/docs/fedora-runtime-claim.md" 'The RPM clean-install works on Fedora 44.'
+expect_fail_message unlisted-fedora-runtime-evidence "$case_root" \
+    'Fedora evidence exceeds build-only contract'
+
+case_root=$(clone_case split-line-fedora-runtime-evidence)
+write_file "$case_root/docs/fedora-runtime-split.md" 'Fedora 44 is the package baseline.
+The graphical session works.'
+expect_fail_message split-line-fedora-runtime-evidence "$case_root" \
     'Fedora evidence exceeds build-only contract'
 
 # SPEC 0009 A1/A2: retirement is stateful. Renaming the lane must not let an
@@ -523,7 +554,7 @@ expect_fail_message architecture-overclaims-ci-evidence "$case_root" \
     'ARCHITECTURE must not claim every target is already supported and tested in CI'
 
 case_root=$(clone_case false-fedora-runtime-evidence)
-append_line "$case_root/README.md" 'The Fedora 44 lane proves the RPM and graphical session work under SELinux.'
+write_file "$case_root/docs/fedora-runtime-overclaim.md" 'The Fedora 44 lane proves the RPM and graphical session work under SELinux.'
 expect_fail_message false-fedora-runtime-evidence "$case_root" 'Fedora evidence exceeds build-only contract'
 
 case_root=$(clone_case missing-rpm-pre-alpha-boundary)
