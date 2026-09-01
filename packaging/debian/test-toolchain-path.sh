@@ -56,9 +56,11 @@ pass missing-toolchain
 # database, but it must still exercise the same resolver (including Debhelper's
 # nested make).  A supplied resolver root is therefore a test seam, not a
 # RUST_VERSIONED_BIN bypass.
-if output=$(make -f "$rules" -n \
+if output=$(make -f "$rules" -pn \
   HELM_RUST_VERSIONED_ROOT="$tmp/root" override_dh_auto_build 2>&1); then
-  :
+  printf '%s\n' "$output" | grep -F \
+    "RUST_VERSIONED_BIN := $tmp/root/usr/lib/rust-1.90/bin" >/dev/null \
+    || fail "rules-configured-root did not select the physical supplied toolchain: $output"
 else
   fail "rules-configured-root unexpectedly failed: $output"
 fi

@@ -60,7 +60,9 @@ DEBIAN_RULES_DIR := $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 # fixture supplies a separate root with that identical versioned layout so its
 # nested Debhelper make cannot silently fall back to host tooling.
 HELM_RUST_VERSIONED_ROOT ?= /
-RUST_VERSIONED_BIN := $(shell "$(DEBIAN_RULES_DIR)toolchain-path.sh" --root "$(HELM_RUST_VERSIONED_ROOT)")
+HELM_RUST_VERSIONED_PREFIX := $(if $(filter /,$(HELM_RUST_VERSIONED_ROOT)),,$(patsubst %/,%,$(HELM_RUST_VERSIONED_ROOT)))
+RUST_VERSIONED_LOGICAL_BIN := $(shell "$(DEBIAN_RULES_DIR)toolchain-path.sh" --root "$(HELM_RUST_VERSIONED_ROOT)")
+RUST_VERSIONED_BIN := $(HELM_RUST_VERSIONED_PREFIX)$(RUST_VERSIONED_LOGICAL_BIN)
 ifeq ($(strip $(RUST_VERSIONED_BIN)),)
 $(error helm: missing Ubuntu versioned Rust toolchain directory: $(RUST_VERSIONED_GLOB))
 endif
