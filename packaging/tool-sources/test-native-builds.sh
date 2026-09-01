@@ -131,6 +131,17 @@ assert_current_package_guide() {
         "$guide_output" >/dev/null; then
         fail "$guide_name package installed a guide without the retained-kit producer"
     fi
+    case $guide_name in
+        Debian)
+            required_install='sudo apt install devscripts debhelper rustc-1.85 cargo-1.85 pkg-config python3 zstd'
+            ;;
+        RPM)
+            required_install='sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd'
+            ;;
+    esac
+    if ! grep -F -x "$required_install" "$guide_output" >/dev/null; then
+        fail "$guide_name package installed a guide without its clean-host build prerequisites"
+    fi
 }
 
 run_rpm() {

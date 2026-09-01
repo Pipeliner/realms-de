@@ -118,6 +118,8 @@ packaging metadata, not from the identity-bound archive's historical
 `build-native-source-kits.sh` and SHALL NOT retain the superseded checkout
 `ln -s packaging/debian` or moving `git archive ... HEAD` workflows. Updating
 package guidance SHALL NOT mutate or regenerate the canonical source authority.
+Its clean-host prerequisite commands SHALL include the direct native recipe
+requirements: Debian `pkg-config` and Fedora `make`.
 
 The Debian and Fedora package paths SHALL unpack only these retained inputs and
 build using `cargo --frozen --offline --locked`. They MAY consume declared,
