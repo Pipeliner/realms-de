@@ -141,6 +141,10 @@ rejects 'vendor tree lacks Cargo checksum for beta 2.0.0' "$tmp"
 printf '{"files":{},"package":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}\n' >"$tmp/bundle/vendor/beta-2.0.0/.cargo-checksum.json"
 
 # Cargo's vendor checksum record must be parseable and bind the lock checksum.
+cp "$tmp/bundle/Cargo.lock" "$tmp/clean-Cargo.lock"
+sed -i '/^checksum = "bbbb/d' "$tmp/bundle/Cargo.lock"
+rejects 'Cargo.lock package lacks checksum for beta 2.0.0' "$tmp"
+mv "$tmp/clean-Cargo.lock" "$tmp/bundle/Cargo.lock"
 printf '{}\n' >"$tmp/bundle/vendor/beta-2.0.0/.cargo-checksum.json"
 rejects 'vendor Cargo checksum is invalid for beta 2.0.0' "$tmp"
 printf '{"files":{},"package":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}\n' >"$tmp/bundle/vendor/beta-2.0.0/.cargo-checksum.json"

@@ -262,7 +262,9 @@ for package in resolved:
     if key not in packages:
         raise SystemExit(f"vendor tree lacks Cargo checksum for {key[0]} {key[1]}")
     checksum = cargo_checksum(packages[key], key[0], key[1])
-    if "checksum" in package and checksum != package["checksum"]:
+    if not package.get("checksum"):
+        raise SystemExit(f"Cargo.lock package lacks checksum for {key[0]} {key[1]}")
+    if checksum != package["checksum"]:
         raise SystemExit(f"vendor Cargo checksum disagrees with Cargo.lock for {key[0]} {key[1]}")
 covered = license_rows(paths["license_report"], vendor)
 for package in resolved:
