@@ -204,9 +204,10 @@ and `/usr/share/helm/palette.toml`, plus `/usr/bin/helmctl` with `theme apply`,
 ## Fedora 44 (pre-alpha)
 
 There is no Helm Fedora repository. The tracked RPM is pre-alpha and does not
-install a working desktop. The pinned Fedora 44 lane builds the RPM from the
-retained-only source kit; package installation and a graphical session remain
-unverified. To investigate the package locally:
+install a working desktop. Fedora 44 has one pinned Cargo-smoke lane and one
+pinned retained-source RPM-build lane; the latter builds the RPM from the
+retained-only source kit without clean-installing it. Package installation and
+a graphical session remain unverified. To investigate the package locally:
 
 ```sh
 sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd

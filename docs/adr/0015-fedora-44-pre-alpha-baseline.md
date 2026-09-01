@@ -18,10 +18,11 @@ River 0.3.14 for Fedora 43 and `river-0.4.8-1.fc44` for Fedora 44. River 0.4.0
 is the release that introduced the external window-management architecture
 ADR 0013 requires.
 
-The repository's current Fedora job is only a Cargo smoke. The RPM says
-explicitly that it installs no Helm binaries and no working desktop. Selecting
-a current build/packaging baseline must not be confused with satisfying M3
-Fedora support.
+The repository's current Fedora workflow has one Cargo-smoke lane and one
+retained-source RPM-build lane. The RPM lane builds `Source0` but does not
+clean-install the result, and the RPM says explicitly that it installs no Helm
+binaries and no working desktop. Selecting a current build/packaging baseline
+must not be confused with satisfying M3 Fedora support.
 
 ## Decision
 
@@ -33,9 +34,11 @@ Fedora support.
 3. `44+`, `latest`, Rawhide, and implicit future-release support are rejected.
    A successor is admitted only by a later accepted contract based on then-live
    evidence.
-4. The one Fedora Cargo-smoke lane uses Fedora's official Fedora 44 image at an
-   admitted index digest. The digest pins the base image, not the live Fedora
-   repositories or packages resolved from them.
+4. Exactly one Fedora Cargo-smoke lane and exactly one retained-source RPM-build
+   lane use Fedora's official Fedora 44 image at an admitted index digest. The
+   digest pins the base image, not the live Fedora repositories or packages
+   resolved from them. The RPM lane runs the retained-source-kit producer and
+   `rpmbuild -bb --nodeps`, but does not clean-install the resulting package.
 5. Fedora package metadata depends on Fedora's official `river >= 0.4.0`
    package. The observed Fedora 44 candidate is `river-0.4.8-1.fc44`; this is a
    time-scoped package observation, not a tested Helm pairing. No `< 0.5`
@@ -65,7 +68,8 @@ Fedora support.
 ### Good
 
 - Current CI and documentation stop claiming an EOL Fedora release.
-- Matrix breadth remains one Fedora lane.
+- Matrix breadth remains exactly two Fedora lanes: one Cargo smoke and one
+  retained-source RPM build.
 - Fedora's maintained native River package replaces an unimplemented
   Fedora-specific `helm-river` path.
 - A future Fedora release cannot become supported accidentally.
@@ -91,8 +95,8 @@ Fedora support.
 
 ## Reversal
 
-Low for the release identity: accept a later ADR/SPEC, replace the single
-Fedora lane, reconcile package metadata and current documentation, and retain
+Low for the release identity: accept a later ADR/SPEC, replace the two exact
+Fedora lanes, reconcile package metadata and current documentation, and retain
 this ADR as history. Reconsider when Fedora 44 reaches EOL, when Fedora removes
 the required protocol-generation package, or when an implemented Helm/River
 integration demonstrates an incompatibility. Do not infer a successor or an
