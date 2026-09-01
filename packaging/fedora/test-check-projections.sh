@@ -315,6 +315,15 @@ append_line "$case_root/.github/workflows/distro.yml" '            runs-on: ubun
 append_line "$case_root/.github/workflows/distro.yml" "            container: $canonical_image"
 expect_fail_message second-fedora-lane "$case_root" 'exactly one Fedora 44 Cargo-smoke lane'
 
+# An additional Fedora-family image is a third Fedora lane even when it does
+# not use the canonical base-image repository name.
+case_root=$(clone_case extra-fedora-minimal-lane)
+append_line "$case_root/.github/workflows/distro.yml" '          - name: fedora-44-minimal-smoke'
+append_line "$case_root/.github/workflows/distro.yml" '            runs-on: ubuntu-24.04'
+append_line "$case_root/.github/workflows/distro.yml" '            container: registry.fedoraproject.org/fedora-minimal:44'
+expect_fail_message extra-fedora-minimal-lane "$case_root" \
+    'exactly one Fedora 44 Cargo-smoke lane and one retained-source RPM build lane are required'
+
 # SPEC 0009 A1/A2: retirement is stateful. Renaming the lane must not let an
 # unsupported record retain either a Fedora container or live F44 support text.
 case_root=$(clone_case unsupported-renamed-lane-and-current-claim)

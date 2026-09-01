@@ -221,7 +221,7 @@ image=$(sed -n 's/^image = "\([^"]*\)"$/\1/p' "$baseline")
 
 workflow="$root/.github/workflows/distro.yml"
 cargo_lane_count=$(grep -E -c '^[[:space:]]*- name: fedora-44-cargo-smoke$' "$workflow" || true)
-fedora_container_count=$(grep -E -i -c '^[[:space:]]*container: ([^[:space:]]*/)*fedora(:|@)' "$workflow" || true)
+fedora_container_count=$(grep -E -i -c '^[[:space:]]*container: ([^[:space:]]*/)*fedora[^/:@]*(:|@)' "$workflow" || true)
 workflow_image_count=$(awk -v image="$image" '
     {
         line = $0
