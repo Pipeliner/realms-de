@@ -151,6 +151,19 @@ EOF
     chmod +x "$directory/rustc"
 }
 
+make_versioned_toolchain_root() {
+    root=$1
+    cargo_path=$2
+    rustc_path=$3
+    bin=$root/usr/lib/rust-1.90/bin
+    mkdir -p "$bin"
+    # Cargo instrumentation is transparent: it immediately execs HELM_REAL_CARGO.
+    # The resolver nevertheless sees a complete versioned pair, including in
+    # Debhelper's nested make invocation.
+    ln -s "$cargo_path" "$bin/cargo"
+    ln -s "$rustc_path" "$bin/rustc"
+}
+
 run_debian() {
     kit=$1
     log=$2
@@ -162,6 +175,8 @@ run_debian() {
     selectors=$fixture_state/selectors
     make_sentinels "$sentinels"
     make_rustc_selector "$selectors"
+    versioned_root=$fixture_state/versioned-rust
+    make_versioned_toolchain_root "$versioned_root" "$sentinels/cargo" "$real_rustc"
     mkdir -p "$fixture_state/outer-cargo-home"
     run_isolated env \
         PATH="$sentinels:$real_rust_bin:/usr/bin:/bin" \
@@ -179,6 +194,7 @@ run_debian() {
         HELM_CARGO_START_MARKER="$fixture_state/cargo-started" \
         HELM_REAL_CARGO="$real_cargo" \
         HELM_REAL_RUSTC="$real_rustc" \
+        HELM_RUST_VERSIONED_ROOT="$versioned_root" \
         RUSTC="$real_rustc" \
         RUSTC_WRAPPER= \
         RUSTC_WORKSPACE_WRAPPER= \
@@ -187,7 +203,7 @@ run_debian() {
         CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= \
         CARGO_INCREMENTAL=0 \
         CARGO_PROFILE_RELEASE_DEBUG=0 \
-        make -C "$kit" -f debian/rules binary RUST_VERSIONED_BIN="$sentinels"
+        make -C "$kit" -f debian/rules binary
 }
 
 assert_current_package_guide() {

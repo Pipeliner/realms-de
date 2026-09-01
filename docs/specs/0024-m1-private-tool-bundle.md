@@ -147,6 +147,14 @@ preflight-execute that staged Cargo and rustc. Staging may copy the real
 toolchain solely to make it accessible; it SHALL NOT replace either executable
 with a shim.
 
+The Debian recipe's production resolver SHALL continue to select its complete
+versioned Cargo/rustc pair below `/usr/lib/rust-1.[89][0-9]/bin`.  The native
+offline fixture MAY set an explicit resolver-root input that contains the same
+versioned layout and symlinks or copies to its supplied real toolchain.  That
+input exists only to make the real nested Debhelper invocation reproducible in
+an isolated fixture; it SHALL be consumed by the resolver itself, not used to
+override its selected binary directory or bypass the completeness check.
+
 The Yazi build SHALL set deterministic source-date and VCS metadata. The intake
 record SHALL bind the selected tag to its upstream commit SHA and commit
 timestamp; the package recipe SHALL set the exact version/metadata inputs

@@ -56,7 +56,11 @@ export CARGO_TERM_COLOR = never
 # matching path. Its Ubuntu 24.04 archive layout was verified on #104.
 RUST_VERSIONED_GLOB := /usr/lib/rust-1.[89][0-9]/bin
 DEBIAN_RULES_DIR := $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
-RUST_VERSIONED_BIN := $(shell "$(DEBIAN_RULES_DIR)toolchain-path.sh")
+# Production resolves the distro-provided pair below /.  The retained-source
+# fixture supplies a separate root with that identical versioned layout so its
+# nested Debhelper make cannot silently fall back to host tooling.
+HELM_RUST_VERSIONED_ROOT ?= /
+RUST_VERSIONED_BIN := $(shell "$(DEBIAN_RULES_DIR)toolchain-path.sh" --root "$(HELM_RUST_VERSIONED_ROOT)")
 ifeq ($(strip $(RUST_VERSIONED_BIN)),)
 $(error helm: missing Ubuntu versioned Rust toolchain directory: $(RUST_VERSIONED_GLOB))
 endif
