@@ -51,3 +51,20 @@ captured=$(PATH='/caller/bin:/usr/lib/helm/bin:/other/bin' \
     echo "contaminated caller PATH was not filtered: $captured" >&2
     exit 1
 }
+
+IMPORT_OUTPUT_DIR="$tmp" PATH='/bin:/usr/lib/helm/bin:/caller/bin' /bin/bash -c '
+    . "$1"
+    HELM_IMPORT_PATH=1
+    have_systemd_user=1
+    have_dbus_update=1
+    systemctl() { printf "%s\n" "$PATH" >"$IMPORT_OUTPUT_DIR/systemd-path"; }
+    dbus-update-activation-environment() { printf "%s\n" "$PATH" >"$IMPORT_OUTPUT_DIR/dbus-path"; }
+    import_session_environment
+' bash "$tmp/session-functions.sh" "$tmp"
+
+for imported in "$tmp/systemd-path" "$tmp/dbus-path"; do
+    [ "$(cat "$imported")" = '/bin:/caller/bin' ] || {
+        echo "activation import leaked private PATH through $imported" >&2
+        exit 1
+    }
+done
