@@ -136,11 +136,28 @@ jobs:
           ./packaging/tool-sources/test-bundle-linkage.sh
           ./packaging/tool-sources/test-no-live-fetch.sh
           ./packaging/tool-sources/test-native-source-kits.sh
+      - name: Stage root-readable real Rust toolchain for native package fixture
+        id: native-rust
+        run: |
+          set -euo pipefail
+          real_cargo=$(rustup which cargo)
+          real_rustc=$(rustup which rustc)
+          toolchain_root=$(dirname "$(dirname "$real_cargo")")
+          native_toolchain=$(mktemp -d /tmp/helm-native-rust.XXXXXX)
+          cp -a "$toolchain_root/." "$native_toolchain/"
+          chmod -R a+rX "$native_toolchain"
+          sudo test -x "$native_toolchain/bin/cargo"
+          sudo test -x "$native_toolchain/bin/rustc"
+          sudo env PATH="$native_toolchain/bin:/usr/bin:/bin" \
+            "$native_toolchain/bin/cargo" --version
+          sudo env PATH="$native_toolchain/bin:/usr/bin:/bin" \
+            "$native_toolchain/bin/rustc" --version
+          printf 'path=%s\n' "$native_toolchain" >> "$GITHUB_OUTPUT"
       - name: Check network-isolated native package paths
         run: |
           sudo env \
-            HELM_REAL_CARGO="$(rustup which cargo)" \
-            HELM_REAL_RUSTC="$(rustup which rustc)" \
+            HELM_REAL_CARGO="${{ steps.native-rust.outputs.path }}/bin/cargo" \
+            HELM_REAL_RUSTC="${{ steps.native-rust.outputs.path }}/bin/rustc" \
             ./packaging/tool-sources/test-native-builds.sh
       - run: cargo doc --workspace --no-deps
 

@@ -130,6 +130,16 @@ Fedora RPM build phase with networking disabled and empty Cargo registry/Git
 caches, reject a closure/configuration/lockfile mismatch, and fail when an
 adversarial injected-fetch attempt is present in either recipe.
 
+The fixture SHALL invoke its supplied real Cargo and rustc executables, not a
+stand-in. It SHALL bind Cargo to that supplied rustc and clear inherited
+compiler-wrapper selection. Transparent instrumentation may record a Cargo
+invocation only when it execs the supplied real Cargo unchanged. When CI
+elevates that fixture, it SHALL first stage a complete Rust toolchain in a
+directory readable, traversable, and executable by the elevated process, and
+preflight-execute that staged Cargo and rustc. Staging may copy the real
+toolchain solely to make it accessible; it SHALL NOT replace either executable
+with a shim.
+
 The Yazi build SHALL set deterministic source-date and VCS metadata. The intake
 record SHALL bind the selected tag to its upstream commit SHA and commit
 timestamp; the package recipe SHALL set the exact version/metadata inputs

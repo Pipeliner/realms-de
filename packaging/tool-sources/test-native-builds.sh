@@ -13,19 +13,25 @@ fail() {
     failures=$((failures + 1))
 }
 
-for command in dh dpkg-deb gzip rpm2archive rpmbuild python3 tar zstd; do
-    if ! command -v "$command" >/dev/null 2>&1; then
-        echo "required native-build test command is missing: $command" >&2
-        exit 1
-    fi
-done
 real_cargo=${HELM_REAL_CARGO:-$(command -v cargo || true)}
 real_rustc=${HELM_REAL_RUSTC:-$(command -v rustc || true)}
 if [ ! -x "$real_cargo" ] || [ ! -x "$real_rustc" ]; then
     echo "real Cargo or rustc is not executable" >&2
     exit 1
 fi
+if ! "$real_cargo" --version >/dev/null 2>&1 \
+    || ! "$real_rustc" --version >/dev/null 2>&1; then
+    echo "real Cargo or rustc cannot execute" >&2
+    exit 1
+fi
 real_rust_bin=$(dirname "$real_rustc")
+
+for command in dh dpkg-deb gzip rpm2archive rpmbuild python3 tar zstd; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+        echo "required native-build test command is missing: $command" >&2
+        exit 1
+    fi
+done
 
 "$kit_builder" "$tmp/production"
 
@@ -82,6 +88,12 @@ printf 'cargo-result|status=%s\n' "$status" >>"$HELM_SENTINEL_LOG"
 exit "$status"
 EOF
     chmod +x "$directory/cargo"
+    cat >"$directory/rustc" <<'EOF'
+#!/bin/sh
+printf 'rustc-selector|cwd=%s|args=%s\n' "$PWD" "$*" >>"${HELM_SENTINEL_LOG:?}"
+exit 97
+EOF
+    chmod +x "$directory/rustc"
 }
 
 run_debian() {
@@ -96,6 +108,12 @@ run_debian() {
     mkdir -p "$fixture_state/outer-cargo-home"
     run_isolated env \
         PATH="$sentinels:$real_rust_bin:/usr/bin:/bin" \
+        RUSTC="$sentinels/rustc" \
+        RUSTC_WRAPPER="$sentinels/rustc" \
+        RUSTC_WORKSPACE_WRAPPER="$sentinels/rustc" \
+        CARGO_BUILD_RUSTC="$sentinels/rustc" \
+        CARGO_BUILD_RUSTC_WRAPPER="$sentinels/rustc" \
+        CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER="$sentinels/rustc" \
         CARGO_HOME="$fixture_state/outer-cargo-home" \
         HELM_EXPECTED_SOURCE="$source" \
         HELM_EXPECTED_CARGO_HOME="$cargo_home" \
@@ -104,6 +122,12 @@ run_debian() {
         HELM_CARGO_START_MARKER="$fixture_state/cargo-started" \
         HELM_REAL_CARGO="$real_cargo" \
         HELM_REAL_RUSTC="$real_rustc" \
+        RUSTC="$real_rustc" \
+        RUSTC_WRAPPER= \
+        RUSTC_WORKSPACE_WRAPPER= \
+        CARGO_BUILD_RUSTC="$real_rustc" \
+        CARGO_BUILD_RUSTC_WRAPPER= \
+        CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= \
         CARGO_INCREMENTAL=0 \
         CARGO_PROFILE_RELEASE_DEBUG=0 \
         make -C "$kit" -f debian/rules binary RUST_VERSIONED_BIN="$sentinels"
@@ -157,6 +181,12 @@ run_rpm() {
     run_isolated env \
         HOME="$tree/home" \
         PATH="$sentinels:$real_rust_bin:/usr/bin:/bin" \
+        RUSTC="$sentinels/rustc" \
+        RUSTC_WRAPPER="$sentinels/rustc" \
+        RUSTC_WORKSPACE_WRAPPER="$sentinels/rustc" \
+        CARGO_BUILD_RUSTC="$sentinels/rustc" \
+        CARGO_BUILD_RUSTC_WRAPPER="$sentinels/rustc" \
+        CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER="$sentinels/rustc" \
         CARGO_HOME="$tree/outer-cargo-home" \
         HELM_EXPECTED_SOURCE="$source" \
         HELM_EXPECTED_CARGO_HOME="$cargo_home" \
@@ -165,6 +195,12 @@ run_rpm() {
         HELM_CARGO_START_MARKER="$tree/cargo-started" \
         HELM_REAL_CARGO="$real_cargo" \
         HELM_REAL_RUSTC="$real_rustc" \
+        RUSTC="$real_rustc" \
+        RUSTC_WRAPPER= \
+        RUSTC_WORKSPACE_WRAPPER= \
+        CARGO_BUILD_RUSTC="$real_rustc" \
+        CARGO_BUILD_RUSTC_WRAPPER= \
+        CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= \
         CARGO_INCREMENTAL=0 \
         CARGO_PROFILE_RELEASE_DEBUG=0 \
         rpmbuild -bb --nodeps \
@@ -205,6 +241,9 @@ accepts_offline_cargo() {
     fi
     if grep '^forbidden|' "$log" >/dev/null; then
         fail "$name invoked Git or a network command"
+    fi
+    if grep '^rustc-selector|' "$log" >/dev/null; then
+        fail "$name honored an inherited rustc selector"
     fi
     if grep '^cargo-home-not-empty|' "$log" >/dev/null; then
         fail "$name did not begin with an empty package-local Cargo home"
