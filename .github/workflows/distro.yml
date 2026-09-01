@@ -49,8 +49,10 @@ jobs:
           cd "$RUNNER_TEMP/helm-native-kits/helm-debian-0.1.0"
           dpkg-buildpackage -us -uc -b -d
 
+  # This lane builds the retained-source RPM only; it does not clean-install
+  # the result or exercise a graphical session or SELinux.
   fedora-rpm-package:
-    name: Fedora 44 RPM package
+    name: Fedora 44 retained-source RPM build
     runs-on: ubuntu-24.04
     container: registry.fedoraproject.org/fedora:44@sha256:df52038ff64ee61affa188d78beb85cf6eecfe4e9f6042238269ccdc8e944392
     steps:
