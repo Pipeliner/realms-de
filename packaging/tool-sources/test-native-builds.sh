@@ -3,6 +3,7 @@
 set -eu
 
 root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
+kit_builder=$root/packaging/tool-sources/build-native-source-kits.sh
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/helm-native-builds.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 failures=0
@@ -18,6 +19,15 @@ for command in dh rpmbuild python3 tar zstd; do
         exit 1
     fi
 done
+real_cargo=${HELM_REAL_CARGO:-$(command -v cargo || true)}
+real_rustc=${HELM_REAL_RUSTC:-$(command -v rustc || true)}
+if [ ! -x "$real_cargo" ] || [ ! -x "$real_rustc" ]; then
+    echo "real Cargo or rustc is not executable" >&2
+    exit 1
+fi
+real_rust_bin=$(dirname "$real_rustc")
+
+"$kit_builder" "$tmp/production"
 
 run_isolated() {
     if [ "${HELM_NATIVE_NETWORK_ISOLATED:-0}" = 1 ]; then
@@ -30,44 +40,17 @@ run_isolated() {
     fi
 }
 
-copy_authority() {
-    kit=$1
-    mkdir -p "$kit/packaging/tool-sources/bundles"
-    cp "$root/packaging/tool-sources/check-bundle-linkage.py" \
-        "$kit/packaging/tool-sources/check-bundle-linkage.py"
-    if [ -f "$root/packaging/tool-sources/stage-helm-workspace.py" ]; then
-        cp "$root/packaging/tool-sources/stage-helm-workspace.py" \
-            "$kit/packaging/tool-sources/stage-helm-workspace.py"
-    fi
-    cp -R "$root/packaging/tool-sources/bundles/helm-workspace" \
-        "$kit/packaging/tool-sources/bundles/helm-workspace"
-}
-
 make_debian_kit() {
     kit=$1
-    mkdir -p "$kit/packaging"
-    cp -R "$root/packaging/debian" "$kit/packaging/debian"
-    copy_authority "$kit"
-    ln -s packaging/debian "$kit/debian"
-    if [ -e "$kit/Cargo.toml" ] || [ -e "$kit/crates" ]; then
-        echo "Debian source kit contains a second Helm workspace tree" >&2
-        exit 1
-    fi
+    cp -R "$tmp/production/helm-debian-0.1.0" "$kit"
 }
 
 make_rpm_tree() {
     tree=$1
-    kit=$tree/source/helm-0.1.0
-    mkdir -p "$kit/packaging" "$tree/top/SOURCES" "$tree/top/SPECS" \
+    mkdir -p "$tree/top/SOURCES" "$tree/top/SPECS" \
         "$tree/top/BUILD" "$tree/top/BUILDROOT" "$tree/top/RPMS" "$tree/top/SRPMS"
-    cp -R "$root/packaging/fedora" "$kit/packaging/fedora"
-    copy_authority "$kit"
-    cp "$root/packaging/fedora/helm.spec" "$tree/top/SPECS/helm.spec"
-    if [ -e "$kit/Cargo.toml" ] || [ -e "$kit/crates" ]; then
-        echo "RPM Source0 kit contains a second Helm workspace tree" >&2
-        exit 1
-    fi
-    tar -C "$tree/source" -czf "$tree/top/SOURCES/helm-0.1.0.tar.gz" helm-0.1.0
+    cp "$tmp/production/helm-0.1.0.tar.gz" "$tree/top/SOURCES/helm-0.1.0.tar.gz"
+    cp "$tmp/production/helm.spec" "$tree/top/SPECS/helm.spec"
 }
 
 make_sentinels() {
@@ -81,16 +64,24 @@ exit 97
 EOF
         chmod +x "$directory/$command"
     done
-    cat >"$directory/rustc" <<'EOF'
-#!/bin/sh
-printf '%s\n' 'rustc 1.97.1 (fixture)'
-EOF
     cat >"$directory/cargo" <<'EOF'
 #!/bin/sh
 printf 'cargo|cwd=%s|home=%s|args=%s\n' "$PWD" "${CARGO_HOME:-}" "$*" >>"${HELM_SENTINEL_LOG:?}"
-exit 0
+if [ ! -e "${HELM_CARGO_START_MARKER:?}" ]; then
+    if find "${CARGO_HOME:?}" -mindepth 1 -print -quit | grep . >/dev/null; then
+        printf 'cargo-home-not-empty|home=%s\n' "$CARGO_HOME" >>"$HELM_SENTINEL_LOG"
+        exit 96
+    fi
+    : >"$HELM_CARGO_START_MARKER"
+fi
+set +e
+"${HELM_REAL_CARGO:?}" "$@"
+status=$?
+set -e
+printf 'cargo-result|status=%s\n' "$status" >>"$HELM_SENTINEL_LOG"
+exit "$status"
 EOF
-    chmod +x "$directory/rustc" "$directory/cargo"
+    chmod +x "$directory/cargo"
 }
 
 run_debian() {
@@ -98,15 +89,23 @@ run_debian() {
     log=$2
     source=$kit/debian/helm-workspace/source
     cargo_home=$kit/debian/.cargo-home
-    sentinels=$kit/sentinels
+    target_dir=$kit/debian/cargo-target
+    fixture_state=$kit.fixture-state
+    sentinels=$fixture_state/sentinels
     make_sentinels "$sentinels"
-    mkdir -p "$kit/outer-cargo-home"
+    mkdir -p "$fixture_state/outer-cargo-home"
     run_isolated env \
-        PATH="$sentinels:/usr/bin:/bin" \
-        CARGO_HOME="$kit/outer-cargo-home" \
+        PATH="$sentinels:$real_rust_bin:/usr/bin:/bin" \
+        CARGO_HOME="$fixture_state/outer-cargo-home" \
         HELM_EXPECTED_SOURCE="$source" \
         HELM_EXPECTED_CARGO_HOME="$cargo_home" \
+        HELM_EXPECTED_TARGET_DIR="$target_dir" \
         HELM_SENTINEL_LOG="$log" \
+        HELM_CARGO_START_MARKER="$fixture_state/cargo-started" \
+        HELM_REAL_CARGO="$real_cargo" \
+        HELM_REAL_RUSTC="$real_rustc" \
+        CARGO_INCREMENTAL=0 \
+        CARGO_PROFILE_RELEASE_DEBUG=0 \
         make -C "$kit" -f debian/rules build RUST_VERSIONED_BIN="$sentinels"
 }
 
@@ -116,16 +115,23 @@ run_rpm() {
     top=$tree/top
     source=$top/BUILD/helm-0.1.0/.helm-workspace/source
     cargo_home=$top/BUILD/helm-0.1.0/.cargo-home
+    target_dir=$top/BUILD/helm-0.1.0/.cargo-target
     sentinels=$tree/sentinels
     make_sentinels "$sentinels"
     mkdir -p "$tree/home" "$tree/outer-cargo-home"
     run_isolated env \
         HOME="$tree/home" \
-        PATH="$sentinels:/usr/bin:/bin" \
+        PATH="$sentinels:$real_rust_bin:/usr/bin:/bin" \
         CARGO_HOME="$tree/outer-cargo-home" \
         HELM_EXPECTED_SOURCE="$source" \
         HELM_EXPECTED_CARGO_HOME="$cargo_home" \
+        HELM_EXPECTED_TARGET_DIR="$target_dir" \
         HELM_SENTINEL_LOG="$log" \
+        HELM_CARGO_START_MARKER="$tree/cargo-started" \
+        HELM_REAL_CARGO="$real_cargo" \
+        HELM_REAL_RUSTC="$real_rustc" \
+        CARGO_INCREMENTAL=0 \
+        CARGO_PROFILE_RELEASE_DEBUG=0 \
         rpmbuild -bb --nodeps \
             --define "_topdir $top" \
             --define "rust_arches $(uname -m)" \
@@ -161,10 +167,12 @@ accepts_offline_cargo() {
     if ! "$runner" "$fixture" "$log" >"$output" 2>&1; then
         fail "$name valid source kit did not complete its native build path"
         sed -n '1,160p' "$output" >&2
-        return
     fi
     if grep '^forbidden|' "$log" >/dev/null; then
         fail "$name invoked Git or a network command"
+    fi
+    if grep '^cargo-home-not-empty|' "$log" >/dev/null; then
+        fail "$name did not begin with an empty package-local Cargo home"
     fi
     cargo_count=$(grep -c '^cargo|' "$log" || true)
     if [ "$cargo_count" -ne 2 ]; then
@@ -175,6 +183,40 @@ accepts_offline_cargo() {
     if [ "$build_count" -ne 1 ] || [ "$test_count" -ne 1 ]; then
         fail "$name did not make exactly one Cargo build and one Cargo test invocation"
     fi
+    build_invocation=$(grep '|args=build ' "$log" | head -n 1 || true)
+    case $build_invocation in
+        *"|args=build --release --frozen --offline --locked --workspace") ;;
+        *) fail "$name did not run the exact complete staged workspace build" ;;
+    esac
+    test_invocation=$(grep '|args=test ' "$log" | head -n 1 || true)
+    case $test_invocation in
+        *"|args=test --release --frozen --offline --locked --workspace --exclude helm-agent-sdd") ;;
+        *) fail "$name did not run the exact package-relevant workspace test selection" ;;
+    esac
+    case $name in
+        Debian)
+            if [ ! -x "$HELM_EXPECTED_TARGET_DIR/release/helmctl" ]; then
+                fail "$name Cargo build did not produce the staged workspace helmctl"
+            fi
+            ;;
+        RPM)
+            rpm_artifact=$(find "$HELM_EXPECTED_PACKAGE_ROOT" -type f \
+                -name 'helm-*.rpm' -print -quit)
+            if [ -z "$rpm_artifact" ]; then
+                fail "$name native driver did not emit a package artifact"
+            elif ! rpm -qpl "$rpm_artifact" | grep -Fx '/usr/bin/helmctl' >/dev/null; then
+                fail "$name package did not contain the staged workspace helmctl"
+            fi
+            ;;
+    esac
+    if ! grep -F 'test result: ok.' "$output" >/dev/null; then
+        fail "$name Cargo test did not execute the staged workspace tests"
+    fi
+    result_count=$(grep -c '^cargo-result|status=0$' "$log" || true)
+    if [ "$result_count" -ne 2 ]; then
+        fail "$name did not complete both real Cargo invocations successfully"
+    fi
+    grep '^cargo|' "$log" >"$output.cargo"
     while IFS= read -r invocation; do
         case $invocation in
             *"|cwd=${HELM_EXPECTED_SOURCE}"*) ;;
@@ -190,7 +232,7 @@ accepts_offline_cargo() {
                 *) fail "$name Cargo invocation omitted $flag" ;;
             esac
         done
-    done <"$log"
+    done <"$output.cargo"
 }
 
 rejects_injected_fetch() {
@@ -220,7 +262,8 @@ rejects_before_cargo Debian run_debian "$tmp/debian-invalid" \
 make_debian_kit "$tmp/debian-valid"
 HELM_EXPECTED_SOURCE="$tmp/debian-valid/debian/helm-workspace/source"
 HELM_EXPECTED_CARGO_HOME="$tmp/debian-valid/debian/.cargo-home"
-export HELM_EXPECTED_SOURCE HELM_EXPECTED_CARGO_HOME
+HELM_EXPECTED_TARGET_DIR="$tmp/debian-valid/debian/cargo-target"
+export HELM_EXPECTED_SOURCE HELM_EXPECTED_CARGO_HOME HELM_EXPECTED_TARGET_DIR
 accepts_offline_cargo Debian run_debian "$tmp/debian-valid" \
     "$tmp/debian-valid.log" "$tmp/debian-valid.out"
 
@@ -232,8 +275,8 @@ rejects_injected_fetch Debian run_debian "$tmp/debian-fetch" \
 
 make_rpm_tree "$tmp/rpm-invalid"
 mkdir -p "$tmp/rpm-invalid/substitution"
-tar -C "$tmp/rpm-invalid/source" -xzf "$tmp/rpm-invalid/top/SOURCES/helm-0.1.0.tar.gz" \
-    -C "$tmp/rpm-invalid/substitution"
+tar -C "$tmp/rpm-invalid/substitution" -xzf \
+    "$tmp/rpm-invalid/top/SOURCES/helm-0.1.0.tar.gz"
 printf 'different retained bytes\n' >> \
     "$tmp/rpm-invalid/substitution/helm-0.1.0/packaging/tool-sources/bundles/helm-workspace/source.tar.gz"
 tar -C "$tmp/rpm-invalid/substitution" -czf \
@@ -244,7 +287,10 @@ rejects_before_cargo RPM run_rpm "$tmp/rpm-invalid" \
 make_rpm_tree "$tmp/rpm-valid"
 HELM_EXPECTED_SOURCE="$tmp/rpm-valid/top/BUILD/helm-0.1.0/.helm-workspace/source"
 HELM_EXPECTED_CARGO_HOME="$tmp/rpm-valid/top/BUILD/helm-0.1.0/.cargo-home"
-export HELM_EXPECTED_SOURCE HELM_EXPECTED_CARGO_HOME
+HELM_EXPECTED_TARGET_DIR="$tmp/rpm-valid/top/BUILD/helm-0.1.0/.cargo-target"
+HELM_EXPECTED_PACKAGE_ROOT="$tmp/rpm-valid/top/RPMS"
+export HELM_EXPECTED_SOURCE HELM_EXPECTED_CARGO_HOME HELM_EXPECTED_TARGET_DIR \
+    HELM_EXPECTED_PACKAGE_ROOT
 accepts_offline_cargo RPM run_rpm "$tmp/rpm-valid" \
     "$tmp/rpm-valid.log" "$tmp/rpm-valid.out"
 

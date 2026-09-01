@@ -113,6 +113,8 @@ attached because helm-wm and helm-bar are not written yet.
 
 %prep
 %autosetup
+python3 packaging/tool-sources/check-native-source-kit.py rpm \
+    %{_builddir}/%{name}-%{version}
 rm -rf %{helm_cargo_home} %{helm_target_dir}
 mkdir -p %{helm_cargo_home} %{helm_target_dir}
 python3 packaging/tool-sources/stage-helm-workspace.py \
@@ -168,11 +170,14 @@ done
 %check
 # helm-core's tests include the palette lint, so a palette that fails its WCAG
 # floors fails the package build. That is deliberate (ADR 0005).
+# helm-agent-sdd is not packaged here and its gate fixtures require live Git
+# worktree state, which the canonical source archive deliberately omits.
 python3 %{_builddir}/%{name}-%{version}/packaging/tool-sources/stage-helm-workspace.py \
     %{helm_bundle} %{helm_stage}
 cd %{helm_source}
 CARGO_HOME=%{helm_cargo_home} CARGO_TARGET_DIR=%{helm_target_dir} \
-    cargo test --release --frozen --offline --locked --workspace
+    cargo test --release --frozen --offline --locked --workspace \
+        --exclude helm-agent-sdd
 
 # No %%systemd_user_post/%%systemd_user_preun. Those macros enable units named
 # in %%{_userunitdir} for *new* user sessions via presets, and helm's units must

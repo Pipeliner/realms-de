@@ -96,6 +96,14 @@ different digest in each path and require refusal before Cargo runs. A moving
 checkout or unspecified local RPM `Source0` is not an immutable source
 authority and SHALL NOT satisfy this contract.
 
+The canonical source authority intentionally contains no Git worktree metadata.
+Both native paths SHALL build the complete staged workspace, but their native
+test invocation SHALL run all package-relevant staged workspace members and
+exclude only the non-packaged `helm-agent-sdd` member: that member's 47 gate
+fixtures validate live Git worktree state and remain mandatory in its existing
+source-worktree test lane. Native package preparation SHALL NOT synthesize a
+Git repository or weaken the no-Git rule merely to run those worktree fixtures.
+
 The Debian and Fedora package paths SHALL unpack only these retained inputs and
 build using `cargo --frozen --offline --locked`. They MAY consume declared,
 target-provided C toolchain/system dependencies, but SHALL NOT acquire an
@@ -185,7 +193,7 @@ the Helm template, rather than only a nonempty default prompt.
 | # | Given / When / Then | Test |
 |---|---|---|
 | B1 | Given a selected tool or Helm-workspace source bundle, when its intake linkage is validated, then archive, lockfile, every resolved Cargo source, vendor tree, source-replacement config, digest records, and dependency license report agree exactly. | To be implemented: source-bundle linkage fixture. |
-| B2 | Given the actual Debian and Fedora package build paths with networking disabled and empty Cargo caches, when the selected bundles and Helm workspace build, then all Cargo invocations use `--frozen --offline --locked`, deterministic source/VCS metadata where applicable, and no recipe fetch path. | To be implemented: native offline-build fixture. |
+| B2 | Given the actual Debian and Fedora package build paths with networking disabled and empty Cargo caches, when the selected bundles and Helm workspace build and all package-relevant staged workspace tests run (excluding only non-packaged `helm-agent-sdd`), then all Cargo invocations use `--frozen --offline --locked`, deterministic source/VCS metadata where applicable, and no recipe fetch path. | To be implemented: native offline-build fixture. |
 | B3 | Given a native package install and direct or systemd-user Helm session launch, when executable and PATH ownership are inspected, then only `/usr/lib/helm/bin/*` owns the three Helm tools, Helm-launched applications resolve them, and neither user manager nor DBus activation receives the private PATH, including with `HELM_IMPORT_PATH=1`. | To be implemented: package/session ownership fixture. |
 | B4 | Given a rendered Helm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it, then a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Helm feature. | To be implemented: rendered-config runtime fixture. |
 | B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | To be implemented: dependency-license fixture. |

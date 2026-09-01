@@ -135,8 +135,13 @@ jobs:
           ./packaging/tool-sources/test-intake.sh
           ./packaging/tool-sources/test-bundle-linkage.sh
           ./packaging/tool-sources/test-no-live-fetch.sh
+          ./packaging/tool-sources/test-native-source-kits.sh
       - name: Check network-isolated native package paths
-        run: sudo ./packaging/tool-sources/test-native-builds.sh
+        run: |
+          sudo env \
+            HELM_REAL_CARGO="$(rustup which cargo)" \
+            HELM_REAL_RUSTC="$(rustup which rustc)" \
+            ./packaging/tool-sources/test-native-builds.sh
       - run: cargo doc --workspace --no-deps
 
   msrv:

@@ -1,2 +1,2 @@
-docs/INSTALL.md
-docs/PITFALLS.md
+debian/helm-workspace/source/docs/INSTALL.md
+debian/helm-workspace/source/docs/PITFALLS.md
