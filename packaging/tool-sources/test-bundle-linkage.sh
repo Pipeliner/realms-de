@@ -43,6 +43,8 @@ EOF
 
 "$checker" "$tmp"
 
+cp "$tmp/bundle/vendor.tar.zst" "$tmp/valid-vendor.tar.zst"
+
 rm -f "$tmp/bundle/vendor.tar.zst"
 mkdir -p "$tmp/malicious/vendor" "$tmp/malicious/target"
 printf '{"files":{}}\n' >"$tmp/malicious/target/.cargo-checksum.json"
@@ -56,6 +58,10 @@ if "$checker" "$tmp" >"$tmp/out" 2>"$tmp/err"; then
     exit 1
 fi
 grep -F 'vendor tree contains symlink' "$tmp/err"
+
+# Restore the valid archive before exercising independent source-accounting
+# failures.  Otherwise the earlier malicious fixture masks every later check.
+cp "$tmp/valid-vendor.tar.zst" "$tmp/bundle/vendor.tar.zst"
 
 printf 'source = "git+https://example.invalid/unrepresented#abc"\n' >>"$tmp/bundle/Cargo.lock"
 if "$checker" "$tmp" >"$tmp/out" 2>"$tmp/err"; then
