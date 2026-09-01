@@ -3078,7 +3078,7 @@ mod tests {
     use crate::generation::{GenerationGcReport, GenerationPublication, GenerationStore};
     use std::cell::Cell;
     use std::fs;
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
     use std::path::Path;
 
     fn direct_preparing(process_group: &str) -> Vec<u8> {
@@ -4256,16 +4256,21 @@ bar-process-group 0\n",
             fixture.direct_evidence(),
         )
         .unwrap();
-        write_mode(&staging, &lifecycle.encode(), 0o600);
+        let lifecycle_bytes = lifecycle.encode();
+        write_mode(&staging, &lifecycle_bytes, 0o600);
 
         let plan = classify_lease_transfer_staging_locked(&fixture.store.leases.fd).unwrap();
         fs::rename(&staging, &displaced).unwrap();
-        write_mode(&staging, b"replacement evidence", 0o600);
+        write_mode(&staging, &lifecycle_bytes, 0o600);
 
         let error = plan.normalize(&fixture.store.leases.fd).unwrap_err();
 
         assert!(error.contains("pair changed"), "{error}");
-        assert_eq!(fs::read(&staging).unwrap(), b"replacement evidence");
+        assert_eq!(fs::read(&staging).unwrap(), lifecycle_bytes);
+        assert_ne!(
+            fs::metadata(&staging).unwrap().ino(),
+            fs::metadata(&displaced).unwrap().ino(),
+        );
         assert!(matches!(
             ParsedLeaseRecord::parse(&fs::read(displaced).unwrap()),
             Ok(ParsedLeaseRecord::Lifecycle(_))
