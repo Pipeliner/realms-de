@@ -2,6 +2,8 @@
 """Validate one retained Cargo bundle without consulting the network."""
 import hashlib
 import json
+import os
+import stat
 import subprocess
 import sys
 import tarfile
@@ -31,6 +33,84 @@ def under_root(root: Path, key: str, value: str) -> Path:
     except ValueError:
         raise SystemExit(f"bundle {key} path escapes bundle root")
     return path
+
+
+def source_archive_descriptor(root: Path, value: str) -> int:
+    parts = value.split("/")
+    if (not value or value.startswith("/") or any(part in {"", ".", ".."} for part in parts)):
+        raise SystemExit("bundle source path escapes bundle root")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW
+    directory_fd = None
+    source_fd = None
+    try:
+        directory_fd = os.open(root, directory_flags)
+        for part in parts[:-1]:
+            child_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = child_fd
+        source_fd = os.open(parts[-1], file_flags, dir_fd=directory_fd)
+        source_stat = os.fstat(source_fd)
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise OSError
+        return source_fd
+    except OSError:
+        if source_fd is not None:
+            os.close(source_fd)
+        raise SystemExit("bundle source is missing or symlinked")
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def stage_source_archive(root: Path, value: str, expected_digest: str, temporary: Path) -> Path:
+    source_fd = source_archive_descriptor(root, value)
+    staged = temporary / "source.tar.gz"
+    digest = hashlib.sha256()
+    try:
+        with staged.open("xb") as output:
+            while data := os.read(source_fd, 1024 * 1024):
+                digest.update(data)
+                output.write(data)
+    finally:
+        os.close(source_fd)
+    if digest.hexdigest() != expected_digest:
+        raise SystemExit("source SHA-256 mismatch")
+    return staged
+
+
+def source_archive_root(archive: Path, destination: Path, lockfile: Path) -> None:
+    try:
+        with tarfile.open(archive, mode="r:gz") as contents:
+            members = contents.getmembers()
+            names: set[str] = set()
+            roots: set[str] = set()
+            root_members = []
+            for member in members:
+                parts = member.name.split("/")
+                if (not member.name or member.name.startswith("/") or
+                        any(part in {"", ".", ".."} for part in parts)):
+                    raise SystemExit("source archive member path escapes source root")
+                if not (member.isdir() or member.isreg()):
+                    raise SystemExit("source archive contains unsafe member")
+                if member.name in names:
+                    raise SystemExit("source archive has duplicate member")
+                names.add(member.name)
+                roots.add(parts[0])
+                if len(parts) == 1:
+                    root_members.append(member)
+            if len(roots) != 1 or len(root_members) != 1 or not root_members[0].isdir():
+                raise SystemExit("source archive must contain one regular top-level root")
+            contents.extractall(destination, members=members)
+    except SystemExit:
+        raise
+    except (OSError, tarfile.TarError):
+        raise SystemExit("source archive cannot be read")
+    root = destination / next(iter(roots))
+    unpacked_lockfile = root / "Cargo.lock"
+    if (unpacked_lockfile.is_symlink() or not unpacked_lockfile.is_file() or
+            unpacked_lockfile.read_bytes() != lockfile.read_bytes()):
+        raise SystemExit("source archive Cargo.lock differs from retained lockfile")
 
 
 def cargo_packages(lockfile: Path) -> list[dict[str, str]]:
@@ -211,19 +291,42 @@ bound_fields = {
 basic_fields = required | vendor_fields
 basic_archive_fields = required | archive_fields
 bound_archive_fields = basic_archive_fields | bound_fields
-if frozenset(record) not in {frozenset(basic_fields), frozenset(basic_archive_fields), frozenset(bound_archive_fields)}:
+helm_fields = bound_archive_fields | {
+    "source_archive_format", "source_provenance", "source_provenance_sha256",
+}
+helm_bundle = record.get("name") == "helm-workspace"
+if helm_bundle:
+    valid_fields = frozenset(record) == frozenset(helm_fields)
+else:
+    valid_fields = frozenset(record) in {
+        frozenset(basic_fields), frozenset(basic_archive_fields), frozenset(bound_archive_fields),
+    }
+if not valid_fields:
     raise SystemExit("bundle manifest fields differ from policy")
 
 paths = {key: under_root(root, key, record[key]) for key in required - {"name"}}
-if "source" in record:
+if helm_bundle:
+    paths["source_provenance"] = under_root(root, "source_provenance", record["source_provenance"])
+elif "source" in record:
     paths["source"] = under_root(root, "source", record["source"])
 for key, path in paths.items():
     if path.is_symlink() or not path.is_file():
         raise SystemExit(f"bundle {key} is missing or symlinked")
-for key in ("source", "lockfile", "cargo_config", "license_report"):
+for key, path in paths.items():
     hash_key = f"{key}_sha256"
-    if hash_key in record and hashlib.sha256(paths[key].read_bytes()).hexdigest() != record[hash_key]:
+    if hash_key in record and hashlib.sha256(path.read_bytes()).hexdigest() != record[hash_key]:
         raise SystemExit(f"{key} SHA-256 mismatch")
+
+source_temporary = None
+if helm_bundle:
+    if record["source"] != "source.tar.gz":
+        raise SystemExit("Helm source archive path is not source.tar.gz")
+    if record["source_archive_format"] != "tar.gz":
+        raise SystemExit("source archive format is not tar.gz")
+    source_temporary = tempfile.TemporaryDirectory()
+    source_directory = Path(source_temporary.name)
+    staged_source = stage_source_archive(root, record["source"], record["source_sha256"], source_directory)
+    source_archive_root(staged_source, source_directory / "source", paths["lockfile"])
 
 config = cargo_source_config(paths["cargo_config"])
 temporary = None
