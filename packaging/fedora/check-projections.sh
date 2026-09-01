@@ -168,6 +168,7 @@ projection_paths() {
         ! -path "$root/.git/*" \
         ! -path "$root/.worktrees/*" \
         ! -path "$root/target/*" \
+        ! -path "$root/.superpowers/sdd/*" \
         ! -path "$root/docs/superpowers/plans/*" \
         ! -path "$root/packaging/fedora/check-projections.sh" \
         ! -path "$root/packaging/fedora/test-check-projections.sh" \
@@ -220,9 +221,150 @@ image=$(sed -n 's/^image = "\([^"]*\)"$/\1/p' "$baseline")
 [ -n "$image" ] || fail 'baseline.toml has no exact image field'
 
 workflow="$root/.github/workflows/distro.yml"
-lane_count=$(grep -E -c '^[[:space:]]*- name: fedora-44-cargo-smoke$' "$workflow" || true)
-fedora_container_count=$(grep -E -c '^[[:space:]]*container: registry\.fedoraproject\.org/fedora:' "$workflow" || true)
-workflow_image_count=$(grep -F -x -c -e "            container: $image" "$workflow" || true)
+workflow_files=$(find "$root/.github/workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) | sort)
+[ -n "$workflow_files" ] || fail 'Fedora workflow inventory is empty'
+# shellcheck disable=SC2086 # The inventory is a newline-separated repository path list.
+inventory=$(awk -v image="$image" '
+    function trim(value) {
+        sub(/^[[:space:]]+/, "", value)
+        sub(/[[:space:]]+$/, "", value)
+        return value
+    }
+
+    function normalized_image(value) {
+        value = trim(value)
+        if (value ~ /^\{[[:space:]]*image:[[:space:]]*/) {
+            sub(/^\{[[:space:]]*image:[[:space:]]*/, "", value)
+            sub(/[[:space:]]*\}$/, "", value)
+            value = trim(value)
+        }
+        if (value ~ /^".*"$/ || value ~ /^\047.*\047$/) {
+            value = substr(value, 2, length(value) - 2)
+        }
+        return value
+    }
+
+    function is_fedora_image(value) {
+        value = tolower(value)
+        return value ~ /^([^[:space:]]*\/)*fedora[^\/:@]*(:|@)/
+    }
+
+    function observe_container(value, cargo_context, job_context) {
+        value = normalized_image(value)
+        if (!is_fedora_image(value)) {
+            return
+        }
+        fedora_containers++
+        if (value == image) {
+            exact_images++
+            if (cargo_context) {
+                cargo_images++
+            }
+            if (job_context == "fedora-rpm-package") {
+                rpm_images++
+            }
+        }
+    }
+
+    {
+        line = $0
+        indentation = line
+        sub(/[^[:space:]].*$/, "", indentation)
+        indentation = length(indentation)
+
+        if (line ~ /^  [[:alnum:]_-]+:$/) {
+            job = line
+            sub(/^  /, "", job)
+            sub(/:$/, "", job)
+            if (job == "fedora-rpm-package") {
+                rpm_jobs++
+            }
+        }
+
+        if (line == "          - name: fedora-44-cargo-smoke") {
+            cargo_lanes++
+            cargo_context = 1
+            next
+        }
+        if (cargo_context && line ~ /^          - name: /) {
+            cargo_context = 0
+        }
+
+        if (mapping_container) {
+            if (indentation > mapping_indentation && line ~ /^[[:space:]]*image:[[:space:]]*/) {
+                value = line
+                sub(/^[[:space:]]*image:[[:space:]]*/, "", value)
+                observe_container(value, mapping_cargo_context, mapping_job_context)
+                mapping_container = 0
+                next
+            }
+            if (indentation <= mapping_indentation) {
+                mapping_container = 0
+            }
+        }
+
+        if (line ~ /^[[:space:]]*container:[[:space:]]*/) {
+            value = line
+            sub(/^[[:space:]]*container:[[:space:]]*/, "", value)
+            if (value == "") {
+                mapping_container = 1
+                mapping_indentation = indentation
+                mapping_cargo_context = cargo_context
+                mapping_job_context = job
+                next
+            }
+            observe_container(value, cargo_context, job)
+        }
+
+        if (job == "fedora-rpm-package") {
+            if (line == "    name: Fedora 44 retained-source RPM build") {
+                rpm_names++
+            }
+            if (line == "      - name: Build retained-only RPM Source0") {
+                rpm_build_steps++
+            }
+            if (line == "          packaging/tool-sources/build-native-source-kits.sh \"$RUNNER_TEMP/helm-native-kits\"") {
+                rpm_source_kit_producers++
+            }
+            if (line == "          cp \"$RUNNER_TEMP/helm-native-kits/helm-0.1.0.tar.gz\" \"$RUNNER_TEMP/rpmbuild/SOURCES/\"") {
+                rpm_source0_copies++
+            }
+            if (line == "          cp \"$RUNNER_TEMP/helm-native-kits/helm.spec\" \"$RUNNER_TEMP/rpmbuild/SPECS/\"") {
+                rpm_spec_copies++
+            }
+            if (line == "          rpmbuild -bb --nodeps \\") {
+                rpmbuild_invocations++
+            }
+            if (line == "            \"$RUNNER_TEMP/rpmbuild/SPECS/helm.spec\"") {
+                rpmbuild_spec_targets++
+            }
+        }
+    }
+
+    END {
+        print fedora_containers + 0, exact_images + 0, cargo_lanes + 0,
+            cargo_images + 0, rpm_jobs + 0, rpm_names + 0, rpm_images + 0,
+            rpm_build_steps + 0, rpm_source_kit_producers + 0,
+            rpm_source0_copies + 0, rpm_spec_copies + 0,
+            rpmbuild_invocations + 0, rpmbuild_spec_targets + 0
+    }
+' $workflow_files)
+# shellcheck disable=SC2086 # The awk inventory emits exactly thirteen integers.
+set -- $inventory
+fedora_container_count=$1
+workflow_image_count=$2
+cargo_lane_count=$3
+cargo_lane_image_count=$4
+rpm_lane_count=$5
+rpm_lane_name_count=$6
+rpm_lane_image_count=$7
+rpm_build_step_count=$8
+rpm_source_kit_producer_count=$9
+shift 9
+rpm_source0_copy_count=$1
+rpm_spec_copy_count=$2
+rpmbuild_invocation_count=$3
+rpmbuild_spec_target_count=$4
 
 assert_ci_invocation() {
     invocation=$1
@@ -240,11 +382,61 @@ assert_ci_invocation() {
     fi
 }
 
+assert_fedora_build_evidence_boundary() {
+    # A claim may span lines, so examine complete paragraphs in every discovered
+    # projection instead of only known current files or single matching lines.
+    projection_files=$(projection_paths | sed "s#^#$root/#")
+    # shellcheck disable=SC2086 # Projection paths are a newline-separated repository path list.
+    if ! awk '
+        function inspect_paragraph() {
+            lower = tolower(paragraph)
+            fedora = "(fedora[[:space:]]*(44|lane)|f44|fedora[-:]44)"
+            runtime = "(clean[-[:space:]]*install|package[[:space:]]+installation|graphical|session|selinux)"
+            boundary = "(does[[:space:]]+not|do[[:space:]]+not|cannot|not[[:space:]]+(clean|install|graphical|session|selinux|evidence|support|working)|no[[:space:]]+(clean|package|graphical|session|selinux|architecture)|unverified|unsupported|neither|nor[[:space:]]|without|outside|blocked)"
+            if (lower ~ fedora && lower ~ runtime && lower !~ boundary) {
+                exit 1
+            }
+        }
+
+        FNR == 1 {
+            if (paragraph != "") {
+                inspect_paragraph()
+            }
+            paragraph = ""
+        }
+
+        /^[[:space:]]*$/ {
+            inspect_paragraph()
+            paragraph = ""
+            next
+        }
+
+        {
+            paragraph = paragraph "\n" $0
+        }
+
+        END {
+            inspect_paragraph()
+        }
+    ' $projection_files; then
+        fail 'Fedora evidence exceeds build-only contract'
+    fi
+}
+
 case "$status" in
     pre-alpha)
-        [ "$lane_count" -eq 1 ] || fail 'exactly one Fedora 44 Cargo-smoke lane is required'
-        [ "$fedora_container_count" -eq 1 ] || fail 'exactly one Fedora 44 Cargo-smoke lane is required'
-        [ "$workflow_image_count" -eq 1 ] || fail 'workflow image must equal baseline.toml'
+        [ "$fedora_container_count" -eq 2 ] || fail 'exactly one Fedora 44 Cargo-smoke lane and one retained-source RPM build lane are required'
+        [ "$workflow_image_count" -eq 2 ] || fail 'workflow image must equal baseline.toml'
+        if ! { [ "$cargo_lane_count" -eq 1 ] && [ "$cargo_lane_image_count" -eq 1 ] &&
+            [ "$rpm_lane_count" -eq 1 ] && [ "$rpm_lane_name_count" -eq 1 ] &&
+            [ "$rpm_lane_image_count" -eq 1 ] && [ "$rpm_build_step_count" -eq 1 ]; }; then
+            fail 'exactly one Fedora 44 Cargo-smoke lane and one retained-source RPM build lane are required'
+        fi
+        if ! { [ "$rpm_source_kit_producer_count" -eq 1 ] && [ "$rpm_source0_copy_count" -eq 1 ] &&
+            [ "$rpm_spec_copy_count" -eq 1 ] && [ "$rpmbuild_invocation_count" -eq 1 ] &&
+            [ "$rpmbuild_spec_target_count" -eq 1 ]; }; then
+            fail 'RPM lane must run the retained-source producer and Source0 RPM build'
+        fi
         assert_contains .github/workflows/distro.yml 'pinned base/current packages' \
             'Fedora lane must say pinned base/current packages'
         ;;
@@ -271,7 +463,7 @@ if current_matches '(Fedora 41|F41|fedora-41|fedora:41)'; then
 fi
 
 if current_matches '(Fedora 43|F43|fedora-43|fedora:43)'; then
-    fail 'exactly one Fedora 44 Cargo-smoke lane is required'
+    fail 'exactly one Fedora 44 Cargo-smoke lane and one retained-source RPM build lane are required'
 fi
 
 if current_matches '(Fedora[[:space:]]*44\+|Fedora[[:space:]]*44[[:space:]]+(and[[:space:]]+)?(later|newer)|Fedora[^[:alnum:]]*(latest|Rawhide)|fedora:(latest|rawhide))'; then
@@ -305,10 +497,10 @@ assert_contains packaging/fedora/helm.spec \
 
 assert_contains README.md 'Today Fedora 44 is the sole Fedora' \
     'README must identify Fedora 44 as the sole pre-alpha Fedora baseline'
-assert_contains docs/INSTALL.md '| Fedora 44 (pre-alpha) | RPM skeleton' \
-    'INSTALL must identify the Fedora 44 pre-alpha RPM skeleton'
-assert_contains docs/ARCHITECTURE.md '| **Fedora 44 (pre-alpha)** | tracked RPM skeleton' \
-    'ARCHITECTURE must identify the Fedora 44 pre-alpha RPM skeleton'
+assert_contains docs/INSTALL.md '| Fedora 44 (pre-alpha) | RPM from the retained-only source kit' \
+    'INSTALL must identify the Fedora 44 retained-only source-kit RPM build'
+assert_contains docs/ARCHITECTURE.md '| **Fedora 44 (pre-alpha)** | exactly one pinned Cargo-smoke lane plus exactly one retained-source RPM-build lane' \
+    'ARCHITECTURE must identify the two Fedora 44 pre-alpha build lanes'
 assert_contains docs/ARCHITECTURE.md 'Target plan and current evidence:' \
     'ARCHITECTURE must not claim every target is already supported and tested in CI'
 assert_contains docs/MVP.md 'Fedora uses its official native candidate' \
@@ -327,9 +519,7 @@ if current_matches '(vendor|vendors|vendored).*River.*(every target|all three (t
     fail 'universal River sourcing claim'
 fi
 
-if current_matches 'Fedora 44.*(prove|proves|verifies|demonstrates).*(RPM|graphical|session|SELinux)|(Fedora 44).*(RPM|graphical|session|SELinux).*(proven|works)'; then
-    fail 'Fedora evidence exceeds Cargo smoke'
-fi
+assert_fedora_build_evidence_boundary
 fi
 
 historical_allowlist() {
@@ -373,7 +563,7 @@ docs/specs/0009-fedora-44-pre-alpha-baseline.md:::third-party historical facts, 
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::1. ADR 0010's header/index must mark its Fedora 41-or-later baseline and the
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::The correction must not describe a direct Fedora 41 to Fedora 44 operating
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A1 | Given the machine-checked inventory of live Fedora claims, when `status = "pre-alpha"` it is validated, then the only admitted release is exactly `44`; when `status = "unsupported"`, no Fedora release is admitted; `41`, `42`, `43`, `44+`, `latest`, Rawhide, and implicit newer releases are always rejected as current Helm targets | *Planned (#138):* `fedora_baseline::only_fedora_44_is_a_live_target`; includes one failing fixture per rejected form and one unsupported-state fixture |
-docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A2 | Given the required distro matrix, when `status = "pre-alpha"`, then it contains one Fedora lane named as a Cargo smoke and uses the exact official Fedora 44 digest above; when `status = "unsupported"`, it contains no required Fedora lane; neither state adds a Fedora 41/Fedora 43 lane, runner, or architecture claim | *Planned (#138):* `fedora_baseline::required_ci_uses_one_pinned_f44_cargo_smoke` |
+docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A2 | Given the repository workflow files, when `status = "pre-alpha"`, then exactly one `fedora-44-cargo-smoke` Cargo lane and exactly one `fedora-rpm-package` retained-source RPM build lane resolve to the exact official Fedora 44 digest above; no other Fedora-family container image is present anywhere under `.github/workflows/`, regardless of scalar or mapping YAML syntax. The RPM lane runs the retained-source-kit producer, copies `Source0` and the RPM spec into the build tree, and invokes `rpmbuild -bb --nodeps`, but does not clean-install the resulting package. Cargo and RPM build facts are allowed; neither lane is graphical-session or SELinux evidence. When `status = "unsupported"`, it contains no required Fedora lane; neither state adds a Fedora 41/Fedora 43 lane, runner, or architecture claim | `packaging/fedora/test-check-projections.sh`: `fedora_baseline::required_ci_uses_one_pinned_f44_cargo_smoke_and_one_retained_source_rpm_build` |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A3 | Given the Fedora RPM metadata, when it is inspected, then it identifies Fedora 44, requires Fedora's `river >= 0.4.0`, contains no `helm-river` alternative or false “River unavailable on Fedora” claim, and continues to state that the package is pre-alpha and not a working desktop | *Planned (#138):* `fedora_baseline::rpm_metadata_matches_the_f44_pre_alpha_contract` |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A6 | Given a seeded stale live-support claim such as `Fedora 41+`, when the consistency guard runs, then it fails; given an exact reviewed historical exception in a superseded ADR or third-party history, then it passes without treating that text as current support | *Planned (#138):* `fedora_baseline::stale_live_claims_fail_and_exact_history_exceptions_pass` |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A8 | Given current user-facing and normative documentation, when the consistency guard and doc review run, then Fedora 41 is absent from live Helm support/install examples, Fedora 44 is described as the sole pre-alpha baseline, no text upgrades the Cargo smoke to RPM/session evidence, and no direct Fedora 41 to Fedora 44 OS upgrade is called supported | *Planned (#138):* `fedora_baseline::docs_state_the_evidence_level_truthfully` plus review of rendered Markdown |

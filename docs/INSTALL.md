@@ -32,7 +32,7 @@ target ([ARCHITECTURE.md §5](ARCHITECTURE.md)):
 |---|---|---|
 | NixOS / Nix | flake: `packages.default`, `nixosModules.helm`, `homeManagerModules.helm` | Reference build. Evaluates; VM test asserts the contract, not the desktop |
 | Ubuntu 24.04 LTS + | `.deb` from `packaging/debian/` | Builds; three runtime dependencies are not in the Ubuntu archive (below) |
-| Fedora 44 (pre-alpha) | RPM skeleton at `packaging/fedora/helm.spec` | Cargo smoke only, using a pinned base/current packages image; the RPM and graphical session are unverified |
+| Fedora 44 (pre-alpha) | RPM from the retained-only source kit | Builds in a pinned Fedora 44 image; package installation and the graphical session are unverified |
 
 Anything else is best-effort. The flake is the definition; the deb and the rpm
 follow from the same tree.
@@ -151,13 +151,20 @@ There is no apt repository yet (`NEEDS-HUMAN` in `packaging/debian/control`:
 PPA, self-hosted apt, or GitHub Releases). Build it yourself:
 
 ```sh
-sudo apt install devscripts debhelper rustc-1.85 cargo-1.85
+sudo apt install devscripts debhelper rustc-1.85 cargo-1.85 pkg-config python3 zstd
 git clone https://github.com/pipeliner/realms-de && cd realms-de
 
-ln -s packaging/debian debian        # Debian tooling insists on ./debian
+packaging/tool-sources/build-native-source-kits.sh "$PWD/native-kits"
+cd native-kits/helm-debian-0.1.0
 dpkg-buildpackage -us -uc -b
 sudo apt install ../helm_0.1.0_*.deb
 ```
+
+The producer copies only Debian metadata, the staging/linkage helpers, and the
+retained Helm workspace bundle into the package source directory. The checkout
+is intake context for running that producer; it is not the package build input.
+`debian/rules` rejects a full checkout before Cargo rather than treating it as
+a second workspace authority.
 
 Ubuntu 24.04's default rustc is 1.75, which is below helm's MSRV of 1.85. The
 archive carries versioned toolchain packages — `rustc-1.85`/`cargo-1.85` are
@@ -196,19 +203,26 @@ and `/usr/share/helm/palette.toml`, plus `/usr/bin/helmctl` with `theme apply`,
 
 ## Fedora 44 (pre-alpha)
 
-There is no Helm Fedora repository. The tracked RPM is a pre-alpha skeleton and
-does not install a working desktop; its only current Fedora evidence is the
-Fedora 44 Cargo-smoke lane. The RPM has not been built or installed as
-acceptance evidence. To investigate the skeleton locally:
+There is no Helm Fedora repository. The tracked RPM is pre-alpha and does not
+install a working desktop. Fedora 44 has one pinned Cargo-smoke lane and one
+pinned retained-source RPM-build lane; the latter builds the RPM from the
+retained-only source kit without clean-installing it. Package installation and
+a graphical session remain unverified. To investigate the package locally:
 
 ```sh
-sudo dnf install rpm-build rust cargo systemd-rpm-macros
+sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd
 git clone https://github.com/pipeliner/realms-de && cd realms-de
 
-git archive --format=tar.gz --prefix=helm-0.1.0/ -o ~/rpmbuild/SOURCES/helm-0.1.0.tar.gz HEAD
-rpmbuild -bb packaging/fedora/helm.spec
+packaging/tool-sources/build-native-source-kits.sh "$PWD/native-kits"
+rpmbuild -bb \
+  --define "_sourcedir $PWD/native-kits" \
+  "$PWD/native-kits/helm.spec"
 sudo dnf install ~/rpmbuild/RPMS/*/helm-0.1.0-*.rpm
 ```
+
+The resulting RPM `Source0` contains only Fedora metadata, the shared helpers,
+and the same retained Helm bundle. `%prep` rejects a checkout-shaped Source0
+and stages Cargo exclusively from the canonical inner `source.tar.gz`.
 
 Fedora 44's official package listing reported `rust` and `cargo` 1.97.1 on
 2026-08-29, above the current Rust 1.85 MSRV. Fedora repositories float, so
