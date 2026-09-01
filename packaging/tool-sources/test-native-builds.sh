@@ -88,6 +88,11 @@ printf 'cargo-result|status=%s\n' "$status" >>"$HELM_SENTINEL_LOG"
 exit "$status"
 EOF
     chmod +x "$directory/cargo"
+}
+
+make_rustc_selector() {
+    directory=$1
+    mkdir -p "$directory"
     cat >"$directory/rustc" <<'EOF'
 #!/bin/sh
 printf 'rustc-selector|cwd=%s|args=%s\n' "$PWD" "$*" >>"${HELM_SENTINEL_LOG:?}"
@@ -104,16 +109,18 @@ run_debian() {
     target_dir=$kit/debian/cargo-target
     fixture_state=$kit.fixture-state
     sentinels=$fixture_state/sentinels
+    selectors=$fixture_state/selectors
     make_sentinels "$sentinels"
+    make_rustc_selector "$selectors"
     mkdir -p "$fixture_state/outer-cargo-home"
     run_isolated env \
         PATH="$sentinels:$real_rust_bin:/usr/bin:/bin" \
-        RUSTC="$sentinels/rustc" \
-        RUSTC_WRAPPER="$sentinels/rustc" \
-        RUSTC_WORKSPACE_WRAPPER="$sentinels/rustc" \
-        CARGO_BUILD_RUSTC="$sentinels/rustc" \
-        CARGO_BUILD_RUSTC_WRAPPER="$sentinels/rustc" \
-        CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER="$sentinels/rustc" \
+        RUSTC="$selectors/rustc" \
+        RUSTC_WRAPPER="$selectors/rustc" \
+        RUSTC_WORKSPACE_WRAPPER="$selectors/rustc" \
+        CARGO_BUILD_RUSTC="$selectors/rustc" \
+        CARGO_BUILD_RUSTC_WRAPPER="$selectors/rustc" \
+        CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER="$selectors/rustc" \
         CARGO_HOME="$fixture_state/outer-cargo-home" \
         HELM_EXPECTED_SOURCE="$source" \
         HELM_EXPECTED_CARGO_HOME="$cargo_home" \
@@ -176,17 +183,19 @@ run_rpm() {
     cargo_home=$top/BUILD/helm-0.1.0/.cargo-home
     target_dir=$top/BUILD/helm-0.1.0/.cargo-target
     sentinels=$tree/sentinels
+    selectors=$tree/selectors
     make_sentinels "$sentinels"
+    make_rustc_selector "$selectors"
     mkdir -p "$tree/home" "$tree/outer-cargo-home"
     run_isolated env \
         HOME="$tree/home" \
         PATH="$sentinels:$real_rust_bin:/usr/bin:/bin" \
-        RUSTC="$sentinels/rustc" \
-        RUSTC_WRAPPER="$sentinels/rustc" \
-        RUSTC_WORKSPACE_WRAPPER="$sentinels/rustc" \
-        CARGO_BUILD_RUSTC="$sentinels/rustc" \
-        CARGO_BUILD_RUSTC_WRAPPER="$sentinels/rustc" \
-        CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER="$sentinels/rustc" \
+        RUSTC="$selectors/rustc" \
+        RUSTC_WRAPPER="$selectors/rustc" \
+        RUSTC_WORKSPACE_WRAPPER="$selectors/rustc" \
+        CARGO_BUILD_RUSTC="$selectors/rustc" \
+        CARGO_BUILD_RUSTC_WRAPPER="$selectors/rustc" \
+        CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER="$selectors/rustc" \
         CARGO_HOME="$tree/outer-cargo-home" \
         HELM_EXPECTED_SOURCE="$source" \
         HELM_EXPECTED_CARGO_HOME="$cargo_home" \
