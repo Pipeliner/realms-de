@@ -310,9 +310,17 @@ accepts_offline_cargo() {
     log=$4
     output=$5
     : >"$log"
-    if ! "$runner" "$fixture" "$log" >"$output" 2>&1; then
+    if "$runner" "$fixture" "$log" >"$output" 2>&1; then
+        runner_status=0
+    else
+        runner_status=$?
         fail "$name valid source kit did not complete its native build path"
+        printf '%s native-driver exit status: %s\n' "$name" "$runner_status" >&2
         sed -n '1,160p' "$output" >&2
+        printf '%s native-driver output tail:\n' "$name" >&2
+        tail -n 80 "$output" >&2
+        printf '%s native-driver artifact candidates:\n' "$name" >&2
+        find "$fixture" -type f \( -name '*.deb' -o -name '*.rpm' \) -print >&2
     fi
     if grep '^forbidden|' "$log" >/dev/null; then
         fail "$name invoked Git or a network command"
