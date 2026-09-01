@@ -95,7 +95,6 @@ in
         OnFailure = [ "helm-session-abort.service" ];
       };
       Service = {
-        Environment = "PATH=/usr/lib/helm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin";
         # PRE-ALPHA: this binary does not exist yet (M2). The unit is here so
         # the session shape is complete and testable.
         ExecStart = "${cfg.package}/bin/helm-wm";
@@ -139,7 +138,6 @@ in
         StartLimitBurst = 5;
       };
       Service = {
-        Environment = "PATH=/usr/lib/helm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin";
         # PRE-ALPHA: lands in M2, like helm-wm above.
         ExecStart = "${cfg.package}/bin/helm-bar";
         # A crashed bar restarts itself and never takes the session with it

@@ -73,7 +73,6 @@ HELM_IMPORT_PATH="${HELM_IMPORT_PATH:-0}"
 HELM_ALLOW_NO_WM="${HELM_ALLOW_NO_WM:-0}"
 HELM_STRICT="${HELM_STRICT:-0}"
 HELM_DBUS_REEXEC="${HELM_DBUS_REEXEC:-0}"
-HELM_CALLER_PATH="${PATH:-}"
 
 # The unit that supervises the window manager. Named for the daemon rather than
 # generically, per SPEC 0005 OQ-4.
@@ -104,6 +103,22 @@ SESSION_ENV_VARS=(
 	XCURSOR_THEME
 	XCURSOR_SIZE
 )
+
+# Keep a caller-supplied private directory from becoming durable manager or
+# D-Bus activation state. The direct Helm process receives the private prefix
+# later; this filtered path is exclusively for the opt-in import route.
+strip_private_path() {
+	local component
+	local -a components=() filtered=()
+	local IFS=:
+	read -r -a components <<<"$1"
+	for component in "${components[@]}"; do
+		[[ "$component" == "$HELM_PRIVATE_BIN" ]] || filtered+=("$component")
+	done
+	printf '%s' "${filtered[*]}"
+}
+
+HELM_CALLER_PATH="$(strip_private_path "${PATH:-}")"
 
 # ---------------------------------------------------------------- logging ---
 # Everything goes to the log file *and* stderr: the display manager captures
