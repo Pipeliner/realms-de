@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -79,7 +80,7 @@ def stage_source_archive(root: Path, value: str, expected_digest: str, temporary
     return staged
 
 
-def source_archive_root(archive: Path, destination: Path, lockfile: Path) -> None:
+def source_archive_root(archive: Path, destination: Path, lockfile: Path) -> Path:
     try:
         with tarfile.open(archive, mode="r:gz") as contents:
             members = contents.getmembers()
@@ -111,6 +112,7 @@ def source_archive_root(archive: Path, destination: Path, lockfile: Path) -> Non
     if (unpacked_lockfile.is_symlink() or not unpacked_lockfile.is_file() or
             unpacked_lockfile.read_bytes() != lockfile.read_bytes()):
         raise SystemExit("source archive Cargo.lock differs from retained lockfile")
+    return root
 
 
 def cargo_packages(lockfile: Path) -> list[dict[str, str]]:
@@ -279,98 +281,144 @@ def license_rows(report: Path, vendor: Path) -> set[tuple[str, str]]:
     return covered
 
 
-root = Path(sys.argv[1]).resolve() if len(sys.argv) == 2 else Path(__file__).resolve().parent
-record = quoted_record(root / "bundle.toml")
-required = {"name", "lockfile", "cargo_config", "license_report"}
-vendor_fields = {"vendor"}
-archive_fields = {"vendor_archive", "vendor_archive_sha256", "vendor_archive_format"}
-bound_fields = {
-    "version", "commit", "commit_timestamp", "source", "source_sha256",
-    "lockfile_sha256", "cargo_config_sha256", "license_report_sha256",
-}
-basic_fields = required | vendor_fields
-basic_archive_fields = required | archive_fields
-bound_archive_fields = basic_archive_fields | bound_fields
-helm_fields = bound_archive_fields | {
-    "source_archive_format", "source_provenance", "source_provenance_sha256",
-}
-helm_bundle = record.get("name") == "helm-workspace"
-if helm_bundle:
-    valid_fields = frozenset(record) == frozenset(helm_fields)
-else:
-    valid_fields = frozenset(record) in {
-        frozenset(basic_fields), frozenset(basic_archive_fields), frozenset(bound_archive_fields),
+def materialize_helm_stage(source: Path, vendor: Path, config: Path, destination: Path) -> Path:
+    destination = Path(os.path.abspath(destination))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
+        raise SystemExit("staging destination is not a regular directory")
+    with tempfile.TemporaryDirectory(
+            prefix=f".{destination.name}.stage-", dir=destination.parent) as temporary:
+        temporary_root = Path(temporary)
+        staged = temporary_root / "staged"
+        shutil.copytree(source, staged / "source")
+        shutil.copytree(vendor, staged / "vendor")
+        (staged / ".cargo").mkdir()
+        shutil.copyfile(config, staged / ".cargo" / "config.toml")
+        previous = temporary_root / "previous"
+        if destination.exists():
+            destination.rename(previous)
+        try:
+            staged.rename(destination)
+        except BaseException:
+            if previous.exists() and not destination.exists():
+                previous.rename(destination)
+            raise
+    return destination / "source"
+
+
+def validate_bundle(root: Path, destination: Path | None = None) -> Path | None:
+    root = root.resolve()
+    record = quoted_record(root / "bundle.toml")
+    required = {"name", "lockfile", "cargo_config", "license_report"}
+    vendor_fields = {"vendor"}
+    archive_fields = {"vendor_archive", "vendor_archive_sha256", "vendor_archive_format"}
+    bound_fields = {
+        "version", "commit", "commit_timestamp", "source", "source_sha256",
+        "lockfile_sha256", "cargo_config_sha256", "license_report_sha256",
     }
-if not valid_fields:
-    raise SystemExit("bundle manifest fields differ from policy")
+    basic_fields = required | vendor_fields
+    basic_archive_fields = required | archive_fields
+    bound_archive_fields = basic_archive_fields | bound_fields
+    helm_fields = bound_archive_fields | {
+        "source_archive_format", "source_provenance", "source_provenance_sha256",
+    }
+    helm_bundle = record.get("name") == "helm-workspace"
+    if helm_bundle:
+        valid_fields = frozenset(record) == frozenset(helm_fields)
+    else:
+        valid_fields = frozenset(record) in {
+            frozenset(basic_fields), frozenset(basic_archive_fields), frozenset(bound_archive_fields),
+        }
+    if not valid_fields:
+        raise SystemExit("bundle manifest fields differ from policy")
 
-paths = {key: under_root(root, key, record[key]) for key in required - {"name"}}
-if helm_bundle:
-    paths["source_provenance"] = under_root(root, "source_provenance", record["source_provenance"])
-elif "source" in record:
-    paths["source"] = under_root(root, "source", record["source"])
-for key, path in paths.items():
-    if path.is_symlink() or not path.is_file():
-        raise SystemExit(f"bundle {key} is missing or symlinked")
-for key, path in paths.items():
-    hash_key = f"{key}_sha256"
-    if hash_key in record and hashlib.sha256(path.read_bytes()).hexdigest() != record[hash_key]:
-        raise SystemExit(f"{key} SHA-256 mismatch")
+    paths = {key: under_root(root, key, record[key]) for key in required - {"name"}}
+    if helm_bundle:
+        paths["source_provenance"] = under_root(
+            root, "source_provenance", record["source_provenance"])
+    elif "source" in record:
+        paths["source"] = under_root(root, "source", record["source"])
+    for key, path in paths.items():
+        if path.is_symlink() or not path.is_file():
+            raise SystemExit(f"bundle {key} is missing or symlinked")
+    for key, path in paths.items():
+        hash_key = f"{key}_sha256"
+        if hash_key in record and hashlib.sha256(path.read_bytes()).hexdigest() != record[hash_key]:
+            raise SystemExit(f"{key} SHA-256 mismatch")
 
-source_temporary = None
-if helm_bundle:
-    if record["source"] != "source.tar.gz":
-        raise SystemExit("Helm source archive path is not source.tar.gz")
-    if record["source_archive_format"] != "tar.gz":
-        raise SystemExit("source archive format is not tar.gz")
-    source_temporary = tempfile.TemporaryDirectory()
-    source_directory = Path(source_temporary.name)
-    staged_source = stage_source_archive(root, record["source"], record["source_sha256"], source_directory)
-    source_archive_root(staged_source, source_directory / "source", paths["lockfile"])
+    source_temporary = None
+    source = None
+    if helm_bundle:
+        if record["source"] != "source.tar.gz":
+            raise SystemExit("Helm source archive path is not source.tar.gz")
+        if record["source_archive_format"] != "tar.gz":
+            raise SystemExit("source archive format is not tar.gz")
+        source_temporary = tempfile.TemporaryDirectory()
+        source_directory = Path(source_temporary.name)
+        staged_source = stage_source_archive(
+            root, record["source"], record["source_sha256"], source_directory)
+        source = source_archive_root(
+            staged_source, source_directory / "source", paths["lockfile"])
 
-config = cargo_source_config(paths["cargo_config"])
-temporary = None
-if "vendor" in record:
-    vendor = under_root(root, "vendor", record["vendor"])
-    if vendor.is_symlink() or not vendor.is_dir():
-        raise SystemExit("vendor tree is missing or symlinked")
-else:
-    archive = under_root(root, "vendor_archive", record["vendor_archive"])
-    if archive.is_symlink() or not archive.is_file():
-        raise SystemExit("vendor archive is missing or symlinked")
-    if record["vendor_archive_format"] != "tar.zst":
-        raise SystemExit("vendor archive format is not tar.zst")
-    if hashlib.sha256(archive.read_bytes()).hexdigest() != record["vendor_archive_sha256"]:
-        raise SystemExit("vendor archive SHA-256 mismatch")
-    safe_archive_members(archive)
-    temporary = tempfile.TemporaryDirectory()
-    unpacked = Path(temporary.name)
-    subprocess.run(["tar", "--zstd", "-xf", str(archive), "-C", str(unpacked)], check=True)
-    vendor = unpacked / "vendor"
-    if vendor.is_symlink() or not vendor.is_dir():
-        raise SystemExit("vendor archive did not unpack a regular vendor tree")
-if (config.get(("source.crates-io", "replace-with")) != "vendored-sources" or
-        config.get(("source.vendored-sources", "directory")) != "vendor"):
-    raise SystemExit("Cargo source replacement does not select vendor directory")
+    config = cargo_source_config(paths["cargo_config"])
+    temporary = None
+    if "vendor" in record:
+        vendor = under_root(root, "vendor", record["vendor"])
+        if vendor.is_symlink() or not vendor.is_dir():
+            raise SystemExit("vendor tree is missing or symlinked")
+    else:
+        archive = under_root(root, "vendor_archive", record["vendor_archive"])
+        if archive.is_symlink() or not archive.is_file():
+            raise SystemExit("vendor archive is missing or symlinked")
+        if record["vendor_archive_format"] != "tar.zst":
+            raise SystemExit("vendor archive format is not tar.zst")
+        if hashlib.sha256(archive.read_bytes()).hexdigest() != record["vendor_archive_sha256"]:
+            raise SystemExit("vendor archive SHA-256 mismatch")
+        safe_archive_members(archive)
+        temporary = tempfile.TemporaryDirectory()
+        unpacked = Path(temporary.name)
+        subprocess.run(["tar", "--zstd", "-xf", str(archive), "-C", str(unpacked)], check=True)
+        vendor = unpacked / "vendor"
+        if vendor.is_symlink() or not vendor.is_dir():
+            raise SystemExit("vendor archive did not unpack a regular vendor tree")
+    if (config.get(("source.crates-io", "replace-with")) != "vendored-sources" or
+            config.get(("source.vendored-sources", "directory")) != "vendor"):
+        raise SystemExit("Cargo source replacement does not select vendor directory")
 
-resolved = cargo_packages(paths["lockfile"])
-for package in resolved:
-    if package["source"] != "registry+https://github.com/rust-lang/crates.io-index":
-        if package["source"].startswith("registry+"):
-            raise SystemExit("Cargo.lock registry source is not crates.io")
-        raise SystemExit("Cargo.lock source is not represented by vendor configuration")
-packages = vendor_packages(vendor)
-for package in resolved:
-    key = (package.get("name", ""), package.get("version", ""))
-    if key not in packages:
-        raise SystemExit(f"vendor tree lacks Cargo checksum for {key[0]} {key[1]}")
-    checksum = cargo_checksum(packages[key], key[0], key[1])
-    if not package.get("checksum"):
-        raise SystemExit(f"Cargo.lock package lacks checksum for {key[0]} {key[1]}")
-    if checksum != package["checksum"]:
-        raise SystemExit(f"vendor Cargo checksum disagrees with Cargo.lock for {key[0]} {key[1]}")
-covered = license_rows(paths["license_report"], vendor)
-for package in resolved:
-    key = (package.get("name", ""), package.get("version", ""))
-    if key not in covered:
-        raise SystemExit(f"dependency license report lacks {key[0]} {key[1]}")
+    resolved = cargo_packages(paths["lockfile"])
+    for package in resolved:
+        if package["source"] != "registry+https://github.com/rust-lang/crates.io-index":
+            if package["source"].startswith("registry+"):
+                raise SystemExit("Cargo.lock registry source is not crates.io")
+            raise SystemExit("Cargo.lock source is not represented by vendor configuration")
+    packages = vendor_packages(vendor)
+    for package in resolved:
+        key = (package.get("name", ""), package.get("version", ""))
+        if key not in packages:
+            raise SystemExit(f"vendor tree lacks Cargo checksum for {key[0]} {key[1]}")
+        checksum = cargo_checksum(packages[key], key[0], key[1])
+        if not package.get("checksum"):
+            raise SystemExit(f"Cargo.lock package lacks checksum for {key[0]} {key[1]}")
+        if checksum != package["checksum"]:
+            raise SystemExit(
+                f"vendor Cargo checksum disagrees with Cargo.lock for {key[0]} {key[1]}")
+    covered = license_rows(paths["license_report"], vendor)
+    for package in resolved:
+        key = (package.get("name", ""), package.get("version", ""))
+        if key not in covered:
+            raise SystemExit(f"dependency license report lacks {key[0]} {key[1]}")
+
+    if destination is not None:
+        if source is None:
+            raise SystemExit("only the Helm workspace bundle can be staged")
+        return materialize_helm_stage(source, vendor, paths["cargo_config"], destination)
+    return None
+
+
+def main() -> None:
+    root = Path(sys.argv[1]) if len(sys.argv) == 2 else Path(__file__).resolve().parent
+    validate_bundle(root)
+
+
+if __name__ == "__main__":
+    main()

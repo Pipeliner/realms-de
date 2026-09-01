@@ -25,7 +25,9 @@ Maintainer: helm contributors <vadim.evard@gmail.com>
 Build-Depends: debhelper-compat (= 13),
                cargo-1.85 | cargo (>= 1.85),
                rustc-1.85 | rustc (>= 1.85),
-               pkg-config
+               pkg-config,
+               python3,
+               zstd
 Standards-Version: 4.7.0
 Homepage: https://github.com/pipeliner/realms-de
 Rules-Requires-Root: no

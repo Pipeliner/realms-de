@@ -117,6 +117,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: docs
+      - name: Install native package build drivers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends debhelper rpm zstd
       - name: Check README truth snapshot
         run: |
           set -euo pipefail
@@ -131,6 +135,8 @@ jobs:
           ./packaging/tool-sources/test-intake.sh
           ./packaging/tool-sources/test-bundle-linkage.sh
           ./packaging/tool-sources/test-no-live-fetch.sh
+      - name: Check network-isolated native package paths
+        run: sudo ./packaging/tool-sources/test-native-builds.sh
       - run: cargo doc --workspace --no-deps
 
   msrv:
