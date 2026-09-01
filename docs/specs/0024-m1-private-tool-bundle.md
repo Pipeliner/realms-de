@@ -1,6 +1,6 @@
 # SPEC 0024 — M1 private Yazi and Starship tool bundle
 
-- **Status:** Accepted (2026-08-31)
+- **Status:** Accepted (2026-08-31; amended 2026-09-01)
 - **Milestone:** M1
 - **Issue:** [#134](https://github.com/Pipeliner/realms-de/issues/134)
 - **Refines:** [SPEC 0023](0023-m1-tool-source-intake.md)
@@ -64,6 +64,37 @@ vendor tree, source-replacement configuration, and dependency license/notice
 report, or the recipe SHALL not invoke Cargo for that workspace. It is not
 permitted to prove only the bundled tools offline while allowing the package's
 own Cargo commands to rely on a pre-populated cache or live registry.
+
+### Helm workspace source authority
+
+The Helm workspace closure SHALL bind to the immutable package source archive
+at `packaging/tool-sources/bundles/helm-workspace/source.tar.gz`. That archive
+is the source authority and SHALL be the exact archive unpacked for Helm's
+Cargo build by both native package paths; no second source copy or build-time,
+unbound `git archive` is permitted. A controlled intake MAY create this one
+canonical archive from the record-bound repository commit, but it SHALL retain
+the resulting bytes and digest as this source authority outside, and before,
+either native package path. Debian/RPM preparation and build phases SHALL NOT
+invoke `git`, `git archive`, archive creation, or any fetch operation, even if
+the resulting bytes would match the recorded digest. Its tracked
+`packaging/tool-sources/bundles/helm-workspace/bundle.toml` record SHALL bind
+the archive SHA-256 to the repository commit, commit timestamp, and
+provenance/notice record used at intake. The linkage fixture SHALL unpack the
+source authority, verify the record's archive digest, and require its root
+`Cargo.lock` to match the separately retained, digest-bound Helm-workspace
+lockfile byte-for-byte.
+
+The Helm-workspace source-replacement configuration is a separately retained
+build input: native recipes SHALL stage it at the unpacked source root before
+Cargo runs. The linkage fixture SHALL verify that configuration, the retained
+vendor tree, every resolved dependency, and the dependency license report as
+for selected tool bundles. Before each **Helm-workspace** Cargo invocation, the
+Debian source package path and Fedora `%prep` path SHALL verify the same
+retained archive digest and build only its unpacked source tree. The native
+offline-build fixture SHALL substitute a same-name source archive with a
+different digest in each path and require refusal before Cargo runs. A moving
+checkout or unspecified local RPM `Source0` is not an immutable source
+authority and SHALL NOT satisfy this contract.
 
 The Debian and Fedora package paths SHALL unpack only these retained inputs and
 build using `cargo --frozen --offline --locked`. They MAY consume declared,
