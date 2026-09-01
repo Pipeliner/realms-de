@@ -810,8 +810,15 @@ then applies the durable transitions and retirements. A safe unpublished
 registry temporary or valid staging pair plus any unrelated fatal or uncertain
 row therefore produces zero filesystem mutation. Every inventory collector
 enforces the 4096-entry/16-MiB bounds incrementally before retaining another
-name, descriptor, or payload. Directory enumeration order
-must not change this rule.
+name, descriptor, or payload. In particular, a collector SHALL NOT retain one
+open descriptor per otherwise in-bound entry before it can reject the first
+over-bound entry: the declared inventory limit must remain enforceable under a
+normal bounded process file-descriptor limit. A later destructive
+transfer-staging normalization may retain the exact canonical/staging pair it
+will unlink, but it SHALL first complete a fresh bounded whole-inventory scan
+and SHALL retain no descriptor for unrelated entries; it repeats that proof per
+pair in lexical target order. Directory enumeration order must not change this
+rule.
 
 Complete inventory means an unconditional scan of every lease-directory entry,
 not only the names referenced by launch records and not only inventories that
