@@ -3,9 +3,9 @@
 # there is no reload signal, so a running instance keeps the old colours until
 # it is restarted. `apply` says so rather than pretending otherwise.
 #
-# Section names follow yazi's post-rename schema (`[mgr]`, `[pick]`).
+# Section names follow Yazi 25.4's schema (`[manager]`, `[pick]`).
 
-[mgr]
+[manager]
 cwd = { fg = "{{ pantheon.charon }}" }
 
 hovered = { fg = "{{ text.bright }}", bg = "{{ background.focused }}" }
@@ -30,24 +30,28 @@ tab_active = { fg = "{{ background.void }}", bg = "{{ accent.violet }}" }
 tab_inactive = { fg = "{{ text.dim }}", bg = "{{ background.raised }}" }
 tab_width = 1
 
+[mode]
+normal_main = { fg = "{{ background.void }}", bg = "{{ accent.violet }}", bold = true }
+normal_alt = { fg = "{{ background.void }}", bg = "{{ accent.violet }}", bold = true }
+select_main = { fg = "{{ background.void }}", bg = "{{ accent.teal }}", bold = true }
+select_alt = { fg = "{{ background.void }}", bg = "{{ accent.teal }}", bold = true }
+unset_main = { fg = "{{ background.void }}", bg = "{{ accent.gold }}", bold = true }
+unset_alt = { fg = "{{ background.void }}", bg = "{{ accent.gold }}", bold = true }
+
 [status]
 overall = { fg = "{{ text.normal }}", bg = "{{ background.bar_top }}" }
 sep_left = { open = "", close = "" }
 sep_right = { open = "", close = "" }
 
-mode_normal = { fg = "{{ background.void }}", bg = "{{ accent.violet }}", bold = true }
-mode_select = { fg = "{{ background.void }}", bg = "{{ accent.teal }}", bold = true }
-mode_unset = { fg = "{{ background.void }}", bg = "{{ accent.gold }}", bold = true }
-
 progress_label = { fg = "{{ text.bright }}", bold = true }
 progress_normal = { fg = "{{ accent.violet }}", bg = "{{ background.raised }}" }
 progress_error = { fg = "{{ accent.gold }}", bg = "{{ background.raised }}" }
 
-permissions_t = { fg = "{{ accent.teal }}" }
-permissions_r = { fg = "{{ accent.gold }}" }
-permissions_w = { fg = "{{ accent.violet }}" }
-permissions_x = { fg = "{{ accent.cyan }}" }
-permissions_s = { fg = "{{ text.faint }}" }
+perm_sep = { fg = "{{ text.faint }}" }
+perm_type = { fg = "{{ accent.teal }}" }
+perm_read = { fg = "{{ accent.gold }}" }
+perm_write = { fg = "{{ accent.violet }}" }
+perm_exec = { fg = "{{ accent.cyan }}" }
 
 [pick]
 border = { fg = "{{ border.focused.over(background.pane, border.focused_alpha) }}" }

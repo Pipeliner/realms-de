@@ -26,6 +26,7 @@ StartLimitIntervalSec=30
 StartLimitBurst=5
 
 [Service]
+Environment=PATH=/usr/lib/helm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 Type=exec
 ExecStart=/usr/bin/helm-bar
 Restart=on-failure
