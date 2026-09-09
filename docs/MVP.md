@@ -55,6 +55,9 @@ does not serve it waits — however good it would look in a screenshot.
 
 **M3 is the MVP.** M0–M3 is the critical path; nothing in M4+ blocks it.
 
+Security checks and security-hardening review are deferred until after the MVP.
+They are tracked as post-MVP work and do not gate the M0–M3 critical path.
+
 ---
 
 ## Sequencing rules
@@ -69,3 +72,6 @@ does not serve it waits — however good it would look in a screenshot.
    distro gets a CI job on that distro.
 4. **The budget is a gate, not a goal.** A change that misses a frame budget in
    [ARCHITECTURE.md §4](ARCHITECTURE.md) is a regression, not a trade-off.
+5. **Native package builds run in CI only.** Local development does not install
+   distro packaging toolchains or treat their absence as a blocker; the
+   matching distro CI job supplies authoritative package-build evidence.

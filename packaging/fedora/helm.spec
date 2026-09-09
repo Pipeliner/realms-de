@@ -15,10 +15,11 @@
 # script the display manager runs). The %%files glob below is scoped so it can
 # never claim %%{_bindir}/helm.
 #
-# NEEDS-HUMAN (Source0 / hosting): no download URL is invented here. Options:
-# a GitHub release tarball once tags exist, a Fedora COPR building from git, or
-# dist-git after a formal review. Until then, build from a local tarball:
-#   git archive --format=tar.gz --prefix=helm-0.1.0/ -o ~/rpmbuild/SOURCES/helm-0.1.0.tar.gz HEAD
+# Source0 is a packaging kit, not a second Helm workspace archive. It contains
+# this packaging metadata, the staging/linkage helpers, and the retained
+# packaging/tool-sources/bundles/helm-workspace authority. %%prep validates and
+# unpacks that canonical inner source.tar.gz; no checkout or archive-generation
+# command is part of this package path.
 #
 # Fedora 44's official repositories resolved river-0.4.8-1.fc44 during the
 # 2026-08-29 review. That dated package observation justifies the native
@@ -37,6 +38,12 @@ License:        MIT OR Apache-2.0
 URL:            https://github.com/pipeliner/realms-de
 Source0:        %{name}-%{version}.tar.gz
 
+%global helm_bundle %{_builddir}/%{name}-%{version}/packaging/tool-sources/bundles/helm-workspace
+%global helm_stage %{_builddir}/%{name}-%{version}/.helm-workspace
+%global helm_source %{helm_stage}/source
+%global helm_cargo_home %{_builddir}/%{name}-%{version}/.cargo-home
+%global helm_target_dir %{_builddir}/%{name}-%{version}/.cargo-target
+
 # helm's MSRV is 1.85 (Cargo.toml). The BuildRequires below is the mechanical
 # check: dnf refuses the build rather than failing halfway through cargo if the
 # shipped Rust compiler is older.
@@ -44,11 +51,8 @@ BuildRequires:  rust >= 1.85
 BuildRequires:  cargo
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  make
-# NOTE ON THE RUST MACROS: a package destined for Fedora proper would use
-# rust2rpm's %%cargo_prep/%%cargo_build/%%cargo_install with vendored sources,
-# because Fedora builders have no network. This spec uses plain cargo with
-# --locked so it can be built today from a git checkout; switching to the
-# macros is mechanical and does not change anything below %%files.
+BuildRequires:  python3
+BuildRequires:  zstd
 
 # Fedora's native compositor candidate. The lower bound is the
 # river-window-management-v1 generation boundary, not a tested-session claim.
@@ -109,12 +113,20 @@ attached because helm-wm and helm-bar are not written yet.
 
 %prep
 %autosetup
+python3 packaging/tool-sources/check-native-source-kit.py rpm \
+    %{_builddir}/%{name}-%{version}
+rm -rf %{helm_cargo_home} %{helm_target_dir}
+mkdir -p %{helm_cargo_home} %{helm_target_dir}
+python3 packaging/tool-sources/stage-helm-workspace.py \
+    %{helm_bundle} %{helm_stage}
 
 %build
-# --locked: build what Cargo.lock says, never silently resolve something else.
-cargo build --release --locked --workspace
+cd %{helm_source}
+CARGO_HOME=%{helm_cargo_home} CARGO_TARGET_DIR=%{helm_target_dir} \
+    cargo build --release --frozen --offline --locked --workspace
 
 %install
+cd %{helm_source}
 install -Dpm0755 packaging/session/helm-session %{buildroot}%{_bindir}/helm-session
 install -Dpm0644 packaging/session/helm.desktop %{buildroot}%{_datadir}/wayland-sessions/helm.desktop
 install -Dpm0644 packaging/systemd/helm-session.target %{buildroot}%{_userunitdir}/helm-session.target
@@ -149,8 +161,8 @@ ln -sf ../helm-bar.service %{buildroot}%{_userunitdir}/helm-session.target.wants
 # *empty* -f list as firmly as it rejects a glob that matches nothing.
 echo "%{_bindir}/helm-session" >%{_builddir}/helm-binaries.list
 for bin in helmctl helm-wm helm-bar; do
-    if [ -x "target/release/${bin}" ]; then
-        install -Dpm0755 "target/release/${bin}" "%{buildroot}%{_bindir}/${bin}"
+    if [ -x "%{helm_target_dir}/release/${bin}" ]; then
+        install -Dpm0755 "%{helm_target_dir}/release/${bin}" "%{buildroot}%{_bindir}/${bin}"
         echo "%{_bindir}/${bin}" >>%{_builddir}/helm-binaries.list
     fi
 done
@@ -158,7 +170,14 @@ done
 %check
 # helm-core's tests include the palette lint, so a palette that fails its WCAG
 # floors fails the package build. That is deliberate (ADR 0005).
-cargo test --release --locked --workspace
+# helm-agent-sdd is not packaged here and its gate fixtures require live Git
+# worktree state, which the canonical source archive deliberately omits.
+python3 %{_builddir}/%{name}-%{version}/packaging/tool-sources/stage-helm-workspace.py \
+    %{helm_bundle} %{helm_stage}
+cd %{helm_source}
+CARGO_HOME=%{helm_cargo_home} CARGO_TARGET_DIR=%{helm_target_dir} \
+    cargo test --release --frozen --offline --locked --workspace \
+        --exclude helm-agent-sdd
 
 # No %%systemd_user_post/%%systemd_user_preun. Those macros enable units named
 # in %%{_userunitdir} for *new* user sessions via presets, and helm's units must
@@ -172,8 +191,8 @@ cargo test --release --locked --workspace
 # %%install — the session entry and helmctl today, plus helm-wm and helm-bar
 # once they build, with no spec change.
 %files -f %{_builddir}/helm-binaries.list
-%license LICENSE-MIT LICENSE-APACHE
-%doc docs/INSTALL.md docs/PITFALLS.md
+%license .helm-workspace/source/LICENSE-MIT .helm-workspace/source/LICENSE-APACHE
+%doc packaging/package-docs/INSTALL.md .helm-workspace/source/docs/PITFALLS.md
 %{_datadir}/wayland-sessions/helm.desktop
 %{_userunitdir}/helm-session.target
 %{_userunitdir}/helm-wm.service

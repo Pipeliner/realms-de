@@ -3078,7 +3078,7 @@ mod tests {
     use crate::generation::{GenerationGcReport, GenerationPublication, GenerationStore};
     use std::cell::Cell;
     use std::fs;
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
     use std::path::Path;
 
     fn direct_preparing(process_group: &str) -> Vec<u8> {
@@ -4164,8 +4164,7 @@ bar-process-group 0\n",
         );
     }
 
-    #[test]
-    fn transfer_stage_classifier_rejects_over_bound_inventory() {
+    fn assert_transfer_stage_classifier_rejects_over_bound_inventory() {
         let generated = tempfile::tempdir().unwrap();
         fs::set_permissions(generated.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let store = GenerationStore::open(generated.path()).unwrap();
@@ -4189,6 +4188,171 @@ bar-process-group 0\n",
         let error = classify_lease_transfer_staging_locked(&store.leases.fd).unwrap_err();
 
         assert!(error.contains("bounds"), "{error}");
+    }
+
+    #[test]
+    fn transfer_stage_classifier_rejects_over_bound_inventory() {
+        assert_transfer_stage_classifier_rejects_over_bound_inventory();
+    }
+
+    #[test]
+    fn transfer_stage_classifier_rejects_over_bound_inventory_with_low_fd_child() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--ignored")
+            .arg("--exact")
+            .arg(
+                "generation::lifecycle::tests::transfer_stage_classifier_rejects_over_bound_inventory_low_fd_subprocess",
+            )
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "low-FD classifier child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    #[ignore = "low-FD subprocess helper"]
+    fn transfer_stage_classifier_rejects_over_bound_inventory_low_fd_subprocess() {
+        const LOW_FD_LIMIT: u64 = 256;
+
+        let limits = rustix::process::getrlimit(rustix::process::Resource::Nofile);
+        assert!(
+            limits.maximum.is_none_or(|maximum| maximum >= LOW_FD_LIMIT),
+            "test environment hard FD limit is below {LOW_FD_LIMIT}: {limits:?}",
+        );
+        rustix::process::setrlimit(
+            rustix::process::Resource::Nofile,
+            rustix::process::Rlimit {
+                current: Some(LOW_FD_LIMIT),
+                maximum: limits.maximum,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            rustix::process::getrlimit(rustix::process::Resource::Nofile).current,
+            Some(LOW_FD_LIMIT),
+        );
+
+        assert_transfer_stage_classifier_rejects_over_bound_inventory();
+    }
+
+    #[test]
+    fn transfer_recovery_normalizes_in_bound_inventory_with_low_fd_child() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--ignored")
+            .arg("--exact")
+            .arg(
+                "generation::lifecycle::tests::transfer_recovery_normalizes_in_bound_inventory_low_fd_subprocess",
+            )
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "low-FD recovery child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    #[ignore = "low-FD subprocess helper"]
+    fn transfer_recovery_normalizes_in_bound_inventory_low_fd_subprocess() {
+        const LOW_FD_LIMIT: u64 = 256;
+
+        let limits = rustix::process::getrlimit(rustix::process::Resource::Nofile);
+        assert!(
+            limits.maximum.is_none_or(|maximum| maximum >= LOW_FD_LIMIT),
+            "test environment hard FD limit is below {LOW_FD_LIMIT}: {limits:?}",
+        );
+        rustix::process::setrlimit(
+            rustix::process::Resource::Nofile,
+            rustix::process::Rlimit {
+                current: Some(LOW_FD_LIMIT),
+                maximum: limits.maximum,
+            },
+        )
+        .unwrap();
+
+        let fixture = TransferFixture::direct();
+        let lease_name = fixture.selection.lease_name.clone();
+        let leases = fixture._generated.path().join("leases");
+        let staging = leases.join(format!(".lease-transfer-{lease_name}"));
+        let (lifecycle, _) = transfer_records(
+            &fixture.prepared.record,
+            &fixture.selection,
+            fixture.direct_evidence(),
+        )
+        .unwrap();
+        write_mode(&staging, &lifecycle.encode(), 0o600);
+        let process_bytes = fs::read(fixture.lease_path()).unwrap();
+        let mut created = 0_usize;
+        let mut index = 0_u64;
+        while created < MAX_INVENTORY_ENTRIES - 2 {
+            let path = leases.join(format!("{index:032x}"));
+            index += 1;
+            if path.exists() {
+                continue;
+            }
+            write_mode(&path, &process_bytes, 0o600);
+            created += 1;
+        }
+
+        let plan = classify_lease_transfer_staging_locked(&fixture.store.leases.fd).unwrap();
+        plan.normalize(&fixture.store.leases.fd).unwrap();
+
+        assert!(!staging.exists());
+        assert_eq!(
+            fs::read_dir(&leases).unwrap().count(),
+            MAX_INVENTORY_ENTRIES - 1
+        );
+    }
+
+    #[test]
+    fn transfer_recovery_retains_staging_replacement_after_classification() {
+        let fixture = TransferFixture::direct();
+        let lease_name = fixture.selection.lease_name.clone();
+        let staging = fixture
+            ._generated
+            .path()
+            .join("leases")
+            .join(format!(".lease-transfer-{lease_name}"));
+        let displaced = fixture._generated.path().join("displaced-transfer-stage");
+        let (lifecycle, _) = transfer_records(
+            &fixture.prepared.record,
+            &fixture.selection,
+            fixture.direct_evidence(),
+        )
+        .unwrap();
+        let lifecycle_bytes = lifecycle.encode();
+        write_mode(&staging, &lifecycle_bytes, 0o600);
+
+        let plan = classify_lease_transfer_staging_locked(&fixture.store.leases.fd).unwrap();
+        let error = plan
+            .normalize_with_selected_pair_checkpoint(
+                &fixture.store.leases.fd,
+                |classified_target| {
+                    assert_eq!(classified_target, lease_name);
+                    fs::rename(&staging, &displaced).unwrap();
+                    write_mode(&staging, &lifecycle_bytes, 0o600);
+                },
+            )
+            .unwrap_err();
+
+        assert!(error.contains("pair changed"), "{error}");
+        assert_eq!(fs::read(&staging).unwrap(), lifecycle_bytes);
+        assert_ne!(
+            fs::metadata(&staging).unwrap().ino(),
+            fs::metadata(&displaced).unwrap().ino(),
+        );
+        assert!(matches!(
+            ParsedLeaseRecord::parse(&fs::read(displaced).unwrap()),
+            Ok(ParsedLeaseRecord::Lifecycle(_))
+        ));
     }
 
     #[test]

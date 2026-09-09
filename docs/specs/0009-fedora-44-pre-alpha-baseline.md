@@ -1,6 +1,9 @@
 # SPEC 0009 — Fedora 44 pre-alpha packaging and CI baseline
 
 - **Status:** Accepted (2026-08-29)
+- **Amendment:** Accepted (2026-09-01): one retained-source RPM build lane
+  accompanies the one Cargo-smoke lane; exactly those two Fedora-family
+  containers use the admitted image, and neither is runtime-install evidence.
 - **Milestone:** M0 support-claim correction; M3 Fedora runtime acceptance is separate
 - **Decision:** [ADR 0015](../adr/0015-fedora-44-pre-alpha-baseline.md)
 - **Issue:** [#138](https://github.com/Pipeliner/realms-de/issues/138)
@@ -26,8 +29,8 @@ daily-driver acceptance obligations have passed.
 - selecting Fedora 44 as the only explicit Fedora pre-alpha baseline;
 - retiring Fedora 41 from required CI and current Helm support claims;
 - declining Fedora 43 and any implicit future-release support;
-- using Fedora's official Fedora 44 base image for the one existing Fedora
-  Cargo-smoke lane;
+- using Fedora's official Fedora 44 base image for exactly one Fedora
+  Cargo-smoke lane and exactly one retained-source RPM build lane;
 - recording Fedora's official `river` package as the Fedora 44 packaging
   candidate; and
 - recording the exact Fedora baseline identity and EOL in one small local
@@ -121,8 +124,13 @@ without a daemon, scheduled job, or network request.
 
 ### 3. Honest CI evidence
 
-The single existing Fedora matrix entry is replaced, not expanded. It uses the
-official Fedora registry image admitted during review:
+Fedora 44 has exactly two and only two workflow lanes. The existing
+`fedora-44-cargo-smoke` matrix entry remains the sole Cargo-smoke lane, and
+`fedora-rpm-package` is the sole retained-source RPM build lane. These are the
+only Fedora-family container images anywhere under `.github/workflows/`, and each resolves to the
+official Fedora registry image admitted during review, regardless of whether
+the YAML expresses `container` as a scalar, quoted scalar, inline mapping, or
+mapping with `image`:
 
 ```text
 registry.fedoraproject.org/fedora:44@sha256:df52038ff64ee61affa188d78beb85cf6eecfe4e9f6042238269ccdc8e944392
@@ -132,10 +140,15 @@ That digest pins the base-image index only. Because enabled Fedora repositories
 remain live, the lane must be described as **pinned base/current packages**,
 not as a reproducible Fedora package snapshot.
 
-The lane builds and tests the Rust workspace with the repository toolchain. It
-is a Cargo smoke check only. It is not evidence that the RPM builds or installs,
-that all runtime dependencies exist, that either architecture in the image
-index is supported, or that a Helm graphical session works.
+The Cargo lane builds and tests the Rust workspace with the repository
+toolchain. The RPM lane runs the retained-source-kit producer, copies its
+`Source0` and RPM spec into the RPM build tree, and invokes `rpmbuild -bb
+--nodeps`; it does not install the resulting RPM. It is truthful to describe
+those Cargo and retained-source RPM build facts. Together, they are build
+evidence only: neither establishes RPM clean-install or dependency-graph
+support, runtime dependency availability, graphical-session or SELinux
+support, support for either architecture in the image index, or a working Helm
+desktop.
 
 ### 4. Fedora's native River package
 
@@ -167,7 +180,10 @@ Nix.
 
 All current Helm target, installation, CI, packaging, example-output, and
 issue-template claims must be reconciled to the exact Fedora 44 pre-alpha
-baseline and its stated evidence level. In particular, the workflow, Fedora
+baseline and its stated evidence level. The guard discovers current projection
+files rather than trusting a hand-maintained documentation list; a Fedora
+runtime claim cannot become admissible by moving it to a new file or a separate
+line in the same paragraph. In particular, the workflow, Fedora
 spec header and commentary, `README.md`, `docs/ARCHITECTURE.md`,
 `docs/INSTALL.md`, `docs/MVP.md`, `docs/ROADMAP.md`,
 `docs/integration/session-services.md`, the bug template, and the current
@@ -225,7 +241,7 @@ test module, but each row remains independently observable.
 | # | Given / When / Then | Test or evidence |
 |---|---|---|
 | A1 | Given the machine-checked inventory of live Fedora claims, when `status = "pre-alpha"` it is validated, then the only admitted release is exactly `44`; when `status = "unsupported"`, no Fedora release is admitted; `41`, `42`, `43`, `44+`, `latest`, Rawhide, and implicit newer releases are always rejected as current Helm targets | *Planned (#138):* `fedora_baseline::only_fedora_44_is_a_live_target`; includes one failing fixture per rejected form and one unsupported-state fixture |
-| A2 | Given the required distro matrix, when `status = "pre-alpha"`, then it contains one Fedora lane named as a Cargo smoke and uses the exact official Fedora 44 digest above; when `status = "unsupported"`, it contains no required Fedora lane; neither state adds a Fedora 41/Fedora 43 lane, runner, or architecture claim | *Planned (#138):* `fedora_baseline::required_ci_uses_one_pinned_f44_cargo_smoke` |
+| A2 | Given the repository workflow files, when `status = "pre-alpha"`, then exactly one `fedora-44-cargo-smoke` Cargo lane and exactly one `fedora-rpm-package` retained-source RPM build lane resolve to the exact official Fedora 44 digest above; no other Fedora-family container image is present anywhere under `.github/workflows/`, regardless of scalar or mapping YAML syntax. The RPM lane runs the retained-source-kit producer, copies `Source0` and the RPM spec into the build tree, and invokes `rpmbuild -bb --nodeps`, but does not clean-install the resulting package. Cargo and RPM build facts are allowed; neither lane is graphical-session or SELinux evidence. When `status = "unsupported"`, it contains no required Fedora lane; neither state adds a Fedora 41/Fedora 43 lane, runner, or architecture claim | `packaging/fedora/test-check-projections.sh`: `fedora_baseline::required_ci_uses_one_pinned_f44_cargo_smoke_and_one_retained_source_rpm_build` |
 | A3 | Given the Fedora RPM metadata, when it is inspected, then it identifies Fedora 44, requires Fedora's `river >= 0.4.0`, contains no `helm-river` alternative or false “River unavailable on Fedora” claim, and continues to state that the package is pre-alpha and not a working desktop | *Planned (#138):* `fedora_baseline::rpm_metadata_matches_the_f44_pre_alpha_contract` |
 | A4 | Given a disposable Fedora 44 environment using only official Fedora repositories, when the review probe queries lifecycle/package metadata, then the evidence records Bodhi `F44` as current with EOL 2027-06-02 and records the resolved River NEVRA; the record labels these observations as time-scoped and does not call the River/Helm pairing tested | Review evidence attached to #138 or its pull request; network observation, not a deterministic CI gate |
 | A5 | Given the strict local baseline record and an injected evaluation date, when the lifecycle guard runs for 2027-06-01 it passes, when it runs for 2027-06-02 or a later date with `status = "pre-alpha"` it fails, and when Fedora is explicitly `unsupported` it permits retirement only if the support-claim guard finds no required lane/current claim | *Planned (#138):* `fedora_baseline::lifecycle_boundary_is_offline_and_inclusive_at_eol`; fixed-date fixtures and no network |
@@ -264,10 +280,11 @@ record when later work uses it.
 
 ## Budgets
 
-#138 replaces the existing single Fedora CI lane; it does not add another
-Fedora lane, runner class, native-architecture matrix, VM, or scheduled job.
-No new timing budget is introduced. M2/M3 runtime and VM budgets remain owned
-by their accepted contracts.
+#138 retains the one Cargo-smoke lane and adds the one specified retained-source
+RPM build lane; it does not add a third Fedora lane, runner class,
+native-architecture matrix, VM, or scheduled job. No new timing budget is
+introduced. M2/M3 runtime and VM budgets remain owned by their accepted
+contracts.
 
 ## Failure modes
 
@@ -278,6 +295,7 @@ by their accepted contracts.
 | A later Fedora release becomes supported through `+`, `latest`, or Rawhide | A1 |
 | A base-image digest is called a reproducible package snapshot | A2, A8 |
 | Fedora package availability is described as tested Helm runtime compatibility | A3, A4, A8 |
+| The RPM build is treated as clean-install, graphical-session, or SELinux evidence | A2, A8 |
 | Partial supersession leaves the ADR index or operational decision memory stale | A7 |
 | #138 silently decides package trust, runner, rollback, or Nix policy | A9 |
 | Historical evidence is destroyed merely to satisfy a global string search | A6's exact exception model and A7 |

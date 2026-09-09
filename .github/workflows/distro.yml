@@ -1,8 +1,7 @@
 # NixOS, Ubuntu and Fedora remain the intended M3 targets, but this workflow's
-# Fedora evidence is deliberately narrower: Fedora 44 is the sole pre-alpha
-# baseline and its lane is a Cargo smoke only. It does not build or install the
-# RPM, start a graphical session, exercise SELinux, or establish architecture
-# support.
+# Fedora 44 is the sole pre-alpha baseline. Its retained-only source kit is
+# built through the tracked RPM spec, but the workflow does not install the RPM,
+# start a graphical session, exercise SELinux, or establish architecture support.
 #
 # Today these jobs build and test the Rust workspace. The point is scaffolding:
 # when helm-session pulls in Wayland, D-Bus and systemd, the distro that
@@ -40,12 +39,36 @@ jobs:
             cargo-1.85 \
             rustc-1.85 \
             debhelper \
-            pkg-config
-      - name: Build Debian package with the archive toolchain
+            pkg-config \
+            python3 \
+            zstd
+      - name: Build retained-only Debian source kit with the archive toolchain
         run: |
           set -euo pipefail
-          ln -s packaging/debian debian
+          packaging/tool-sources/build-native-source-kits.sh "$RUNNER_TEMP/helm-native-kits"
+          cd "$RUNNER_TEMP/helm-native-kits/helm-debian-0.1.0"
           dpkg-buildpackage -us -uc -b -d
+
+  # This lane builds the retained-source RPM only; it does not clean-install
+  # the result or exercise a graphical session or SELinux.
+  fedora-rpm-package:
+    name: Fedora 44 retained-source RPM build
+    runs-on: ubuntu-24.04
+    container: registry.fedoraproject.org/fedora:44@sha256:df52038ff64ee61affa188d78beb85cf6eecfe4e9f6042238269ccdc8e944392
+    steps:
+      - name: Install RPM build prerequisites
+        run: dnf -y install --setopt=install_weak_deps=False git rpm-build rust cargo systemd-rpm-macros make python3 zstd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build retained-only RPM Source0
+        run: |
+          set -euo pipefail
+          packaging/tool-sources/build-native-source-kits.sh "$RUNNER_TEMP/helm-native-kits"
+          mkdir -p "$RUNNER_TEMP/rpmbuild"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          cp "$RUNNER_TEMP/helm-native-kits/helm-0.1.0.tar.gz" "$RUNNER_TEMP/rpmbuild/SOURCES/"
+          cp "$RUNNER_TEMP/helm-native-kits/helm.spec" "$RUNNER_TEMP/rpmbuild/SPECS/"
+          rpmbuild -bb --nodeps \
+            --define "_topdir $RUNNER_TEMP/rpmbuild" \
+            "$RUNNER_TEMP/rpmbuild/SPECS/helm.spec"
 
   fedora-baseline-contract:
     name: Fedora baseline contract

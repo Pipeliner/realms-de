@@ -1,13 +1,13 @@
 #!/usr/bin/make -f
 # helm — Debian rules.
 #
-# HOW THIS DIRECTORY IS USED. Debian tooling insists on ./debian at the source
-# root; helm keeps its packaging under packaging/ so the three distro targets
-# sit side by side. Before building:
+# HOW THIS DIRECTORY IS USED. Construct the retained-only Debian source kit,
+# then run dpkg-buildpackage from that kit. It contains this directory as
+# ./debian plus the retained Helm authority; it does not contain a checkout:
 #
-#     ln -s packaging/debian debian && dpkg-buildpackage -us -uc -b
-#
-# (a copy works too; the symlink keeps one copy of the truth).
+#     packaging/tool-sources/build-native-source-kits.sh /tmp/helm-kits
+#     cd /tmp/helm-kits/helm-debian-0.1.0
+#     dpkg-buildpackage -us -uc -b
 #
 # PRE-ALPHA (0.1.0): this workspace builds `helmctl` for the implemented theme
 # commands. override_dh_auto_install installs every built Helm binary, so
@@ -35,8 +35,17 @@
 
 export DH_VERBOSE = 1
 
-# Keep cargo's downloads and caches inside the build tree.
-export CARGO_HOME = $(CURDIR)/debian/.cargo
+# The Debian source kit carries no checkout of the Helm workspace. Both Cargo
+# inputs are staged from the retained, digest-bound authority before use.
+HELM_BUNDLE := $(CURDIR)/packaging/tool-sources/bundles/helm-workspace
+HELM_STAGE := $(CURDIR)/debian/helm-workspace
+HELM_STAGER := $(CURDIR)/packaging/tool-sources/stage-helm-workspace.py
+HELM_KIT_CHECKER := $(CURDIR)/packaging/tool-sources/check-native-source-kit.py
+
+# Keep Cargo state and build outputs package-local. CARGO_HOME starts empty;
+# dependency resolution comes exclusively from HELM_STAGE/vendor.
+export CARGO_HOME = $(CURDIR)/debian/.cargo-home
+export CARGO_TARGET_DIR = $(CURDIR)/debian/cargo-target
 # Debian's own rustc/cargo are dfsg-repacked; helm only needs a compiler new
 # enough for its MSRV.
 export CARGO_TERM_COLOR = never
@@ -46,7 +55,14 @@ export CARGO_TERM_COLOR = never
 # resolver accepts only a complete cargo/rustc pair and returns the newest
 # matching path. Its Ubuntu 24.04 archive layout was verified on #104.
 RUST_VERSIONED_GLOB := /usr/lib/rust-1.[89][0-9]/bin
-RUST_VERSIONED_BIN := $(shell ./packaging/debian/toolchain-path.sh)
+DEBIAN_RULES_DIR := $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
+# Production resolves the distro-provided pair below /.  The retained-source
+# fixture supplies a separate root with that identical versioned layout so its
+# nested Debhelper make cannot silently fall back to host tooling.
+HELM_RUST_VERSIONED_ROOT ?= /
+HELM_RUST_VERSIONED_PREFIX := $(if $(filter /,$(HELM_RUST_VERSIONED_ROOT)),,$(patsubst %/,%,$(HELM_RUST_VERSIONED_ROOT)))
+RUST_VERSIONED_LOGICAL_BIN := $(shell "$(DEBIAN_RULES_DIR)toolchain-path.sh" --root "$(HELM_RUST_VERSIONED_ROOT)")
+RUST_VERSIONED_BIN := $(HELM_RUST_VERSIONED_PREFIX)$(RUST_VERSIONED_LOGICAL_BIN)
 ifeq ($(strip $(RUST_VERSIONED_BIN)),)
 $(error helm: missing Ubuntu versioned Rust toolchain directory: $(RUST_VERSIONED_GLOB))
 endif
@@ -57,22 +73,30 @@ export PATH := $(RUST_VERSIONED_BIN):$(PATH)
 
 # helm is not autotools; there is nothing to configure.
 override_dh_auto_configure:
+	python3 "$(HELM_KIT_CHECKER)" debian "$(CURDIR)"
 
 override_dh_auto_build:
-	@echo "cargo: $$(cargo --version) / rustc: $$(rustc --version)"
-	@rustc --version | awk '{split($$2,v,"."); if (v[1] < 1 || (v[1] == 1 && v[2] < 85)) { \
+	rm -rf "$(CARGO_HOME)" "$(CARGO_TARGET_DIR)"
+	mkdir -p "$(CARGO_HOME)" "$(CARGO_TARGET_DIR)"
+	@set -e; \
+	helm_source="$$(python3 "$(HELM_STAGER)" "$(HELM_BUNDLE)" "$(HELM_STAGE)")"; \
+	cd "$$helm_source"; \
+	rustc --version | awk '{split($$2,v,"."); if (v[1] < 1 || (v[1] == 1 && v[2] < 85)) { \
 		print "helm: rustc " $$2 " is older than the MSRV 1.85 declared in Cargo.toml."; \
 		print "      Install rustc-1.85/cargo-1.85 (in the Ubuntu 24.04 archive) or newer."; \
-		exit 1 }}'
-	# --locked: the build must use Cargo.lock, never silently resolve something
-	# else. A Debian archive upload additionally needs `cargo vendor` output and
-	# an offline build; that is part of the hosting decision in debian/control.
-	cargo build --release --locked --workspace
+		exit 1 }}'; \
+	cargo build --release --frozen --offline --locked --workspace
 
 override_dh_auto_test:
 	# helm-core's tests include the palette lint, so a palette that fails its
 	# WCAG floors fails the package build. That is deliberate (ADR 0005).
-	cargo test --release --locked --workspace
+	# helm-agent-sdd is not packaged here and its gate fixtures require live Git
+	# worktree state, which the canonical source archive deliberately omits.
+	@set -e; \
+	helm_source="$$(python3 "$(HELM_STAGER)" "$(HELM_BUNDLE)" "$(HELM_STAGE)")"; \
+	cd "$$helm_source"; \
+	cargo test --release --frozen --offline --locked --workspace \
+		--exclude helm-agent-sdd
 
 override_dh_auto_install:
 	# The .wants symlinks, shipped rather than left to [Install] processing.
@@ -93,8 +117,8 @@ override_dh_auto_install:
 	# helmctl (the CLI, so it cannot collide with Kubernetes helm).
 	set -e; \
 	for bin in helmctl helm-wm helm-bar; do \
-		if [ -x "target/release/$$bin" ]; then \
-			install -Dm755 "target/release/$$bin" "debian/helm/usr/bin/$$bin"; \
+		if [ -x "$(CARGO_TARGET_DIR)/release/$$bin" ]; then \
+			install -Dm755 "$(CARGO_TARGET_DIR)/release/$$bin" "debian/helm/usr/bin/$$bin"; \
 			echo "installed $$bin"; \
 		else \
 			echo "skipping $$bin: not built in this revision"; \
@@ -102,8 +126,7 @@ override_dh_auto_install:
 	done
 
 override_dh_auto_clean:
-	cargo clean || true
-	rm -rf debian/.cargo
+	rm -rf "$(HELM_STAGE)" "$(CARGO_HOME)" "$(CARGO_TARGET_DIR)"
 
 # No hand-written maintainer scripts, on purpose. The only thing that would need
 # one is enabling the systemd user units, and dh_installsystemduser generates

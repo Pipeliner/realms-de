@@ -55,9 +55,9 @@
 
 - **Three intended M3 targets, evidence kept honest.** NixOS, Ubuntu and Fedora
   remain the installation targets. Today Fedora 44 is the sole Fedora
-  pre-alpha baseline, and its required lane is a **Cargo smoke only** against a
-  pinned base/current packages image; the tracked RPM is still a skeleton and
-  no Fedora graphical session or SELinux acceptance has run.
+  pre-alpha baseline. Its two required pinned-image lanes are a Cargo smoke and
+  a retained-source RPM build; the latter builds `Source0` but does not
+  clean-install its result. Neither is graphical-session or SELinux acceptance.
   [ADR 0015](docs/adr/0015-fedora-44-pre-alpha-baseline.md)
 
 Behaviour is written down before it is written in Rust: every non-trivial

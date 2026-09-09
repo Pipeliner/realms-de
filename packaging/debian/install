@@ -6,14 +6,14 @@
 # see SPEC 0005 §4 for why they are shipped rather than left to [Install].
 #
 # The wrapper is committed executable, and dh_install preserves that.
-packaging/session/helm-session             usr/bin
-packaging/session/helm.desktop             usr/share/wayland-sessions
-packaging/systemd/helm-session.target      usr/lib/systemd/user
-packaging/systemd/helm-wm.service    usr/lib/systemd/user
-packaging/systemd/helm-bar.service         usr/lib/systemd/user
-packaging/systemd/helm-session-abort.service usr/lib/systemd/user
-palette.toml                               usr/share/helm
+debian/helm-workspace/source/packaging/session/helm-session             usr/bin
+debian/helm-workspace/source/packaging/session/helm.desktop             usr/share/wayland-sessions
+debian/helm-workspace/source/packaging/systemd/helm-session.target      usr/lib/systemd/user
+debian/helm-workspace/source/packaging/systemd/helm-wm.service          usr/lib/systemd/user
+debian/helm-workspace/source/packaging/systemd/helm-bar.service         usr/lib/systemd/user
+debian/helm-workspace/source/packaging/systemd/helm-session-abort.service usr/lib/systemd/user
+debian/helm-workspace/source/palette.toml                               usr/share/helm
 # The portal backend policy (SPEC 0005 §5). Without it the portal picks from
 # whatever backends are installed, and screen sharing silently produces nothing
 # because the GTK backend implements no ScreenCast on wlroots compositors.
-configs/portal/helm-portals.conf           usr/share/xdg-desktop-portal
+debian/helm-workspace/source/configs/portal/helm-portals.conf           usr/share/xdg-desktop-portal

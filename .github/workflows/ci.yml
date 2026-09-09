@@ -117,6 +117,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: docs
+      - name: Install native package build drivers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends debhelper rpm zstd
       - name: Check README truth snapshot
         run: |
           set -euo pipefail
@@ -131,6 +135,40 @@ jobs:
           ./packaging/tool-sources/test-intake.sh
           ./packaging/tool-sources/test-bundle-linkage.sh
           ./packaging/tool-sources/test-no-live-fetch.sh
+          ./packaging/tool-sources/test-native-source-kits.sh
+      - name: Prepare lifecycle-capable native package temporary directory
+        id: native-temp
+        run: |
+          set -euo pipefail
+          native_temp=$(mktemp -d /tmp/helm-native-builds.XXXXXX)
+          chmod 755 "$native_temp"
+          sudo test -d "$native_temp"
+          sudo test -w "$native_temp"
+          printf 'path=%s\n' "$native_temp" >> "$GITHUB_OUTPUT"
+      - name: Stage root-readable real Rust toolchain for native package fixture
+        id: native-rust
+        run: |
+          set -euo pipefail
+          real_cargo=$(rustup which cargo)
+          real_rustc=$(rustup which rustc)
+          toolchain_root=$(dirname "$(dirname "$real_cargo")")
+          native_toolchain=$(mktemp -d /tmp/helm-native-rust.XXXXXX)
+          cp -a "$toolchain_root/." "$native_toolchain/"
+          chmod -R a+rX "$native_toolchain"
+          sudo test -x "$native_toolchain/bin/cargo"
+          sudo test -x "$native_toolchain/bin/rustc"
+          sudo env PATH="$native_toolchain/bin:/usr/bin:/bin" \
+            "$native_toolchain/bin/cargo" --version
+          sudo env PATH="$native_toolchain/bin:/usr/bin:/bin" \
+            "$native_toolchain/bin/rustc" --version
+          printf 'path=%s\n' "$native_toolchain" >> "$GITHUB_OUTPUT"
+      - name: Check network-isolated native package paths
+        run: |
+          sudo env \
+            HELM_NATIVE_TMPDIR="${{ steps.native-temp.outputs.path }}" \
+            HELM_REAL_CARGO="${{ steps.native-rust.outputs.path }}/bin/cargo" \
+            HELM_REAL_RUSTC="${{ steps.native-rust.outputs.path }}/bin/rustc" \
+            ./packaging/tool-sources/test-native-builds.sh
       - run: cargo doc --workspace --no-deps
 
   msrv:
