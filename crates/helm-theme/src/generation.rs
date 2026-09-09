@@ -224,8 +224,14 @@ struct GcLeaseInventoryPreflight {
 
 #[derive(Debug, Default)]
 struct LeaseTransferRecoveryPlan {
-    final_entries: BTreeMap<String, ValidatedLeaseInventoryEntry>,
-    staging_entries: BTreeMap<String, ValidatedLeaseInventoryEntry>,
+    final_entries: BTreeMap<String, ParsedLeaseRecord>,
+    staging_entries: BTreeMap<String, ParsedLeaseRecord>,
+}
+
+#[derive(Debug)]
+struct ValidatedLeaseTransferPair {
+    target: ValidatedLeaseInventoryEntry,
+    staging: ValidatedLeaseInventoryEntry,
 }
 
 impl LeaseTransferRecoveryPlan {
@@ -234,38 +240,50 @@ impl LeaseTransferRecoveryPlan {
     }
 
     fn normalize(self, lease_directory: &OwnedFd) -> std::result::Result<(), String> {
+        self.normalize_with_selected_pair_checkpoint(lease_directory, |_| {})
+    }
+
+    fn normalize_with_selected_pair_checkpoint<H>(
+        self,
+        lease_directory: &OwnedFd,
+        mut after_pair_classification: H,
+    ) -> std::result::Result<(), String>
+    where
+        H: FnMut(&str),
+    {
         if self.staging_entries.is_empty() {
             return Ok(());
         }
-        for (target_name, staging) in &self.staging_entries {
+        for (target_name, classified_staging) in &self.staging_entries {
             let staging_name = format!(".lease-transfer-{target_name}");
-            let target = self
+            let classified_target = self
                 .final_entries
                 .get(target_name)
                 .expect("staging targets were classified");
+            let pair = scan_selected_lease_transfer_pair_locked(lease_directory, target_name)?;
+            if &pair.target.record != classified_target
+                || &pair.staging.record != classified_staging
+            {
+                return Err("generation lease transfer pair changed before recovery".into());
+            }
+            after_pair_classification(target_name);
             if !validated_lease_path_matches(
                 lease_directory,
                 staging_name.as_str(),
-                &staging.descriptor,
+                &pair.staging.descriptor,
             )? || !validated_lease_path_matches(
                 lease_directory,
                 target_name.as_str(),
-                &target.descriptor,
+                &pair.target.descriptor,
             )? {
                 return Err("generation lease transfer pair changed before recovery".into());
             }
+            fsync(lease_directory).map_err(|error| error.to_string())?;
+            unlinkat(lease_directory, staging_name.as_str(), AtFlags::empty())
+                .map_err(|error| error.to_string())?;
+            fsync(lease_directory).map_err(|error| error.to_string())?;
         }
-
-        fsync(lease_directory).map_err(|error| error.to_string())?;
-        for target_name in self.staging_entries.keys() {
-            unlinkat(
-                lease_directory,
-                format!(".lease-transfer-{target_name}").as_str(),
-                AtFlags::empty(),
-            )
-            .map_err(|error| error.to_string())?;
-        }
-        fsync(lease_directory).map_err(|error| error.to_string())
+        Ok(())
     }
 }
 
@@ -2389,8 +2407,36 @@ fn transfer_staging_matches(
 fn classify_lease_transfer_staging_locked(
     lease_directory: &OwnedFd,
 ) -> std::result::Result<LeaseTransferRecoveryPlan, String> {
-    let mut final_entries = BTreeMap::<String, ValidatedLeaseInventoryEntry>::new();
-    let mut staging_entries = BTreeMap::<String, ValidatedLeaseInventoryEntry>::new();
+    scan_lease_transfer_inventory_locked(lease_directory, None).map(|(plan, _)| plan)
+}
+
+fn scan_selected_lease_transfer_pair_locked(
+    lease_directory: &OwnedFd,
+    target_name: &str,
+) -> std::result::Result<ValidatedLeaseTransferPair, String> {
+    let (_, selected_pair) =
+        scan_lease_transfer_inventory_locked(lease_directory, Some(target_name))?;
+    selected_pair.ok_or_else(|| "generation lease transfer pair changed before recovery".into())
+}
+
+fn scan_lease_transfer_inventory_locked(
+    lease_directory: &OwnedFd,
+    selected_target: Option<&str>,
+) -> std::result::Result<
+    (
+        LeaseTransferRecoveryPlan,
+        Option<ValidatedLeaseTransferPair>,
+    ),
+    String,
+> {
+    if let Some(target_name) = selected_target {
+        GenerationId::parse(target_name)
+            .map_err(|_| "generation lease transfer staging target is malformed")?;
+    }
+    let mut final_entries = BTreeMap::<String, ParsedLeaseRecord>::new();
+    let mut staging_entries = BTreeMap::<String, ParsedLeaseRecord>::new();
+    let mut selected_final = None;
+    let mut selected_staging = None;
     let mut inventory_entries = 0_usize;
     let mut inventory_bytes = 0_usize;
     let mut directory = Dir::read_from(lease_directory).map_err(|error| error.to_string())?;
@@ -2423,8 +2469,14 @@ fn classify_lease_transfer_staging_locked(
             .map_err(|_| "generation lease inventory name is not UTF-8")?;
         if GenerationId::parse(name).is_ok() {
             let validated = read_validated_lease_inventory_entry(lease_directory, name)?;
-            if final_entries.insert(name.to_owned(), validated).is_some() {
+            if final_entries
+                .insert(name.to_owned(), validated.record.clone())
+                .is_some()
+            {
                 return Err("generation lease inventory contains a duplicate name".into());
+            }
+            if selected_target == Some(name) {
+                selected_final = Some(validated);
             }
             continue;
         }
@@ -2435,10 +2487,13 @@ fn classify_lease_transfer_staging_locked(
             .map_err(|_| "generation lease transfer staging name is malformed")?;
         let validated = read_validated_lease_inventory_entry(lease_directory, name)?;
         if staging_entries
-            .insert(target.to_owned(), validated)
+            .insert(target.to_owned(), validated.record.clone())
             .is_some()
         {
             return Err("generation lease inventory contains duplicate transfer staging".into());
+        }
+        if selected_target == Some(target) {
+            selected_staging = Some(validated);
         }
     }
     drop(directory);
@@ -2447,7 +2502,7 @@ fn classify_lease_transfer_staging_locked(
         let target = final_entries
             .get(target_name)
             .ok_or("generation lease transfer staging target is absent")?;
-        let exact_pair = match (&target.record, &staging.record) {
+        let exact_pair = match (target, staging) {
             (ParsedLeaseRecord::Process(process), ParsedLeaseRecord::Lifecycle(lifecycle))
             | (ParsedLeaseRecord::Lifecycle(lifecycle), ParsedLeaseRecord::Process(process)) => {
                 lifecycle_matches_process(lifecycle, process)
@@ -2459,10 +2514,20 @@ fn classify_lease_transfer_staging_locked(
         }
     }
 
-    Ok(LeaseTransferRecoveryPlan {
+    let plan = LeaseTransferRecoveryPlan {
         final_entries,
         staging_entries,
-    })
+    };
+    let selected_pair = match selected_target {
+        Some(_) => Some(ValidatedLeaseTransferPair {
+            target: selected_final
+                .ok_or("generation lease transfer pair changed before recovery")?,
+            staging: selected_staging
+                .ok_or("generation lease transfer pair changed before recovery")?,
+        }),
+        None => None,
+    };
+    Ok((plan, selected_pair))
 }
 
 fn gc_lease_inventory_preflight(

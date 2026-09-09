@@ -4241,6 +4241,78 @@ bar-process-group 0\n",
     }
 
     #[test]
+    fn transfer_recovery_normalizes_in_bound_inventory_with_low_fd_child() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--ignored")
+            .arg("--exact")
+            .arg(
+                "generation::lifecycle::tests::transfer_recovery_normalizes_in_bound_inventory_low_fd_subprocess",
+            )
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "low-FD recovery child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    #[ignore = "low-FD subprocess helper"]
+    fn transfer_recovery_normalizes_in_bound_inventory_low_fd_subprocess() {
+        const LOW_FD_LIMIT: u64 = 256;
+
+        let limits = rustix::process::getrlimit(rustix::process::Resource::Nofile);
+        assert!(
+            limits.maximum.is_none_or(|maximum| maximum >= LOW_FD_LIMIT),
+            "test environment hard FD limit is below {LOW_FD_LIMIT}: {limits:?}",
+        );
+        rustix::process::setrlimit(
+            rustix::process::Resource::Nofile,
+            rustix::process::Rlimit {
+                current: Some(LOW_FD_LIMIT),
+                maximum: limits.maximum,
+            },
+        )
+        .unwrap();
+
+        let fixture = TransferFixture::direct();
+        let lease_name = fixture.selection.lease_name.clone();
+        let leases = fixture._generated.path().join("leases");
+        let staging = leases.join(format!(".lease-transfer-{lease_name}"));
+        let (lifecycle, _) = transfer_records(
+            &fixture.prepared.record,
+            &fixture.selection,
+            fixture.direct_evidence(),
+        )
+        .unwrap();
+        write_mode(&staging, &lifecycle.encode(), 0o600);
+        let process_bytes = fs::read(fixture.lease_path()).unwrap();
+        let mut created = 0_usize;
+        let mut index = 0_u64;
+        while created < MAX_INVENTORY_ENTRIES - 2 {
+            let path = leases.join(format!("{index:032x}"));
+            index += 1;
+            if path.exists() {
+                continue;
+            }
+            write_mode(&path, &process_bytes, 0o600);
+            created += 1;
+        }
+
+        let plan = classify_lease_transfer_staging_locked(&fixture.store.leases.fd).unwrap();
+        plan.normalize(&fixture.store.leases.fd).unwrap();
+
+        assert!(!staging.exists());
+        assert_eq!(
+            fs::read_dir(&leases).unwrap().count(),
+            MAX_INVENTORY_ENTRIES - 1
+        );
+    }
+
+    #[test]
     fn transfer_recovery_retains_staging_replacement_after_classification() {
         let fixture = TransferFixture::direct();
         let lease_name = fixture.selection.lease_name.clone();
@@ -4260,10 +4332,16 @@ bar-process-group 0\n",
         write_mode(&staging, &lifecycle_bytes, 0o600);
 
         let plan = classify_lease_transfer_staging_locked(&fixture.store.leases.fd).unwrap();
-        fs::rename(&staging, &displaced).unwrap();
-        write_mode(&staging, &lifecycle_bytes, 0o600);
-
-        let error = plan.normalize(&fixture.store.leases.fd).unwrap_err();
+        let error = plan
+            .normalize_with_selected_pair_checkpoint(
+                &fixture.store.leases.fd,
+                |classified_target| {
+                    assert_eq!(classified_target, lease_name);
+                    fs::rename(&staging, &displaced).unwrap();
+                    write_mode(&staging, &lifecycle_bytes, 0o600);
+                },
+            )
+            .unwrap_err();
 
         assert!(error.contains("pair changed"), "{error}");
         assert_eq!(fs::read(&staging).unwrap(), lifecycle_bytes);
