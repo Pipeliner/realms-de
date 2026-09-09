@@ -373,6 +373,15 @@ helm_source_digest
 rejects 'source archive Cargo.lock differs from retained lockfile' "$tmp/helm"
 write_helm_source
 
+# A workspace archive must not recursively embed independent retained authorities.
+mkdir -p "$tmp/helm/source-input/helm-workspace/packaging/tool-sources/bundles/other"
+printf nested >"$tmp/helm/source-input/helm-workspace/packaging/tool-sources/bundles/other/source.tar.gz"
+tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+    -C "$tmp/helm/source-input" -czf "$tmp/helm/source.tar.gz" helm-workspace
+helm_source_digest
+rejects 'source archive contains nested retained authority' "$tmp/helm"
+write_helm_source
+
 # Replacing the pathname after open cannot substitute bytes for the staged descriptor.
 dd if=/dev/urandom of="$tmp/helm/source-input/helm-workspace/padding" bs=1M count=32 status=none
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \

@@ -84,6 +84,17 @@ source authority, verify the record's archive digest, and require its root
 `Cargo.lock` to match the separately retained, digest-bound Helm-workspace
 lockfile byte-for-byte.
 
+The controlled intake SHALL exclude `packaging/tool-sources/bundles/` from the
+source archive. Those independent retained authorities are inputs to outer
+packaging orchestration, not Helm-workspace Cargo source or build/test inputs;
+embedding them would recursively duplicate source and dependency closures. The
+linkage validator SHALL reject a workspace source authority containing that
+directory, and the provenance record SHALL name the exclusion. Any tracked
+workspace source or Cargo build/test input changed after the recorded source
+commit SHALL refresh the canonical archive from a new committed snapshot before
+native package CI can satisfy this contract; passing tests against the moving
+checkout do not make a stale retained archive current.
+
 The Helm-workspace source-replacement configuration is a separately retained
 build input: native recipes SHALL stage it at the unpacked source root before
 Cargo runs. The linkage fixture SHALL verify that configuration, the retained

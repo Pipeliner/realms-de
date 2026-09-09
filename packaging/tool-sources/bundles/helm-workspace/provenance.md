@@ -7,18 +7,20 @@ package recipe.
 ## Bound source
 
 - Repository: `https://github.com/pipeliner/realms-de`
-- Commit: `50b5847e85d300fb0dd223afcb65af9c69a19ad8`
-- Commit timestamp: `2026-08-31T20:15:32Z` (`1788207332`)
+- Commit: `368af1e7bc0e61b5c04d14d9233f1690afcf564d`
+- Commit timestamp: `2026-09-09T19:30:56Z` (`1788982256`)
 - Workspace version: `0.1.0`
 - Canonical archive: `source.tar.gz`
 - Canonical archive SHA-256:
-  `3672d2e416eb8c8de8e8490703f426cfacaa08570cfd47f3ef5fa81c831325ef`
+  `b3abfd5c38aecb1ea7254a5552f3c289759c12affe2ffad9782e63dfbb32db47`
 
 The intake cloned a clean checkout, detached it at the bound commit, confirmed
 that `HEAD` equalled that commit and that the checkout had no status output,
 then ran one `git archive --format=tar.gz --prefix=helm-workspace/` command at
-that commit.  The resulting archive is retained as the canonical source input;
-the working checkout is neither an input nor a substitute for the archive.
+that commit, excluding `packaging/tool-sources/bundles/` so the authority
+cannot recursively contain any independent retained source or dependency
+closure. The resulting archive is retained as the canonical source input; the
+working checkout is neither an input nor a substitute for the archive.
 
 ## Dependency closure
 

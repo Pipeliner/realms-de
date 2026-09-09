@@ -92,6 +92,8 @@ def source_archive_root(archive: Path, destination: Path, lockfile: Path) -> Pat
                 if (not member.name or member.name.startswith("/") or
                         any(part in {"", ".", ".."} for part in parts)):
                     raise SystemExit("source archive member path escapes source root")
+                if parts[1:4] == ["packaging", "tool-sources", "bundles"]:
+                    raise SystemExit("source archive contains nested retained authority")
                 if not (member.isdir() or member.isreg()):
                     raise SystemExit("source archive contains unsafe member")
                 if member.name in names:
