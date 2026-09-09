@@ -25,3 +25,8 @@ the same change whenever a contract changes.
   `scripts/gh-body-file` so `gh --body-file` reads it without shell evaluation.
   This rule exists because Markdown backticks are shell syntax in an inline
   command and must be mechanically unable to execute.
+
+- **“Understood” is never evidence.** Classify every direction by scope
+  (conversation, task, repository policy, specification, or external side
+  effect), record it at the appropriate durable authority, and verify the
+  resulting state before claiming it was handled.
