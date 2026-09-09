@@ -30,3 +30,9 @@ the same change whenever a contract changes.
   (conversation, task, repository policy, specification, or external side
   effect), record it at the appropriate durable authority, and verify the
   resulting state before claiming it was handled.
+
+- Native distro packages are built and verified in CI only. Do not install
+  distro packaging toolchains merely to reproduce package builds locally, and
+  do not treat their local absence as a blocker; inspect the matching CI job.
+- Security checks and security-hardening review are post-MVP work. Do not make
+  them MVP gates; track them for the post-MVP queue instead.
