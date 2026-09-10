@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 #[cfg(not(target_os = "linux"))]

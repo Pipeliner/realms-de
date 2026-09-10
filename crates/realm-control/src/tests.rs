@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::Path;
@@ -12,6 +13,60 @@ use crate::{production_runtime_dir, test_runtime_dir, IpcPathError, RuntimeDir};
 fn environment_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct EnvironmentRestore {
+    xdg_runtime_dir: Option<OsString>,
+    realm_socket: Option<OsString>,
+}
+
+impl EnvironmentRestore {
+    fn capture() -> Self {
+        Self {
+            xdg_runtime_dir: std::env::var_os("XDG_RUNTIME_DIR"),
+            realm_socket: std::env::var_os("REALM_SOCKET"),
+        }
+    }
+}
+
+impl Drop for EnvironmentRestore {
+    fn drop(&mut self) {
+        match &self.xdg_runtime_dir {
+            Some(value) => std::env::set_var("XDG_RUNTIME_DIR", value),
+            None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
+        match &self.realm_socket {
+            Some(value) => std::env::set_var("REALM_SOCKET", value),
+            None => std::env::remove_var("REALM_SOCKET"),
+        }
+    }
+}
+
+/// Catches a regression where a panic in an environment-mutating test leaks
+/// its override into later tests.
+#[test]
+fn environment_restore_guard_restores_overrides_after_panic() {
+    let _lock = environment_lock().lock().unwrap();
+    let _actual_environment = EnvironmentRestore::capture();
+    std::env::set_var("XDG_RUNTIME_DIR", "/before-panic");
+    std::env::set_var("REALM_SOCKET", "/before-panic.sock");
+
+    let result = std::panic::catch_unwind(|| {
+        let _restored_environment = EnvironmentRestore::capture();
+        std::env::set_var("XDG_RUNTIME_DIR", "/during-panic");
+        std::env::set_var("REALM_SOCKET", "/during-panic.sock");
+        panic!("intentional fixture panic");
+    });
+
+    assert!(result.is_err());
+    assert_eq!(
+        std::env::var_os("XDG_RUNTIME_DIR"),
+        Some("/before-panic".into())
+    );
+    assert_eq!(
+        std::env::var_os("REALM_SOCKET"),
+        Some("/before-panic.sock".into())
+    );
 }
 
 fn set_mode(path: &Path, mode: u32) {
@@ -80,6 +135,17 @@ fn runtime_capability_rejects_every_unsafe_input_and_openat2_failure() {
         IpcPathError::Io(error) => assert_eq!(error.raw_os_error(), Some(Errno::IO.raw_os_error())),
         other => panic!("expected retained opener errno, got {other:?}"),
     }
+
+    for (errno, expected_raw_errno) in [(Errno::NOSYS, 38), (Errno::INVAL, 22), (Errno::XDEV, 18)] {
+        let error = match crate::runtime::resolve_runtime_with(&root, |_| Err(errno)) {
+            Err(error) => error,
+            Ok(_) => panic!("expected opener failure"),
+        };
+        match error {
+            IpcPathError::Io(error) => assert_eq!(error.raw_os_error(), Some(expected_raw_errno)),
+            other => panic!("expected retained opener errno, got {other:?}"),
+        }
+    }
 }
 
 /// Catches a regression where production consults another socket override or
@@ -87,8 +153,7 @@ fn runtime_capability_rejects_every_unsafe_input_and_openat2_failure() {
 #[test]
 fn production_runtime_reads_only_xdg_runtime_dir() {
     let _guard = environment_lock().lock().unwrap();
-    let saved_xdg = std::env::var_os("XDG_RUNTIME_DIR");
-    let saved_socket = std::env::var_os("REALM_SOCKET");
+    let _environment = EnvironmentRestore::capture();
     let temporary = tempfile::tempdir().unwrap();
     let runtime = temporary.path().join("runtime");
     fs::create_dir(&runtime).unwrap();
@@ -104,15 +169,6 @@ fn production_runtime_reads_only_xdg_runtime_dir() {
     std::env::set_var("XDG_RUNTIME_DIR", &runtime);
     let resolved = production_runtime_dir().unwrap();
     assert_eq!(resolved.path(), runtime.as_path());
-
-    match saved_xdg {
-        Some(value) => std::env::set_var("XDG_RUNTIME_DIR", value),
-        None => std::env::remove_var("XDG_RUNTIME_DIR"),
-    }
-    match saved_socket {
-        Some(value) => std::env::set_var("REALM_SOCKET", value),
-        None => std::env::remove_var("REALM_SOCKET"),
-    }
 }
 
 /// Catches a regression where `realm` is reopened through the mutable display

@@ -90,16 +90,7 @@ fn resolve_runtime(path: &Path) -> Result<RuntimeDir, IpcPathError> {
     })
 }
 
-#[cfg(test)]
 pub(crate) fn resolve_runtime_with<F>(path: &Path, opener: F) -> Result<RuntimeDir, IpcPathError>
-where
-    F: FnOnce(&Path) -> rustix::io::Result<OwnedFd>,
-{
-    resolve_runtime_from_opener(path, opener)
-}
-
-#[cfg(not(test))]
-fn resolve_runtime_with<F>(path: &Path, opener: F) -> Result<RuntimeDir, IpcPathError>
 where
     F: FnOnce(&Path) -> rustix::io::Result<OwnedFd>,
 {
@@ -201,9 +192,7 @@ fn validate_directory(
 fn map_runtime_open_error(error: Errno) -> IpcPathError {
     match error {
         Errno::NOENT | Errno::NOTDIR => IpcPathError::MissingRuntimeDir,
-        Errno::LOOP | Errno::ACCESS | Errno::PERM | Errno::XDEV | Errno::NOSYS | Errno::INVAL => {
-            IpcPathError::UnsafeRuntimeDir
-        }
+        Errno::LOOP | Errno::ACCESS | Errno::PERM => IpcPathError::UnsafeRuntimeDir,
         other => IpcPathError::from(other),
     }
 }
@@ -211,14 +200,9 @@ fn map_runtime_open_error(error: Errno) -> IpcPathError {
 #[allow(dead_code)]
 fn map_realm_open_error(error: Errno) -> IpcPathError {
     match error {
-        Errno::NOENT
-        | Errno::NOTDIR
-        | Errno::LOOP
-        | Errno::ACCESS
-        | Errno::PERM
-        | Errno::XDEV
-        | Errno::NOSYS
-        | Errno::INVAL => IpcPathError::UnsafeRealmDirectory,
+        Errno::NOENT | Errno::NOTDIR | Errno::LOOP | Errno::ACCESS | Errno::PERM => {
+            IpcPathError::UnsafeRealmDirectory
+        }
         other => IpcPathError::from(other),
     }
 }
