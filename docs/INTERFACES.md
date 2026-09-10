@@ -18,6 +18,20 @@ river's window manager; `NativeBackend` implements it in-process against
 `realm-compositor` in M5. Nothing above this line changes when we swap them.
 
 ```rust
+pub type BackendResult<T> = std::result::Result<T, BackendError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum BackendError {
+    #[error("backend cannot honour capability {capability}")]
+    Unsupported { capability: String },
+    #[error("backend disconnected")]
+    Disconnected,
+    #[error("backend unavailable: {message}")]
+    Unavailable { message: String },
+    #[error("backend I/O failed: {message}")]
+    Io { message: String },
+}
+
 /// A window manager realm can drive.
 ///
 /// Implementations translate realm's ledger operations into whatever the
@@ -29,19 +43,19 @@ pub trait WmBackend: Send {
     fn name(&self) -> &str;
 
     /// Connect, and report what the backend can actually honour.
-    fn connect(&mut self) -> Result<Capabilities>;
+    fn connect(&mut self) -> BackendResult<Capabilities>;
 
     /// Apply a projection. Called only when the projection has changed.
     ///
     /// Implementations must be idempotent: submitting the same placements
     /// twice must not produce a visible change or a second frame.
-    fn apply(&mut self, placements: &[Placement]) -> Result<()>;
+    fn apply(&mut self, placements: &[Placement]) -> BackendResult<()>;
 
     /// Give a window keyboard focus.
-    fn focus(&mut self, win: WinId) -> Result<()>;
+    fn focus(&mut self, win: WinId) -> BackendResult<()>;
 
     /// Ask a window to close politely; the compositor may refuse.
-    fn close(&mut self, win: WinId) -> Result<()>;
+    fn close(&mut self, win: WinId) -> BackendResult<()>;
 
     /// The workarea currently available for tiling.
     fn workarea(&self) -> Workarea;
@@ -50,7 +64,7 @@ pub trait WmBackend: Send {
     fn event_fd(&self) -> std::os::fd::RawFd;
 
     /// Block until the next backend event, or until `deadline`.
-    fn next_event(&mut self, deadline: Option<Instant>) -> Result<Option<BackendEvent>>;
+    fn next_event(&mut self, deadline: Option<Instant>) -> BackendResult<Option<BackendEvent>>;
 }
 
 /// What a backend can and cannot do, so realm degrades honestly rather than

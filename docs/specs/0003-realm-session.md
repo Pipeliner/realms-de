@@ -684,6 +684,7 @@ Each row is one happy path and becomes one test.
 | A16 | Given a module that recomputes to the text it already had, when derivation runs, then `revision` does not increment and no `Event::State` is sent | |
 | A17 | Given a client that quantises its dimensions down to a multiple of a 9×18 cell, when a triptych of three such clients is applied, then after at most one corrective `propose_dimensions` per window each `set_content_clip_box` equals that window's projected rect and the clip boxes tile the workarea exactly | |
 | A18 | Given a successfully persisted ledger snapshot holding three windows across two orbits and a next-`WinId` watermark, when the session is killed, all three windows survive, and the first manage sequence after restart completes, then each window is back in its snapshotted orbit and ledger position, focus is restored, the broadcast `RealmState` equals the snapshot apart from `revision`, and a newly reported window receives the persisted next id rather than a reused id | |
+| A19 | Given a backend operation whose required capability is listed as unsupported, when the operation is invoked, then it returns `BackendError::Unsupported` carrying that exact capability name and produces no frame | |
 
 ## Budgets
 
@@ -838,6 +839,14 @@ printed by `realmctl doctor`, so it is one shared serialisable wire type rather
 than a session-private duplicate. Its `unsupported` field is `Vec<String>`;
 backend implementations construct owned capability names and clients can decode
 them without borrowing process-static data.
+
+**8. How are unsupported operations reported? — Resolved: a typed backend
+error.** Every fallible `WmBackend` method returns `BackendResult<T>`. An
+unsupported operation returns `BackendError::Unsupported { capability }`, with
+the same stable capability name used in `Capabilities::unsupported`; transport
+loss returns `Disconnected`, connection refusal returns `Unavailable`, and
+other transport failures return `Io`. The session may add user-facing context,
+but it must not turn an unsupported operation into a silent success.
 
 ---
 
