@@ -29,18 +29,36 @@ fail() {
 
 helper=$root/scripts/gh-body-file
 [ -f "$helper" ] || fail 'missing approved helper'
+expected_helper_sha256=1b88fbc15e134f4ceab0169051d6be7a6b5fd7ddc0a805874705cdb78d9e3247
+actual_helper_sha256=$(sha256sum "$helper" | awk '{ print $1 }')
+[ "$actual_helper_sha256" = "$expected_helper_sha256" ] ||
+    fail 'helper bytes differ from the approved SHA-256 digest'
 
 for line in \
     "        exec gh issue create --title \"\$title\" --body-file \"\$body_file\"" \
     "        exec gh issue comment \"\$issue\" --body-file \"\$body_file\"" \
+    "        exec gh api --method PATCH \"repos/{owner}/{repo}/issues/comments/\$comment_id\" --field \"body=@\$body_file\"" \
+    "        exec gh issue edit \"\$issue\" --title \"\$title\" --body-file \"\$body_file\"" \
     "        exec gh pr create --base \"\$base\" --head \"\$head\" --title \"\$title\" --body-file \"\$body_file\""; do
     grep -F -x -q "$line" "$helper" || fail 'helper command surface changed'
 done
 
-helper_gh_count=$(grep -c -E '^[[:space:]]*exec gh[[:space:]]' "$helper" || true)
-[ "$helper_gh_count" -eq 3 ] || fail 'helper has an unapproved GitHub CLI invocation'
+helper_gh_count=$(grep -c -E '^[[:space:]]*(exec[[:space:]]+)?gh[[:space:]]' "$helper" || true)
+[ "$helper_gh_count" -eq 5 ] || fail 'helper has an unapproved GitHub CLI invocation'
+helper_gh_token_count=$(awk '
+    {
+        line = $0
+        while (match(line, /(^|[^[:alnum:]_])gh([^[:alnum:]_]|$)/)) {
+            count++
+            line = substr(line, RSTART + RLENGTH)
+        }
+    }
+    END { print count + 0 }
+' "$helper")
+[ "$helper_gh_token_count" -eq 5 ] || fail 'helper has a non-allowlisted GitHub CLI token'
 if grep -n -E '(^|[[:space:];])eval[[:space:]]|<<' "$helper" >/dev/null ||
-    grep -F -q "\$(" "$helper" ||
+    awk '{ if (sub(/\\$/, "")) { printf "%s", $0 } else { printf "%s ", $0 } }' "$helper" |
+        grep -q -E '\$\([^(]' ||
     grep -F -q '`' "$helper"; then
     fail 'helper dynamically constructs a shell command'
 fi

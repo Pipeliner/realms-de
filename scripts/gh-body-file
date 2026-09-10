@@ -3,22 +3,67 @@
 set -eu
 
 usage() {
-    echo "usage: $0 issue-create TITLE BODY_FILE | issue-comment ISSUE BODY_FILE | pr-create BASE HEAD TITLE BODY_FILE" >&2
+    echo "usage: $0 issue-create TITLE BODY_FILE | issue-comment ISSUE BODY_FILE | issue-comment-edit COMMENT_ID BODY_FILE | issue-edit ISSUE TITLE_FILE BODY_FILE | pr-create BASE HEAD TITLE BODY_FILE" >&2
     exit 64
 }
 
 require_body_file() {
     body_file=$1
-    [ -f "$body_file" ] && [ -r "$body_file" ] || {
+    if ! [ -f "$body_file" ] || ! [ -r "$body_file" ]; then
         echo "body file must be a readable regular file: $body_file" >&2
         exit 66
-    }
+    fi
+}
+
+require_title_file() {
+    title_file=$1
+    if ! [ -f "$title_file" ] || ! [ -r "$title_file" ]; then
+        echo "title file must be a readable regular file: $title_file" >&2
+        exit 66
+    fi
+    if od -An -t x1 <"$title_file" |
+        grep -Eq '(^|[[:space:]])(00|0d)([[:space:]]|$)'; then
+        echo "title file must contain exactly one nonempty LF-terminated line" >&2
+        exit 64
+    fi
+}
+
+read_title_file() {
+    title_file=$1
+    title=
+    title_lines=0
+    while :; do
+        line=
+        if IFS= read -r line; then
+            title_lines=$((title_lines + 1))
+            [ "$title_lines" -eq 1 ] || {
+                echo "title file must contain exactly one nonempty LF-terminated line" >&2
+                exit 64
+            }
+            title=$line
+        else
+            [ -z "$line" ] || {
+                echo "title file must contain exactly one nonempty LF-terminated line" >&2
+                exit 64
+            }
+            break
+        fi
+    done <"$title_file"
+    if ! [ "$title_lines" -eq 1 ] || [ -z "$title" ]; then
+        echo "title file must contain exactly one nonempty LF-terminated line" >&2
+        exit 64
+    fi
 }
 
 require_issue() {
     issue=$1
     case "$issue" in
-        '' | *[!0-9]* | 0)
+        '' | *[!0-9]*)
+            echo "issue must be a positive decimal identifier" >&2
+            exit 64
+            ;;
+        *[1-9]*) ;;
+        *)
             echo "issue must be a positive decimal identifier" >&2
             exit 64
             ;;
@@ -52,6 +97,25 @@ case "$1" in
         require_issue "$issue"
         require_body_file "$body_file"
         exec gh issue comment "$issue" --body-file "$body_file"
+        ;;
+    issue-comment-edit)
+        [ "$#" -eq 3 ] || usage
+        comment_id=$2
+        body_file=$3
+        require_issue "$comment_id"
+        require_body_file "$body_file"
+        exec gh api --method PATCH "repos/{owner}/{repo}/issues/comments/$comment_id" --field "body=@$body_file"
+        ;;
+    issue-edit)
+        [ "$#" -eq 4 ] || usage
+        issue=$2
+        title_file=$3
+        body_file=$4
+        require_issue "$issue"
+        require_title_file "$title_file"
+        require_body_file "$body_file"
+        read_title_file "$title_file"
+        exec gh issue edit "$issue" --title "$title" --body-file "$body_file"
         ;;
     pr-create)
         [ "$#" -eq 5 ] || usage
