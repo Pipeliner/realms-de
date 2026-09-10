@@ -35,6 +35,13 @@ pub enum BackendError {
     Io { message: String },
 }
 
+pub enum SessionActionError {
+    /// Recovery is incomplete or authoritative backend repair is pending.
+    NotReady,
+    /// The requested operation reached the compositor backend and failed.
+    Backend(BackendError),
+}
+
 /// A window manager realm can drive.
 ///
 /// Implementations translate realm's ledger operations into whatever the
@@ -110,6 +117,8 @@ pub struct Capabilities {
 
 /// Something the compositor did that the ledger needs to know about.
 pub enum BackendEvent {
+    /// The connected backend has reported every window present at startup.
+    InitialReplayComplete,
     WindowOpened { backend_id: BackendWindowId, app_id: String, title: String },
     WindowClosed(WinId),
     TitleChanged { win: WinId, title: String },
