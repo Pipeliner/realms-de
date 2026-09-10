@@ -10,6 +10,10 @@ use realm_core::WinId;
 /// Result returned by compositor backend operations.
 pub type BackendResult<T> = std::result::Result<T, BackendError>;
 
+/// Stable compositor-owned identity used to recover Realm window ids.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BackendWindowId(pub String);
+
 /// A compositor backend failure with enough structure to report it honestly.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BackendError {
@@ -41,8 +45,8 @@ pub enum BackendError {
 pub enum BackendEvent {
     /// A new window became manageable.
     WindowOpened {
-        /// Realm's never-reused window identifier.
-        win: WinId,
+        /// Stable compositor identity used for restart reconciliation.
+        backend_id: BackendWindowId,
         /// Application identifier reported by the compositor.
         app_id: String,
         /// Window title reported by the compositor.
@@ -83,6 +87,12 @@ pub trait WmBackend: Send {
     /// Connect and report what the backend can honour.
     fn connect(&mut self) -> BackendResult<Capabilities>;
 
+    /// Bind a stable backend identity to Realm's allocated window id.
+    ///
+    /// The session calls this once for each [`BackendEvent::WindowOpened`]
+    /// before the window appears in another backend operation.
+    fn assign_window(&mut self, backend_id: &BackendWindowId, win: WinId) -> BackendResult<()>;
+
     /// Apply the complete visible projection.
     ///
     /// Implementations are idempotent: submitting identical placements twice
@@ -114,9 +124,12 @@ mod tests {
     use realm_core::layout::{Placement, Workarea};
     use realm_core::WinId;
 
-    use super::{BackendError, BackendEvent, BackendResult, WmBackend};
+    use super::{BackendError, BackendEvent, BackendResult, BackendWindowId, WmBackend};
 
-    struct ContractBackend;
+    #[derive(Default)]
+    struct ContractBackend {
+        assigned: Option<(BackendWindowId, WinId)>,
+    }
 
     impl WmBackend for ContractBackend {
         fn name(&self) -> &str {
@@ -132,6 +145,11 @@ mod tests {
                 fullscreen: false,
                 unsupported: vec!["exact-geometry".to_owned()],
             })
+        }
+
+        fn assign_window(&mut self, backend_id: &BackendWindowId, win: WinId) -> BackendResult<()> {
+            self.assigned = Some((backend_id.clone(), win));
+            Ok(())
         }
 
         fn apply(&mut self, _placements: &[Placement]) -> BackendResult<()> {
@@ -166,7 +184,7 @@ mod tests {
 
     #[test]
     fn trait_exposes_the_accepted_backend_contract() {
-        let mut backend: Box<dyn WmBackend> = Box::new(ContractBackend);
+        let mut backend: Box<dyn WmBackend> = Box::new(ContractBackend::default());
 
         assert_eq!(backend.name(), "contract");
         assert_eq!(backend.event_fd(), 7);
@@ -190,5 +208,27 @@ mod tests {
             error.to_string(),
             "backend cannot honour capability exact-geometry"
         );
+    }
+
+    #[test]
+    fn stable_backend_identity_is_assigned_before_window_use() {
+        let mut backend = ContractBackend::default();
+        let backend_id = BackendWindowId("river-window-17".to_owned());
+
+        backend.assign_window(&backend_id, WinId(42)).unwrap();
+
+        assert_eq!(backend.assigned, Some((backend_id.clone(), WinId(42))));
+        let event = BackendEvent::WindowOpened {
+            backend_id: backend_id.clone(),
+            app_id: "foot".to_owned(),
+            title: "shell".to_owned(),
+        };
+        assert!(matches!(
+            event,
+            BackendEvent::WindowOpened {
+                backend_id: observed,
+                ..
+            } if observed == backend_id
+        ));
     }
 }

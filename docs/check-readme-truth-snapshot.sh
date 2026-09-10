@@ -33,6 +33,8 @@ require_section() {
     printf '%s\n' "$section" | grep -F -q -e "$text" || fail "$message"
 }
 
+markdown_tick=$(printf '\140')
+
 intro_section=$(sed -n '1,/^---$/p' "$readme")
 rules_section=$(sed -n '/^## What makes it different$/,/^## The one idea$/p' "$readme")
 status_section=$(sed -n '/^## Status$/,/^## Try it$/p' "$readme")
@@ -101,9 +103,9 @@ grep -F -q -e 'ThemeCommand' "$root/crates/realm-ctl/src/main.rs" \
 grep -F -q -e 'pub trait WmBackend' "$root/crates/realm-session/src/backend.rs" \
     || fail 'README truth snapshot realm-session seam is missing'
 
-require_section "$status_section" '`realmctl theme`' \
+require_section "$status_section" "${markdown_tick}realmctl theme${markdown_tick}" \
     'README status must name the implemented realmctl theme surface'
-require_section "$status_section" '`WmBackend` contract' \
+require_section "$status_section" "${markdown_tick}WmBackend${markdown_tick} contract" \
     'README status must distinguish the implemented backend seam from the missing daemon'
 
 if [ -e "$root/crates/realm-bar/Cargo.toml" ]; then
