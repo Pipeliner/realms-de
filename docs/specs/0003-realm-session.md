@@ -832,6 +832,13 @@ event loop responsive. Watchdog and overflow telemetry are post-MVP hardening.
 admission freeze and target stop. This removes the clean-exit ambiguity without
 settling any river existing-window replay behaviour.
 
+**7. Where does `Capabilities` live? — Resolved: `realm_core::ipc`.** It is
+returned by `WmBackend::connect`, carried by the session health response, and
+printed by `realmctl doctor`, so it is one shared serialisable wire type rather
+than a session-private duplicate. Its `unsupported` field is `Vec<String>`;
+backend implementations construct owned capability names and clients can decode
+them without borrowing process-static data.
+
 ---
 
 These resolutions make A1–A18 implementable without an unresolved product or

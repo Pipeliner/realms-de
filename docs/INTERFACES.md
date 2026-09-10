@@ -54,7 +54,9 @@ pub trait WmBackend: Send {
 }
 
 /// What a backend can and cannot do, so realm degrades honestly rather than
-/// pretending. `realmctl doctor` prints this.
+/// pretending. This serialisable wire type lives in `realm_core::ipc`, and
+/// `realmctl doctor` prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
     /// True when the *rendered* rectangle is exactly the projected one.
     ///
@@ -68,7 +70,7 @@ pub struct Capabilities {
     pub hide_show: bool,          // is stow expressible?
     pub explicit_ordering: bool,  // can we set stacking order directly?
     pub fullscreen: bool,
-    pub unsupported: Vec<&'static str>, // named realm behaviours this backend cannot honour
+    pub unsupported: Vec<String>, // named realm behaviours this backend cannot honour
 }
 
 /// Something the compositor did that the ledger needs to know about.
