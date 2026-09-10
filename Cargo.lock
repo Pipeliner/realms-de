@@ -316,6 +316,8 @@ name = "realm-session"
 version = "0.1.0"
 dependencies = [
  "realm-core",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

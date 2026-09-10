@@ -6,12 +6,13 @@ use std::time::Instant;
 use realm_core::ipc::Capabilities;
 use realm_core::layout::{Placement, Rect, Workarea};
 use realm_core::WinId;
+use serde::{Deserialize, Serialize};
 
 /// Result returned by compositor backend operations.
 pub type BackendResult<T> = std::result::Result<T, BackendError>;
 
 /// Stable compositor-owned identity used to recover Realm window ids.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct BackendWindowId(pub String);
 
 /// A compositor backend failure with enough structure to report it honestly.
@@ -43,6 +44,8 @@ pub enum BackendError {
 /// Something the compositor did that the authoritative ledger must reconcile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendEvent {
+    /// The backend has reported every window present at connection time.
+    InitialReplayComplete,
     /// A new window became manageable.
     WindowOpened {
         /// Stable compositor identity used for restart reconciliation.

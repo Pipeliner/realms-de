@@ -1,14 +1,349 @@
 //! Transactional session state and projection coordination.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use realm_core::ipc::Capabilities;
+use realm_core::ipc::PROTOCOL_VERSION;
 use realm_core::layout::{project, Layout, Placement, TriptychParams, Workarea};
 use realm_core::ledger::Dir;
+use realm_core::ledger::ORBIT_COUNT;
 use realm_core::state::{Module, OrbitCell, OrbitDisplay, RealmState};
 use realm_core::{Ledger, OrbitId, WinId};
+use serde::de::{Error as _, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::backend::{BackendError, BackendEvent, BackendResult, BackendWindowId, WmBackend};
+
+const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+const ORBIT_NAMES: [&str; ORBIT_COUNT] = [
+    "triptych",
+    "scriptorium",
+    "observatory",
+    "forge",
+    "athenaeum",
+    "crypt",
+];
+
+/// Stable binding between one persisted Realm id and a compositor identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SnapshotBinding {
+    /// Realm-owned numeric window id.
+    pub win_id: WinId,
+    /// Stable compositor-owned identity.
+    pub backend_id: BackendWindowId,
+}
+
+impl<'de> Deserialize<'de> for SnapshotBinding {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct BindingVisitor;
+
+        impl<'de> Visitor<'de> for BindingVisitor {
+            type Value = SnapshotBinding;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a snapshot binding with fields win_id, backend_id in order")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                match map.next_key::<String>()? {
+                    Some(key) if key == "win_id" => {}
+                    Some(_) => return Err(A::Error::custom("win_id must be the first field")),
+                    None => return Err(A::Error::missing_field("win_id")),
+                }
+                let win_id = map.next_value()?;
+                match map.next_key::<String>()? {
+                    Some(key) if key == "backend_id" => {}
+                    Some(_) => return Err(A::Error::custom("backend_id must be the second field")),
+                    None => return Err(A::Error::missing_field("backend_id")),
+                }
+                let backend_id = map.next_value()?;
+                if map.next_key::<String>()?.is_some() {
+                    return Err(A::Error::custom("snapshot binding has an extra field"));
+                }
+                Ok(SnapshotBinding { win_id, backend_id })
+            }
+        }
+
+        deserializer.deserialize_map(BindingVisitor)
+    }
+}
+
+/// Closed, versioned persistence record for one authoritative live session.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SessionSnapshotV1 {
+    schema_version: u32,
+    protocol_version: u32,
+    ledger: Ledger,
+    bindings: Vec<SnapshotBinding>,
+    next_win_id: u64,
+    active_orbit: OrbitId,
+}
+
+impl<'de> Deserialize<'de> for SessionSnapshotV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct SnapshotVisitor;
+
+        impl<'de> Visitor<'de> for SnapshotVisitor {
+            type Value = SessionSnapshotV1;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(
+                    "a version-one session snapshot with its six fields in canonical order",
+                )
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                match map.next_key::<String>()? {
+                    Some(key) if key == "schema_version" => {}
+                    Some(_) => {
+                        return Err(A::Error::custom("schema_version must be the first field"));
+                    }
+                    None => return Err(A::Error::missing_field("schema_version")),
+                }
+                let schema_version = map.next_value()?;
+                match map.next_key::<String>()? {
+                    Some(key) if key == "protocol_version" => {}
+                    Some(_) => {
+                        return Err(A::Error::custom(
+                            "protocol_version must be the second field",
+                        ));
+                    }
+                    None => return Err(A::Error::missing_field("protocol_version")),
+                }
+                let protocol_version = map.next_value()?;
+                match map.next_key::<String>()? {
+                    Some(key) if key == "ledger" => {}
+                    Some(_) => return Err(A::Error::custom("ledger must be the third field")),
+                    None => return Err(A::Error::missing_field("ledger")),
+                }
+                let ledger = map.next_value()?;
+                match map.next_key::<String>()? {
+                    Some(key) if key == "bindings" => {}
+                    Some(_) => return Err(A::Error::custom("bindings must be the fourth field")),
+                    None => return Err(A::Error::missing_field("bindings")),
+                }
+                let bindings = map.next_value()?;
+                match map.next_key::<String>()? {
+                    Some(key) if key == "next_win_id" => {}
+                    Some(_) => {
+                        return Err(A::Error::custom("next_win_id must be the fifth field"));
+                    }
+                    None => return Err(A::Error::missing_field("next_win_id")),
+                }
+                let next_win_id = map.next_value()?;
+                match map.next_key::<String>()? {
+                    Some(key) if key == "active_orbit" => {}
+                    Some(_) => {
+                        return Err(A::Error::custom("active_orbit must be the sixth field"));
+                    }
+                    None => return Err(A::Error::missing_field("active_orbit")),
+                }
+                let active_orbit = map.next_value()?;
+                if map.next_key::<String>()?.is_some() {
+                    return Err(A::Error::custom("session snapshot has an extra field"));
+                }
+                Ok(SessionSnapshotV1 {
+                    schema_version,
+                    protocol_version,
+                    ledger,
+                    bindings,
+                    next_win_id,
+                    active_orbit,
+                })
+            }
+        }
+
+        deserializer.deserialize_map(SnapshotVisitor)
+    }
+}
+
+/// Failure to decode or validate a persisted session snapshot.
+#[derive(Debug, thiserror::Error)]
+pub enum SessionSnapshotError {
+    /// The record is not valid JSON or does not match the closed schema.
+    #[error("invalid session snapshot encoding: {0}")]
+    Encoding(#[from] serde_json::Error),
+    /// The record violates a snapshot invariant.
+    #[error("invalid session snapshot: {0}")]
+    Invalid(&'static str),
+}
+
+impl SessionSnapshotV1 {
+    /// Construct and validate a version-one snapshot.
+    pub fn new(
+        mut ledger: Ledger,
+        bindings: Vec<SnapshotBinding>,
+        next_win_id: u64,
+    ) -> Result<Self, SessionSnapshotError> {
+        ledger.discard_undo_history();
+        let active_orbit = ledger.active();
+        let snapshot = Self {
+            schema_version: SNAPSHOT_SCHEMA_VERSION,
+            protocol_version: PROTOCOL_VERSION,
+            ledger,
+            bindings,
+            next_win_id,
+            active_orbit,
+        };
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
+    /// Decode and validate the closed version-one JSON representation.
+    pub fn from_json(bytes: &[u8]) -> Result<Self, SessionSnapshotError> {
+        let snapshot: Self = serde_json::from_slice(bytes)?;
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
+    /// Encode the validated closed version-one JSON representation.
+    pub fn to_json(&self) -> Result<Vec<u8>, SessionSnapshotError> {
+        self.validate()?;
+        Ok(serde_json::to_vec(self)?)
+    }
+
+    /// Sorted persisted bindings.
+    pub fn bindings(&self) -> &[SnapshotBinding] {
+        &self.bindings
+    }
+
+    /// Next numeric id, or the exhausted sentinel.
+    pub fn next_win_id(&self) -> u64 {
+        self.next_win_id
+    }
+
+    fn validate(&self) -> Result<(), SessionSnapshotError> {
+        if self.schema_version != SNAPSHOT_SCHEMA_VERSION {
+            return Err(SessionSnapshotError::Invalid("unsupported schema version"));
+        }
+        if self.protocol_version != PROTOCOL_VERSION {
+            return Err(SessionSnapshotError::Invalid("protocol version mismatch"));
+        }
+        if self.active_orbit != self.ledger.active() {
+            return Err(SessionSnapshotError::Invalid(
+                "active orbit disagrees with ledger",
+            ));
+        }
+        if self.active_orbit.index() >= ORBIT_COUNT {
+            return Err(SessionSnapshotError::Invalid(
+                "active orbit is out of range",
+            ));
+        }
+        if self.ledger.orbits().len() != ORBIT_COUNT {
+            return Err(SessionSnapshotError::Invalid(
+                "ledger must contain six orbits",
+            ));
+        }
+
+        let mut ledger_windows = BTreeSet::new();
+        for (index, orbit) in self.ledger.orbits().iter().enumerate() {
+            if orbit.id != OrbitId::new(index).expect("canonical orbit index") {
+                return Err(SessionSnapshotError::Invalid("orbit ids are not canonical"));
+            }
+            if orbit.name != ORBIT_NAMES[index] {
+                return Err(SessionSnapshotError::Invalid(
+                    "orbit names are not canonical",
+                ));
+            }
+            match orbit.focus {
+                None if !orbit.windows.is_empty() => {
+                    return Err(SessionSnapshotError::Invalid("occupied orbit has no focus"));
+                }
+                Some(focus) if focus >= orbit.windows.len() => {
+                    return Err(SessionSnapshotError::Invalid("orbit focus is out of range"));
+                }
+                Some(_) if orbit.windows.is_empty() => {
+                    return Err(SessionSnapshotError::Invalid("empty orbit has a focus"));
+                }
+                _ => {}
+            }
+            for win in &orbit.windows {
+                if win.0 >= self.next_win_id || !ledger_windows.insert(*win) {
+                    return Err(SessionSnapshotError::Invalid(
+                        "window ids must be unique and below the watermark",
+                    ));
+                }
+            }
+            let mut stowed = BTreeSet::new();
+            for win in &orbit.stowed {
+                if !orbit.windows.contains(win) || !stowed.insert(*win) {
+                    return Err(SessionSnapshotError::Invalid(
+                        "stowed windows must be a unique subset of the orbit",
+                    ));
+                }
+            }
+            if orbit
+                .fullscreen
+                .is_some_and(|win| !orbit.windows.contains(&win))
+            {
+                return Err(SessionSnapshotError::Invalid(
+                    "fullscreen window must belong to the orbit",
+                ));
+            }
+        }
+
+        let mut bound_windows = BTreeSet::new();
+        let mut backend_ids = BTreeSet::new();
+        let mut previous = None;
+        for binding in &self.bindings {
+            if previous.is_some_and(|win| win >= binding.win_id) {
+                return Err(SessionSnapshotError::Invalid(
+                    "bindings must be strictly sorted by window id",
+                ));
+            }
+            previous = Some(binding.win_id);
+            let bytes = binding.backend_id.0.as_bytes();
+            if bytes.is_empty()
+                || bytes.len() > 32
+                || !bytes.iter().all(|byte| (0x20..=0x7e).contains(byte))
+            {
+                return Err(SessionSnapshotError::Invalid(
+                    "backend identity must be 1-32 printable ASCII bytes",
+                ));
+            }
+            if !bound_windows.insert(binding.win_id) || !backend_ids.insert(&binding.backend_id) {
+                return Err(SessionSnapshotError::Invalid(
+                    "bindings must be a one-to-one mapping",
+                ));
+            }
+        }
+        if bound_windows != ledger_windows {
+            return Err(SessionSnapshotError::Invalid(
+                "bindings must cover the ledger exactly",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Recovery position relative to the backend's explicit replay barrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryPhase {
+    /// Initial compositor windows are being accumulated without side effects.
+    InitialReplay,
+    /// Reconciliation is installed and backend work must finish before events continue.
+    FinalizingReplay,
+    /// The session is authoritative and accepts live events and desired actions.
+    Live,
+}
+
+#[derive(Debug, Clone)]
+struct ReplayWindow {
+    backend_id: BackendWindowId,
+    metadata: WindowMetadata,
+}
 
 /// Metadata retained for a window independently of the ledger's ordering.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +392,15 @@ pub enum SessionEventError {
     /// Every possible numeric window id has already been allocated.
     #[error("Realm window id space is exhausted")]
     WindowIdExhausted,
+    /// The one scheduled retry of pending backend work also failed.
+    #[error("backend retry exhausted: {0}")]
+    BackendRetryExhausted(BackendError),
+    /// A backend event arrived while recovery or repair work was pending.
+    #[error("backend event received while backend work is pending")]
+    BackendWorkPending,
+    /// The backend emitted its one-shot replay barrier more than once.
+    #[error("initial replay completion barrier was repeated")]
+    RepeatedInitialReplayComplete,
 }
 
 /// The compositor-independent owner of Realm's ledger and visible state.
@@ -72,25 +416,78 @@ pub struct Session<B: WmBackend> {
     last_projection: Vec<Placement>,
     projection_dirty: bool,
     state: RealmState,
+    phase: RecoveryPhase,
+    replay: Vec<ReplayWindow>,
+    pending_backend_work: bool,
 }
 
 impl<B: WmBackend> Session<B> {
     /// Connect a backend and seed an empty six-orbit session.
-    pub fn connect(mut backend: B) -> BackendResult<Self> {
+    pub fn connect(backend: B) -> BackendResult<Self> {
+        Self::connect_with_snapshot(backend, None)
+    }
+
+    /// Connect a backend and enter initial replay using an optional validated snapshot.
+    pub fn connect_with_snapshot(
+        mut backend: B,
+        snapshot: Option<SessionSnapshotV1>,
+    ) -> BackendResult<Self> {
         let capabilities = backend.connect()?;
         let workarea = backend.workarea();
+        let (ledger, backend_ids, next_win_id) = snapshot.map_or_else(
+            || (Ledger::new(), BTreeMap::new(), 0),
+            |snapshot| {
+                let backend_ids = snapshot
+                    .bindings
+                    .into_iter()
+                    .map(|binding| (binding.backend_id, binding.win_id))
+                    .collect();
+                (snapshot.ledger, backend_ids, snapshot.next_win_id)
+            },
+        );
         Ok(Self {
             backend,
-            ledger: Ledger::new(),
+            ledger,
             capabilities,
             workarea,
             windows: BTreeMap::new(),
-            backend_ids: BTreeMap::new(),
+            backend_ids,
             pending_assignments: BTreeMap::new(),
-            next_win_id: 0,
+            next_win_id,
             last_projection: Vec::new(),
-            projection_dirty: false,
+            projection_dirty: true,
             state: RealmState::default(),
+            phase: RecoveryPhase::InitialReplay,
+            replay: Vec::new(),
+            pending_backend_work: false,
+        })
+    }
+
+    /// Current recovery phase.
+    pub fn phase(&self) -> RecoveryPhase {
+        self.phase
+    }
+
+    /// True when backend repair must run before another event is read.
+    pub fn has_pending_backend_work(&self) -> bool {
+        self.pending_backend_work
+    }
+
+    /// A validated persistence snapshot, exposed only in authoritative live state.
+    pub fn snapshot(&self) -> Option<SessionSnapshotV1> {
+        (self.phase == RecoveryPhase::Live).then(|| {
+            let bindings = self
+                .backend_ids
+                .iter()
+                .map(|(backend_id, win_id)| SnapshotBinding {
+                    win_id: *win_id,
+                    backend_id: backend_id.clone(),
+                })
+                .collect::<Vec<_>>();
+            let mut bindings = bindings;
+            bindings.sort_by_key(|binding| binding.win_id);
+            SessionSnapshotV1::new(self.ledger.clone(), bindings, self.next_win_id)
+                .expect("live session invariants produce a valid snapshot")
         })
     }
 
@@ -176,6 +573,11 @@ impl<B: WmBackend> Session<B> {
 
     /// Ask the focused window to close without changing authoritative state.
     pub fn request_close_focused(&mut self) -> BackendResult<Option<WinId>> {
+        if self.phase != RecoveryPhase::Live {
+            return Err(BackendError::Unavailable {
+                message: "session recovery is not complete".to_owned(),
+            });
+        }
         let Some(win) = self.ledger.focused() else {
             return Ok(None);
         };
@@ -185,6 +587,9 @@ impl<B: WmBackend> Session<B> {
 
     /// Toggle the visible which-key strip without applying a projection.
     pub fn toggle_whichkey(&mut self) -> SessionUpdate {
+        if self.phase != RecoveryPhase::Live {
+            return SessionUpdate::unchanged();
+        }
         let mut changed = self.state.clone();
         changed.revision = changed.revision.saturating_add(1);
         changed.whichkey = !changed.whichkey;
@@ -200,29 +605,58 @@ impl<B: WmBackend> Session<B> {
         &mut self,
         update: impl FnOnce(&mut Ledger),
     ) -> BackendResult<SessionUpdate> {
+        if self.phase != RecoveryPhase::Live {
+            return Err(BackendError::Unavailable {
+                message: "session recovery is not complete".to_owned(),
+            });
+        }
         let mut candidate = self.ledger.clone();
         update(&mut candidate);
-        self.commit_desired(candidate, self.windows.clone(), self.workarea)
+        match self.commit_desired(candidate, self.windows.clone(), self.workarea) {
+            Ok(update) => Ok(update),
+            Err(error) => {
+                self.pending_backend_work = should_retry_desired_repair(&error);
+                Err(error)
+            }
+        }
     }
 
-    /// Retry a projection left pending by a failed observed-state transition.
-    ///
-    /// This never mutates the ledger. A successful retry may release the
-    /// visible state snapshot that was withheld with the failed attempt.
-    pub fn retry_pending_projection(&mut self) -> BackendResult<SessionUpdate> {
-        self.bind_pending_windows()?;
-        let projection = self.project(&self.ledger, self.workarea);
-        let projection_applied = self.apply_projection_if_needed(projection)?;
-        let state = self.commit_visible_state().state;
-        Ok(SessionUpdate {
-            projection_applied,
-            state,
-            deferred: None,
-        })
+    /// Run the one permitted retry of currently pending backend work.
+    pub fn retry_pending_backend_work(&mut self) -> Result<SessionUpdate, SessionEventError> {
+        if !self.pending_backend_work {
+            return Ok(SessionUpdate::unchanged());
+        }
+        self.pending_backend_work = false;
+        let result = if self.phase == RecoveryPhase::FinalizingReplay {
+            self.finish_replay()
+        } else {
+            self.repair_authoritative_projection()
+        };
+        result.map_err(SessionEventError::BackendRetryExhausted)
     }
 
     /// Apply one compositor event that has compositor-independent semantics.
     pub fn handle_backend_event(
+        &mut self,
+        event: BackendEvent,
+    ) -> Result<SessionUpdate, SessionEventError> {
+        if self.pending_backend_work {
+            return Err(SessionEventError::BackendWorkPending);
+        }
+        match self.phase {
+            RecoveryPhase::InitialReplay => self.handle_initial_replay_event(event),
+            RecoveryPhase::FinalizingReplay => match event {
+                BackendEvent::Disconnected => Err(BackendError::Disconnected.into()),
+                BackendEvent::InitialReplayComplete => {
+                    Err(SessionEventError::RepeatedInitialReplayComplete)
+                }
+                _ => Err(SessionEventError::BackendWorkPending),
+            },
+            RecoveryPhase::Live => self.handle_live_event(event),
+        }
+    }
+
+    fn handle_initial_replay_event(
         &mut self,
         event: BackendEvent,
     ) -> Result<SessionUpdate, SessionEventError> {
@@ -232,10 +666,52 @@ impl<B: WmBackend> Session<B> {
                 app_id,
                 title,
             } => {
+                let metadata = WindowMetadata { app_id, title };
+                if let Some(replayed) = self
+                    .replay
+                    .iter_mut()
+                    .find(|window| window.backend_id == backend_id)
+                {
+                    replayed.metadata = metadata;
+                } else {
+                    self.replay.push(ReplayWindow {
+                        backend_id,
+                        metadata,
+                    });
+                }
+                Ok(SessionUpdate::unchanged())
+            }
+            BackendEvent::InitialReplayComplete => self.finalize_initial_replay(),
+            BackendEvent::WorkareaChanged(workarea) => {
+                self.workarea = workarea;
+                Ok(SessionUpdate::unchanged())
+            }
+            BackendEvent::Disconnected => Err(BackendError::Disconnected.into()),
+            event @ (BackendEvent::FocusChanged(_)
+            | BackendEvent::ExclusiveFocusChanged(_)
+            | BackendEvent::GeometryDrifted { .. }
+            | BackendEvent::TitleChanged { .. }
+            | BackendEvent::WindowClosed(_)) => Ok(SessionUpdate::deferred(event)),
+        }
+    }
+
+    fn handle_live_event(
+        &mut self,
+        event: BackendEvent,
+    ) -> Result<SessionUpdate, SessionEventError> {
+        let result = match event {
+            BackendEvent::InitialReplayComplete => {
+                return Err(SessionEventError::RepeatedInitialReplayComplete);
+            }
+            BackendEvent::WindowOpened {
+                backend_id,
+                app_id,
+                title,
+            } => {
                 let win = self.record_window_identity(backend_id)?;
                 self.ledger.summon(win, self.ledger.active());
                 self.windows.insert(win, WindowMetadata { app_id, title });
-                self.retry_pending_projection().map_err(Into::into)
+                self.repair_authoritative_projection()
             }
             BackendEvent::WindowClosed(win) => {
                 let mut ledger = self.ledger.clone();
@@ -246,28 +722,37 @@ impl<B: WmBackend> Session<B> {
                 self.pending_assignments
                     .retain(|_, assigned| *assigned != win);
                 self.commit_observed(ledger, windows, self.workarea)
-                    .map_err(Into::into)
             }
             BackendEvent::TitleChanged { win, title } => {
                 let Some(metadata) = self.windows.get_mut(&win) else {
                     return Ok(SessionUpdate::unchanged());
                 };
                 metadata.title = title;
-                self.retry_pending_projection().map_err(Into::into)
+                self.repair_authoritative_projection()
             }
-            BackendEvent::WorkareaChanged(workarea) => self
-                .commit_observed(self.ledger.clone(), self.windows.clone(), workarea)
-                .map_err(Into::into),
+            BackendEvent::WorkareaChanged(workarea) => {
+                self.commit_observed(self.ledger.clone(), self.windows.clone(), workarea)
+            }
             BackendEvent::GeometryDrifted { .. } => Ok(SessionUpdate::unchanged()),
-            BackendEvent::Disconnected => Err(BackendError::Disconnected.into()),
+            BackendEvent::Disconnected => Err(BackendError::Disconnected),
             event @ (BackendEvent::FocusChanged(_) | BackendEvent::ExclusiveFocusChanged(_)) => {
                 Ok(SessionUpdate::deferred(event))
+            }
+        };
+        match result {
+            Ok(update) => Ok(update),
+            Err(error) => {
+                self.pending_backend_work = should_retry_authoritative(&error);
+                Err(error.into())
             }
         }
     }
 
     /// Replace bar-module values without issuing a compositor request.
     pub fn update_modules(&mut self, modules: Vec<Module>) -> SessionUpdate {
+        if self.phase != RecoveryPhase::Live {
+            return SessionUpdate::unchanged();
+        }
         if self.state.modules == modules {
             return SessionUpdate::unchanged();
         }
@@ -280,6 +765,108 @@ impl<B: WmBackend> Session<B> {
             state: Some(changed),
             deferred: None,
         }
+    }
+
+    fn finalize_initial_replay(&mut self) -> Result<SessionUpdate, SessionEventError> {
+        let replayed_ids: BTreeSet<_> = self
+            .replay
+            .iter()
+            .map(|window| window.backend_id.clone())
+            .collect();
+        let unknown_count = self
+            .replay
+            .iter()
+            .filter(|window| !self.backend_ids.contains_key(&window.backend_id))
+            .count() as u128;
+        let available = u128::from(u64::MAX - self.next_win_id);
+        if unknown_count > available {
+            return Err(SessionEventError::WindowIdExhausted);
+        }
+
+        let mut ledger = self.ledger.clone();
+        let mut backend_ids = self.backend_ids.clone();
+        let mut windows = BTreeMap::new();
+        let mut pending_assignments = BTreeMap::new();
+        let mut next_win_id = self.next_win_id;
+
+        let persisted_order: Vec<_> = ledger
+            .orbits()
+            .iter()
+            .flat_map(|orbit| orbit.windows.iter().copied())
+            .collect();
+        for win in persisted_order {
+            let backend_id = backend_ids
+                .iter()
+                .find_map(|(backend_id, assigned)| (*assigned == win).then(|| backend_id.clone()))
+                .expect("validated snapshot binds every ledger window");
+            if !replayed_ids.contains(&backend_id) {
+                ledger.banish(win);
+                backend_ids.remove(&backend_id);
+            }
+        }
+
+        for replayed in &self.replay {
+            let win = if let Some(win) = backend_ids.get(&replayed.backend_id).copied() {
+                win
+            } else {
+                let win = WinId(next_win_id);
+                next_win_id = next_win_id
+                    .checked_add(1)
+                    .expect("id availability was preflighted");
+                backend_ids.insert(replayed.backend_id.clone(), win);
+                ledger.summon(win, ledger.active());
+                win
+            };
+            windows.insert(win, replayed.metadata.clone());
+            pending_assignments.insert(replayed.backend_id.clone(), win);
+        }
+        ledger.discard_undo_history();
+
+        self.ledger = ledger;
+        self.backend_ids = backend_ids;
+        self.windows = windows;
+        self.pending_assignments = pending_assignments;
+        self.next_win_id = next_win_id;
+        self.phase = RecoveryPhase::FinalizingReplay;
+        self.projection_dirty = true;
+
+        match self.finish_replay() {
+            Ok(update) => Ok(update),
+            Err(error) => {
+                self.pending_backend_work = should_retry_authoritative(&error);
+                Err(error.into())
+            }
+        }
+    }
+
+    fn finish_replay(&mut self) -> BackendResult<SessionUpdate> {
+        self.bind_pending_windows()?;
+        let projection = self.project(&self.ledger, self.workarea);
+        self.apply_projection_if_needed(projection)?;
+        self.phase = RecoveryPhase::Live;
+        let state = self.publish_first_visible_state();
+        Ok(SessionUpdate {
+            projection_applied: true,
+            state: Some(state),
+            deferred: None,
+        })
+    }
+
+    fn publish_first_visible_state(&mut self) -> RealmState {
+        self.state = self.visible_state(1);
+        self.state.clone()
+    }
+
+    fn repair_authoritative_projection(&mut self) -> BackendResult<SessionUpdate> {
+        self.bind_pending_windows()?;
+        let projection = self.project(&self.ledger, self.workarea);
+        let projection_applied = self.apply_projection_if_needed(projection)?;
+        let state = self.commit_visible_state().state;
+        Ok(SessionUpdate {
+            projection_applied,
+            state,
+            deferred: None,
+        })
     }
 
     fn record_window_identity(
@@ -375,8 +962,25 @@ impl<B: WmBackend> Session<B> {
     }
 
     fn commit_visible_state(&mut self) -> SessionUpdate {
-        let candidate = RealmState {
-            revision: self.state.revision,
+        let candidate = self.visible_state(self.state.revision);
+
+        if self.state.renders_same_as(&candidate) {
+            return SessionUpdate::unchanged();
+        }
+
+        let mut changed = candidate;
+        changed.revision = self.state.revision.saturating_add(1);
+        self.state = changed.clone();
+        SessionUpdate {
+            projection_applied: false,
+            state: Some(changed),
+            deferred: None,
+        }
+    }
+
+    fn visible_state(&self, revision: u64) -> RealmState {
+        RealmState {
+            revision,
             orbits: self
                 .ledger
                 .orbits()
@@ -405,21 +1009,19 @@ impl<B: WmBackend> Session<B> {
             chord_echo: self.state.chord_echo.clone(),
             whichkey: self.state.whichkey,
             modules: self.state.modules.clone(),
-        };
-
-        if self.state.renders_same_as(&candidate) {
-            return SessionUpdate::unchanged();
-        }
-
-        let mut changed = candidate;
-        changed.revision = self.state.revision.saturating_add(1);
-        self.state = changed.clone();
-        SessionUpdate {
-            projection_applied: false,
-            state: Some(changed),
-            deferred: None,
         }
     }
+}
+
+fn should_retry_authoritative(error: &BackendError) -> bool {
+    matches!(error, BackendError::Io { .. })
+}
+
+fn should_retry_desired_repair(error: &BackendError) -> bool {
+    !matches!(
+        error,
+        BackendError::Disconnected | BackendError::Unavailable { .. }
+    )
 }
 
 #[cfg(test)]
@@ -431,7 +1033,7 @@ mod tests {
     use realm_core::ipc::{Capabilities, PROTOCOL_VERSION};
     use realm_core::layout::{project, Layout, Placement, Rect, TriptychParams, Workarea};
     use realm_core::ledger::Dir;
-    use realm_core::state::Module;
+    use realm_core::state::{Module, RealmState};
     use realm_core::{Ledger, OrbitId, WinId};
 
     use crate::backend::{BackendError, BackendEvent, BackendResult, BackendWindowId, WmBackend};
@@ -579,6 +1181,17 @@ mod tests {
         .unwrap()
     }
 
+    fn live_session(backend: FakeBackend) -> Session<FakeBackend> {
+        let mut session = Session::connect(backend).unwrap();
+        session
+            .handle_backend_event(BackendEvent::InitialReplayComplete)
+            .unwrap();
+        session.state = RealmState::default();
+        session.backend.apply_attempts.clear();
+        session.backend.successful_frames.clear();
+        session
+    }
+
     #[test]
     fn snapshot_validation_is_closed_and_total() {
         let snapshot = recovery_snapshot();
@@ -591,9 +1204,7 @@ mod tests {
 
         let mut wrong_schema: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
         wrong_schema["schema_version"] = serde_json::json!(2);
-        assert!(
-            SessionSnapshotV1::from_json(&serde_json::to_vec(&wrong_schema).unwrap()).is_err()
-        );
+        assert!(SessionSnapshotV1::from_json(&serde_json::to_vec(&wrong_schema).unwrap()).is_err());
 
         let mut wrong_protocol: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
         wrong_protocol["protocol_version"] = serde_json::json!(PROTOCOL_VERSION + 1);
@@ -610,6 +1221,20 @@ mod tests {
         let mut incomplete: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
         incomplete["bindings"].as_array_mut().unwrap().pop();
         assert!(SessionSnapshotV1::from_json(&serde_json::to_vec(&incomplete).unwrap()).is_err());
+
+        let encoded = String::from_utf8(encoded).unwrap();
+        let out_of_order = encoded.replacen(
+            "\"schema_version\":1,\"protocol_version\":1",
+            "\"protocol_version\":1,\"schema_version\":1",
+            1,
+        );
+        assert!(SessionSnapshotV1::from_json(out_of_order.as_bytes()).is_err());
+        let out_of_order_binding = encoded.replacen(
+            "\"win_id\":7,\"backend_id\":\"restored-7\"",
+            "\"backend_id\":\"restored-7\",\"win_id\":7",
+            1,
+        );
+        assert!(SessionSnapshotV1::from_json(out_of_order_binding.as_bytes()).is_err());
     }
 
     #[test]
@@ -650,7 +1275,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(session.phase(), RecoveryPhase::Live);
-        assert_eq!(session.ledger().active_orbit().windows, [WinId(7), WinId(10)]);
+        assert_eq!(
+            session.ledger().active_orbit().windows,
+            [WinId(7), WinId(10)]
+        );
+        assert_eq!(session.ledger().focused(), Some(WinId(10)));
         assert!(session
             .ledger()
             .orbit(OrbitId::from_human(2).unwrap())
@@ -791,7 +1420,7 @@ mod tests {
     #[test]
     fn window_opened_summons_after_focus_and_applies_active_projection_once() {
         let area = Workarea::new(1920, 1080, 32, 26);
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
 
         session
             .handle_backend_event(window_opened("r1", "one"))
@@ -824,13 +1453,13 @@ mod tests {
 
     #[test]
     fn unchanged_projection_is_not_applied_twice() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
 
-        let first = session.retry_pending_projection().unwrap();
-        let second = session.retry_pending_projection().unwrap();
+        let first = session.retry_pending_backend_work().unwrap();
+        let second = session.retry_pending_backend_work().unwrap();
 
         assert!(!first.projection_applied);
         assert!(!second.projection_applied);
@@ -839,7 +1468,7 @@ mod tests {
 
     #[test]
     fn no_op_ledger_mutation_does_not_apply_or_emit() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
 
         let update = session
             .switch_orbit(OrbitId::from_human(1).unwrap())
@@ -853,7 +1482,7 @@ mod tests {
 
     #[test]
     fn workarea_change_reprojects_once_but_does_not_emit_unchanged_state() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -874,7 +1503,7 @@ mod tests {
 
     #[test]
     fn geometry_drift_preserves_ledger_and_waits_for_next_projection() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         for (id, title) in [("r1", "one"), ("r2", "two")] {
             session
                 .handle_backend_event(window_opened(id, title))
@@ -901,7 +1530,7 @@ mod tests {
 
     #[test]
     fn focused_title_change_emits_once_without_applying() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -929,7 +1558,7 @@ mod tests {
 
     #[test]
     fn module_change_emits_once_without_backend_apply() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         let modules = vec![Module {
             id: "clock".to_owned(),
             text: "12:34".to_owned(),
@@ -954,7 +1583,7 @@ mod tests {
         let mut backend = FakeBackend::new();
         backend.capabilities.exact_geometry = false;
         backend.capabilities.unsupported = vec!["exact-geometry".to_owned()];
-        let mut session = Session::connect(backend).unwrap();
+        let mut session = live_session(backend);
         session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -983,11 +1612,12 @@ mod tests {
         assert_eq!(session.last_projection(), projection);
         assert_eq!(session.backend.apply_attempts.len(), attempts + 1);
         assert_eq!(session.backend.successful_frames.len(), successes);
+        assert!(session.has_pending_backend_work());
     }
 
     #[test]
     fn failed_desired_apply_marks_current_projection_dirty_for_repair() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -1001,7 +1631,7 @@ mod tests {
         });
 
         session.set_layout(Layout::Mono).unwrap_err();
-        let repaired = session.retry_pending_projection().unwrap();
+        let repaired = session.retry_pending_backend_work().unwrap();
 
         assert!(repaired.projection_applied);
         assert_eq!(session.backend.apply_attempts.len(), attempts + 2);
@@ -1017,7 +1647,7 @@ mod tests {
 
     #[test]
     fn failed_apply_after_window_close_retains_the_observed_close_for_retry() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -1042,7 +1672,7 @@ mod tests {
         assert_eq!(session.last_projection(), previous_projection);
         assert!(
             session
-                .retry_pending_projection()
+                .retry_pending_backend_work()
                 .unwrap()
                 .projection_applied
         );
@@ -1051,7 +1681,7 @@ mod tests {
 
     #[test]
     fn failed_apply_after_workarea_change_retains_the_observed_area_for_retry() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -1070,7 +1700,7 @@ mod tests {
         assert_eq!(session.workarea, changed);
         assert!(
             session
-                .retry_pending_projection()
+                .retry_pending_backend_work()
                 .unwrap()
                 .projection_applied
         );
@@ -1084,7 +1714,7 @@ mod tests {
             output: Rect::new(0, 0, 2560, 1440),
             tiles: Rect::new(0, 32, 2560, 1382),
         };
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -1096,12 +1726,14 @@ mod tests {
         session
             .handle_backend_event(BackendEvent::WorkareaChanged(changed))
             .unwrap_err();
-        let repaired = session
+        let repaired = session.retry_pending_backend_work().unwrap();
+        let restored = session
             .handle_backend_event(BackendEvent::WorkareaChanged(original))
             .unwrap();
 
         assert!(repaired.projection_applied);
-        assert_eq!(session.backend.apply_attempts.len(), 3);
+        assert!(restored.projection_applied);
+        assert_eq!(session.backend.apply_attempts.len(), 4);
         assert_eq!(session.backend.apply_attempts.last().unwrap(), &p1);
         assert_eq!(session.backend.successful_frames.last().unwrap(), &p1);
     }
@@ -1109,11 +1741,11 @@ mod tests {
     #[test]
     fn failed_identity_binding_preserves_observed_window_for_retry() {
         let backend_id = BackendWindowId("r1".to_owned());
-        let mut backend = FakeBackend::new();
-        backend.fail_next_assign = Some(BackendError::Io {
+        let backend = FakeBackend::new();
+        let mut session = live_session(backend);
+        session.backend.fail_next_assign = Some(BackendError::Io {
             message: "binding failed".to_owned(),
         });
-        let mut session = Session::connect(backend).unwrap();
 
         session
             .handle_backend_event(window_opened("r1", "one"))
@@ -1127,7 +1759,7 @@ mod tests {
         assert!(session.backend.apply_attempts.is_empty());
         assert!(session.backend.bound_windows.is_empty());
 
-        let repaired = session.retry_pending_projection().unwrap();
+        let repaired = session.retry_pending_backend_work().unwrap();
 
         assert!(repaired.projection_applied);
         assert_eq!(repaired.state.unwrap().focused_title, "one");
@@ -1145,7 +1777,7 @@ mod tests {
     #[test]
     fn replayed_backend_identity_reuses_its_window_id_without_rebinding() {
         let backend_id = BackendWindowId("r1".to_owned());
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -1167,7 +1799,7 @@ mod tests {
 
     #[test]
     fn focus_event_is_deferred_without_becoming_a_backend_failure() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         for event in [
             BackendEvent::FocusChanged(None),
             BackendEvent::ExclusiveFocusChanged(true),
@@ -1182,7 +1814,7 @@ mod tests {
 
     #[test]
     fn focus_step_commits_one_projection_and_one_visible_state() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         for (id, title) in [("r1", "one"), ("r2", "two")] {
             session
                 .handle_backend_event(window_opened(id, title))
@@ -1211,7 +1843,7 @@ mod tests {
 
     #[test]
     fn failed_focus_step_rejects_the_candidate_and_repairs_authoritative_state() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         for (id, title) in [("r1", "one"), ("r2", "two")] {
             session
                 .handle_backend_event(window_opened(id, title))
@@ -1238,7 +1870,7 @@ mod tests {
         assert_eq!(session.state(), &state);
         assert_eq!(session.last_projection(), authoritative);
         assert_eq!(session.backend.apply_attempts[attempts], expected_candidate);
-        let repair = session.retry_pending_projection().unwrap();
+        let repair = session.retry_pending_backend_work().unwrap();
         assert!(repair.projection_applied);
         assert!(repair.state.is_none());
         assert_eq!(session.backend.apply_attempts.len(), attempts + 2);
@@ -1250,7 +1882,7 @@ mod tests {
 
     #[test]
     fn swap_changes_order_once_and_is_a_no_op_with_one_window() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         for (id, title) in [("r1", "one"), ("r2", "two")] {
             session
                 .handle_backend_event(window_opened(id, title))
@@ -1279,7 +1911,7 @@ mod tests {
         assert_eq!(session.backend.apply_attempts.len(), attempts + 1);
         assert_eq!(session.backend.apply_attempts.last().unwrap(), &expected);
 
-        let mut singleton = Session::connect(FakeBackend::new()).unwrap();
+        let mut singleton = live_session(FakeBackend::new());
         singleton
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -1298,7 +1930,7 @@ mod tests {
     fn typed_ledger_actions_delegate_to_the_ledger_contract() {
         let second = OrbitId::from_human(2).unwrap();
 
-        let mut moved = Session::connect(FakeBackend::new()).unwrap();
+        let mut moved = live_session(FakeBackend::new());
         moved
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -1306,7 +1938,7 @@ mod tests {
         assert!(moved.ledger().active_orbit().windows.is_empty());
         assert_eq!(moved.ledger().orbit(second).windows, [WinId(0)]);
 
-        let mut stowed = Session::connect(FakeBackend::new()).unwrap();
+        let mut stowed = live_session(FakeBackend::new());
         stowed
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -1314,7 +1946,7 @@ mod tests {
         assert_eq!(stowed.ledger().active_orbit().stowed, [WinId(0)]);
         assert!(stowed.last_projection().is_empty());
 
-        let mut fullscreen = Session::connect(FakeBackend::new()).unwrap();
+        let mut fullscreen = live_session(FakeBackend::new());
         fullscreen
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -1328,18 +1960,18 @@ mod tests {
             Workarea::new(1920, 1080, 32, 26).output
         );
 
-        let mut switched = Session::connect(FakeBackend::new()).unwrap();
+        let mut switched = live_session(FakeBackend::new());
         switched.switch_orbit(second).unwrap();
         assert_eq!(switched.ledger().active(), second);
 
-        let mut laid_out = Session::connect(FakeBackend::new()).unwrap();
+        let mut laid_out = live_session(FakeBackend::new());
         laid_out.set_layout(Layout::Mono).unwrap();
         assert_eq!(laid_out.ledger().active_orbit().layout, Layout::Mono);
     }
 
     #[test]
     fn failed_undo_does_not_consume_history() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -1364,7 +1996,7 @@ mod tests {
 
     #[test]
     fn undo_never_removes_an_open_window_or_restores_a_closed_window() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         for (id, title) in [("r1", "one"), ("r2", "two")] {
             session
                 .handle_backend_event(window_opened(id, title))
@@ -1402,7 +2034,7 @@ mod tests {
 
     #[test]
     fn close_request_waits_for_the_observed_close_before_mutating_state() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
@@ -1433,7 +2065,7 @@ mod tests {
 
     #[test]
     fn close_request_is_a_no_op_without_a_focused_window() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
 
         assert_eq!(session.request_close_focused().unwrap(), None);
         assert!(session.backend.close_attempts.is_empty());
@@ -1443,7 +2075,7 @@ mod tests {
 
     #[test]
     fn whichkey_toggle_only_emits_state_until_workarea_is_observed() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut session = live_session(FakeBackend::new());
         session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
