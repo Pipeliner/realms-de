@@ -33,13 +33,14 @@ helper=$root/scripts/gh-body-file
 for line in \
     "        exec gh issue create --title \"\$title\" --body-file \"\$body_file\"" \
     "        exec gh issue comment \"\$issue\" --body-file \"\$body_file\"" \
+    "        exec gh api --method PATCH \"repos/{owner}/{repo}/issues/comments/\$comment_id\" --field \"body=@\$body_file\"" \
     "        exec gh issue edit \"\$issue\" --title \"\$title\" --body-file \"\$body_file\"" \
     "        exec gh pr create --base \"\$base\" --head \"\$head\" --title \"\$title\" --body-file \"\$body_file\""; do
     grep -F -x -q "$line" "$helper" || fail 'helper command surface changed'
 done
 
 helper_gh_count=$(grep -c -E '^[[:space:]]*exec gh[[:space:]]' "$helper" || true)
-[ "$helper_gh_count" -eq 4 ] || fail 'helper has an unapproved GitHub CLI invocation'
+[ "$helper_gh_count" -eq 5 ] || fail 'helper has an unapproved GitHub CLI invocation'
 if grep -n -E '(^|[[:space:];])eval[[:space:]]|<<' "$helper" >/dev/null ||
     awk '{ if (sub(/\\$/, "")) { printf "%s", $0 } else { printf "%s ", $0 } }' "$helper" |
         grep -q -E '\$\([^(]' ||

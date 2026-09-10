@@ -3,7 +3,7 @@
 set -eu
 
 usage() {
-    echo "usage: $0 issue-create TITLE BODY_FILE | issue-comment ISSUE BODY_FILE | issue-edit ISSUE TITLE_FILE BODY_FILE | pr-create BASE HEAD TITLE BODY_FILE" >&2
+    echo "usage: $0 issue-create TITLE BODY_FILE | issue-comment ISSUE BODY_FILE | issue-comment-edit COMMENT_ID BODY_FILE | issue-edit ISSUE TITLE_FILE BODY_FILE | pr-create BASE HEAD TITLE BODY_FILE" >&2
     exit 64
 }
 
@@ -92,6 +92,14 @@ case "$1" in
         require_issue "$issue"
         require_body_file "$body_file"
         exec gh issue comment "$issue" --body-file "$body_file"
+        ;;
+    issue-comment-edit)
+        [ "$#" -eq 3 ] || usage
+        comment_id=$2
+        body_file=$3
+        require_issue "$comment_id"
+        require_body_file "$body_file"
+        exec gh api --method PATCH "repos/{owner}/{repo}/issues/comments/$comment_id" --field "body=@$body_file"
         ;;
     issue-edit)
         [ "$#" -eq 4 ] || usage
