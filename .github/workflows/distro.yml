@@ -153,7 +153,7 @@ jobs:
           ./packaging/nix/test-root-flake-ci.sh
           ./packaging/nix/check-root-flake-ci.sh
 
-      - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
+      - uses: DeterminateSystems/nix-installer-action@b67ad2f0e8376a0bc947db191e4484285b6f5b56 # main
 
       # ADR 0019: caching is optional.  Do not make the reference build depend
       # on an authenticated third-party cache service.
