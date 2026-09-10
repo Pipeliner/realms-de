@@ -39,7 +39,7 @@ for line in \
     grep -F -x -q "$line" "$helper" || fail 'helper command surface changed'
 done
 
-helper_gh_count=$(grep -c -E '^[[:space:]]*exec gh[[:space:]]' "$helper" || true)
+helper_gh_count=$(grep -c -E '^[[:space:]]*(exec[[:space:]]+)?gh[[:space:]]' "$helper" || true)
 [ "$helper_gh_count" -eq 5 ] || fail 'helper has an unapproved GitHub CLI invocation'
 if grep -n -E '(^|[[:space:];])eval[[:space:]]|<<' "$helper" >/dev/null ||
     awk '{ if (sub(/\\$/, "")) { printf "%s", $0 } else { printf "%s ", $0 } }' "$helper" |

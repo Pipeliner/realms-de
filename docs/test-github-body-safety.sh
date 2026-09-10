@@ -38,6 +38,12 @@ fixture=$tmp/repository
 make_fixture "$fixture"
 expect_pass "$fixture"
 
+bare_gh_fixture=$tmp/bare-gh-repository
+make_fixture "$bare_gh_fixture"
+printf '%s%s\n' 'g' 'h api repos/{owner}/{repo}' >>"$bare_gh_fixture/scripts/gh-body-file"
+git -C "$bare_gh_fixture" add scripts/gh-body-file
+expect_fail "$bare_gh_fixture"
+
 printf '%s\n' 'unsafe=$''(id)' >>"$fixture/scripts/gh-body-file"
 git -C "$fixture" add scripts/gh-body-file
 expect_fail "$fixture"

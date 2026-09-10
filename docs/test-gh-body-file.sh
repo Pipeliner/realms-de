@@ -85,11 +85,14 @@ expect_argv "$capture" "$expected"
 capture=$tmp/invalid.argv
 expect_no_gh_on_failure "$capture" issue-comment -1 "$body"
 expect_no_gh_on_failure "$capture" issue-comment-edit -1 "$body"
+expect_no_gh_on_failure "$capture" issue-comment 00 "$body"
+expect_no_gh_on_failure "$capture" issue-comment-edit 00 "$body"
 expect_no_gh_on_failure "$capture" issue-create 'body safety' "$tmp/missing"
 expect_no_gh_on_failure "$capture" pr-create -main codex/body-safety 'body safety' "$body"
 expect_no_gh_on_failure "$capture" issue-comment 123 "$tmp"
 expect_no_gh_on_failure "$capture" issue-comment-edit 456 "$tmp/missing"
 expect_no_gh_on_failure "$capture" issue-edit 123 "$tmp/missing" "$body"
+expect_no_gh_on_failure "$capture" issue-edit 00 "$title_file" "$body"
 expect_no_gh_on_failure "$capture" issue-edit 123 "$title_file" "$tmp/missing"
 
 empty_title=$tmp/empty-title.txt

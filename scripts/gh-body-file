@@ -58,7 +58,12 @@ read_title_file() {
 require_issue() {
     issue=$1
     case "$issue" in
-        '' | *[!0-9]* | 0)
+        '' | *[!0-9]*)
+            echo "issue must be a positive decimal identifier" >&2
+            exit 64
+            ;;
+        *[1-9]*) ;;
+        *)
             echo "issue must be a positive decimal identifier" >&2
             exit 64
             ;;
