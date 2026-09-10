@@ -114,8 +114,9 @@ What exists, honestly:
 | `realm-core` | **Implemented and tested.** Ledger, layout projection, OKLab palette derivation and lint, keymap, glyph inventory and IPC types. [`cargo test`](#try-it) is the current executable evidence. |
 | Architecture, MVP cut line, failure register | **Written.** [ARCHITECTURE](docs/ARCHITECTURE.md) · [MVP](docs/MVP.md) · [PITFALLS](docs/PITFALLS.md) |
 | Specs and ADRs | **In progress.** [`docs/specs/`](docs/specs/) · [`docs/adr/`](docs/adr/) |
-| `realm-theme` | **Implemented and tested pre-alpha library.** It renders and validates sealed generations, but has no user-facing `realmctl theme` command yet. |
-| `realm-ctl`, `realm-session`, `realm-bar`, `realm-hecate`, `realm-odin`, `realm-compositor` | **Planned.** The binaries that make a usable desktop do not exist yet. |
+| `realm-theme` and `realmctl theme` | **Implemented and tested pre-alpha surface.** The library renders and validates sealed generations; `realmctl theme apply`, `theme lint`, and `theme diff` expose it. |
+| `realm-session` | **Backend seam implemented and tested.** Its `WmBackend` contract and capability wire type exist; the `realm-wm` daemon binary and dispatch loop do not. |
+| `realm-bar`, `realm-hecate`, `realm-odin`, `realm-compositor` | **Planned.** The remaining binaries that make a usable desktop do not exist yet. |
 | Package/session/portal assets | **Tracked pre-alpha contract.** The repository contains a session entry and wrapper, systemd units, portal configuration, Nix module and native package definitions; none creates a usable Realm desktop yet. |
 | Every image in this repository | **Concept art.** Hand-drawn SVG and the design handoff's HTML prototypes. There are no screenshots of realm, because realm does not run yet. |
 

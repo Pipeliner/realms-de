@@ -46,15 +46,23 @@ The README states that the roadmap marks M0 **in progress** and that M3 is the
 MVP. It distinguishes present pre-alpha artifacts from a usable desktop:
 `realm-core` and `realm-theme` have source and tests; tracked session entry,
 wrapper, systemd-unit, portal-configuration, Nix-module and native-package
-assets exist; none provides a working log-in session because `realm-wm` is not
-implemented. The missing bar also prevents a usable desktop, but it is not the
-session wrapper’s abort condition.
+assets exist; `realmctl theme apply`, `theme lint`, and `theme diff` are
+implemented; the `realm-session` crate contains the accepted `WmBackend`
+contract and wire capability type, but none provides a working log-in session
+because the `realm-wm` daemon binary and dispatch loop are not implemented. The
+missing bar also prevents a usable desktop, but it is not the session wrapper’s
+abort condition.
 
-For this pre-alpha snapshot, absence of the `crates/realm-session` and
-`crates/realm-bar` implementation manifests (and of an implicit
-`src/bin/realm-wm.rs`) is the checked repository evidence for that `realm-wm`
-claim. `realm-theme` source/test evidence consists of its manifest, `src/lib.rs`
-and `src/theme.rs` containing Rust test evidence. The Nix module is
+For this pre-alpha snapshot, the `crates/realm-session` manifest, library and
+backend contract are checked evidence for the implemented seam. Absence of a
+`realm-wm` binary target, including the conventional `src/bin/realm-wm.rs`, is
+the checked repository evidence for the missing daemon. Absence of the
+`crates/realm-bar` manifest is the checked evidence for the missing bar.
+The `crates/realm-ctl` manifest and binary source are checked evidence for the
+implemented theme commands; the README must not imply that the full M3 control
+surface or `doctor` exists.
+`realm-theme` source/test evidence consists of its manifest, `src/lib.rs` and
+`src/theme.rs` containing Rust test evidence. The Nix module is
 `packaging/nix/nixos-module.nix`; native package-definition evidence is
 `packaging/debian/control` and `packaging/fedora/realm.spec`.
 
@@ -94,7 +102,7 @@ to be live.
 | # | Given / When / Then | Test |
 |---|---|---|
 | A1 | Given the README before its first divider, when a visitor reads it, then it contains the five-part identity; given the rule section, it contains the three exact headings with ADR 0001/0005/0009 links. | `docs/test-readme-truth-snapshot.sh` — `intro-and-rules` |
-| A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, present pre-alpha assets, absent `realm-wm`, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
+| A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, present backend seam and pre-alpha assets, absent `realm-wm` daemon binary, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
 | A3 | Given the `2026-08-30T06:18:36Z` snapshot, when each `Needs a human` table row is checked, then it binds one exact issue number, URL and title to a nonempty factual blocker; exactly the 13 accepted rows exist and #34 does not. | `docs/test-readme-truth-snapshot.sh` — `needs-human-snapshot` |
 | A4 | Given the documentation CI job, when it runs on a pull request or push, then uncommented fixture and production-check commands run in the `docs` job without a network call. | `docs/test-readme-truth-snapshot.sh` — `workflow-invocation` |
 

@@ -77,6 +77,11 @@ for path in \
     crates/realm-theme/Cargo.toml \
     crates/realm-theme/src/lib.rs \
     crates/realm-theme/src/theme.rs \
+    crates/realm-ctl/Cargo.toml \
+    crates/realm-ctl/src/main.rs \
+    crates/realm-session/Cargo.toml \
+    crates/realm-session/src/lib.rs \
+    crates/realm-session/src/backend.rs \
     packaging/session/realm.desktop \
     packaging/session/realm-session \
     packaging/systemd/realm-session.target \
@@ -89,12 +94,26 @@ done
 
 grep -F -q -e '#[test]' "$root/crates/realm-theme/src/theme.rs" \
     || fail 'README truth snapshot realm-theme must retain test evidence'
+grep -F -q -e 'name = "realmctl"' "$root/crates/realm-ctl/Cargo.toml" \
+    || fail 'README truth snapshot realmctl implementation is missing'
+grep -F -q -e 'ThemeCommand' "$root/crates/realm-ctl/src/main.rs" \
+    || fail 'README truth snapshot realmctl implementation is missing'
+grep -F -q -e 'pub trait WmBackend' "$root/crates/realm-session/src/backend.rs" \
+    || fail 'README truth snapshot realm-session seam is missing'
 
-if [ -e "$root/crates/realm-session/Cargo.toml" ] || [ -e "$root/crates/realm-bar/Cargo.toml" ]; then
-    fail 'README must not say realm-wm is absent after its implementation crate lands'
+require_section "$status_section" '`realmctl theme`' \
+    'README status must name the implemented realmctl theme surface'
+require_section "$status_section" '`WmBackend` contract' \
+    'README status must distinguish the implemented backend seam from the missing daemon'
+
+if [ -e "$root/crates/realm-bar/Cargo.toml" ]; then
+    fail 'README must not say realm-bar is absent after its implementation crate lands'
 fi
 if find "$root/crates" -type f -path '*/src/bin/realm-wm.rs' -print -quit | grep -q .; then
     fail 'README must not say realm-wm is absent after its binary lands'
+fi
+if grep -F -q -e 'name = "realm-wm"' "$root/crates/realm-session/Cargo.toml"; then
+    fail 'README must not say realm-wm is absent after its binary target lands'
 fi
 
 while IFS='|' read -r path map_name; do
