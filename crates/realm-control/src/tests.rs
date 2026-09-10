@@ -3,11 +3,14 @@ use std::fs;
 use std::os::fd::{BorrowedFd, OwnedFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use rustix::fs::{fstat, openat2, FileType, Mode, OFlags, ResolveFlags, Stat, CWD};
-use rustix::io::Errno;
+use rustix::fs::{
+    fstat, openat2, statat, AtFlags, FileType, Mode, OFlags, ResolveFlags, Stat, CWD,
+};
+use rustix::io::{Errno, FdFlags};
 use rustix::process::{geteuid, umask};
 
 use crate::{production_runtime_dir, test_runtime_dir, IpcPathError, RuntimeDir, SocketEndpoint};
@@ -542,4 +545,300 @@ fn sockaddr_un_overflow_fails_before_mutation_without_fallback() {
     let bridge = InjectedRuntimeBridge::requested(&runtime, BridgeStat::Actual);
     endpoint_error(runtime.prepare_server_endpoint_with(&bridge, 108));
     assert!(!actual_runtime.join("realm").exists());
+}
+
+/// Catches a regression where an uncertain Linux connect or completion result
+/// is treated as authority to reclaim a pathname.
+#[test]
+fn linux_stale_probe_completion_table_is_total() {
+    let _lock = process_test_lock();
+    use crate::endpoint::{
+        classify_initial_probe, classify_poll_completion, PollCompletion, ProbeDecision,
+    };
+
+    for (case, result, expected) in [
+        ("success", Ok(()), ProbeDecision::Preserve),
+        (
+            "immediate refusal",
+            Err(Errno::CONNREFUSED),
+            ProbeDecision::Stale,
+        ),
+        ("would block", Err(Errno::AGAIN), ProbeDecision::Poll),
+        ("in progress", Err(Errno::INPROGRESS), ProbeDecision::Poll),
+        (
+            "unexpected already",
+            Err(Errno::ALREADY),
+            ProbeDecision::Preserve,
+        ),
+        (
+            "other immediate error",
+            Err(Errno::ACCESS),
+            ProbeDecision::Preserve,
+        ),
+    ] {
+        assert_eq!(classify_initial_probe(result), expected, "{case}");
+    }
+
+    for (case, completion, expected) in [
+        ("timeout", PollCompletion::Timeout, ProbeDecision::Preserve),
+        (
+            "poll failure",
+            PollCompletion::PollFailure,
+            ProbeDecision::Preserve,
+        ),
+        (
+            "ready successful completion",
+            PollCompletion::Ready(Ok(Ok(()))),
+            ProbeDecision::Preserve,
+        ),
+        (
+            "ready refused completion",
+            PollCompletion::Ready(Ok(Err(Errno::CONNREFUSED))),
+            ProbeDecision::Stale,
+        ),
+        (
+            "ready other completion error",
+            PollCompletion::Ready(Ok(Err(Errno::ACCESS))),
+            ProbeDecision::Preserve,
+        ),
+        (
+            "socket error query failure",
+            PollCompletion::Ready(Err(Errno::IO)),
+            ProbeDecision::Preserve,
+        ),
+    ] {
+        assert_eq!(classify_poll_completion(completion), expected, "{case}");
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PathIdentity {
+    device: u64,
+    inode: u64,
+    mode: u32,
+}
+
+fn path_identity(path: &Path) -> PathIdentity {
+    let metadata = fs::symlink_metadata(path).unwrap();
+    PathIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        mode: metadata.mode(),
+    }
+}
+
+fn result_error<T>(result: Result<T, IpcPathError>) -> IpcPathError {
+    match result {
+        Err(error) => error,
+        Ok(_) => panic!("expected operation to fail"),
+    }
+}
+
+fn bind_control_listener(path: &Path, mode: u32) -> UnixListener {
+    let listener = UnixListener::bind(path).unwrap();
+    set_mode(path, mode);
+    listener
+}
+
+/// Catches a regression where ctl.sock is inspected before the private,
+/// independent realm-directory open-file description has won its flock.
+#[test]
+fn singleton_lock_precedes_socket_inspection() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    let first = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let first_lock = first.acquire_lock_and_reclaim().unwrap();
+
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    fs::write(&socket_path, b"unsafe entry must not be inspected").unwrap();
+    set_mode(&socket_path, 0o600);
+    let before = entry_fingerprint(&socket_path);
+    let second = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+
+    assert!(matches!(
+        result_error(second.acquire_lock_and_reclaim()),
+        IpcPathError::EndpointInUse
+    ));
+    assert_eq!(entry_fingerprint(&socket_path), before);
+    drop(first_lock);
+}
+
+/// Catches regressions that accept an unsafe lock-directory view or alter an
+/// existing ctl.sock whose type, owner, or exact mode is unsafe.
+#[test]
+fn unsafe_realm_and_socket_entries_are_preserved() {
+    let _lock = process_test_lock();
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let realm_path = runtime_path.join("realm");
+    set_mode(&realm_path, 0o755);
+    assert!(matches!(
+        result_error(endpoint.acquire_lock_and_reclaim()),
+        IpcPathError::UnsafeRealmDirectory
+    ));
+    assert_eq!(fs::metadata(&realm_path).unwrap().mode() & 0o777, 0o755);
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    fs::write(&socket_path, b"not a socket").unwrap();
+    set_mode(&socket_path, 0o600);
+    let before = entry_fingerprint(&socket_path);
+    assert!(matches!(
+        result_error(endpoint.acquire_lock_and_reclaim()),
+        IpcPathError::UnsafeSocketEntry
+    ));
+    assert_eq!(entry_fingerprint(&socket_path), before);
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let realm_path = runtime_path.join("realm");
+    let socket_path = realm_path.join("ctl.sock");
+    let target_path = realm_path.join("target");
+    fs::write(&target_path, b"symlink target").unwrap();
+    symlink(&target_path, &socket_path).unwrap();
+    let before = path_identity(&socket_path);
+    assert!(matches!(
+        result_error(endpoint.acquire_lock_and_reclaim()),
+        IpcPathError::UnsafeSocketEntry
+    ));
+    assert_eq!(path_identity(&socket_path), before);
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let _listener = bind_control_listener(&socket_path, 0o660);
+    let before = path_identity(&socket_path);
+    assert!(matches!(
+        result_error(endpoint.acquire_lock_and_reclaim()),
+        IpcPathError::UnsafeSocketEntry
+    ));
+    assert_eq!(path_identity(&socket_path), before);
+    set_mode(&socket_path, 0o600);
+
+    let mut socket_stat = statat(
+        endpoint.realm_dir().as_fd(),
+        "ctl.sock",
+        AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .unwrap();
+    socket_stat.st_uid = geteuid().as_raw().wrapping_add(1);
+    assert!(matches!(
+        crate::endpoint::validate_socket_stat(&socket_stat, geteuid().as_raw()),
+        Err(IpcPathError::UnsafeSocketEntry)
+    ));
+
+    let expected_realm = fstat(endpoint.realm_dir().as_fd()).unwrap();
+    let mut wrong_device = expected_realm;
+    wrong_device.st_dev = wrong_device.st_dev.wrapping_add(1);
+    let mut wrong_inode = expected_realm;
+    wrong_inode.st_ino = wrong_inode.st_ino.wrapping_add(1);
+    let mut wrong_type = expected_realm;
+    wrong_type.st_mode = FileType::RegularFile.as_raw_mode() | 0o700;
+    let mut wrong_owner = expected_realm;
+    wrong_owner.st_uid = wrong_owner.st_uid.wrapping_add(1);
+    let mut wrong_mode = expected_realm;
+    wrong_mode.st_mode = FileType::Directory.as_raw_mode() | 0o755;
+    for (case, candidate) in [
+        ("device", wrong_device),
+        ("inode", wrong_inode),
+        ("type", wrong_type),
+        ("owner", wrong_owner),
+        ("mode", wrong_mode),
+    ] {
+        assert!(
+            matches!(
+                crate::endpoint::validate_lock_stat(
+                    &expected_realm,
+                    &candidate,
+                    geteuid().as_raw(),
+                    FdFlags::CLOEXEC,
+                ),
+                Err(IpcPathError::UnsafeRealmDirectory)
+            ),
+            "{case}"
+        );
+    }
+    assert!(matches!(
+        crate::endpoint::validate_lock_stat(
+            &expected_realm,
+            &expected_realm,
+            geteuid().as_raw(),
+            FdFlags::empty(),
+        ),
+        Err(IpcPathError::UnsafeRealmDirectory)
+    ));
+}
+
+/// Catches a regression where a reachable listener is reclaimed or a refused
+/// unchanged socket is preserved forever.
+#[test]
+fn live_listener_is_preserved_and_verified_refusal_is_reclaimed() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let listener = bind_control_listener(&socket_path, 0o600);
+    let live_identity = path_identity(&socket_path);
+
+    assert!(matches!(
+        result_error(endpoint.acquire_lock_and_reclaim()),
+        IpcPathError::EndpointInUse
+    ));
+    assert_eq!(path_identity(&socket_path), live_identity);
+
+    drop(listener);
+    let _lock_owner = endpoint.acquire_lock_and_reclaim().unwrap();
+    assert!(!socket_path.exists());
+}
+
+/// Catches a regression where the stale probe's original pathname identity is
+/// not compared with a replacement made before the final no-follow stat.
+#[test]
+fn stale_reclaim_rechecks_identity_before_unlink() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let stale_listener = bind_control_listener(&socket_path, 0o600);
+    let stale_identity = path_identity(&socket_path);
+    drop(stale_listener);
+
+    let replacement_path = runtime_path.join("realm/replacement.sock");
+    let mut replacement = None;
+    let error = result_error(endpoint.acquire_lock_and_reclaim_with(|| {
+        replacement = Some(bind_control_listener(&replacement_path, 0o600));
+        fs::remove_file(&socket_path).unwrap();
+        fs::rename(&replacement_path, &socket_path).unwrap();
+    }));
+
+    assert!(matches!(error, IpcPathError::EndpointInUse));
+    assert!(replacement.is_some());
+    let replacement_identity = path_identity(&socket_path);
+    assert_ne!(replacement_identity, stale_identity);
 }
