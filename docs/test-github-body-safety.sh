@@ -38,6 +38,12 @@ fixture=$tmp/repository
 make_fixture "$fixture"
 expect_pass "$fixture"
 
+byte_fixture=$tmp/byte-repository
+make_fixture "$byte_fixture"
+printf '%s\n' '# arbitrary source addition' >>"$byte_fixture/scripts/gh-body-file"
+git -C "$byte_fixture" add scripts/gh-body-file
+expect_fail "$byte_fixture"
+
 bare_gh_fixture=$tmp/bare-gh-repository
 make_fixture "$bare_gh_fixture"
 printf '%s%s\n' 'g' 'h api repos/{owner}/{repo}' >>"$bare_gh_fixture/scripts/gh-body-file"

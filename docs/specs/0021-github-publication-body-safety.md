@@ -42,8 +42,9 @@ and is not introduced here.
    `repos/{owner}/{repo}/issues/comments/COMMENT_ID`; body bytes are read by
    GitHub CLI from the validated pathname, not incorporated into a shell
    argument. The helper command surface consists of exactly the five specified
-   `exec gh` lines; any other direct or prefixed GitHub CLI invocation is
-   rejected. The safety checker rejects
+   `exec gh` lines and its complete approved byte sequence is pinned by a
+   SHA-256 digest; any byte change or other direct or prefixed GitHub CLI
+   invocation is rejected. The safety checker rejects
    helper command-substitution syntax even when its opening construct is split
    across source lines, including by POSIX backslash-newline joining.
 3. `docs/check-github-body-safety.sh` deterministically examines every tracked
@@ -65,7 +66,7 @@ and is not introduced here.
 |---|---|---|
 | A1 | Given body and one-line title fixtures containing shell-looking Markdown, quotes, glob characters and newlines where applicable, when every supported helper operation runs against a fake GitHub CLI, then the fake receives the exact fixed argv, the body pathname, and the literal title value; no fixture content is evaluated. | `docs/test-gh-body-file.sh` — `literal-file-forwarding` |
 | A2 | Given invalid identifiers, arity, non-regular/unreadable body inputs, or title files with empty, unterminated, multiline, CR, NUL, or operand-looking path input, when the helper is run, then it fails before invoking the fake GitHub CLI. A readable regular body whose pathname begins with `-` remains data and is forwarded as one literal file reference without evaluation. | `docs/test-gh-body-file.sh` — `reject-before-gh` |
-| A3 | Given a tracked automation fixture containing any forbidden direct body publication form; a bare, conditional, or command-prefixed helper GitHub CLI invocation; or single-line, multiline, or POSIX backslash-newline-joined helper command substitution, when the repository guard runs, then it fails; given exactly the five approved helper commands and read-only queries, it passes. | `docs/test-github-body-safety.sh` — `tracked-command-allowlist` |
+| A3 | Given a tracked automation fixture containing any helper byte change; a forbidden direct body publication form; a bare, conditional, or command-prefixed helper GitHub CLI invocation; or single-line, multiline, or POSIX backslash-newline-joined helper command substitution, when the repository guard runs, then it fails; given the SHA-256-pinned helper and read-only queries, it passes. | `docs/test-github-body-safety.sh` — `tracked-command-allowlist` |
 | A4 | Given the normal pull-request CI workflow, when documentation checks run, then the helper and guard fixtures execute and the repository guard passes. | `.github/workflows/ci.yml` — `docs` |
 | A5 | Given the helper guard and its fixture test, when the pinned ShellCheck policy examines them, then both parse and pass without a ShellCheck suppression. | `docs/test-github-body-safety.sh` — `guard-source-is-shellcheck-clean`; `checks.shellcheck` |
 

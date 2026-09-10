@@ -29,6 +29,10 @@ fail() {
 
 helper=$root/scripts/gh-body-file
 [ -f "$helper" ] || fail 'missing approved helper'
+expected_helper_sha256=1b88fbc15e134f4ceab0169051d6be7a6b5fd7ddc0a805874705cdb78d9e3247
+actual_helper_sha256=$(sha256sum "$helper" | awk '{ print $1 }')
+[ "$actual_helper_sha256" = "$expected_helper_sha256" ] ||
+    fail 'helper bytes differ from the approved SHA-256 digest'
 
 for line in \
     "        exec gh issue create --title \"\$title\" --body-file \"\$body_file\"" \
