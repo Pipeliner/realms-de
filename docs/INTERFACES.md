@@ -46,6 +46,9 @@ pub trait WmBackend: Send {
     /// The workarea currently available for tiling.
     fn workarea(&self) -> Workarea;
 
+    /// The backend's readable descriptor for the session event loop's poll set.
+    fn event_fd(&self) -> std::os::fd::RawFd;
+
     /// Block until the next backend event, or until `deadline`.
     fn next_event(&mut self, deadline: Option<Instant>) -> Result<Option<BackendEvent>>;
 }
@@ -158,17 +161,19 @@ scoped accordingly.
 
 Two consequences worth stating plainly, because they cut both ways:
 
-1. **`apply()` maps onto one `manage` sequence.** river applies window-management
-   state atomically between `manage_start` and `manage_finish`, which is exactly
-   the guarantee the projection wants: a relayout is never observed half-done.
+1. **`apply()` maps onto one manage/render transaction.** River applies sizes
+   atomically between `manage_start` and `manage_finish`, then Realm applies
+   positions and visibility before `render_finish`. The resulting relayout is
+   never observed half-done.
 2. **`realm-session` is now on the compositor's input path, with a hard liveness
    requirement.** Under niri, a crashed session daemon left a working if
    unmanaged desktop. Under river it leaves windows unplaced and keys dead, and
-   the protocol has an `unresponsive` error: `modifiers_update` warns that the
-   compositor's input buffering is finite. **A stall is a session failure, not a
-   slow frame.** Nothing in `realm-session` may block — not a theme apply, not a
-   socket write to a wedged subscriber. This promotes the frame budgets in
-   ARCHITECTURE §4 from performance goals to correctness requirements. See
+   the protocol warns that the compositor's input buffering is finite. River
+   v0.4.8 queues 1024 seat events and then drops new input; it declares but does
+   not post its `unresponsive` protocol error. **A stall is a session failure,
+   not a slow frame.** Nothing in `realm-session` may block — not a theme apply,
+   not a socket write to a wedged subscriber. This promotes the frame budgets
+   in ARCHITECTURE §4 from performance goals to correctness requirements. See
    ADR 0013.
 
 On stability: `river-window-management-v1` is **declared stable** as of river

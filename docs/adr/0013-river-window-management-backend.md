@@ -198,9 +198,11 @@ is an empirical question for M2.
 
 ### Bad
 
-- **A stall is now a session failure, not a slow frame.** The protocol has an
-  `unresponsive` error, and `modifiers_update` warns that "the capacity of the
-  compositor to buffer incoming input events is finite". `realm-session` sits on
+- **A stall is now a session failure, not a slow frame.** The protocol declares
+  an `unresponsive` error but River v0.4.8 does not post it; instead its bounded
+  seat-event queue can drop new input. `modifiers_update` warns that "the
+  capacity of the compositor to buffer incoming input events is finite".
+  `realm-session` sits on
   the compositor's input path with a hard liveness requirement. Nothing in it
   may block: not a theme apply, not a socket write to a wedged subscriber, not a
   slow `realmctl` client. This sharpens ADR 0003's single-point-of-failure and
@@ -263,7 +265,7 @@ gapless tiling.
   them fails the build rather than the session.
 - *Planned (M2):* a liveness test asserting `realm-session` completes a
   `manage`/`render` round trip within budget while a subscriber is deliberately
-  wedged, guarding the `unresponsive` failure above.
+  wedged, guarding against input loss from River's bounded queue.
 - *Planned (M2):* a quantisation test tiling a cell-quantising terminal and
   asserting exact coverage with clipping applied.
 - *Planned (M2):* a key-repeat test asserting the repeat timer is disarmed by
