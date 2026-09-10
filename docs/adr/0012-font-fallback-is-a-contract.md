@@ -80,6 +80,17 @@ fallback for every entry.
    font: that needs an explicit licensing ADR amendment covering source,
    licence, notices, update and removal policy.
 
+### MVP shell-prompt default
+
+The generated Starship prompt cannot consume the session's in-process font
+probe. For the MVP it therefore uses the documented ASCII fallback `~` by
+default and appends the ordinary `%` prompt marker plus a separating space.
+This is the only launch-safe choice that does not guess about fonts on a target
+machine. The designed `𓂃`
+form remains inventory data and may become an explicit post-MVP opt-in once the
+generated-config activation boundary can carry verified coverage; it is not an
+automatic MVP default.
+
 ## Alternatives considered
 
 | Option | Why it was attractive | Why it lost |

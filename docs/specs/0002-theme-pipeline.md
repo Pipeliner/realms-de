@@ -61,6 +61,14 @@ Placeholder vocabulary is defined in [INTERFACES.md §2](../INTERFACES.md).
 An unknown placeholder is a **hard error** that aborts the whole apply. A
 silently blank colour is the exact bug this design exists to prevent.
 
+The shipped Starship output SHALL render a dynamic `user@host ::` prefix and an
+ASCII-safe `~% ` character by default, including the trailing space that
+separates the prompt from the command. User, host, separator, sigil, percent
+marker, Git state, and duration styles SHALL come only from derived palette
+keys. Theme generation has no runtime font-probe result, so it SHALL use
+`glyphs.prompt_sigil_fallback`; it SHALL NOT guess that the configured font can
+draw `glyphs.prompt_sigil`. The exotic prompt form is post-MVP opt-in work.
+
 Implementing it added two forms, both supersets of that table rather than
 changes to it. An alpha argument may be a path as well as a literal —
 `{{ border.seam.rgba(border.seam_alpha) }}` — so the alphas stay written down
@@ -138,6 +146,7 @@ tests with similar names are historical evidence, not a second apply contract.
 | A12 | Given an attacker-controlled staging or generation entry, when `apply` runs, then descriptor-relative no-follow validation refuses it without modifying its destination | SPEC 0011 |
 | A13 | Given a symlinked configuration root spelled directly, with trailing separators, with terminal `.` components, or both, or a symlinked `helm` palette directory or `palette.toml`, when palette loading or first-run initialization runs, then it refuses without reading or writing the link destination | `theme::tests::a_symlinked_palette_path_is_refused_without_touching_its_destination`, `theme::tests::a_symlinked_palette_root_with_a_trailing_separator_is_refused_without_initializing_its_destination`, `theme::tests::a_symlinked_palette_root_with_terminal_dot_is_refused_without_reading_its_destination` |
 | A14 | Given a generation output parent is replaced after its directory descriptor is acquired, when staging, validation, cleanup, or commit proceeds, then no operation follows the replacement outside the held generation tree | SPEC 0011 |
+| A15 | Given the shipped palette, when the Starship template renders, then it contains dynamic user and host modules, the literal separator, an ASCII `~% ` character with a trailing command separator, thoth teal for the normal prompt, palette accents for Git/error states, and no exotic prompt sigil | `render::tests::starship_prompt_is_complete_and_ascii_safe_by_default` |
 
 A9 and A10 are exercised through the `helmctl` integration tests. A10 requires
 the generation-aware read-only boundary from SPEC 0011; the legacy

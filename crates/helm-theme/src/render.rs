@@ -304,6 +304,36 @@ mod tests {
     }
 
     #[test]
+    fn starship_prompt_is_complete_and_ascii_safe_by_default() {
+        let p = shipped();
+        let d = p.derived();
+        let template = templates()
+            .into_iter()
+            .find(|template| template.id == "starship")
+            .expect("the shipped Starship template must exist");
+        let output = render(&p, template.id, template.source).expect("Starship must render");
+
+        assert!(output.contains("$username\\\n"));
+        assert!(output.contains("$hostname\\\n"));
+        assert!(output.contains("[ :: ]"));
+        assert!(output.contains("[username]"));
+        assert!(output.contains("[hostname]"));
+        assert!(output.contains(&format!(
+            "success_symbol = \"[{}](bold fg:{})[%](bold fg:{}) \"",
+            p.glyphs.prompt_sigil_fallback,
+            d.accent.teal.hex(),
+            d.accent.teal.hex()
+        )));
+        assert!(output.contains(&format!(
+            "error_symbol = \"[{}](bold fg:{})[%](bold fg:{}) \"",
+            p.glyphs.prompt_sigil_fallback,
+            d.accent.gold.hex(),
+            d.accent.gold.hex()
+        )));
+        assert!(!output.contains(&p.glyphs.prompt_sigil));
+    }
+
+    #[test]
     fn unknown_paths_and_transforms_are_errors_not_empty_strings() {
         let p = shipped();
         for src in [

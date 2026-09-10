@@ -2,13 +2,16 @@
 # overwrites this file. starship (thoth, the prompt) re-reads its config for
 # every prompt, so a new shell — or the next Enter — is the reload.
 #
-# The sigil comes from the palette's glyph inventory, which helm-core probes
-# against the resolved font stack at startup; if the Egyptian block is missing
-# the fallback is the one in palette.toml, not one invented here.
+# Generated configuration cannot consume the session's live font probe, so the
+# MVP prompt deliberately uses the palette's ASCII fallback.
 
 add_newline = false
 
 format = """\
+$username\
+[@](fg:{{ text.dim }})\
+$hostname\
+[ :: ](fg:{{ text.dim }})\
 $directory\
 $git_branch\
 $git_status\
@@ -17,9 +20,20 @@ $character\
 """
 
 [character]
-success_symbol = "[{{ glyphs.prompt_sigil }}](bold fg:{{ pantheon.thoth }})"
-error_symbol = "[{{ glyphs.prompt_sigil }}](bold fg:{{ accent.gold }})"
-vimcmd_symbol = "[{{ glyphs.prompt_sigil }}](bold fg:{{ accent.violet }})"
+success_symbol = "[{{ glyphs.prompt_sigil_fallback }}](bold fg:{{ pantheon.thoth }})[%](bold fg:{{ pantheon.thoth }}) "
+error_symbol = "[{{ glyphs.prompt_sigil_fallback }}](bold fg:{{ accent.gold }})[%](bold fg:{{ accent.gold }}) "
+vimcmd_symbol = "[{{ glyphs.prompt_sigil_fallback }}](bold fg:{{ accent.violet }})[%](bold fg:{{ accent.violet }}) "
+
+[username]
+show_always = true
+style_user = "fg:{{ pantheon.thoth }}"
+style_root = "bold fg:{{ accent.gold }}"
+format = "[$user]($style)"
+
+[hostname]
+ssh_only = false
+style = "fg:{{ pantheon.thoth }}"
+format = "[$hostname]($style)"
 
 [directory]
 style = "fg:{{ accent.starlight }}"
