@@ -895,7 +895,7 @@ Each row is one happy path and becomes one test.
 | A31 | Given snapshotted identities that do not all reappear plus new identities, when `InitialReplayComplete` arrives, then missing windows are removed before new windows are summoned in report order, undo is empty, one forced complete projection succeeds, and exactly one revision-1 state is published before entering `Live` | `session::tests::replay_barrier_reconciles_then_publishes_once` |
 | A32 | Given assignment or projection fails once, when pending backend work exists, then no backend event is read and exactly one next-turn retry can complete the interrupted phase; if that retry fails, the session reports a restartable fatal error | `session::tests::backend_work_gets_one_retry_and_gates_event_reads` |
 | A33 | Given `InitialReplay`, `FinalizingReplay`, a live failed desired candidate, and a live observed change awaiting projection repair, when persistence is requested, then only the two live cases produce a snapshot and both contain authoritative state rather than a replay accumulator or rejected candidate | `session::tests::persistence_exposes_only_authoritative_live_state` |
-| A34 | Given `next_win_id == u64::MAX`, when a new backend identity appears, then it is refused as exhausted without assigning `WinId(u64::MAX)`, changing the ledger, or publishing state | `session::tests::exhausted_watermark_never_allocates_the_sentinel` |
+| A34 | Given `next_win_id == u64::MAX` and an unknown identity buffered during replay, when the replay barrier stages reconciliation, then it is refused as exhausted without assigning `WinId(u64::MAX)`, changing the ledger, or publishing state | `session::tests::exhausted_watermark_never_allocates_the_sentinel` |
 
 ## Budgets
 
