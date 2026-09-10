@@ -22,8 +22,8 @@
 ### Task 1: Encode the low-FD and recovery-normalization regressions
 
 **Files:**
-- Modify: `crates/helm-theme/src/generation/lifecycle.rs`
-- Test: `crates/helm-theme/src/generation/lifecycle.rs` `generation::lifecycle::tests`
+- Modify: `crates/realm-theme/src/generation/lifecycle.rs`
+- Test: `crates/realm-theme/src/generation/lifecycle.rs` `generation::lifecycle::tests`
 
 **Interfaces:**
 - Produces a test-only low-FD child-process helper that runs the existing
@@ -37,7 +37,7 @@ Run:
 
 ```bash
 ulimit -n 256
-cargo test -p helm-theme generation::lifecycle::tests::transfer_stage_classifier_rejects_over_bound_inventory -- --exact
+cargo test -p realm-theme generation::lifecycle::tests::transfer_stage_classifier_rejects_over_bound_inventory -- --exact
 ```
 
 Expected: FAIL with `Too many open files`, proving the regression is capacity
@@ -59,8 +59,8 @@ that lacks a still-held selected descriptor.
 ### Task 2: Retain descriptors only for the selected recovery pair
 
 **Files:**
-- Modify: `crates/helm-theme/src/generation.rs:214-263,2389-2465`
-- Test: `crates/helm-theme/src/generation/lifecycle.rs`
+- Modify: `crates/realm-theme/src/generation.rs:214-263,2389-2465`
+- Test: `crates/realm-theme/src/generation/lifecycle.rs`
 
 **Interfaces:**
 - `classify_lease_transfer_staging_locked` returns ordered parsed records and
@@ -96,9 +96,9 @@ only the staging name, and fsync again.  An error stops later pairs.
 Run:
 
 ```bash
-cargo test -p helm-theme generation::lifecycle::tests::transfer_stage_classifier_rejects_over_bound_inventory -- --exact
-cargo test -p helm-theme generation::lifecycle::tests -- --nocapture
-cargo test -p helm-theme
+cargo test -p realm-theme generation::lifecycle::tests::transfer_stage_classifier_rejects_over_bound_inventory -- --exact
+cargo test -p realm-theme generation::lifecycle::tests -- --nocapture
+cargo test -p realm-theme
 ```
 
 Then run the native package driver that originally failed, and push only after

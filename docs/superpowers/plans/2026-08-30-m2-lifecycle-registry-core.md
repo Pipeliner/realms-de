@@ -4,15 +4,15 @@
 
 **Goal:** Build the descriptor-safe, crash-aware M2 registry core that creates canonical gate-closed launch records and atomically consumes a generation process lease into a lifecycle lease without an unleased or stale-drop state.
 
-**Architecture:** Keep the registry as the real child module `helm_theme::generation::lifecycle`, not a placeholder `helm-session` crate: as a child it can use the parent's private `GenerationSelection` transfer/cleanup operations, while no other crate can call them.  The first core exposes no public launch/transfer API; it owns activation-root/record validation, `lifecycle.lock`, and internal registry-only transfer/reconciliation interfaces.  It uses sealed fake ownership adapters in unit tests; real user-manager/D-Bus/profile launching remain separate #133/#135 work.
+**Architecture:** Keep the registry as the real child module `realm_theme::generation::lifecycle`, not a placeholder `realm-session` crate: as a child it can use the parent's private `GenerationSelection` transfer/cleanup operations, while no other crate can call them.  The first core exposes no public launch/transfer API; it owns activation-root/record validation, `lifecycle.lock`, and internal registry-only transfer/reconciliation interfaces.  It uses sealed fake ownership adapters in unit tests; real user-manager/D-Bus/profile launching remain separate #133/#135 work.
 
-**Tech Stack:** Rust 2021 / MSRV 1.85, `rustix` descriptor-relative filesystem APIs, existing `helm-theme` generation locking and in-file Linux fixtures.
+**Tech Stack:** Rust 2021 / MSRV 1.85, `rustix` descriptor-relative filesystem APIs, existing `realm-theme` generation locking and in-file Linux fixtures.
 
 **Spec:** `docs/specs/0012-activation-launch-lifecycle.md`, `docs/specs/0011-theme-activation-generations.md`, `docs/superpowers/specs/2026-08-30-m2-lifecycle-registry-design.md`
 
 ## Global Constraints
 
-- Never create `crates/helm-session` until it has its own real M2 implementation and red fixtures.
+- Never create `crates/realm-session` until it has its own real M2 implementation and red fixtures.
 - The lock order is `lifecycle.lock`, then SPEC 0011's `activation.lock`; reverse acquisition is forbidden.
 - All activation paths are descriptor-relative, `O_NOFOLLOW`, current-UID, exact mode 0700 directories / 0600 regular files; unsafe collisions fail closed without repair.
 - Every canonical record is UTF-8, LF-terminated, at most 4096 bytes, ordered, duplicate-free, and atomically renamed then directory-fsynced.
@@ -25,8 +25,8 @@
 ### Task 1: Make `GenerationSelection` cleanup discriminator- and identity-safe
 
 **Files:**
-- Modify: `crates/helm-theme/src/generation.rs:91-109,1816-1861,3050-3210`
-- Test: `crates/helm-theme/src/generation.rs` `generation::tests`
+- Modify: `crates/realm-theme/src/generation.rs:91-109,1816-1861,3050-3210`
+- Test: `crates/realm-theme/src/generation.rs` `generation::tests`
 
 **Interfaces:**
 - Produces private `GenerationSelection::release_matching_process_lease(&mut self) -> Result<(), String>`.
@@ -36,7 +36,7 @@
 
 - [ ] **Step 1: Write the failing stale-drop test**
 
-In the existing generation test module, select a generation for the test PID, replace its lease-name bytes with a hand-written canonical `helm-generation-lifecycle-lease-v1` record using the same generation and owner identity, then drop the original selection. Assert the lease pathname still exists and parses as lifecycle evidence.
+In the existing generation test module, select a generation for the test PID, replace its lease-name bytes with a hand-written canonical `realm-generation-lifecycle-lease-v1` record using the same generation and owner identity, then drop the original selection. Assert the lease pathname still exists and parses as lifecycle evidence.
 
 ```rust
 #[test]
@@ -53,7 +53,7 @@ fn selection_drop_never_unlinks_a_replaced_lifecycle_lease() {
 
 - [ ] **Step 2: Verify red**
 
-Run: `cargo test -p helm-theme selection_drop_never_unlinks_a_replaced_lifecycle_lease -- --nocapture`
+Run: `cargo test -p realm-theme selection_drop_never_unlinks_a_replaced_lifecycle_lease -- --nocapture`
 
 Expected: FAIL because the existing destructor unlinks the opaque filename without inspecting its content.
 
@@ -76,8 +76,8 @@ match self.read_current_lease()? {
 Run:
 
 ```bash
-cargo test -p helm-theme selection_drop_never_unlinks_a_replaced_lifecycle_lease -- --nocapture
-cargo test -p helm-theme g1_selected_old_generation_keeps_descriptor_pinned_bytes_after_new_commit -- --nocapture
+cargo test -p realm-theme selection_drop_never_unlinks_a_replaced_lifecycle_lease -- --nocapture
+cargo test -p realm-theme g1_selected_old_generation_keeps_descriptor_pinned_bytes_after_new_commit -- --nocapture
 ```
 
 Expected: both PASS.
@@ -85,16 +85,16 @@ Expected: both PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/helm-theme/src/generation.rs
+git add crates/realm-theme/src/generation.rs
 git commit -m "fix: guard generation selection lease cleanup"
 ```
 
 ### Task 2: Add canonical activation-root, session claim, inventory, and launch-record primitives
 
 **Files:**
-- Create: `crates/helm-theme/src/generation/lifecycle.rs`
-- Modify: `crates/helm-theme/src/generation.rs`
-- Test: `crates/helm-theme/src/generation/lifecycle.rs` `#[cfg(test)]`
+- Create: `crates/realm-theme/src/generation/lifecycle.rs`
+- Modify: `crates/realm-theme/src/generation.rs`
+- Test: `crates/realm-theme/src/generation/lifecycle.rs` `#[cfg(test)]`
 
 **Interfaces:**
 - Produces private `ActivationRegistry`, `SessionId([u8; 16])`, `LaunchId([u8; 16])`, `SessionClaim`, and `ActiveSessionCapability`.
@@ -106,7 +106,7 @@ git commit -m "fix: guard generation selection lease cleanup"
 
 - [ ] **Step 1: Write failing initialization/parser tests**
 
-Add tests for: absent absolute state home creates `helm/activation`, `launches`, and one zero-length mode-0600 `lifecycle.lock`; absent, empty, or relative state home is rejected without mutation; a symlink/wrong-mode lock is rejected without replacement; a claimed session independently revalidates the current UID, Linux boot ID, and exact `/proc` PID/start time before final publication and can be re-opened only through its exact canonical final record; valid direct and systemd `preparing` records parse; duplicate field, CR/no-final-LF, oversized record, wrong direct group, non-exact systemd scope name, and systemd non-`none` pre-adoption incarnation reject.  Add exact-name temporary fixtures proving empty/non-UTF8 producer-shaped artifacts are discarded, while a bad reserved name/type/mode or an entry/byte bound is retained and fails closed.
+Add tests for: absent absolute state home creates `realm/activation`, `launches`, and one zero-length mode-0600 `lifecycle.lock`; absent, empty, or relative state home is rejected without mutation; a symlink/wrong-mode lock is rejected without replacement; a claimed session independently revalidates the current UID, Linux boot ID, and exact `/proc` PID/start time before final publication and can be re-opened only through its exact canonical final record; valid direct and systemd `preparing` records parse; duplicate field, CR/no-final-LF, oversized record, wrong direct group, non-exact systemd scope name, and systemd non-`none` pre-adoption incarnation reject.  Add exact-name temporary fixtures proving empty/non-UTF8 producer-shaped artifacts are discarded, while a bad reserved name/type/mode or an entry/byte bound is retained and fails closed.
 
 ```rust
 #[test]
@@ -117,7 +117,7 @@ fn preparing_direct_record_requires_owner_process_group() {
 
 - [ ] **Step 2: Verify red**
 
-Run: `cargo test -p helm-theme lifecycle::tests::preparing_direct_record_requires_owner_process_group -- --nocapture`
+Run: `cargo test -p realm-theme lifecycle::tests::preparing_direct_record_requires_owner_process_group -- --nocapture`
 
 Expected: FAIL because `lifecycle` and `LaunchRecord` do not exist.
 
@@ -130,8 +130,8 @@ Reuse `GenerationRoot`-style descriptor helpers rather than path-based `std::fs`
 Run:
 
 ```bash
-cargo test -p helm-theme lifecycle::tests -- --nocapture
-cargo clippy -p helm-theme --all-targets --all-features -- -D warnings
+cargo test -p realm-theme lifecycle::tests -- --nocapture
+cargo clippy -p realm-theme --all-targets --all-features -- -D warnings
 ```
 
 Expected: PASS with no warnings.
@@ -139,16 +139,16 @@ Expected: PASS with no warnings.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/helm-theme/src/generation.rs crates/helm-theme/src/generation/lifecycle.rs
+git add crates/realm-theme/src/generation.rs crates/realm-theme/src/generation/lifecycle.rs
 git commit -m "feat: add lifecycle registry record core"
 ```
 
 ### Task 3: Implement linear process-to-lifecycle lease transfer
 
 **Files:**
-- Modify: `crates/helm-theme/src/generation.rs`
-- Modify: `crates/helm-theme/src/generation/lifecycle.rs`
-- Test: `crates/helm-theme/src/generation/lifecycle.rs` `#[cfg(test)]`
+- Modify: `crates/realm-theme/src/generation.rs`
+- Modify: `crates/realm-theme/src/generation/lifecycle.rs`
+- Test: `crates/realm-theme/src/generation/lifecycle.rs` `#[cfg(test)]`
 
 **Interfaces:**
 - Produces private `ActivationRegistry::adopt_prepared(session: &ActiveSessionCapability, prepared: PreparedLaunch, selection: GenerationSelection, evidence: VerifiedOwnership) -> Result<AdoptedLaunch, String>`.
@@ -185,7 +185,7 @@ assert_ne!(process_lease_exists, lifecycle_lease_exists);
 
 - [ ] **Step 2: Verify red**
 
-Run: `cargo test -p helm-theme lifecycle::tests::transfer_never_leaves_an_unleased_generation -- --nocapture`
+Run: `cargo test -p realm-theme lifecycle::tests::transfer_never_leaves_an_unleased_generation -- --nocapture`
 
 Expected: FAIL because no registry transfer operation exists.
 
@@ -214,9 +214,9 @@ same whole-inventory proof before any stale-lease or generation deletion.
 Run:
 
 ```bash
-cargo test -p helm-theme lifecycle::tests::transfer_never_leaves_an_unleased_generation -- --nocapture
-cargo test -p helm-theme lifecycle::tests::post_replace_drop_retains_lifecycle_lease -- --nocapture
-cargo test -p helm-theme --lib --quiet
+cargo test -p realm-theme lifecycle::tests::transfer_never_leaves_an_unleased_generation -- --nocapture
+cargo test -p realm-theme lifecycle::tests::post_replace_drop_retains_lifecycle_lease -- --nocapture
+cargo test -p realm-theme --lib --quiet
 ```
 
 Expected: PASS.
@@ -224,15 +224,15 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/helm-theme/src/generation.rs crates/helm-theme/src/generation/lifecycle.rs
+git add crates/realm-theme/src/generation.rs crates/realm-theme/src/generation/lifecycle.rs
 git commit -m "feat: transfer generation leases through lifecycle registry"
 ```
 
 ### Task 4: Add conservative registry reconciliation with fake proof adapters
 
 **Files:**
-- Modify: `crates/helm-theme/src/generation/lifecycle.rs`
-- Test: `crates/helm-theme/src/generation/lifecycle.rs` `#[cfg(test)]`
+- Modify: `crates/realm-theme/src/generation/lifecycle.rs`
+- Test: `crates/realm-theme/src/generation/lifecycle.rs` `#[cfg(test)]`
 
 **Interfaces:**
 - Consumes a private `GenerationLeaseCapability` derived only from an already
@@ -266,7 +266,7 @@ git commit -m "feat: transfer generation leases through lifecycle registry"
   malformed retirement evidence freezes all deletion. A final-gap replacement
   is retained for the detecting pass; a later fresh full proof may retire
   semantically identical evidence. Permanent inode provenance is deferred.
-- Threat boundary: conforming Helm writers hold the required locks and never
+- Threat boundary: conforming Realm writers hold the required locks and never
   mutate reserved retirement names. Pre-/at-retirement replacement must fail
   closed. Hostile same-UID post-proof mutation is out of M2 account-compromise
   scope; do not claim an unavailable Linux unlink-by-descriptor guarantee.
@@ -277,7 +277,7 @@ Test exact rows: `preparing` plus matching process lease for direct and determin
 
 Add a restart fixture that drops the original registry, reopens and validates
 the existing `GenerationStore`, derives a fresh private lease capability, and
-reopens the registry with it. Put a decoy `helm/generated/leases` path below
+reopens the registry with it. Put a decoy `realm/generated/leases` path below
 state home and prove reconciliation ignores it while releasing only the exact
 lease through the descriptor-derived capability. No record field or state
 path may supply config-root authority.
@@ -290,7 +290,7 @@ assert!(lifecycle_lease_exists(&generated, lease));
 
 - [ ] **Step 2: Verify red**
 
-Run: `cargo test -p helm-theme lifecycle::tests::direct_owner_death_without_witness_is_retained -- --nocapture`
+Run: `cargo test -p realm-theme lifecycle::tests::direct_owner_death_without_witness_is_retained -- --nocapture`
 
 Expected: FAIL because reconciliation does not exist.
 
@@ -308,7 +308,7 @@ specified lock order before every destructive lease pass.
 Run:
 
 ```bash
-cargo test -p helm-theme lifecycle::tests -- --nocapture
+cargo test -p realm-theme lifecycle::tests -- --nocapture
 cargo test --workspace --all-features --locked --quiet
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
@@ -320,7 +320,7 @@ Expected: every command exits 0.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/helm-theme/src/generation/lifecycle.rs
+git add crates/realm-theme/src/generation/lifecycle.rs
 git commit -m "feat: reconcile lifecycle leases conservatively"
 ```
 

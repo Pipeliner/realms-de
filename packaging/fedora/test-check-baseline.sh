@@ -10,11 +10,11 @@ if [ ! -x "$guard" ]; then
     exit 1
 fi
 
-tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/helm-fedora-baseline-test.XXXXXX")
+tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/realm-fedora-baseline-test.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 
 canonical_image='registry.fedoraproject.org/fedora:44@sha256:df52038ff64ee61affa188d78beb85cf6eecfe4e9f6042238269ccdc8e944392'
-canonical_schema='helm-fedora-baseline/v1'
+canonical_schema='realm-fedora-baseline/v1'
 tests_run=0
 
 write_manifest() {
@@ -118,7 +118,7 @@ expect_pass unsupported 2030-01-01 "$canonical_schema" unsupported 44 2027-06-02
 expect_fail_message fedora-41 2027-06-01 'admits only Fedora release 44' \
     "$canonical_schema" pre-alpha 41 2027-06-02 "$canonical_image"
 expect_fail_message wrong-schema 2027-06-01 'unsupported schema' \
-    helm-fedora-baseline/v2 pre-alpha 44 2027-06-02 "$canonical_image"
+    realm-fedora-baseline/v2 pre-alpha 44 2027-06-02 "$canonical_image"
 expect_fail_message wrong-image 2027-06-01 'image does not match SPEC 0009' \
     "$canonical_schema" pre-alpha 44 2027-06-02 \
     'registry.fedoraproject.org/fedora:44@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'

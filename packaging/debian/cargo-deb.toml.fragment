@@ -15,43 +15,43 @@
 # change to one is a change to both.
 #
 # PRE-ALPHA: `cargo deb` needs at least one [[bin]] in the packaged crate, so
-# this cannot run until M1-M2 land helm-ctl. The metadata is written now so it
+# this cannot run until M1-M2 land realm-ctl. The metadata is written now so it
 # is reviewed with everything else rather than invented in a hurry later.
 
 [package.metadata.deb]
-name = "helm"
-maintainer = "helm contributors <vadim.evard@gmail.com>"  # Keep synchronized with debian/control.
-copyright = "2026 the helm contributors"
+name = "realm"
+maintainer = "realm contributors <vadim.evard@gmail.com>"  # Keep synchronized with debian/control.
+copyright = "2026 the realm contributors"
 license-file = ["LICENSE-MIT", "0"]
 extended-description = """
-helm is a Wayland desktop built around one idea: an ordered ledger of windows is
+realm is a Wayland desktop built around one idea: an ordered ledger of windows is
 the only state that matters, and every layout is a pure projection of it.
 
-PRE-ALPHA. helm's binaries are not written yet; this package installs the
+PRE-ALPHA. realm's binaries are not written yet; this package installs the
 session contract — the wayland-session entry, the session wrapper, the systemd
 user units and the palette."""
 section = "x11"
 priority = "optional"
-depends = "$auto, helm-river (>= 0.4.0) | river (>= 0.4.0), dbus-user-session, systemd, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, foot, fuzzel, btop, zsh"
+depends = "$auto, realm-river (>= 0.4.0) | river (>= 0.4.0), dbus-user-session, systemd, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, foot, fuzzel, btop, zsh"
 recommends = "fonts-ibm-plex, fonts-symbola, gsettings-desktop-schemas, xwayland, slurp"
 suggests = "yazi, starship"
 
 # Paths are relative to the workspace root; the trailing component is the
 # destination. Mirrors packaging/debian/install.
 assets = [
-    ["packaging/session/helm-session", "usr/bin/", "755"],
-    ["packaging/session/helm.desktop", "usr/share/wayland-sessions/", "644"],
-    ["palette.toml", "usr/share/helm/", "644"],
-    ["configs/portal/helm-portals.conf", "usr/share/xdg-desktop-portal/", "644"],
-    ["docs/INSTALL.md", "usr/share/doc/helm/", "644"],
+    ["packaging/session/realm-session", "usr/bin/", "755"],
+    ["packaging/session/realm.desktop", "usr/share/wayland-sessions/", "644"],
+    ["palette.toml", "usr/share/realm/", "644"],
+    ["configs/portal/realm-portals.conf", "usr/share/xdg-desktop-portal/", "644"],
+    ["docs/INSTALL.md", "usr/share/doc/realm/", "644"],
     # Binaries land here once they exist (M1-M2), under the settled names:
-    # ["target/release/helmctl", "usr/bin/", "755"],
-    # ["target/release/helm-wm", "usr/bin/", "755"],
-    # ["target/release/helm-bar", "usr/bin/", "755"],
+    # ["target/release/realmctl", "usr/bin/", "755"],
+    # ["target/release/realm-wm", "usr/bin/", "755"],
+    # ["target/release/realm-bar", "usr/bin/", "755"],
 ]
 
 # cargo-deb installs these into /usr/lib/systemd/user and generates the enable
-# snippets. `enable = true` is what creates the helm-session.target.wants
+# snippets. `enable = true` is what creates the realm-session.target.wants
 # symlinks; without them, starting the session target starts nothing at all and
 # reports success (SPEC 0005 §4).
 #
@@ -62,6 +62,6 @@ assets = [
 # checked-in symlink tree, the way packaging/debian/rules does explicitly.
 [package.metadata.deb.systemd-units]
 unit-scripts = "packaging/systemd"
-unit-name = "helm-bar"
+unit-name = "realm-bar"
 enable = true
 start = false

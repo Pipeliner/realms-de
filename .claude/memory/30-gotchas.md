@@ -36,7 +36,7 @@ planned.
 **Cause:** reading a protocol summary rather than its XML. `place_*` orders the
 *render* list, not layout order; `propose_dimensions` is a proposal a client may
 quantise; and three companion protocols are obligations the summary omits.
-**Fix:** for any protocol helm depends on, read the XML from the source
+**Fix:** for any protocol realm depends on, read the XML from the source
 repository before writing a mapping table. A second reader who checks the
 primary source is worth more than a careful first reader who does not.
 

@@ -1,11 +1,11 @@
-# helm — architecture
+# realm — architecture
 
 > **Status: ratified 2026-08-28.** This document records the shape we are building
 > towards and *why*. It is meant to be argued with. Every decision here has an
 > ADR in [`docs/adr/`](adr/) with its alternatives and its reversal cost; a
 > decision that turns out wrong gets a new ADR, not a quiet edit.
 
-helm is a keyboard-first, gapless-tiling Wayland desktop environment. It is
+realm is a keyboard-first, gapless-tiling Wayland desktop environment. It is
 Rust-first, it has no animations, and it treats window order as the only piece
 of state that matters.
 
@@ -42,7 +42,7 @@ whenever the ledger or the workarea changes. Three things fall out for free:
 | Focus is free | Moving focus changes a flag, never a rectangle — verified by a test. |
 | Relayout is skippable | Same inputs ⇒ same output ⇒ nothing to submit to the compositor. |
 
-The projection lives in `helm-core::layout` and is already implemented and
+The projection lives in `realm-core::layout` and is already implemented and
 tested against exact-tiling invariants at five resolutions and twelve window
 counts.
 
@@ -52,7 +52,7 @@ counts.
 
 ```
                           ┌────────────────────────────────────────┐
-   L0  contracts          │              helm-core                 │
+   L0  contracts          │              realm-core                 │
                           │  ledger · layout · palette · color     │
                           │  keys · state · ipc · glyphs           │
                           └───────────────┬────────────────────────┘
@@ -61,19 +61,19 @@ counts.
    │                                      │                                  │
    ▼                                      ▼                                  ▼
 ┌────────────────┐              ┌──────────────────┐              ┌────────────────┐
-│  helm-session  │◀──unix sock──│    helm-ctl      │              │   helm-theme   │
+│  realm-session  │◀──unix sock──│    realm-ctl      │              │   realm-theme   │
 │   (daemon)     │   NDJSON     │      (CLI)       │─────uses────▶│     (lib)      │
 │                │              └──────────────────┘              │  palette.toml  │
-│  owns HelmState│                                                │   → templates  │
-│  WmBackend ────┼──▶ RiverBackend  (phase 1: helm IS the WM)     └───────┬────────┘
+│  owns RealmState│                                                │   → templates  │
+│  WmBackend ────┼──▶ RiverBackend  (phase 1: realm IS the WM)     └───────┬────────┘
 │                │    NativeBackend (phase 3)                             │
 └───────┬────────┘                                                        │ publishes
-        │ broadcasts HelmState                                            ▼
+        │ broadcasts RealmState                                            ▼
         │                                              gtk.css · kvantum · ANSI ·
         ├──────────────┬──────────────┐                yazi · btop · starship · fuzzel
         ▼              ▼              ▼
 ┌──────────────┐ ┌───────────┐ ┌────────────┐
-│   helm-bar   │ │helm-hecate│ │  helm-odin │        L2  clients
+│   realm-bar   │ │realm-hecate│ │  realm-odin │        L2  clients
 │ layer-shell  │ │ launcher  │ │  ratatui   │
 └──────────────┘ └───────────┘ └────────────┘
 
@@ -85,14 +85,14 @@ counts.
 
 | Crate | Kind | Owns | Lands in |
 |---|---|---|---|
-| `helm-core` | lib | Ledger, layout projection, palette, keymap, IPC types, glyph inventory | **M0 — done** |
-| `helm-theme` | lib | `palette.toml` → normalized outputs in one sealed immutable generation. Serial rendering, validation, future-launch pointer publication, and read-only generation diff; no pointer-switch reload | M1 |
-| `helm-ctl` | bin (`helmctl`) | `helmctl theme/orbit/ledger/doctor/run`. The scriptable surface | M1–M2 |
-| `helm-session` | bin (`helm-wm`) | Holds `HelmState`, drives a `WmBackend`, serves the control socket, launches clients. Under river it *is* the window manager, hence the binary name | M2 |
-| `helm-bar` | bin | Layer-shell bar, which-key strip, mode badge, chord echo | M2 |
-| `helm-hecate` | bin | Layer-shell fuzzy launcher (`nucleo`) | M4 |
-| `helm-odin` | bin | `ratatui` agent-harness TUI | M4 |
-| `helm-compositor` | bin | Smithay compositor; `NativeBackend` for `helm-session` | M5 |
+| `realm-core` | lib | Ledger, layout projection, palette, keymap, IPC types, glyph inventory | **M0 — done** |
+| `realm-theme` | lib | `palette.toml` → normalized outputs in one sealed immutable generation. Serial rendering, validation, future-launch pointer publication, and read-only generation diff; no pointer-switch reload | M1 |
+| `realm-ctl` | bin (`realmctl`) | `realmctl theme/orbit/ledger/doctor/run`. The scriptable surface | M1–M2 |
+| `realm-session` | bin (`realm-wm`) | Holds `RealmState`, drives a `WmBackend`, serves the control socket, launches clients. Under river it *is* the window manager, hence the binary name | M2 |
+| `realm-bar` | bin | Layer-shell bar, which-key strip, mode badge, chord echo | M2 |
+| `realm-hecate` | bin | Layer-shell fuzzy launcher (`nucleo`) | M4 |
+| `realm-odin` | bin | `ratatui` agent-harness TUI | M4 |
+| `realm-compositor` | bin | Smithay compositor; `NativeBackend` for `realm-session` | M5 |
 
 Crates join the Cargo workspace when they gain a real implementation, so a
 fresh clone always builds.
@@ -107,7 +107,7 @@ Each row links to its ADR. "Reversal" is the honest cost of changing our mind.
 |---|---|---|---|
 | [0001](adr/0001-ledger-as-single-source-of-truth.md) | Ledger + pure projection | Undo, focus and damage-tracking all become trivial | Structural — the whole DE assumes it |
 | ~~[0002](adr/0002-borrow-a-compositor-first.md)~~ | ~~Ship on **niri** first~~ | *Superseded by 0013.* Kept for the evidence that moved us | — |
-| [0013](adr/0013-river-window-management-backend.md) | Be the window manager for **river 0.4** | river 0.4 removed window management from the compositor; `river-window-management-v1` gives exact position, dimensions, node ordering, hide/show and borders — helm's ledger model exactly | Low — hidden behind `WmBackend` |
+| [0013](adr/0013-river-window-management-backend.md) | Be the window manager for **river 0.4** | river 0.4 removed window management from the compositor; `river-window-management-v1` gives exact position, dimensions, node ordering, hide/show and borders — realm's ledger model exactly | Low — hidden behind `WmBackend` |
 | [0003](adr/0003-session-daemon-owns-state.md) | A session daemon owns state; clients subscribe | Bar/launcher stay dumb; swapping the compositor changes one file | Low |
 | [0004](adr/0004-ndjson-control-socket.md) | Newline-delimited JSON over a unix socket | Scriptable with `socat`; partial frames can't be misread | Low |
 | [0005](adr/0005-palette-toml-single-source.md) | One `palette.toml` → generated themes | No colour is written down twice; contrast is derived, not filtered. Its mutable activation clauses are superseded by 0017 | Low |
@@ -126,14 +126,14 @@ The brief asks for a Smithay compositor eventually. We agree — and we are not
 starting there. Building one first means a year before anyone can log in, and
 the interesting design work, the ledger, is testable without it.
 
-So `helm-session` talks to a `WmBackend` trait. In phase 1, `RiverBackend`
+So `realm-session` talks to a `WmBackend` trait. In phase 1, `RiverBackend`
 implements it by **being river's window manager**: river 0.4 removed all window
 management from the compositor and defers it to an external process over
 `river-window-management-v1`, which offers exact positions and dimensions,
 explicit node ordering, hide/show, focus control and compositor-drawn borders.
-That is helm's model rather than an approximation of it — the ledger drives real
+That is realm's model rather than an approximation of it — the ledger drives real
 pixels from M2. In phase 3, `NativeBackend` implements the same trait in-process
-against `helm-compositor`, and nothing above the trait changes.
+against `realm-compositor`, and nothing above the trait changes.
 
 This replaces an earlier decision to ship on niri, whose scrollable-tiling model
 could only approximate the triptych and had no equivalent for stow. ADR 0002
@@ -142,7 +142,7 @@ records where we landed.
 
 Two things this costs us, stated plainly:
 
-- **helm must *implement* five companion protocols, not merely call them.**
+- **realm must *implement* five companion protocols, not merely call them.**
   `river-layer-shell-v1` (without which the bar never appears at all, since
   layer-shell under river is the window manager's job), `river-xkb-bindings-v1`
   (the whole keymap), `river-input-management-v1`, `river-xkb-config-v1`
@@ -150,7 +150,7 @@ Two things this costs us, stated plainly:
   `river-libinput-config-v1` (without which a laptop has no tap-to-click and no
   way to get one — under river 0.4 the window manager *is* the input
   configuration). M2 is scoped accordingly.
-- **`helm-session` joins the input path with a liveness requirement.** The
+- **`realm-session` joins the input path with a liveness requirement.** The
   protocol has an `unresponsive` error and finite input buffering, so a stall is
   a session failure rather than a slow frame. That promotes §4's budgets from
   performance goals to correctness requirements.
@@ -178,12 +178,12 @@ Neither word is allowed to stay an adjective. Both are tests.
 
 | Path | Budget | How it is held |
 |---|---|---|
-| Key press → new geometry submitted | < 4 ms | Projection is pure integer maths; benchmarked in CI. **Under river this is a correctness bound, not a comfort one**: helm is on the input path and a stalled window manager is a dead session |
-| State change → bar redraw | < 8 ms | Damage-tracked; `HelmState::renders_same_as` drops no-op frames |
+| Key press → new geometry submitted | < 4 ms | Projection is pure integer maths; benchmarked in CI. **Under river this is a correctness bound, not a comfort one**: realm is on the input path and a stalled window manager is a dead session |
+| State change → bar redraw | < 8 ms | Damage-tracked; `RealmState::renders_same_as` drops no-op frames |
 | Bar idle CPU | ~0% | The bar owns no timer and redraws only on a state change |
-| Sampler wakeups | 1 Hz, one thread, in `helm-session` | cpu, mem, gpu and net throughput are rates over counters with no kernel event behind them. One shared sampler off the input path is the single documented exception to the no-timers rule; the clock ticks to the next minute boundary, not every second |
+| Sampler wakeups | 1 Hz, one thread, in `realm-session` | cpu, mem, gpu and net throughput are rates over counters with no kernel event behind them. One shared sampler off the input path is the single documented exception to the no-timers rule; the clock ticks to the next minute boundary, not every second |
 | Cold session start → usable | < 900 ms | No GPU context for the bar, no icon-cache scan, no thumbnailer |
-| `helm ctl theme apply` | < 150 ms | Templates rendered serially, then one complete generation is validated, sealed, fsynced, and selected for future launches; no mutable-target shortcut or reload |
+| `realmctl theme apply` | < 150 ms | Templates rendered serially, then one complete generation is validated, sealed, fsynced, and selected for future launches; no mutable-target shortcut or reload |
 
 **Robust — the failure modes we refuse to ship** (see
 [docs/PITFALLS.md](PITFALLS.md) for the full register):
@@ -208,7 +208,7 @@ portals, lock, polkit, audio, networking, secrets. That surface is inventoried,
 researched and prioritised in
 [docs/INTEGRATION-SURFACE.md](INTEGRATION-SURFACE.md), with the evidence in
 [docs/integration/](integration/). Two findings from it changed this document:
-the bar cannot be timer-free (§4), and river has five protocols helm must serve
+the bar cannot be timer-free (§4), and river has five protocols realm must serve
 rather than three (§3).
 
 ## 5. Target platforms
@@ -217,8 +217,8 @@ Target plan and current evidence:
 
 | Platform | Delivery | Notes |
 |---|---|---|
-| **NixOS / Nix** | Root flake imports packages, `nixosModules.helm`, `homeManagerModules.helm` | Reference build with committed `flake.lock`; lock updates are reviewed dependency changes. A NixOS VM test boots the session and asserts the bar appears |
-| **Ubuntu** 24.04 LTS + | tracked native `packaging/debian/` files | The MSRV is set by the locked dependency graph's edition floor (currently Rust 1.85), not by glibc. If Helm distributes prebuilt binaries, glibc will constrain their compatibility separately. |
+| **NixOS / Nix** | Root flake imports packages, `nixosModules.realm`, `homeManagerModules.realm` | Reference build with committed `flake.lock`; lock updates are reviewed dependency changes. A NixOS VM test boots the session and asserts the bar appears |
+| **Ubuntu** 24.04 LTS + | tracked native `packaging/debian/` files | The MSRV is set by the locked dependency graph's edition floor (currently Rust 1.85), not by glibc. If Realm distributes prebuilt binaries, glibc will constrain their compatibility separately. |
 | **Compositor** | River `>= 0.4.0`, with a source selected per target | Fedora 44 has an official native candidate; availability is not compatibility evidence. Ubuntu and Nix remain governed by ADR 0010/0013 |
 | **Fedora 44 (pre-alpha)** | exactly one pinned Cargo-smoke lane plus exactly one retained-source RPM-build lane | The RPM is built but not clean-installed; graphical login and SELinux behavior remain unverified |
 
@@ -230,19 +230,15 @@ be checked mechanically before release.
 
 ### Binary names
 
-Crate names and installed binary names deliberately differ in two places, both
-to avoid a collision that would otherwise be found by a user rather than by us:
+Crate names and installed binary names deliberately differ where the executable
+role needs to be immediately clear to a user:
 
 | Crate | Binary | Why |
 |---|---|---|
-| `helm-session` | `helm-wm` | `helm-session` is already the session *wrapper* script the display manager runs. Two different things called `helm-session` in one `ps` output is a support burden, and under river the daemon genuinely is the window manager |
-| `helm-ctl` | `helmctl` | Fedora ships Kubernetes Helm as `/usr/bin/helm`. Two packages owning that path cannot coexist, and rpm refuses the install rather than warning |
+| `realm-session` | `realm-wm` | `realm-session` is already the session *wrapper* script the display manager runs. Two different things called `realm-session` in one `ps` output is a support burden, and under river the daemon genuinely is the window manager |
+| `realm-ctl` | `realmctl` | SPEC 0006 and SPEC 0025 define one unambiguous command spelling across every distribution and document |
 
-The design handoff writes the CLI as `helm ctl orbit --list`. That copy is
-otherwise final, and this is a deliberate departure with a reason, per the
-precedence rule in `design/README.md`. Whether to also ship a `helm` alias where
-the name is free is **`needs-human`**: it is a branding call, not a technical
-one.
+The CLI is always `realmctl`; no forwarding alias is part of the product.
 
 ## 6. Repository layout
 
@@ -273,7 +269,7 @@ realms-de/
 
 ## 7. How this gets built
 
-helm is built **spec-first** (standing order S14): behaviour is written down in
+realm is built **spec-first** (standing order S14): behaviour is written down in
 [`docs/specs/`](specs/) — and any decision in [`docs/adr/`](adr/) — before it is
 implemented, then covered by happy-path tests that are watched to fail first.
 Layout and colour maths are the standing exception and get invariant tests

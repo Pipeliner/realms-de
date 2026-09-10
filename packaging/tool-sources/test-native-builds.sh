@@ -1,10 +1,10 @@
 #!/bin/sh
-# Helm-workspace B2: real Debian/RPM drivers consume only retained authority.
+# Realm-workspace B2: real Debian/RPM drivers consume only retained authority.
 set -eu
 
 root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 kit_builder=$root/packaging/tool-sources/build-native-source-kits.sh
-native_tmp=${HELM_NATIVE_TMPDIR:-${TMPDIR:-/tmp}}
+native_tmp=${REALM_NATIVE_TMPDIR:-${TMPDIR:-/tmp}}
 failures=0
 
 fail() {
@@ -12,8 +12,8 @@ fail() {
     failures=$((failures + 1))
 }
 
-real_cargo=${HELM_REAL_CARGO:-$(command -v cargo || true)}
-real_rustc=${HELM_REAL_RUSTC:-$(command -v rustc || true)}
+real_cargo=${REALM_REAL_CARGO:-$(command -v cargo || true)}
+real_rustc=${REALM_REAL_RUSTC:-$(command -v rustc || true)}
 if [ ! -x "$real_cargo" ] || [ ! -x "$real_rustc" ]; then
     echo "real Cargo or rustc is not executable" >&2
     exit 1
@@ -80,13 +80,13 @@ then
     exit 1
 fi
 
-tmp=$(mktemp -d "$native_tmp/helm-native-builds.XXXXXX")
+tmp=$(mktemp -d "$native_tmp/realm-native-builds.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 "$kit_builder" "$tmp/production"
 
 run_isolated() {
-    if [ "${HELM_NATIVE_NETWORK_ISOLATED:-0}" = 1 ]; then
+    if [ "${REALM_NATIVE_NETWORK_ISOLATED:-0}" = 1 ]; then
         "$@"
     elif unshare --user --map-root-user --net true >/dev/null 2>&1; then
         unshare --user --map-root-user --net "$@"
@@ -98,15 +98,15 @@ run_isolated() {
 
 make_debian_kit() {
     kit=$1
-    cp -R "$tmp/production/helm-debian-0.1.0" "$kit"
+    cp -R "$tmp/production/realm-debian-0.1.0" "$kit"
 }
 
 make_rpm_tree() {
     tree=$1
     mkdir -p "$tree/top/SOURCES" "$tree/top/SPECS" \
         "$tree/top/BUILD" "$tree/top/BUILDROOT" "$tree/top/RPMS" "$tree/top/SRPMS"
-    cp "$tmp/production/helm-0.1.0.tar.gz" "$tree/top/SOURCES/helm-0.1.0.tar.gz"
-    cp "$tmp/production/helm.spec" "$tree/top/SPECS/helm.spec"
+    cp "$tmp/production/realm-0.1.0.tar.gz" "$tree/top/SOURCES/realm-0.1.0.tar.gz"
+    cp "$tmp/production/realm.spec" "$tree/top/SPECS/realm.spec"
 }
 
 make_sentinels() {
@@ -115,26 +115,26 @@ make_sentinels() {
     for command in git curl wget ssh scp; do
         sed "s/@COMMAND@/$command/g" >"$directory/$command" <<'EOF'
 #!/bin/sh
-printf 'forbidden|command=@COMMAND@|cwd=%s|args=%s\n' "$PWD" "$*" >>"${HELM_SENTINEL_LOG:?}"
+printf 'forbidden|command=@COMMAND@|cwd=%s|args=%s\n' "$PWD" "$*" >>"${REALM_SENTINEL_LOG:?}"
 exit 97
 EOF
         chmod +x "$directory/$command"
     done
     cat >"$directory/cargo" <<'EOF'
 #!/bin/sh
-printf 'cargo|cwd=%s|home=%s|args=%s\n' "$PWD" "${CARGO_HOME:-}" "$*" >>"${HELM_SENTINEL_LOG:?}"
-if [ ! -e "${HELM_CARGO_START_MARKER:?}" ]; then
+printf 'cargo|cwd=%s|home=%s|args=%s\n' "$PWD" "${CARGO_HOME:-}" "$*" >>"${REALM_SENTINEL_LOG:?}"
+if [ ! -e "${REALM_CARGO_START_MARKER:?}" ]; then
     if find "${CARGO_HOME:?}" -mindepth 1 -print -quit | grep . >/dev/null; then
-        printf 'cargo-home-not-empty|home=%s\n' "$CARGO_HOME" >>"$HELM_SENTINEL_LOG"
+        printf 'cargo-home-not-empty|home=%s\n' "$CARGO_HOME" >>"$REALM_SENTINEL_LOG"
         exit 96
     fi
-    : >"$HELM_CARGO_START_MARKER"
+    : >"$REALM_CARGO_START_MARKER"
 fi
 set +e
-"${HELM_REAL_CARGO:?}" "$@"
+"${REALM_REAL_CARGO:?}" "$@"
 status=$?
 set -e
-printf 'cargo-result|status=%s\n' "$status" >>"$HELM_SENTINEL_LOG"
+printf 'cargo-result|status=%s\n' "$status" >>"$REALM_SENTINEL_LOG"
 exit "$status"
 EOF
     chmod +x "$directory/cargo"
@@ -145,7 +145,7 @@ make_rustc_selector() {
     mkdir -p "$directory"
     cat >"$directory/rustc" <<'EOF'
 #!/bin/sh
-printf 'rustc-selector|cwd=%s|args=%s\n' "$PWD" "$*" >>"${HELM_SENTINEL_LOG:?}"
+printf 'rustc-selector|cwd=%s|args=%s\n' "$PWD" "$*" >>"${REALM_SENTINEL_LOG:?}"
 exit 97
 EOF
     chmod +x "$directory/rustc"
@@ -157,7 +157,7 @@ make_versioned_toolchain_root() {
     rustc_path=$3
     bin=$root/usr/lib/rust-1.90/bin
     mkdir -p "$bin"
-    # Cargo instrumentation is transparent: it immediately execs HELM_REAL_CARGO.
+    # Cargo instrumentation is transparent: it immediately execs REALM_REAL_CARGO.
     # The resolver nevertheless sees a complete versioned pair, including in
     # Debhelper's nested make invocation.
     ln -s "$cargo_path" "$bin/cargo"
@@ -167,7 +167,7 @@ make_versioned_toolchain_root() {
 run_debian() {
     kit=$1
     log=$2
-    source=$kit/debian/helm-workspace/source
+    source=$kit/debian/realm-workspace/source
     cargo_home=$kit/debian/.cargo-home
     target_dir=$kit/debian/cargo-target
     fixture_state=$kit.fixture-state
@@ -187,14 +187,14 @@ run_debian() {
         CARGO_BUILD_RUSTC_WRAPPER="$selectors/rustc" \
         CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER="$selectors/rustc" \
         CARGO_HOME="$fixture_state/outer-cargo-home" \
-        HELM_EXPECTED_SOURCE="$source" \
-        HELM_EXPECTED_CARGO_HOME="$cargo_home" \
-        HELM_EXPECTED_TARGET_DIR="$target_dir" \
-        HELM_SENTINEL_LOG="$log" \
-        HELM_CARGO_START_MARKER="$fixture_state/cargo-started" \
-        HELM_REAL_CARGO="$real_cargo" \
-        HELM_REAL_RUSTC="$real_rustc" \
-        HELM_RUST_VERSIONED_ROOT="$versioned_root" \
+        REALM_EXPECTED_SOURCE="$source" \
+        REALM_EXPECTED_CARGO_HOME="$cargo_home" \
+        REALM_EXPECTED_TARGET_DIR="$target_dir" \
+        REALM_SENTINEL_LOG="$log" \
+        REALM_CARGO_START_MARKER="$fixture_state/cargo-started" \
+        REALM_REAL_CARGO="$real_cargo" \
+        REALM_REAL_RUSTC="$real_rustc" \
+        REALM_RUST_VERSIONED_ROOT="$versioned_root" \
         RUSTC="$real_rustc" \
         RUSTC_WRAPPER= \
         RUSTC_WORKSPACE_WRAPPER= \
@@ -245,9 +245,9 @@ run_rpm() {
     tree=$1
     log=$2
     top=$tree/top
-    source=$top/BUILD/helm-0.1.0/.helm-workspace/source
-    cargo_home=$top/BUILD/helm-0.1.0/.cargo-home
-    target_dir=$top/BUILD/helm-0.1.0/.cargo-target
+    source=$top/BUILD/realm-0.1.0/.realm-workspace/source
+    cargo_home=$top/BUILD/realm-0.1.0/.cargo-home
+    target_dir=$top/BUILD/realm-0.1.0/.cargo-target
     sentinels=$tree/sentinels
     selectors=$tree/selectors
     make_sentinels "$sentinels"
@@ -263,13 +263,13 @@ run_rpm() {
         CARGO_BUILD_RUSTC_WRAPPER="$selectors/rustc" \
         CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER="$selectors/rustc" \
         CARGO_HOME="$tree/outer-cargo-home" \
-        HELM_EXPECTED_SOURCE="$source" \
-        HELM_EXPECTED_CARGO_HOME="$cargo_home" \
-        HELM_EXPECTED_TARGET_DIR="$target_dir" \
-        HELM_SENTINEL_LOG="$log" \
-        HELM_CARGO_START_MARKER="$tree/cargo-started" \
-        HELM_REAL_CARGO="$real_cargo" \
-        HELM_REAL_RUSTC="$real_rustc" \
+        REALM_EXPECTED_SOURCE="$source" \
+        REALM_EXPECTED_CARGO_HOME="$cargo_home" \
+        REALM_EXPECTED_TARGET_DIR="$target_dir" \
+        REALM_SENTINEL_LOG="$log" \
+        REALM_CARGO_START_MARKER="$tree/cargo-started" \
+        REALM_REAL_CARGO="$real_cargo" \
+        REALM_REAL_RUSTC="$real_rustc" \
         RUSTC="$real_rustc" \
         RUSTC_WRAPPER= \
         RUSTC_WORKSPACE_WRAPPER= \
@@ -282,7 +282,7 @@ run_rpm() {
             --define "_topdir $top" \
             --define "rust_arches $(uname -m)" \
             --define "_userunitdir /usr/lib/systemd/user" \
-            "$top/SPECS/helm.spec"
+            "$top/SPECS/realm.spec"
 }
 
 rejects_before_cargo() {
@@ -347,16 +347,16 @@ accepts_offline_cargo() {
     esac
     test_invocation=$(grep '|args=test ' "$log" | head -n 1 || true)
     case $test_invocation in
-        *"|args=test --release --frozen --offline --locked --workspace --exclude helm-agent-sdd") ;;
+        *"|args=test --release --frozen --offline --locked --workspace --exclude realm-agent-sdd") ;;
         *) fail "$name did not run the exact package-relevant workspace test selection" ;;
     esac
     case $name in
         Debian)
-            if [ ! -x "$HELM_EXPECTED_TARGET_DIR/release/helmctl" ]; then
-                fail "$name Cargo build did not produce the staged workspace helmctl"
+            if [ ! -x "$REALM_EXPECTED_TARGET_DIR/release/realmctl" ]; then
+                fail "$name Cargo build did not produce the staged workspace realmctl"
             fi
-            deb_artifact=$(find "$HELM_EXPECTED_PACKAGE_ROOT" -maxdepth 1 \
-                -type f -name 'helm_*_*.deb' -print -quit)
+            deb_artifact=$(find "$REALM_EXPECTED_PACKAGE_ROOT" -maxdepth 1 \
+                -type f -name 'realm_*_*.deb' -print -quit)
             if [ -z "$deb_artifact" ]; then
                 fail "$name native driver did not emit a package artifact"
             else
@@ -367,12 +367,12 @@ accepts_offline_cargo() {
             fi
             ;;
         RPM)
-            rpm_artifact=$(find "$HELM_EXPECTED_PACKAGE_ROOT" -type f \
-                -name 'helm-*.rpm' -print -quit)
+            rpm_artifact=$(find "$REALM_EXPECTED_PACKAGE_ROOT" -type f \
+                -name 'realm-*.rpm' -print -quit)
             if [ -z "$rpm_artifact" ]; then
                 fail "$name native driver did not emit a package artifact"
-            elif ! rpm -qpl "$rpm_artifact" | grep -Fx '/usr/bin/helmctl' >/dev/null; then
-                fail "$name package did not contain the staged workspace helmctl"
+            elif ! rpm -qpl "$rpm_artifact" | grep -Fx '/usr/bin/realmctl' >/dev/null; then
+                fail "$name package did not contain the staged workspace realmctl"
             else
                 mkdir -p "$output.rpm-archive" "$output.rpm-root"
                 rpm_tar=$output.rpm-archive/package.tgz
@@ -396,11 +396,11 @@ accepts_offline_cargo() {
     grep '^cargo|' "$log" >"$output.cargo"
     while IFS= read -r invocation; do
         case $invocation in
-            *"|cwd=${HELM_EXPECTED_SOURCE}"*) ;;
+            *"|cwd=${REALM_EXPECTED_SOURCE}"*) ;;
             *) fail "$name invoked Cargo outside its staged canonical source" ;;
         esac
         case $invocation in
-            *"|home=${HELM_EXPECTED_CARGO_HOME}"*) ;;
+            *"|home=${REALM_EXPECTED_CARGO_HOME}"*) ;;
             *) fail "$name did not use its empty package-local Cargo home" ;;
         esac
         for flag in --frozen --offline --locked; do
@@ -432,50 +432,50 @@ rejects_injected_fetch() {
 
 make_debian_kit "$tmp/debian-invalid"
 printf 'different retained bytes\n' >> \
-    "$tmp/debian-invalid/packaging/tool-sources/bundles/helm-workspace/source.tar.gz"
+    "$tmp/debian-invalid/packaging/tool-sources/bundles/realm-workspace/source.tar.gz"
 rejects_before_cargo Debian run_debian "$tmp/debian-invalid" \
     "$tmp/debian-invalid.log" "$tmp/debian-invalid.out"
 
 make_debian_kit "$tmp/debian-valid"
-HELM_EXPECTED_SOURCE="$tmp/debian-valid/debian/helm-workspace/source"
-HELM_EXPECTED_CARGO_HOME="$tmp/debian-valid/debian/.cargo-home"
-HELM_EXPECTED_TARGET_DIR="$tmp/debian-valid/debian/cargo-target"
-HELM_EXPECTED_PACKAGE_ROOT="$tmp"
-export HELM_EXPECTED_SOURCE HELM_EXPECTED_CARGO_HOME HELM_EXPECTED_TARGET_DIR \
-    HELM_EXPECTED_PACKAGE_ROOT
+REALM_EXPECTED_SOURCE="$tmp/debian-valid/debian/realm-workspace/source"
+REALM_EXPECTED_CARGO_HOME="$tmp/debian-valid/debian/.cargo-home"
+REALM_EXPECTED_TARGET_DIR="$tmp/debian-valid/debian/cargo-target"
+REALM_EXPECTED_PACKAGE_ROOT="$tmp"
+export REALM_EXPECTED_SOURCE REALM_EXPECTED_CARGO_HOME REALM_EXPECTED_TARGET_DIR \
+    REALM_EXPECTED_PACKAGE_ROOT
 accepts_offline_cargo Debian run_debian "$tmp/debian-valid" \
     "$tmp/debian-valid.log" "$tmp/debian-valid.out"
 
 make_debian_kit "$tmp/debian-fetch"
 sed -i '/^override_dh_auto_build:/a\
-\tgit fetch https://example.invalid/helm' "$tmp/debian-fetch/debian/rules"
+\tgit fetch https://example.invalid/realm' "$tmp/debian-fetch/debian/rules"
 rejects_injected_fetch Debian run_debian "$tmp/debian-fetch" \
     "$tmp/debian-fetch.log" "$tmp/debian-fetch.out"
 
 make_rpm_tree "$tmp/rpm-invalid"
 mkdir -p "$tmp/rpm-invalid/substitution"
 tar -C "$tmp/rpm-invalid/substitution" -xzf \
-    "$tmp/rpm-invalid/top/SOURCES/helm-0.1.0.tar.gz"
+    "$tmp/rpm-invalid/top/SOURCES/realm-0.1.0.tar.gz"
 printf 'different retained bytes\n' >> \
-    "$tmp/rpm-invalid/substitution/helm-0.1.0/packaging/tool-sources/bundles/helm-workspace/source.tar.gz"
+    "$tmp/rpm-invalid/substitution/realm-0.1.0/packaging/tool-sources/bundles/realm-workspace/source.tar.gz"
 tar -C "$tmp/rpm-invalid/substitution" -czf \
-    "$tmp/rpm-invalid/top/SOURCES/helm-0.1.0.tar.gz" helm-0.1.0
+    "$tmp/rpm-invalid/top/SOURCES/realm-0.1.0.tar.gz" realm-0.1.0
 rejects_before_cargo RPM run_rpm "$tmp/rpm-invalid" \
     "$tmp/rpm-invalid.log" "$tmp/rpm-invalid.out"
 
 make_rpm_tree "$tmp/rpm-valid"
-HELM_EXPECTED_SOURCE="$tmp/rpm-valid/top/BUILD/helm-0.1.0/.helm-workspace/source"
-HELM_EXPECTED_CARGO_HOME="$tmp/rpm-valid/top/BUILD/helm-0.1.0/.cargo-home"
-HELM_EXPECTED_TARGET_DIR="$tmp/rpm-valid/top/BUILD/helm-0.1.0/.cargo-target"
-HELM_EXPECTED_PACKAGE_ROOT="$tmp/rpm-valid/top/RPMS"
-export HELM_EXPECTED_SOURCE HELM_EXPECTED_CARGO_HOME HELM_EXPECTED_TARGET_DIR \
-    HELM_EXPECTED_PACKAGE_ROOT
+REALM_EXPECTED_SOURCE="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.realm-workspace/source"
+REALM_EXPECTED_CARGO_HOME="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.cargo-home"
+REALM_EXPECTED_TARGET_DIR="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.cargo-target"
+REALM_EXPECTED_PACKAGE_ROOT="$tmp/rpm-valid/top/RPMS"
+export REALM_EXPECTED_SOURCE REALM_EXPECTED_CARGO_HOME REALM_EXPECTED_TARGET_DIR \
+    REALM_EXPECTED_PACKAGE_ROOT
 accepts_offline_cargo RPM run_rpm "$tmp/rpm-valid" \
     "$tmp/rpm-valid.log" "$tmp/rpm-valid.out"
 
 make_rpm_tree "$tmp/rpm-fetch"
-sed -i '/^%build$/a git fetch https://example.invalid/helm' \
-    "$tmp/rpm-fetch/top/SPECS/helm.spec"
+sed -i '/^%build$/a git fetch https://example.invalid/realm' \
+    "$tmp/rpm-fetch/top/SPECS/realm.spec"
 rejects_injected_fetch RPM run_rpm "$tmp/rpm-fetch" \
     "$tmp/rpm-fetch.log" "$tmp/rpm-fetch.out"
 

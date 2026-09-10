@@ -1,4 +1,4 @@
-# helm's dependency surface is small and deliberately chosen (see
+# realm's dependency surface is small and deliberately chosen (see
 # .claude/memory/20-environment.md), so the goal here is not volume — it is that
 # nobody has to remember to look. Weekly, grouped, and capped, so a stale
 # dependency is visible without the loop (S9) spending its iterations on churn.

@@ -12,7 +12,7 @@ if [ ! -x "$guard" ]; then
     exit 1
 fi
 
-tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/helm-readme-truth-test.XXXXXX")
+tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/realm-readme-truth-test.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 
 tests_run=0
@@ -30,21 +30,21 @@ make_fixture() {
         "$fixture_root/packaging/fedora" \
         "$fixture_root/configs/portal" \
         "$fixture_root/configs/templates" \
-        "$fixture_root/crates/helm-theme/src"
+        "$fixture_root/crates/realm-theme/src"
     cp "$repo_root/README.md" "$fixture_root/README.md"
     cp "$repo_root/docs/ROADMAP.md" "$fixture_root/docs/ROADMAP.md"
     cp "$repo_root/.github/workflows/ci.yml" "$fixture_root/.github/workflows/ci.yml"
     : >"$fixture_root/flake.nix"
-    : >"$fixture_root/packaging/session/helm.desktop"
-    : >"$fixture_root/packaging/session/helm-session"
-    : >"$fixture_root/packaging/systemd/helm-session.target"
-    : >"$fixture_root/configs/portal/helm-portals.conf"
-    : >"$fixture_root/crates/helm-theme/Cargo.toml"
-    : >"$fixture_root/crates/helm-theme/src/lib.rs"
-    printf '%s\n' '#[test]' >"$fixture_root/crates/helm-theme/src/theme.rs"
+    : >"$fixture_root/packaging/session/realm.desktop"
+    : >"$fixture_root/packaging/session/realm-session"
+    : >"$fixture_root/packaging/systemd/realm-session.target"
+    : >"$fixture_root/configs/portal/realm-portals.conf"
+    : >"$fixture_root/crates/realm-theme/Cargo.toml"
+    : >"$fixture_root/crates/realm-theme/src/lib.rs"
+    printf '%s\n' '#[test]' >"$fixture_root/crates/realm-theme/src/theme.rs"
     : >"$fixture_root/packaging/nix/nixos-module.nix"
     : >"$fixture_root/packaging/debian/control"
-    : >"$fixture_root/packaging/fedora/helm.spec"
+    : >"$fixture_root/packaging/fedora/realm.spec"
     : >"$fixture_root/palette.toml"
     mkdir -p "$fixture_root/design" "$fixture_root/.claude"
     printf '%s\n' "$fixture_root"
@@ -180,9 +180,9 @@ mv "$fixture_root/README.next" "$fixture_root/README.md"
 expect_fail changed-snapshot-timestamp "$fixture_root" 'README needs-human snapshot timestamp differs from the accepted snapshot'
 
 fixture_root=$(make_fixture implemented-wm-crate)
-mkdir -p "$fixture_root/crates/helm-session"
-: >"$fixture_root/crates/helm-session/Cargo.toml"
-expect_fail implemented-wm-crate "$fixture_root" 'README must not say helm-wm is absent after its implementation crate lands'
+mkdir -p "$fixture_root/crates/realm-session"
+: >"$fixture_root/crates/realm-session/Cargo.toml"
+expect_fail implemented-wm-crate "$fixture_root" 'README must not say realm-wm is absent after its implementation crate lands'
 
 fixture_root=$(make_fixture missing-nix-module)
 rm "$fixture_root/packaging/nix/nixos-module.nix"
@@ -193,11 +193,11 @@ rm "$fixture_root/packaging/debian/control"
 expect_fail missing-debian-definition "$fixture_root" 'README truth snapshot artifact is missing: packaging/debian/control'
 
 fixture_root=$(make_fixture missing-fedora-definition)
-rm "$fixture_root/packaging/fedora/helm.spec"
-expect_fail missing-fedora-definition "$fixture_root" 'README truth snapshot artifact is missing: packaging/fedora/helm.spec'
+rm "$fixture_root/packaging/fedora/realm.spec"
+expect_fail missing-fedora-definition "$fixture_root" 'README truth snapshot artifact is missing: packaging/fedora/realm.spec'
 
 fixture_root=$(make_fixture missing-theme-tests)
-rm "$fixture_root/crates/helm-theme/src/theme.rs"
-expect_fail missing-theme-tests "$fixture_root" 'README truth snapshot artifact is missing: crates/helm-theme/src/theme.rs'
+rm "$fixture_root/crates/realm-theme/src/theme.rs"
+expect_fail missing-theme-tests "$fixture_root" 'README truth snapshot artifact is missing: crates/realm-theme/src/theme.rs'
 
 printf 'PASS: %d README truth snapshot fixtures\n' "$tests_run"

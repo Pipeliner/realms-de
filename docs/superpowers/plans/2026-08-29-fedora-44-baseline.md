@@ -42,11 +42,11 @@ indexes and decision memory.
 
 ### Task 3: CI, RPM and live-document projection
 
-**Files:** Modify `.github/workflows/distro.yml`, `packaging/fedora/helm.spec`, current target/install docs and examples named by SPEC 0009.
+**Files:** Modify `.github/workflows/distro.yml`, `packaging/fedora/realm.spec`, current target/install docs and examples named by SPEC 0009.
 
 - [ ] Add a failing consistency inventory for F41/F43/unbounded-target claims and false evidence-level wording.
 - [ ] Replace the one Fedora smoke lane with the admitted F44 digest and name it pinned-base/current-packages Cargo smoke.
-- [ ] Use Fedora `river >= 0.4.0`; remove the `helm-river` alternative and false unavailable statement without imposing `<0.5`.
+- [ ] Use Fedora `river >= 0.4.0`; remove the `realm-river` alternative and false unavailable statement without imposing `<0.5`.
 - [ ] Reconcile current support documents, retaining only enumerated historical F41 references.
 - [ ] Run guard, shellcheck, Cargo formatting/clippy/tests and inspect workflow syntax.
 

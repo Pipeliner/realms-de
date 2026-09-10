@@ -9,7 +9,7 @@ guard="$root/docs/check-contribution-templates.py"
     exit 1
 }
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/helm-template-test.XXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/realm-template-test.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 fixture="$tmp/fixture"
 make_fixture() {

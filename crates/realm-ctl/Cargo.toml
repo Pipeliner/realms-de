@@ -1,0 +1,22 @@
+[package]
+name = "realm-ctl"
+description = "Command-line interface for Realm theme generation operations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+realm-core = { workspace = true }
+realm-theme = { path = "../realm-theme", version = "0.1.0" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "realmctl"
+path = "src/main.rs"

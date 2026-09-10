@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build and verify the offline, Helm-private Yazi/`ya`/Starship package route required by SPEC 0024.
+**Goal:** Build and verify the offline, Realm-private Yazi/`ya`/Starship package route required by SPEC 0024.
 
-**Architecture:** `packaging/tool-sources/` becomes the checked, typed inventory for three independently retained Cargo closures: Yazi, Starship, and Helm workspace. Native recipes consume only those inputs and install private tool binaries; systemd units receive a Helm-only PATH without mutating the user manager. A shell fixture proves policy and ownership first, then hermetic package/runtime integration proves it end to end.
+**Architecture:** `packaging/tool-sources/` becomes the checked, typed inventory for three independently retained Cargo closures: Yazi, Starship, and Realm workspace. Native recipes consume only those inputs and install private tool binaries; systemd units receive a Realm-only PATH without mutating the user manager. A shell fixture proves policy and ownership first, then hermetic package/runtime integration proves it end to end.
 
 **Tech Stack:** Python 3.10-compatible validation, POSIX shell/Bash, TOML, Cargo 1.85, Debian rules, RPM spec, systemd user units, Rust template renderer.
 
@@ -14,9 +14,9 @@
 
 - Build Yazi `25.4.8` and Starship `1.23.0` with Rust 1.85 using `cargo --frozen --offline --locked`.
 - Retain and hash each source archive, lockfile, vendor tree, source-replacement config, provenance, notices, and dependency license report.
-- Every Cargo command in Debian/Fedora recipes, including Helm workspace commands, is offline and uses retained closure inputs.
-- Install Helm-owned tools only at `/usr/lib/helm/bin/{yazi,ya,starship}`; never own `/usr/bin` tool paths.
-- Private PATH reaches direct and systemd Helm launches but never systemd-user/DBus environment import, including `HELM_IMPORT_PATH=1`.
+- Every Cargo command in Debian/Fedora recipes, including Realm workspace commands, is offline and uses retained closure inputs.
+- Install Realm-owned tools only at `/usr/lib/realm/bin/{yazi,ya,starship}`; never own `/usr/bin` tool paths.
+- Private PATH reaches direct and systemd Realm launches but never systemd-user/DBus environment import, including `REALM_IMPORT_PATH=1`.
 - Keep A3/A4, full user configuration integration, and public infrastructure out of scope.
 
 ### Task 1: Strict source-bundle inventory and B1/B5 fixtures
@@ -28,7 +28,7 @@
 - [ ] Write fixtures that first fail for an unrepresented Cargo.lock source, a missing vendor checksum entry, a source-replacement config without `replace-with`, and a dependency row without a license/notice link.
 - [ ] Run `packaging/tool-sources/test-bundle-linkage.sh`; observe each failure before extending the validator.
 - [ ] Extend the manifest schema with `kind`, `commit`, `commit_timestamp`, `lockfile`, `vendor`, `cargo_config`, and `license_report`; validate regular non-symlink files/directories and exact inventory.
-- [ ] Add explicit bundle records for Helm workspace, Yazi 25.4.8, and Starship 1.23.0 only after their retained bytes and reports exist.
+- [ ] Add explicit bundle records for Realm workspace, Yazi 25.4.8, and Starship 1.23.0 only after their retained bytes and reports exist.
 - [ ] Rerun `test-intake.sh`, `test-bundle-linkage.sh`, and `python3 check-intake.py`; run `shellcheck` on both tests.
 - [ ] Commit `build: validate offline Cargo bundle closure`.
 
@@ -40,16 +40,16 @@
 
 - [ ] Write the test so it fails when a fixture has no vendor config and when a sentinel `git`/network executable is placed before PATH.
 - [ ] Generate each vendor tree from its retained lockfile, include Cargo's checksum files, and write source replacement to the bundle-local vendor tree.
-- [ ] Use selected commands: `cargo build --frozen --offline --locked --release --package starship`; `cargo build --frozen --offline --locked --release --package yazi-fm --package yazi-cli`; and Helm workspace build/test commands.
+- [ ] Use selected commands: `cargo build --frozen --offline --locked --release --package starship`; `cargo build --frozen --offline --locked --release --package yazi-fm --package yazi-cli`; and Realm workspace build/test commands.
 - [ ] Set the version-pinned Yazi `vergen` metadata from recorded commit SHA/timestamp; build twice in distinct paths and compare the declared normalized outputs.
 - [ ] Rerun the offline test with empty registry/Git caches and save test names in SPEC 0024 B1/B2/B5.
 - [ ] Commit `build: retain M1 offline Cargo closures`.
 
 ### Task 3: Native package recipes and private file ownership
 
-**Files:** Modify `packaging/debian/rules`, `packaging/debian/control`, `packaging/fedora/helm.spec`; create `packaging/tool-sources/test-native-builds.sh`.
+**Files:** Modify `packaging/debian/rules`, `packaging/debian/control`, `packaging/fedora/realm.spec`; create `packaging/tool-sources/test-native-builds.sh`.
 
-**Interfaces:** package recipes receive `HELM_TOOL_SOURCES=$CURDIR/packaging/tool-sources`; each uses only bundle config/vendor paths and installs resulting binaries below `/usr/lib/helm/bin`.
+**Interfaces:** package recipes receive `REALM_TOOL_SOURCES=$CURDIR/packaging/tool-sources`; each uses only bundle config/vendor paths and installs resulting binaries below `/usr/lib/realm/bin`.
 
 - [ ] Add a failing static fixture asserting each Cargo invocation includes `--frozen --offline --locked`, and that neither recipe contains fetch commands or `/usr/bin/yazi`, `/usr/bin/ya`, `/usr/bin/starship` install paths.
 - [ ] Change Debian and RPM build stages to unpack bundle sources, export isolated Cargo homes/configs, build selected binaries, and install exactly the private paths.
@@ -60,15 +60,15 @@
 
 ### Task 4: Session-scoped PATH delivery and B3 regression tests
 
-**Files:** Modify `packaging/session/helm-session`, `packaging/systemd/helm-wm.service`, `packaging/systemd/helm-bar.service`, Nix unit projections; create `packaging/session/test-private-tool-path.sh`.
+**Files:** Modify `packaging/session/realm-session`, `packaging/systemd/realm-wm.service`, `packaging/systemd/realm-bar.service`, Nix unit projections; create `packaging/session/test-private-tool-path.sh`.
 
-**Interfaces:** direct launch exports `/usr/lib/helm/bin:$PATH`; Helm-owned systemd units use an explicit unit-level PATH; exported `SESSION_ENV_VARS` never contains the private prefix.
+**Interfaces:** direct launch exports `/usr/lib/realm/bin:$PATH`; Realm-owned systemd units use an explicit unit-level PATH; exported `SESSION_ENV_VARS` never contains the private prefix.
 
-- [ ] Write failing shell fixtures for direct lookup, unit PATH, absence from `systemctl --user import-environment`/`dbus-update-activation-environment`, and `HELM_IMPORT_PATH=1` importing the caller path without the private prefix.
+- [ ] Write failing shell fixtures for direct lookup, unit PATH, absence from `systemctl --user import-environment`/`dbus-update-activation-environment`, and `REALM_IMPORT_PATH=1` importing the caller path without the private prefix.
 - [ ] Capture caller PATH before private prefixing; make the direct route inherit the private directory only locally.
-- [ ] Add the explicit PATH environment to Helm units and identical Nix projections; do not add it to global manager imports.
-- [ ] Run fixture and `shellcheck packaging/session/helm-session packaging/session/test-private-tool-path.sh`.
-- [ ] Commit `feat: scope Helm private tool path to session`.
+- [ ] Add the explicit PATH environment to Realm units and identical Nix projections; do not add it to global manager imports.
+- [ ] Run fixture and `shellcheck packaging/session/realm-session packaging/session/test-private-tool-path.sh`.
+- [ ] Commit `feat: scope Realm private tool path to session`.
 
 ### Task 5: Yazi schema migration and selected-runtime configuration checks
 
@@ -78,9 +78,9 @@
 
 - [ ] Add a failing rendered-template check for every legacy key and for the six mode variants/permission names required by SPEC 0024.
 - [ ] Rewrite `[mgr]` to `[manager]`; migrate status modes to `[mode]`; map permission styles and omit `permissions_s` while using its palette role for `perm_sep`.
-- [ ] Render `templates()` through Helm's Rust renderer into `YAZI_CONFIG_HOME/theme.toml`, run selected Yazi in terminal-capable controlled environment, and assert canonical field consumption.
+- [ ] Render `templates()` through Realm's Rust renderer into `YAZI_CONFIG_HOME/theme.toml`, run selected Yazi in terminal-capable controlled environment, and assert canonical field consumption.
 - [ ] Run selected `starship prompt` with `STARSHIP_CONFIG`, assert no stderr diagnostic and the rendered prompt sigil rather than merely nonempty output.
-- [ ] Run the strict schema and runtime fixtures; commit `fix: migrate Helm Yazi theme for selected bundle`.
+- [ ] Run the strict schema and runtime fixtures; commit `fix: migrate Realm Yazi theme for selected bundle`.
 
 ### Task 6: Full evidence, review, and gradual merge
 

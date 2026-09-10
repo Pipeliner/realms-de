@@ -1,7 +1,7 @@
 # ADR 0019 — Nix CI caching is optional and must not block verification
 
 - **Status:** Accepted (2026-08-30)
-- **Deciders:** helm maintainers
+- **Deciders:** realm maintainers
 - **Related:** [ADR 0010](0010-nix-flake-as-reference-build.md)
 
 ## Context

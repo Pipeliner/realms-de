@@ -10,9 +10,9 @@ root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 destination=$1
 mkdir -p "$destination"
 destination=$(CDPATH='' cd "$destination" && pwd)
-debian_output=$destination/helm-debian-0.1.0
-rpm_output=$destination/helm-0.1.0.tar.gz
-spec_output=$destination/helm.spec
+debian_output=$destination/realm-debian-0.1.0
+rpm_output=$destination/realm-0.1.0.tar.gz
+spec_output=$destination/realm.spec
 for output in "$debian_output" "$rpm_output" "$spec_output"; do
     if [ -e "$output" ] || [ -L "$output" ]; then
         echo "native source-kit output already exists: $output" >&2
@@ -20,20 +20,20 @@ for output in "$debian_output" "$rpm_output" "$spec_output"; do
     fi
 done
 
-temporary=$(mktemp -d "$destination/.helm-native-source-kits.XXXXXX")
+temporary=$(mktemp -d "$destination/.realm-native-source-kits.XXXXXX")
 trap 'rm -rf "$temporary"' EXIT HUP INT TERM
-debian=$temporary/helm-debian-0.1.0
+debian=$temporary/realm-debian-0.1.0
 rpm_parent=$temporary/rpm
-rpm=$rpm_parent/helm-0.1.0
+rpm=$rpm_parent/realm-0.1.0
 
 copy_authority() {
     kit=$1
     mkdir -p "$kit/packaging/tool-sources/bundles"
-    for helper in check-bundle-linkage.py check-native-source-kit.py stage-helm-workspace.py; do
+    for helper in check-bundle-linkage.py check-native-source-kit.py stage-realm-workspace.py; do
         cp "$root/packaging/tool-sources/$helper" "$kit/packaging/tool-sources/$helper"
     done
-    cp -R "$root/packaging/tool-sources/bundles/helm-workspace" \
-        "$kit/packaging/tool-sources/bundles/helm-workspace"
+    cp -R "$root/packaging/tool-sources/bundles/realm-workspace" \
+        "$kit/packaging/tool-sources/bundles/realm-workspace"
 }
 
 copy_package_docs() {
@@ -53,9 +53,9 @@ copy_package_docs "$rpm"
 "$root/packaging/tool-sources/check-native-source-kit.py" debian "$debian"
 "$root/packaging/tool-sources/check-native-source-kit.py" rpm "$rpm"
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
-    -C "$rpm_parent" -czf "$temporary/helm-0.1.0.tar.gz" helm-0.1.0
-cp "$root/packaging/fedora/helm.spec" "$temporary/helm.spec"
+    -C "$rpm_parent" -czf "$temporary/realm-0.1.0.tar.gz" realm-0.1.0
+cp "$root/packaging/fedora/realm.spec" "$temporary/realm.spec"
 
 mv "$debian" "$debian_output"
-mv "$temporary/helm-0.1.0.tar.gz" "$rpm_output"
-mv "$temporary/helm.spec" "$spec_output"
+mv "$temporary/realm-0.1.0.tar.gz" "$rpm_output"
+mv "$temporary/realm.spec" "$spec_output"

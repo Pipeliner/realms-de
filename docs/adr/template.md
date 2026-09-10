@@ -1,12 +1,12 @@
 # ADR NNNN — <Title>
 
 - **Status:** Proposed (YYYY-MM-DD)
-- **Deciders:** helm maintainers
+- **Deciders:** realm maintainers
 - **Supersedes / Superseded by:** —
 
 ## Context
 
-What forces are in play, stated concretely and specific to helm. Reference the
+What forces are in play, stated concretely and specific to realm. Reference the
 design handoff, the frame budgets in `docs/ARCHITECTURE.md` §4, the target
 distros, or the failure register in `docs/PITFALLS.md` where they bear on the
 decision. Generic architecture prose does not belong here; if a sentence would

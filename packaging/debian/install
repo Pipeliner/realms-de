@@ -2,18 +2,18 @@
 #
 # Built binaries are handled by override_dh_auto_install in debian/rules,
 # because none of them exist yet (pre-alpha) and dh_install fails on a missing
-# source file. The helm-session.target.wants symlinks are created there too —
+# source file. The realm-session.target.wants symlinks are created there too —
 # see SPEC 0005 §4 for why they are shipped rather than left to [Install].
 #
 # The wrapper is committed executable, and dh_install preserves that.
-debian/helm-workspace/source/packaging/session/helm-session             usr/bin
-debian/helm-workspace/source/packaging/session/helm.desktop             usr/share/wayland-sessions
-debian/helm-workspace/source/packaging/systemd/helm-session.target      usr/lib/systemd/user
-debian/helm-workspace/source/packaging/systemd/helm-wm.service          usr/lib/systemd/user
-debian/helm-workspace/source/packaging/systemd/helm-bar.service         usr/lib/systemd/user
-debian/helm-workspace/source/packaging/systemd/helm-session-abort.service usr/lib/systemd/user
-debian/helm-workspace/source/palette.toml                               usr/share/helm
+debian/realm-workspace/source/packaging/session/realm-session             usr/bin
+debian/realm-workspace/source/packaging/session/realm.desktop             usr/share/wayland-sessions
+debian/realm-workspace/source/packaging/systemd/realm-session.target      usr/lib/systemd/user
+debian/realm-workspace/source/packaging/systemd/realm-wm.service          usr/lib/systemd/user
+debian/realm-workspace/source/packaging/systemd/realm-bar.service         usr/lib/systemd/user
+debian/realm-workspace/source/packaging/systemd/realm-session-abort.service usr/lib/systemd/user
+debian/realm-workspace/source/palette.toml                               usr/share/realm
 # The portal backend policy (SPEC 0005 §5). Without it the portal picks from
 # whatever backends are installed, and screen sharing silently produces nothing
 # because the GTK backend implements no ScreenCast on wlroots compositors.
-debian/helm-workspace/source/configs/portal/helm-portals.conf           usr/share/xdg-desktop-portal
+debian/realm-workspace/source/configs/portal/realm-portals.conf           usr/share/xdg-desktop-portal

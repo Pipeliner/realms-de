@@ -1,12 +1,12 @@
 # ADR 0014 — Local agent-SDD pilot records are tracked but non-authoritative
 
 - **Status:** Accepted (2026-08-29)
-- **Deciders:** helm maintainers, repo owner
+- **Deciders:** realm maintainers, repo owner
 - **Supersedes / Superseded by:** —
 
 ## Context
 
-helm needs concise, inspectable handoffs between human and agent sessions. The
+realm needs concise, inspectable handoffs between human and agent sessions. The
 repository already separates authority: accepted `docs/` and ADRs state product
 truth, GitHub issues organise public work, tests/CI establish executable
 behaviour, and `.claude/memory/` carries curated working knowledge. A handoff
@@ -59,7 +59,7 @@ add a background service to the MVP.
   promised.
 - Records can be stale, so observations and commands are commit-scoped and
   live Git/files/tests always win.
-- The pilot does not retroactively add L0–L6 traceability to helm.
+- The pilot does not retroactively add L0–L6 traceability to realm.
 
 ### Neutral
 
@@ -77,8 +77,8 @@ commands, IDs and Git revisions cannot cover.
 
 ## Guard
 
-*Implemented (#120):* read-only `helm-sdd gate` and
-`helm-sdd promote --dry-run` fixtures reject malformed records,
+*Implemented (#120):* read-only `realm-sdd gate` and
+`realm-sdd promote --dry-run` fixtures reject malformed records,
 raw-output-like fields, stale evidence and every transition beyond report-only
 pilot scope.
 

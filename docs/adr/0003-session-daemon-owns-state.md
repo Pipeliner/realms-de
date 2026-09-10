@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (ratified 2026-08-28); theme-reload consequence
   superseded by [ADR 0017](0017-immutable-theme-activation-generations.md)
-- **Deciders:** helm maintainers
+- **Deciders:** realm maintainers
 - **Supersedes / Superseded by:** The state/subscriber decision remains active.
   ADR 0017 supersedes the historical consequence assigning theme reload fan-out
   to the daemon.
@@ -14,13 +14,13 @@
 
 ## Context
 
-helm ships several processes that all need to know the same things: which orbit
+realm ships several processes that all need to know the same things: which orbit
 is active, which are occupied, the current layout, the input mode, the focused
 window title, the pending chord. The bar draws all six of those. The launcher
-needs the active orbit to place what it spawns. `helm ctl` needs them to print
+needs the active orbit to place what it spawns. `realmctl` needs them to print
 `orbit --list` and `ledger show`.
 
-`helm-core::state::HelmState` is exactly that set, and it is deliberately a
+`realm-core::state::RealmState` is exactly that set, and it is deliberately a
 plain data struct with no behaviour, because "the bar redraws when and only when
 this value changes" is what event-driven rendering means in practice.
 
@@ -36,9 +36,9 @@ Something has to own lifecycle, and it must not be a client.
 
 ## Decision
 
-`helm-session` is a long-lived user daemon. It, and only it:
+`realm-session` is a long-lived user daemon. It, and only it:
 
-1. Owns the authoritative `Ledger` and derives `HelmState` from it.
+1. Owns the authoritative `Ledger` and derives `RealmState` from it.
 2. Drives a `WmBackend` (ADR 0002) and reconciles the backend's window events
    into the ledger.
 3. Serves the control socket (ADR 0004): accepts `Request`s, answers
@@ -53,20 +53,20 @@ Something has to own lifecycle, and it must not be a client.
    queues. A full queue or write failure evicts that subscriber; a socket write
    may never delay window-management or input processing.
 
-Clients hold no authoritative state. `helm-bar` connects, sends
+Clients hold no authoritative state. `realm-bar` connects, sends
 `Request::Subscribe`, and renders whatever arrives. If it dies, systemd restarts
 it, it re-subscribes, and it gets a fresh snapshot. It never computes state and
 never asks the compositor anything.
 
 Coalescing is the session's job: `Event::State` is sent once per change, and
-clients additionally drop no-op frames with `HelmState::renders_same_as`.
+clients additionally drop no-op frames with `RealmState::renders_same_as`.
 
 ## Alternatives considered
 
 | Option | Why it was attractive | Why it lost |
 |---|---|---|
 | **Each client polls the compositor directly** (the waybar/eww default) | No daemon to write; each client is independently useful; a crashed client cannot take state with it because there is no shared state | N pollers means N timers, which means idle CPU never reaches zero and the frame budget fails by construction. It also means N implementations of "what does occupied mean", which drift. And every client would import the compositor's own IPC vocabulary, defeating the seam ADR 0013 depends on |
-| **The compositor serves clients directly** (sway's own IPC model) | One fewer process; lowest possible latency; the compositor already knows everything | Couples every client to the compositor. When `NativeBackend` arrives at M5, every client's protocol would change. It also means `helm-compositor` grows a socket server, a theme reloader and a process supervisor, which is scope we specifically moved out of it |
+| **The compositor serves clients directly** (sway's own IPC model) | One fewer process; lowest possible latency; the compositor already knows everything | Couples every client to the compositor. When `NativeBackend` arrives at M5, every client's protocol would change. It also means `realm-compositor` grows a socket server, a theme reloader and a process supervisor, which is scope we specifically moved out of it |
 | **A shared-memory or file-backed state blob** | Cheapest possible read; no serialisation on the hot path | No change notification without a watch, so we are back to polling or to inotify with its own edge cases. Versioning a memory layout across a package upgrade is worse than versioning JSON |
 | **D-Bus with the session as a service** | Standard desktop pattern; free activation and signalling | Argued in ADR 0004; the socket won on scriptability and on not needing a bus to be alive before the desktop is |
 
@@ -74,7 +74,7 @@ clients additionally drop no-op frames with `HelmState::renders_same_as`.
 
 ### Good
 
-- One definition of every derived value. `HelmState` is computed once.
+- One definition of every derived value. `RealmState` is computed once.
 - Clients are trivially testable: feed them JSON, assert what they draw. No
   compositor, no bus.
 - Swapping the compositor changes one module, as ADR 0002 promises.
@@ -92,19 +92,19 @@ clients additionally drop no-op frames with `HelmState::renders_same_as`.
   compositor does while it is down.
 - One extra process and one extra hop on every state change. The 8 ms budget
   absorbs it, but it is real.
-- Everything serialises through JSON, so `HelmState` must stay small. That is a
+- Everything serialises through JSON, so `RealmState` must stay small. That is a
   discipline, not a guarantee.
 
 ### Neutral
 
 - The daemon is the natural home for the theme reload fan-out (ADR 0005) and for
-  `helm ctl doctor`'s runtime checks, so those get a home for free.
+  `realmctl doctor`'s runtime checks, so those get a home for free.
 
 ## Reversal
 
-Low. The seam is `helm-core::ipc` plus the client's connection module. Folding
+Low. The seam is `realm-core::ipc` plus the client's connection module. Folding
 the daemon into the compositor later would mean moving the socket server and the
-supervisor into `helm-compositor` and leaving the wire protocol untouched:
+supervisor into `realm-compositor` and leaving the wire protocol untouched:
 clients would not notice. Estimated a few days.
 
 The signal to reconsider is latency: if the extra hop is ever measured as the
@@ -115,12 +115,12 @@ compositor and the daemon becomes a state mirror.
 
 - `state::tests::revision_alone_does_not_force_a_redraw` — fails if the no-op
   frame drop stops working, which is what keeps idle CPU at zero.
-- `state::tests::state_round_trips_through_json` — fails if `HelmState` grows a
+- `state::tests::state_round_trips_through_json` — fails if `RealmState` grows a
   field that cannot cross the socket.
-- *Planned (M2):* an integration test that starts `helm-session`, connects two
+- *Planned (M2):* an integration test that starts `realm-session`, connects two
   subscribers, applies a ledger mutation and asserts both receive exactly one
   `Event::State` with identical content.
-- *Planned (M2):* a supervision test that kills `helm-bar` and asserts the
+- *Planned (M2):* a supervision test that kills `realm-bar` and asserts the
   session is still serving and the restarted bar receives a full snapshot.
 - *Planned (M2):* a liveness test that wedges one subscriber, verifies its
   eviction, and proves a window-management round trip and a healthy subscriber

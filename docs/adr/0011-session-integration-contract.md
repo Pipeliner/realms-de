@@ -1,7 +1,7 @@
 # ADR 0011 — The session entry owns the environment handshake
 
 - **Status:** Accepted (ratified 2026-08-28); see Reversal
-- **Deciders:** helm maintainers
+- **Deciders:** realm maintainers
 - **Supersedes / Superseded by:** Fedora-specific River-vendoring premise in
   the lock-screen discussion superseded by
   [ADR 0015](0015-fedora-44-pre-alpha-baseline.md); Ubuntu and Nix remain
@@ -32,7 +32,7 @@ Two mechanisms have to be fed, and feeding one is not enough:
   services inherit.
 
 Desktops that set only the first still break bus-activated portals. Desktops
-that set only the second still break systemd user units. helm must do both, and
+that set only the second still break systemd user units. realm must do both, and
 must do both *before* starting anything that could trigger an activation.
 
 `docs/PITFALLS.md` has a whole section for this called "the classic killers" and
@@ -42,21 +42,21 @@ Electron apps are non-negotiable in a work week".
 ## Decision
 
 The session entry point is a contract, not a convenience script. It performs the
-steps below in this order, and `helm ctl doctor` verifies each one at runtime.
+steps below in this order, and `realmctl doctor` verifies each one at runtime.
 
 ### The checklist a packager must follow
 
 **1. Set the identity variables before anything else.**
 
 ```
-XDG_CURRENT_DESKTOP=helm
+XDG_CURRENT_DESKTOP=realm
 XDG_SESSION_TYPE=wayland
-XDG_SESSION_DESKTOP=helm
+XDG_SESSION_DESKTOP=realm
 ```
 
-`XDG_CURRENT_DESKTOP` selects the portal backend. It must be `helm`, and the
-portal configuration in `configs/portal/helm-portals.conf` must name a backend
-for `helm` or portals will find nothing.
+`XDG_CURRENT_DESKTOP` selects the portal backend. It must be `realm`, and the
+portal configuration in `configs/portal/realm-portals.conf` must name a backend
+for `realm` or portals will find nothing.
 
 **2. Start the compositor and wait for `WAYLAND_DISPLAY` to be real.**
 
@@ -80,8 +80,8 @@ Both. Every time. This is the step that is skipped.
 
 **4. Only now start target-owned session helpers.**
 
-`helm-session` is a systemd user unit ordered after the import. The bar and any
-fixed launcher UI are separate restartable helpers bound to the Helm target
+`realm-session` is a systemd user unit ordered after the import. The bar and any
+fixed launcher UI are separate restartable helpers bound to the Realm target
 (ADR 0003), so a crashed bar does not end the session. Candidate SPEC 0012
 requires its per-UID session claim before this global publication and keeps
 profile-launched applications in independent scopes; those applications are
@@ -90,13 +90,13 @@ not target clients and are neither stopped nor respawned by target teardown.
 **5. Declare a portal backend dependency.**
 
 The packages must depend on `xdg-desktop-portal` plus at least one backend.
-helm's own choice for M3 is `xdg-desktop-portal-gtk` for `FileChooser` and
+realm's own choice for M3 is `xdg-desktop-portal-gtk` for `FileChooser` and
 `Settings`, and `xdg-desktop-portal-wlr` for `ScreenCast` and `Screenshot`.
-`Inhibit` is explicitly `none`; helm does not claim an inhibition-policy
+`Inhibit` is explicitly `none`; realm does not claim an inhibition-policy
 contract. The toolkit file chooser remains supported through M3; do not replace
 it with a terminal chooser (ADR 0007). Ship
-`configs/portal/helm-portals.conf` mapping each interface for
-`XDG_CURRENT_DESKTOP=helm`.
+`configs/portal/realm-portals.conf` mapping each interface for
+`XDG_CURRENT_DESKTOP=realm`.
 
 **6. Set the cursor theme and size in both places.**
 
@@ -120,24 +120,24 @@ unlocked is a security failure, not a missing feature.
 
 The locker **must** be an `ext-session-lock-v1` client, never a layer-shell
 overlay: under [ADR 0013](0013-river-window-management-backend.md) an overlay
-locker would depend on `helm-session` serving layer shell, so a crash in helm
+locker would depend on `realm-session` serving layer shell, so a crash in realm
 would expose the desktop. Which client we ship is still open; see *Needs a
 human*. The idle daemon may be any `ext-idle-notify-v1` client.
 
-**9. `helm ctl doctor` verifies every one of the above.**
+**9. `realmctl doctor` verifies every one of the above.**
 
 Not a subset. The doctor is what turns this contract from documentation into
 something that fails loudly. Its checks:
 
 | Check | Covers |
 |---|---|
-| `WAYLAND_DISPLAY` and `XDG_CURRENT_DESKTOP=helm` present in the systemd user environment **and** in the D-Bus activation environment, separately reported | steps 1, 3 |
+| `WAYLAND_DISPLAY` and `XDG_CURRENT_DESKTOP=realm` present in the systemd user environment **and** in the D-Bus activation environment, separately reported | steps 1, 3 |
 | The portal config names GTK for `FileChooser` and `Settings`, `none` for `Inhibit`, and wlr for `ScreenCast`/`Screenshot`; the selected implementations resolve, and an on-demand `FileChooser.OpenFile` round trip returns a request handle within two seconds | step 5 |
 | Cursor theme resolvable and gsettings agrees with the environment | step 6 |
 | XWayland running if enabled; scale policy as configured | step 7 |
 | Idle and lock units active | step 8 |
 | Font stack covers the glyph inventory (ADR 0012); reused tools present at their version floors (ADR 0007) | dependencies |
-| `helm-session` socket present and answering `Hello` | session up |
+| `realm-session` socket present and answering `Hello` | session up |
 
 ## Alternatives considered
 
@@ -145,7 +145,7 @@ something that fails loudly. Its checks:
 |---|---|---|
 | **Let systemd's graphical session target handle it** (`graphical-session.target` with a generator) | The modern, correct-looking approach; less shell in the session entry; better integration with logind | It only covers the systemd side. Bus-activated services still inherit the bus's activation environment, so the portal problem survives untouched. It is a good idea *in addition to* the explicit import, not instead of it |
 | **Set the variables in `~/.profile` or a PAM environment file** | Applies before anything starts; no ordering problem | `WAYLAND_DISPLAY` is not known until the compositor is running, so it cannot be set ahead of time. Splitting the mechanism across two places also makes it harder to verify |
-| **Document the requirement and rely on the display manager** | Display managers already set some of this; less code for us | Display manager behaviour varies enormously and the user may be starting helm from a TTY. Relying on it means helm works for some users and mysteriously does not for others, which is the current state of the art and is what this ADR rejects |
+| **Document the requirement and rely on the display manager** | Display managers already set some of this; less code for us | Display manager behaviour varies enormously and the user may be starting realm from a TTY. Relying on it means realm works for some users and mysteriously does not for others, which is the current state of the art and is what this ADR rejects |
 
 ## Consequences
 
@@ -178,14 +178,14 @@ something that fails loudly. Its checks:
 ## Reversal
 
 Low. The contract lives in the session entry script, the systemd user units and
-the doctor's check list, all under `packaging/` and `crates/helm-ctl`. Changing
+the doctor's check list, all under `packaging/` and `crates/realm-ctl`. Changing
 the mechanism is a rewrite of one script and one check module. The *requirement*
 is not reversible: it is imposed by how D-Bus activation works.
 
 ## Guard
 
 - *Planned (M3):* the NixOS VM test boots the session and runs
-  `helm ctl doctor`, failing the build on any non-zero exit. This is the guard.
+  `realmctl doctor`, failing the build on any non-zero exit. This is the guard.
 - *Planned (M3):* a negative test that deliberately skips the
   `dbus-update-activation-environment` call and asserts `doctor` reports it.
   A health check that has never been seen to fail is not a health check.
@@ -196,7 +196,7 @@ is not reversible: it is imposed by how D-Bus activation works.
 
 ## Needs a human
 
-**Which lock screen does helm ship?** This is a security default and remains a
+**Which lock screen does realm ship?** This is a security default and remains a
 human's call. What follows corrects two premises this section originally got
 wrong, so that the choice is at least between accurate options.
 
@@ -206,7 +206,7 @@ wrong, so that the choice is at least between accurate options.
 implements it (`river/LockManager.zig`, `river/LockSurface.zig`) and reports
 `session_locked` / `session_unlocked` to the window manager. The argument, from
 SPEC 0005, is decisive: a locker drawn as a layer-shell overlay would depend on
-`helm-session` serving `river-layer-shell-v1` (ADR 0013), so a crash in **helm**
+`realm-session` serving `river-layer-shell-v1` (ADR 0013), so a crash in **realm**
 would expose the desktop. Under `ext-session-lock-v1` the compositor keeps the
 session locked even if the locker dies. Any overlay-based locker is therefore
 out.
@@ -239,10 +239,10 @@ waylock directly, gtklock via the `gtk-session-lock-0` library.
 | Maintainer | Isaac Freund — same as river, so it tracks the compositor we ship | Independent |
 | Attack surface | Very small: seven source files and a PAM path | GTK, its theme machinery, and a plugin system |
 | Theming | Four flags, `-init-color`, `-input-color`, `-input-alt-color`, `-fail-color`, all `0xRRGGBB` — which `Rgb::hex_bare()` already emits, so it themes from `palette.toml` with no patch and no template | Themed by the `gtk.css` we already generate (ADR 0005), including type and layout, at no extra cost |
-| Visual fidelity | Colour only. No clock, no text, no type. The lock screen will not look like helm | The lock screen can genuinely look like helm |
+| Visual fidelity | Colour only. No clock, no text, no type. The lock screen will not look like realm | The lock screen can genuinely look like realm |
 | Packaging | Ubuntu/Nix: one more Zig build, on a toolchain already carried under ADR 0013. Fedora: the native-River baseline in ADR 0015 means the Zig cost must be re-evaluated. | An extra library, `gtk-session-lock-0`, on three distros |
 
-Writing our own (`helm-ward`) stays out of scope: getting a lock screen wrong is
+Writing our own (`realm-ward`) stays out of scope: getting a lock screen wrong is
 the worst class of bug in a desktop. Not before M6, if ever.
 
 ### The disagreement, and where I come down
@@ -263,7 +263,7 @@ published list of things theming does not reach — a list that already exists a
 already tells users the truth about libadwaita geometry and CSD shapes.
 
 The strongest case against my own position, and it is not weak: `docs/MVP.md`
-defines success as using helm as your only desktop for a week, and a user locks
+defines success as using realm as your only desktop for a week, and a user locks
 their screen many times a day. A solid-colour locker with no clock is a visible,
 repeated regression, whereas a smaller attack surface is never *felt*. Someone
 who weights the daily experience over the tail risk should choose gtklock, and

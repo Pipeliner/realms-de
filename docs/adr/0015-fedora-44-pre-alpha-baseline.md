@@ -1,7 +1,7 @@
 # ADR 0015 — Fedora 44 is the sole explicit pre-alpha Fedora baseline
 
 - **Status:** Accepted (2026-08-29)
-- **Deciders:** helm maintainers, repo owner
+- **Deciders:** realm maintainers, repo owner
 - **Supersedes / Superseded by:** Supersedes ADR 0010's Fedora 41-or-later baseline and Fedora portion of decision 7; supersedes ADR 0013 decision 4 only for Fedora
 
 ## Context
@@ -20,13 +20,13 @@ ADR 0013 requires.
 
 The repository's current Fedora workflow has one Cargo-smoke lane and one
 retained-source RPM-build lane. The RPM lane builds `Source0` but does not
-clean-install the result, and the RPM says explicitly that it installs no Helm
+clean-install the result, and the RPM says explicitly that it installs no Realm
 binaries and no working desktop. Selecting a current build/packaging baseline
 must not be confused with satisfying M3 Fedora support.
 
 ## Decision
 
-1. Fedora 44 becomes Helm's sole explicit Fedora pre-alpha CI and packaging
+1. Fedora 44 becomes Realm's sole explicit Fedora pre-alpha CI and packaging
    baseline. Fedora 41 is removed from required CI and current support claims.
 2. Fedora 43 is not added. Supporting it would expand the one-Fedora-target
    intent and require a separate River path for a release with only 95 days of
@@ -41,7 +41,7 @@ must not be confused with satisfying M3 Fedora support.
    `rpmbuild -bb --nodeps`, but does not clean-install the resulting package.
 5. Fedora package metadata depends on Fedora's official `river >= 0.4.0`
    package. The observed Fedora 44 candidate is `river-0.4.8-1.fc44`; this is a
-   time-scoped package observation, not a tested Helm pairing. No `< 0.5`
+   time-scoped package observation, not a tested Realm pairing. No `< 0.5`
    incompatibility policy is adopted. The planned M2 protocol and headless
    integration guards remain responsible for runtime compatibility.
 6. This decision changes only Fedora's River source. Ubuntu and Nix River
@@ -71,7 +71,7 @@ must not be confused with satisfying M3 Fedora support.
 - Matrix breadth remains exactly two Fedora lanes: one Cargo smoke and one
   retained-source RPM build.
 - Fedora's maintained native River package replaces an unimplemented
-  Fedora-specific `helm-river` path.
+  Fedora-specific `realm-river` path.
 - A future Fedora release cannot become supported accidentally.
 - The recorded EOL becomes a failing local invariant instead of unguarded
   prose.
@@ -81,7 +81,7 @@ must not be confused with satisfying M3 Fedora support.
 - Fedora's fast lifecycle still requires a later explicit baseline decision.
 - The Fedora package repositories used by the smoke lane remain mutable; the
   base-image digest alone does not make package resolution reproducible.
-- The decision supplies no evidence that a complete Helm session works on
+- The decision supplies no evidence that a complete Realm session works on
   Fedora. That remains visible rather than being papered over.
 
 ### Neutral
@@ -98,7 +98,7 @@ must not be confused with satisfying M3 Fedora support.
 Low for the release identity: accept a later ADR/SPEC, replace the two exact
 Fedora lanes, reconcile package metadata and current documentation, and retain
 this ADR as history. Reconsider when Fedora 44 reaches EOL, when Fedora removes
-the required protocol-generation package, or when an implemented Helm/River
+the required protocol-generation package, or when an implemented Realm/River
 integration demonstrates an incompatibility. Do not infer a successor or an
 upper version bound from the release number alone.
 
@@ -123,7 +123,7 @@ upper version bound from the release number alone.
   memory replacement.
 - *Planned (M2, not #138):* the ADR 0013 protocol-version and headless River
   integration tests. Until they exist and pass, documentation must not call
-  Fedora River a tested Helm pairing.
+  Fedora River a tested Realm pairing.
 
 ## Needs a human
 

@@ -28,13 +28,13 @@ for path in \
     docs/INSTALL.md \
     packaging/debian/cargo-deb.toml.fragment \
     packaging/debian/control \
-    packaging/fedora/helm.spec \
+    packaging/fedora/realm.spec \
     packaging/nix/nixos-module.nix; do
     require_file "$path"
 done
 
 adr="$root/docs/adr/0012-font-fallback-is-a-contract.md"
-grep -Fq 'Helm does not redistribute Symbola or a generic Nerd Font.' "$adr" \
+grep -Fq 'Realm does not redistribute Symbola or a generic Nerd Font.' "$adr" \
     || fail 'ADR 0012 does not prohibit Symbola/Nerd Font redistribution'
 grep -Fq 'may only recommend distribution-reviewed symbol-font or' "$adr" \
     || fail 'ADR 0012 does not retain the optional symbol-font policy'
@@ -66,7 +66,7 @@ grep -E '^recommends *=.*fonts-symbola' "$cargo_deb" >/dev/null \
 grep -E '^recommends *=.*fonts-ibm-plex' "$cargo_deb" >/dev/null \
     || fail 'cargo-deb metadata does not recommend IBM Plex'
 
-fedora="$root/packaging/fedora/helm.spec"
+fedora="$root/packaging/fedora/realm.spec"
 if grep -E '^Requires(\([^)]*\))?:.*(google-noto-sans-symbols2-fonts|nerd-font|ibm-plex-mono-fonts)' "$fedora" >/dev/null; then
     fail 'Fedora spec makes a font a hard dependency'
 fi

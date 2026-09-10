@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080" role="img" aria-label="The helm desktop: a 32-pixel bar with six runic orbits, a gapless triptych of five panes named odin, thoth, hermes, horus and urania, and a which-key strip along the bottom.">
-<title>helm — the reference desktop</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080" role="img" aria-label="The realm desktop: a 32-pixel bar with six runic orbits, a gapless triptych of five panes named odin, thoth, hermes, horus and urania, and a which-key strip along the bottom.">
+<title>realm — the reference desktop</title>
 <defs>
 <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
 <stop offset="0" stop-color="#0a0c15"/><stop offset="1" stop-color="#080911"/>
@@ -36,7 +36,7 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <g fill="#d2e1ff"><circle cx="345" cy="13" r="0.9" opacity=".6"/><circle cx="826" cy="22" r="0.9" opacity=".4"/><circle cx="1286" cy="10" r="0.9" opacity=".5"/><circle cx="1690" cy="19" r="0.9" opacity=".35"/></g>
 <rect y="31" width="1920" height="1" fill="#a692ec" opacity=".4"/>
 <g color="#a692ec"><use href="#mark" x="19" y="16"/></g>
-<text class="b" x="33" y="20.5" fill="#a692ec" letter-spacing="1">helm</text>
+<text class="b" x="33" y="20.5" fill="#a692ec" letter-spacing="1">realm</text>
 <rect x="76" width="1" height="32" fill="#a692ec" opacity=".35"/>
 <rect x="82" width="28" height="32" fill="#a692ec" opacity=".14"/>
 <rect x="82" y="30" width="28" height="2" fill="#a692ec"/>
@@ -95,7 +95,7 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <text class="m" x="16" y="426" fill="#66748e">stream · run 7f3a</text>
 <g class="s" fill="#93a1ba">
 <text x="16" y="460"><tspan fill="#66748e">14:29:41</tspan> <tspan fill="#a692ec">odin    </tspan> run 7f3a summoned · 6 familiars bound</text>
-<text x="16" y="482"><tspan fill="#66748e">14:29:48</tspan> <tspan fill="#a3bff2">huginn  </tspan> scrying helm-core::layout · 411 lines</text>
+<text x="16" y="482"><tspan fill="#66748e">14:29:48</tspan> <tspan fill="#a3bff2">huginn  </tspan> scrying realm-core::layout · 411 lines</text>
 <text x="16" y="504"><tspan fill="#66748e">14:30:02</tspan> <tspan fill="#a3bff2">muninn  </tspan> cache warm · embedding 240 chunks</text>
 <text x="16" y="526"><tspan fill="#66748e">14:30:09</tspan> <tspan fill="#a3bff2">geri    </tspan> drafting stage::relayout · 3 candidate diffs</text>
 <text x="16" y="548"><tspan fill="#66748e">14:30:17</tspan> <tspan fill="#d9b06a">valkyrja</tspan> test drift in stage::relayout — reroll requested</text>
@@ -131,7 +131,7 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <g class="b">
 <text x="657" y="84"><tspan fill="#7fd4c1">nav@caldera</tspan> <tspan fill="#66748e">::</tspan></text>
 <g color="#d9b06a"><use href="#sig" x="765" y="72"/></g>
-<text x="779" y="84"><tspan fill="#d9b06a">%</tspan> <tspan fill="#c2cbde">helm ctl orbit --list</tspan></text>
+<text x="779" y="84"><tspan fill="#d9b06a">%</tspan> <tspan fill="#c2cbde">realmctl orbit --list</tspan></text>
 <g color="#93a1ba"><use href="#r1" x="666" y="93"/></g>
 <text x="682" y="104" fill="#93a1ba">triptych    3 vessels   focus: odin</text>
 <g color="#93a1ba"><use href="#r2" x="666" y="113"/></g>
@@ -145,7 +145,7 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <text x="682" y="184" fill="#93a1ba">run 7f3a summoned · attaching stream…</text>
 <text x="657" y="204"><tspan fill="#7fd4c1">nav@caldera</tspan> <tspan fill="#66748e">::</tspan></text>
 <g color="#d9b06a"><use href="#sig" x="765" y="192"/></g>
-<text x="779" y="204"><tspan fill="#d9b06a">%</tspan> <tspan fill="#c2cbde">helm ctl theme apply</tspan></text>
+<text x="779" y="204"><tspan fill="#d9b06a">%</tspan> <tspan fill="#c2cbde">realmctl theme apply</tspan></text>
 <text x="682" y="224" fill="#93a1ba">14 templates rendered · 11 clients reloaded · 96ms</text>
 <text x="657" y="244"><tspan fill="#7fd4c1">nav@caldera</tspan> <tspan fill="#66748e">::</tspan></text>
 <g color="#d9b06a"><use href="#sig" x="765" y="232"/></g>
@@ -164,12 +164,12 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <text class="h" x="1352" y="76" fill="#66748e">‹ ›</text>
 <rect x="1378.5" y="62.5" width="399" height="19" fill="#0e111b" stroke="#66748e" stroke-opacity=".4"/>
 <text class="h" x="1387" y="76" fill="#7fc9e8">◈</text>
-<text class="h" x="1402" y="76" fill="#aab6cc">docs.helm.sh/ledger/anatomy</text>
+<text class="h" x="1402" y="76" fill="#aab6cc">docs.realm.sh/ledger/anatomy</text>
 <text class="h" x="1790" y="76" fill="#66748e">✚ ☰</text>
 <g color="#4a5670"><use href="#kbd" x="1822" y="66"/></g>
 <text class="e" x="1838" y="76" fill="#4a5670">/ seek</text>
 <rect x="1340" y="86" width="580" height="526" fill="#0c0f18"/>
-<text class="m" x="1366" y="120" fill="#66748e" letter-spacing="2">HELM MANUAL · CH. 4</text>
+<text class="m" x="1366" y="120" fill="#66748e" letter-spacing="2">REALM MANUAL · CH. 4</text>
 <text x="1366" y="154" fill="#f2f5fb" font-size="20">Anatomy of the ledger</text>
 <g class="b" fill="#aab6cc">
 <text x="1366" y="190">Every vessel the compositor maps is entered into the</text>
@@ -180,7 +180,7 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <text x="1366" y="306">an earlier ledger restores the exact screen, gaps and all.</text>
 </g>
 <rect x="1366.5" y="330.5" width="527" height="62" fill="#0e111b" stroke="#66748e" stroke-opacity=".35"/>
-<text class="s" x="1380" y="354" fill="#7fc9e8">$ helm ctl ledger show</text>
+<text class="s" x="1380" y="354" fill="#7fc9e8">$ realmctl ledger show</text>
 <g color="#7fc9e8"><use href="#r1" x="1540" y="343"/></g>
 <text class="s" x="1380" y="378" fill="#7b89a4">0 odin    1 thoth    2 hermes</text>
 <g class="b" fill="#aab6cc">
@@ -213,7 +213,7 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <rect x="657" y="838" width="666" height="1" fill="#66748e" opacity=".3"/>
 <g class="h">
 <text x="657" y="858" fill="#66748e"> pid     cpu%  mem     command</text>
-<text x="657" y="877" fill="#93a1ba"><tspan fill="#a3bff2"> 1204</tspan>   12.3  1.1G    helm-session</text>
+<text x="657" y="877" fill="#93a1ba"><tspan fill="#a3bff2"> 1204</tspan>   12.3  1.1G    realm-session</text>
 <text x="657" y="895" fill="#93a1ba"> 6021   11.8  2.4G    odin-harness</text>
 <text x="657" y="913" fill="#93a1ba"> 2381    8.7  840M    hermes</text>
 <text x="657" y="931" fill="#93a1ba"> 4127    1.9   96M    mpd</text>
@@ -247,7 +247,7 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <g class="h" fill="#93a1ba">
 <text x="1358" y="784">☾ waning gibbous · 84%</text><text x="1646" y="784">☉ sets 20:14</text>
 <text x="1358" y="802">♆ ping 11ms · vpn warded</text><text x="1646" y="802">♄ tz UTC+2 · sid 21:07</text>
-<text x="1358" y="820">☿ entropy pool 3968b</text><text x="1646" y="820">♁ kernel 6.12.4-helm</text>
+<text x="1358" y="820">☿ entropy pool 3968b</text><text x="1646" y="820">♁ kernel 6.12.4-realm</text>
 </g>
 <rect x="1358" y="838" width="544" height="1" fill="#66748e" opacity=".3"/>
 <text class="m" x="1358" y="858" fill="#66748e">almanac · next transits</text>
@@ -287,6 +287,6 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
   <g id="concept-label" aria-hidden="true">
     <text x="1906" y="1070" text-anchor="end"
           font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" font-size="10.5"
-          fill="#4a5670" letter-spacing="1.2">CONCEPT RENDERING · NOT A SCREENSHOT · helm does not run yet</text>
+          fill="#4a5670" letter-spacing="1.2">CONCEPT RENDERING · NOT A SCREENSHOT · realm does not run yet</text>
   </g>
 </svg>

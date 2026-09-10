@@ -15,7 +15,7 @@
 Turn one desktop-file identity into at most one new child whose desktop argv and
 directory come from one immutable desktop snapshot, and whose profile overlay
 and generation-relative assets come from one sealed generation selected by the
-accepted M2 owner.  Helm must never call an activation themed when it used a
+accepted M2 owner.  Realm must never call an activation themed when it used a
 shell, a mutable pathname, a D-Bus owner, or global environment state.
 
 ## Scope
@@ -44,7 +44,7 @@ Admission captures the XDG data roots once: `XDG_DATA_HOME` then
 `XDG_DATA_DIRS` is unset or empty.  `HOME` is required when the former default
 is needed.  Each root is absolute, UTF-8, no-follow opened, and bounded to 64
 roots/64 KiB combined spelling; empty or relative explicit components refuse.
-For each captured spelling Helm opens the supplied root without following its
+For each captured spelling Realm opens the supplied root without following its
 final component, validates that descriptor, then opens and validates only its
 direct `applications` child without following links.  The supplied-root
 descriptor is the trust boundary; ancestors used to resolve its spelling are
@@ -57,16 +57,16 @@ continues at the next ordered root.  Once an `applications` descriptor is
 obtained, every `ENOENT`, I/O, metadata, decoding, or traversal failure,
 including after entry enumeration, refuses rather than falling through.
 
-Helm searches `applications/` descriptor-relatively in raw-byte lexicographic,
+Realm searches `applications/` descriptor-relatively in raw-byte lexicographic,
 depth-first order.  It counts every enumerated entry other than `.` and `..`
 (including non-candidates and entries whose later descriptor-relative check
 fails) as that entry is read, and refuses immediately on the 4,097th such entry
 before retaining it or reading another name.  It retains and sorts only the at
 most 4096 names already counted for a directory before descent.  `applications/`
 is depth 0; a source
-candidate may have at most 64 components below it, and Helm refuses before
+candidate may have at most 64 components below it, and Realm refuses before
 entering or accepting anything deeper.  The desktop-file id is the
-applications-relative path with every `/` replaced by `-`.  For each root Helm
+applications-relative path with every `/` replaced by `-`.  For each root Realm
 finishes the bounded scan to detect every matching mapping before considering a
 lower-priority root; a candidate found before the cap never permits early
 success.  No matching path continues scanning; exactly one matching path wins;
@@ -78,13 +78,13 @@ group/other write bit.  An unsafe directory or a failed metadata check after
 enumeration refuses rather than silently hiding a possible matching descendant.
 
 The candidate is captured once as a no-follow regular file of at most 1 MiB.
-After pre-read metadata establishes that bound, Helm reads exactly the recorded
+After pre-read metadata establishes that bound, Realm reads exactly the recorded
 size from the retained descriptor; a short read refuses and no unbounded
 read-to-EOF operation is allowed.  Device, inode, size, mtime and ctime are
 checked before and after the read; disagreement refuses.  The held bytes are
 UTF-8, have no BOM/NUL/CR, at most 4096 LF-terminated lines and 16 KiB per
 line.  The captured byte sequence ends in LF and is parsed only as those
-LF-terminated lines.  Helm never rereads the pathname.
+LF-terminated lines.  Realm never rereads the pathname.
 Desktop-file syntax is deliberately smaller than the general desktop-entry
 grammar.  Each line is either empty; a comment whose first byte is `#` or `;`;
 a group header `[group]`; or a key/value line `key=value` after a group header.
@@ -102,7 +102,7 @@ select or authorize an action because the request carries no action selector.
 These capture rules do not authorize desktop actions, field-code expansion, or
 lifecycle effects.
 
-Until admission produces an immutable `AdmittedDesktopPlan`, Helm may only do
+Until admission produces an immutable `AdmittedDesktopPlan`, Realm may only do
 bounded read-only lookup/capture and diagnostics.  It must not open, initialize,
 recover, select, or GC a generation store; create an owner, process/lifecycle
 lease, record, scope, group, or gate; mutate process/global/systemd/D-Bus
@@ -121,14 +121,14 @@ The sole authoritative group requires:
 - no desktop action or payload request.
 
 Desktop booleans are exactly lowercase `true` or `false`; another spelling
-refuses.  Immediately after structural/main-group validation, Helm evaluates
+refuses.  Immediately after structural/main-group validation, Realm evaluates
 `DBusActivatable`.  Absent or `false` may proceed.  `true` refuses identically
 before parsing or using `Exec`, `TryExec`, or `Path`; before an owner or any
 lifecycle/generation effect; and without deriving a bus name, querying an
 owner, sending a D-Bus message, or treating `Exec` as fallback.  Bus presence,
 owner presence, and ownership races cannot change this result.
 
-A plain entry has no owner result.  Helm performs no process, PID-file,
+A plain entry has no owner result.  Realm performs no process, PID-file,
 executable-name, window, Wayland app-id, title, startup-class, or bus probe.
 Two accepted requests for one entry may create two independent fresh launches.
 
@@ -246,7 +246,7 @@ AdmittedDesktopPlan {
 }
 ```
 
-Only after that complete desktop-only plan exists may Helm call the private,
+Only after that complete desktop-only plan exists may Realm call the private,
 one-shot M2 facade.  The facade alone creates the inert owner; under the
 lifecycle and generation locks selects and validates N, including its
 `ExecutableAllowlist<N>` before it publishes the process lease; then combines
@@ -295,7 +295,7 @@ generation-store, lease/lock, gate, desktop-snapshot, cwd, `/dev/null` original,
 nor other control authority to the application; the executable and error-report
 descriptors disappear on success.  #133 defines no asset descriptors.
 
-Picker code may return only `DesktopFileId`; Helm repeats this complete
+Picker code may return only `DesktopFileId`; Realm repeats this complete
 admission.  Direct fuzzel application mode and raw `Spawn(argv)` cannot claim
 this plan, generation, or verified themed launch.
 

@@ -6,7 +6,7 @@
 
 **Architecture:** Add a private `generation::desktop_exec` module for immutable desktop admission, beginning with a pure byte-oriented `Exec` parser that has no filesystem, generation, lifecycle, environment, or process side effects. A later private lifecycle facade alone may consume an admitted plan. It must first solve the existing safe low-level process-execution boundary; no `GenerationSelection`, lifecycle record, lease, transfer, or gate capability becomes public or `pub(crate)` merely to make launch code convenient.
 
-**Tech Stack:** Rust 2021 / MSRV 1.85, existing `helm-theme` test conventions, `rustix` descriptor-relative Linux APIs, `tempfile` fixtures.
+**Tech Stack:** Rust 2021 / MSRV 1.85, existing `realm-theme` test conventions, `rustix` descriptor-relative Linux APIs, `tempfile` fixtures.
 
 **Spec:** `docs/specs/0013-truthful-fresh-desktop-exec.md`, `docs/specs/0012-activation-launch-lifecycle.md`, `docs/adr/0018-fresh-desktop-exec-only.md`.
 
@@ -18,7 +18,7 @@
 - Admission is pure/read-only until it produces an immutable plan. It must not open or initialize a `GenerationStore`.
 - Lifecycle code remains a private child module. Do not export or reconstruct `GenerationSelection`, lease, record, transfer, ownership-evidence, or gate-token authority.
 - #133 supplies only synthetic allowlist/overlay fixtures. Production target assets and real allowlist entries remain #135.
-- No execution implementation may bypass `helm-theme`'s `#![forbid(unsafe_code)]`; a child `fexecve` runner requires a separately reviewed safe abstraction or ADR-backed low-level crate.  Its wire protocol must use a single fixed frame no larger than `PIPE_BUF`: only a complete valid child report proves unavailable/returned pre-replacement `fexecve` and no profile code.  A short/malformed/partial report or CLOEXEC EOF/no report is not a failure or successful-exit proof and records `terminal/lost` uncertainty unless a separately accepted post-replacement witness exists; independent empty-ownership/drain proof may still release its lease.
+- No execution implementation may bypass `realm-theme`'s `#![forbid(unsafe_code)]`; a child `fexecve` runner requires a separately reviewed safe abstraction or ADR-backed low-level crate.  Its wire protocol must use a single fixed frame no larger than `PIPE_BUF`: only a complete valid child report proves unavailable/returned pre-replacement `fexecve` and no profile code.  A short/malformed/partial report or CLOEXEC EOF/no report is not a failure or successful-exit proof and records `terminal/lost` uncertainty unless a separately accepted post-replacement witness exists; independent empty-ownership/drain proof may still release its lease.
 
 ---
 
@@ -26,9 +26,9 @@
 
 **Files:**
 
-- Modify: `crates/helm-theme/src/generation.rs:1-5`
-- Create: `crates/helm-theme/src/generation/desktop_exec.rs`
-- Test: `crates/helm-theme/src/generation/desktop_exec.rs` `#[cfg(test)]`
+- Modify: `crates/realm-theme/src/generation.rs:1-5`
+- Create: `crates/realm-theme/src/generation/desktop_exec.rs`
+- Test: `crates/realm-theme/src/generation/desktop_exec.rs` `#[cfg(test)]`
 
 **Interfaces:**
 
@@ -72,7 +72,7 @@ Also cover leading/trailing ASCII whitespace, a quoted executable, multiple toke
 Run:
 
 ```bash
-cargo test -p helm-theme --lib desktop_exec::tests -- --nocapture
+cargo test -p realm-theme --lib desktop_exec::tests -- --nocapture
 ```
 
 Expected: FAIL because `generation::desktop_exec` and `parse_exec` do not exist.
@@ -98,9 +98,9 @@ Do not use `Command`, shell splitting, `sh -c`, path lookup, environment reads, 
 Run:
 
 ```bash
-cargo test -p helm-theme --lib desktop_exec::tests -- --nocapture
-cargo test -p helm-theme --lib generation::lifecycle::tests -- --nocapture
-cargo clippy -p helm-theme --all-targets --all-features -- -D warnings
+cargo test -p realm-theme --lib desktop_exec::tests -- --nocapture
+cargo test -p realm-theme --lib generation::lifecycle::tests -- --nocapture
+cargo clippy -p realm-theme --all-targets --all-features -- -D warnings
 ```
 
 Expected: all PASS; parser tests have no lifecycle setup and existing registry tests remain unchanged.
@@ -108,7 +108,7 @@ Expected: all PASS; parser tests have no lifecycle setup and existing registry t
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/helm-theme/src/generation.rs crates/helm-theme/src/generation/desktop_exec.rs
+git add crates/realm-theme/src/generation.rs crates/realm-theme/src/generation/desktop_exec.rs
 git commit -m "feat: add fail-closed desktop Exec parser"
 ```
 
@@ -116,8 +116,8 @@ git commit -m "feat: add fail-closed desktop Exec parser"
 
 **Files:**
 
-- Modify: `crates/helm-theme/src/generation/desktop_exec.rs`
-- Test: `crates/helm-theme/src/generation/desktop_exec.rs` `#[cfg(test)]`
+- Modify: `crates/realm-theme/src/generation/desktop_exec.rs`
+- Test: `crates/realm-theme/src/generation/desktop_exec.rs` `#[cfg(test)]`
 
 **Interfaces:**
 
@@ -150,7 +150,7 @@ The first fixture deletes `HOME` only when `XDG_DATA_HOME` is unset/empty and as
 Run:
 
 ```bash
-cargo test -p helm-theme --lib desktop_exec::tests::xdg -- --nocapture
+cargo test -p realm-theme --lib desktop_exec::tests::xdg -- --nocapture
 ```
 
 Expected: FAIL because admission does not exist.
@@ -164,8 +164,8 @@ Reuse the generation module's no-follow validation style. Capture roots once; us
 Run:
 
 ```bash
-cargo test -p helm-theme --lib desktop_exec::tests -- --nocapture
-cargo test -p helm-theme --lib generation::lifecycle::tests -- --nocapture
+cargo test -p realm-theme --lib desktop_exec::tests -- --nocapture
+cargo test -p realm-theme --lib generation::lifecycle::tests -- --nocapture
 ```
 
 Expected: PASS.
@@ -173,7 +173,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/helm-theme/src/generation/desktop_exec.rs
+git add crates/realm-theme/src/generation/desktop_exec.rs
 git commit -m "feat: capture desktop entries immutably"
 ```
 
@@ -181,8 +181,8 @@ git commit -m "feat: capture desktop entries immutably"
 
 **Files:**
 
-- Modify: `crates/helm-theme/src/generation/desktop_exec.rs`
-- Test: `crates/helm-theme/src/generation/desktop_exec.rs` `#[cfg(test)]`
+- Modify: `crates/realm-theme/src/generation/desktop_exec.rs`
+- Test: `crates/realm-theme/src/generation/desktop_exec.rs` `#[cfg(test)]`
 
 **Interfaces:**
 
@@ -200,8 +200,8 @@ Create `tests::static_preflight_refuses_without_generation_effect` for malformed
 Run:
 
 ```bash
-cargo test -p helm-theme --lib desktop_exec::tests::dbus_refusal_after_structural_validation -- --nocapture
-cargo test -p helm-theme --lib desktop_exec::tests::static_preflight_refuses_without_generation_effect -- --nocapture
+cargo test -p realm-theme --lib desktop_exec::tests::dbus_refusal_after_structural_validation -- --nocapture
+cargo test -p realm-theme --lib desktop_exec::tests::static_preflight_refuses_without_generation_effect -- --nocapture
 ```
 
 Expected: FAIL because the effects audit and preflight stages do not exist.
@@ -215,7 +215,7 @@ Capture and structurally validate the main group first; then reject `DBusActivat
 Run:
 
 ```bash
-cargo test -p helm-theme --lib desktop_exec::tests -- --nocapture
+cargo test -p realm-theme --lib desktop_exec::tests -- --nocapture
 cargo test --workspace --all-features --locked --quiet
 ```
 
@@ -224,7 +224,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/helm-theme/src/generation/desktop_exec.rs
+git add crates/realm-theme/src/generation/desktop_exec.rs
 git commit -m "feat: preflight desktop Exec admission"
 ```
 
@@ -232,10 +232,10 @@ git commit -m "feat: preflight desktop Exec admission"
 
 **Files:**
 
-- Modify: `crates/helm-theme/src/generation.rs`
-- Modify: `crates/helm-theme/src/generation/lifecycle.rs`
+- Modify: `crates/realm-theme/src/generation.rs`
+- Modify: `crates/realm-theme/src/generation/lifecycle.rs`
 - Create or modify only after an ADR-approved safe low-level child-runner boundary exists
-- Test: `crates/helm-theme/src/generation/lifecycle.rs` and an external compile-fail fixture
+- Test: `crates/realm-theme/src/generation/lifecycle.rs` and an external compile-fail fixture
 
 **Interfaces:**
 
@@ -246,13 +246,13 @@ git commit -m "feat: preflight desktop Exec admission"
 
 - [ ] **Step 1: Write the required safe-execution ADR and red ordering/topology tests**
 
-The checked pinned `rustix 1.1.4` exposes only `unsafe runtime::execveat`, so it cannot satisfy `helm-theme`'s `#![forbid(unsafe_code)]` directly. Before façade code, add and accept an ADR naming the exact separately audited low-level crate/API that confines `fork`, `fchdir`, `dup2`, close sweep, and `execveat(AT_EMPTY_PATH)` to one safe child-runner interface. The ADR must define its fd ownership contract and wire classification: a one-write fixed frame no larger than `PIPE_BUF` means unavailable/returned pre-replacement execution failure; short/malformed/partial frame or CLOEXEC EOF/no report is neither readiness nor no-code evidence and records `terminal/lost` uncertainty absent an accepted post-replacement witness, while independent empty-ownership/drain proof still controls release.
+The checked pinned `rustix 1.1.4` exposes only `unsafe runtime::execveat`, so it cannot satisfy `realm-theme`'s `#![forbid(unsafe_code)]` directly. Before façade code, add and accept an ADR naming the exact separately audited low-level crate/API that confines `fork`, `fchdir`, `dup2`, close sweep, and `execveat(AT_EMPTY_PATH)` to one safe child-runner interface. The ADR must define its fd ownership contract and wire classification: a one-write fixed frame no larger than `PIPE_BUF` means unavailable/returned pre-replacement execution failure; short/malformed/partial frame or CLOEXEC EOF/no report is neither readiness nor no-code evidence and records `terminal/lost` uncertainty absent an accepted post-replacement witness, while independent empty-ownership/drain proof still controls release.
 
 Write a red `fresh_exec_nonmatching_allowlist_creates_no_lease_or_record` test for `select_current_for_fresh_exec`: a nonmatching synthetic `ExecutableAllowlist<N>` callback returns refusal and the leases directory plus `launches/` inventory remain unchanged. Add red subprocess fixtures for two concurrent plain requests, a pre-existing same-name sentinel, one child exec per owner, no owner probe, exact error-report/reap, fd isolation, and no lifecycle authority visible in `/proc/self/fd` after exec.  Include returned `fexecve` error → complete report, exact reap, `terminal/failed`, and no sentinel entry; short/malformed/partial report and real post-replacement loader failure → exact reap and retained `terminal/lost`; and application nonzero exit → the same uncertainty classification until an accepted post-replacement witness exists.
 
 - [ ] **Step 2: Verify red**
 
-Run: `cargo test -p helm-theme fresh_exec -- --nocapture`
+Run: `cargo test -p realm-theme fresh_exec -- --nocapture`
 
 Expected: FAIL because no production façade or safe child runner exists.
 
@@ -267,7 +267,7 @@ Run the dedicated subprocess suite, full workspace test/clippy/fmt/doc suite, an
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/helm-theme/src/generation.rs crates/helm-theme/src/generation/lifecycle.rs
+git add crates/realm-theme/src/generation.rs crates/realm-theme/src/generation/lifecycle.rs
 git commit -m "feat: consume admitted desktop Exec through lifecycle facade"
 ```
 

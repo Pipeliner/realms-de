@@ -92,7 +92,7 @@ ShellCheck can see literal intent without a suppression.
 
 ## Pilot procedure measurement
 
-For a real local agent-SDD pilot iteration, use the three `helm-agent-sdd-*`
+For a real local agent-SDD pilot iteration, use the three `realm-agent-sdd-*`
 skills only after the normal orient/pick/spec-first procedure. Keep the pilot
 record separate from product work and report the recovery detail it made
 available, the added record work, and any limitation in `.claude/memory/`.

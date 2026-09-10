@@ -1,4 +1,4 @@
-schema = "helm-fedora-baseline/v1"
+schema = "realm-fedora-baseline/v1"
 status = "pre-alpha"
 release = 44
 eol = "2027-06-02"

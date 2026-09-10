@@ -35,7 +35,7 @@ no system Wayland headers needed to build the clients.
 - Layout and colour maths get **invariant** tests (exact tiling at many sizes,
   hue preserved across the whole contrast range), not example tests. Example
   tests pass while the algorithm is subtly wrong.
-- `palette.toml` is `include_str!`-ed into `helm-core`'s tests, so the shipped
+- `palette.toml` is `include_str!`-ed into `realm-core`'s tests, so the shipped
   palette is linted by `cargo test`. Editing the palette badly fails the build.
 
 ## Sandbox notes (agent sessions)

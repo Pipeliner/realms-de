@@ -1,7 +1,7 @@
 # ADR 0006 — Contrast is derived in OKLab, not applied as a filter
 
 - **Status:** Accepted (ratified 2026-08-28); see Reversal
-- **Deciders:** helm maintainers
+- **Deciders:** realm maintainers
 - **Supersedes / Superseded by:** —
 
 ## Context
@@ -14,7 +14,7 @@ It also says, in the same breath, "In production: derive palette variants from
 A `contrast()` filter is a per-pixel operation over the whole composited output.
 It has two costs.
 
-**Performance.** It is a fullscreen pass, every frame, forever. helm's stated
+**Performance.** It is a fullscreen pass, every frame, forever. realm's stated
 budgets are a bar redraw under 8 ms and idle CPU at roughly zero
 (`docs/ARCHITECTURE.md` §4), and M6's acceptance criterion is holding those on a
 2015-era laptop. A fullscreen shader pass on integrated graphics from that era
@@ -28,7 +28,7 @@ For a neutral grey that is harmless. For a saturated accent it is not: the
 channels have different headroom, so they clip at different points and the
 ratios between them change. The ratios between channels are the hue.
 
-Measured on the prototype: helm's violet `#a692ec` at contrast 1.4 drifted
+Measured on the prototype: realm's violet `#a692ec` at contrast 1.4 drifted
 roughly 18 degrees toward blue under naive per-channel clamping. *(Recorded as
 an observation from the prototype, not as an invariant; the test suite asserts
 the direction of the effect rather than the magnitude.)* The palette's own rule
@@ -57,12 +57,12 @@ Contrast is a derivation applied once, at theme-apply time, in OKLab.
    templates render a plain palette with no knowledge of contrast at all.
 5. `contrast` is validated at parse time to `[0.85, 1.40]`, matching the
    prototype's range.
-6. There is no compositor-side filter, and no shader in any helm process.
+6. There is no compositor-side filter, and no shader in any realm process.
 
 The key insight, and the reason for the gamut cap: saturated colours run out of
 gamut before they run out of lightness. There is no very light, very saturated
 violet in sRGB. The naive response is to desaturate towards it, which turns the
-accent into a near-grey whose hue angle is numerical noise. helm stops pushing
+accent into a near-grey whose hue angle is numerical noise. realm stops pushing
 instead.
 
 ## Alternatives considered
@@ -73,7 +73,7 @@ instead.
 | **Per-channel contrast in sRGB, but computed ahead of time** | Removes the per-frame cost; keeps the arithmetic trivial; matches the prototype's output exactly at every setting | Keeps the hue rotation, which is the more serious of the two problems. Matching the prototype exactly is not a goal when the prototype's colour maths is the thing being replaced |
 | **HSL lightness adjustment** | Familiar, cheap, one function, preserves the H channel by definition | HSL's L is not perceptual. Equal L steps are wildly unequal in perceived lightness across hues, so gold and violet at the same nominal contrast would look nothing alike. It also has no gamut concept, so it clips exactly where it matters |
 | **Ship a fixed set of hand-tuned palettes** (low / normal / high) | Perfect control; a designer picks every value; no maths to get wrong | Three times the values to maintain, and the handoff asks for a continuous setting. It also does not compose with a user's own palette, which ADR 0005 says must work |
-| **CIELAB instead of OKLab** | Older, more widely implemented, well understood | OKLab's hue lines are markedly straighter, particularly in blue and violet, which is precisely helm's accent region. CIELAB's blue hue shift under lightness change would reintroduce a smaller version of the problem we are solving |
+| **CIELAB instead of OKLab** | Older, more widely implemented, well understood | OKLab's hue lines are markedly straighter, particularly in blue and violet, which is precisely realm's accent region. CIELAB's blue hue shift under lightness change would reintroduce a smaller version of the problem we are solving |
 
 ## Consequences
 
@@ -91,7 +91,7 @@ instead.
 
 ### Bad
 
-- Contrast only reaches what helm themes. An unthemed application does not
+- Contrast only reaches what realm themes. An unthemed application does not
   respond to the setting at all, whereas a compositor filter would have. This is
   a genuine loss of reach and it is the strongest argument for the filter.
 - Changing contrast requires a theme apply, not a live slider. At under 150 ms
@@ -111,9 +111,9 @@ instead.
 
 ## Reversal
 
-Low. The derivation is confined to `helm-core::color` and
+Low. The derivation is confined to `realm-core::color` and
 `Palette::derived()`. Reinstating a filter would mean adding a compositor
-pass in `helm-compositor` and setting `contrast = 1.0` everywhere else: the
+pass in `realm-compositor` and setting `contrast = 1.0` everywhere else: the
 palette pipeline would not need to change at all.
 
 The signal to reconsider is accessibility feedback that users need contrast

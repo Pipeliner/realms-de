@@ -1,11 +1,11 @@
 # Integration surface — hardware, media and localisation
 
 > **Status: research, not a decision.** This file inventories the OS-level
-> services helm has to sit on top of for hardware, media and localisation,
+> services realm has to sit on top of for hardware, media and localisation,
 > assesses each candidate against the vision in
 > [`design/HANDOFF.md`](../../design/HANDOFF.md) and the budgets in
 > [ARCHITECTURE §4](../ARCHITECTURE.md#4-what-robust-and-snappy-mean-here), and
-> proposes a priority. Anything here that changes helm's shape needs an ADR;
+> proposes a priority. Anything here that changes realm's shape needs an ADR;
 > this document is the evidence, not the decision.
 
 Companion file: `session-services.md` (notifications, clipboard, portals, idle
@@ -33,7 +33,7 @@ depending on whether the compositor or the window manager owns it.
 ### 0.1 ADR 0013's protocol table is incomplete: there are six, not four
 
 [ADR 0013](../adr/0013-river-window-management-backend.md) lists four protocols
-helm must serve under river: `river-window-management-v1`,
+realm must serve under river: `river-window-management-v1`,
 `river-layer-shell-v1`, `river-xkb-bindings-v1` and `river-input-management-v1`.
 river's `protocol/` directory contains
 [six](https://codeberg.org/river/river/src/branch/main/protocol) (verified):
@@ -55,7 +55,7 @@ week test:
   `set_keymap`, `set_layout_by_index`, `set_layout_by_name`, a `layout(index,
   name)` **event**, and explicit `capslock_enable`/`disable`,
   `numlock_enable`/`disable` with matching `capslock_enabled` /
-  `capslock_disabled` events. Without helm implementing it, the only layout a
+  `capslock_disabled` events. Without realm implementing it, the only layout a
   user gets is river's fallback: river builds a default keymap by passing `null`
   to `xkb_keymap_new_from_names`, which means `XKB_DEFAULT_LAYOUT`,
   `XKB_DEFAULT_VARIANT` and `XKB_DEFAULT_OPTIONS` from the environment
@@ -70,8 +70,8 @@ week test:
   `set_accel_speed`, `set_click_method`, `set_middle_emulation`,
   `set_scroll_method`, `set_scroll_button`, `set_left_handed`,
   `set_calibration_matrix`, `set_send_events` — each paired with `_support`,
-  `_default` and `_current` events, so helm is *told* what the hardware can do
-  rather than guessing. Without helm implementing it, every libinput default
+  `_default` and `_current` events, so realm is *told* what the hardware can do
+  rather than guessing. Without realm implementing it, every libinput default
   stands. libinput's default for tap-to-click is off on most touchpads
   (assumed — the exact per-device default comes from libinput's quirks
   database), which means **a laptop user cannot tap to click, cannot use
@@ -84,23 +84,23 @@ lands here because touchpads and keyboard layouts are hardware and
 localisation. **Recommendation: an ADR amendment adding the two protocols to
 0013's obligation table, and M2 issues for each.**
 
-### 0.2 The bar cannot be a pure function of `HelmState` unless hardware state is *in* `HelmState`
+### 0.2 The bar cannot be a pure function of `RealmState` unless hardware state is *in* `RealmState`
 
 [INTERFACES §3](../INTERFACES.md) says the bar is "a pure function of
-`HelmState` plus the palette" and owns no state. The mockup's bar shows net
+`RealmState` plus the palette" and owns no state. The mockup's bar shows net
 throughput, cpu, mem, gpu temperature, volume and battery — none of which are
 window-manager state. There are only two coherent answers:
 
 1. Each bar module opens its own D-Bus/PipeWire/netlink connection. This breaks
    the purity claim, puts sockets in a process whose whole design is "dumb
    renderer", and means a restarted bar re-subscribes to eight services.
-2. `helm-session` subscribes once, folds the results into `HelmState`, and
+2. `realm-session` subscribes once, folds the results into `RealmState`, and
    broadcasts as it already does over the NDJSON socket (ADR 0003, ADR 0004).
-   The bar stays pure, `helmctl` can print the same values, and a crashed bar
+   The bar stays pure, `realmctl` can print the same values, and a crashed bar
    costs nothing.
 
 **Recommendation: option 2** — but with a hard constraint that follows from ADR
-0013's liveness requirement. `helm-session` is on river's input path and a stall
+0013's liveness requirement. `realm-session` is on river's input path and a stall
 is an `unresponsive` error, so no D-Bus round trip, no PipeWire round trip and
 no `/proc` read may happen on the window-management event loop. The hardware
 subscriptions belong on their own thread (or their own `tokio` task set) feeding
@@ -112,17 +112,17 @@ implementation detail.
 
 Everything in this document that has a TUI — `wiremix`, `impala`, `bluetui`,
 `nmtui`, `btop`, `yazi` — renders through the terminal's 16-colour ANSI scheme,
-which helm generates from `palette.toml`. Under SPEC 0011, apply publishes that
+which realm generates from `palette.toml`. Under SPEC 0011, apply publishes that
 scheme inside one sealed immutable generation and selects it for **future
 launches only**. It sends no reload, signal, command, or session notification
 when `current` changes, so an existing terminal or TUI remains on the generation
 it selected. This supersedes the former reload-fan-out assumption throughout
 this integration survey; live upgrade and wire compatibility remain out of
-scope. A newly launched TUI picker in a floating foot window is helm-coloured
+scope. A newly launched TUI picker in a floating foot window is realm-coloured
 with no additional template. The GTK equivalents (`pavucontrol`, `blueman`,
 `nm-connection-editor`,
 `gnome-control-center`) need the `gtk.css` template, will still show libadwaita
-geometry helm cannot change ([`HANDOFF.md`](../../design/HANDOFF.md) says so
+geometry realm cannot change ([`HANDOFF.md`](../../design/HANDOFF.md) says so
 explicitly), and drag a toolkit into a session that otherwise has none.
 
 That is a much stronger argument for the TUI options than "they are lighter",
@@ -142,15 +142,15 @@ when a headset appears).
 no "reduced functionality" version of this: a desktop with no volume control
 fails the week test on day one, in a meeting.
 
-**Must helm provide, integrate, or not break?** **Integrate.** PipeWire and
-WirePlumber are started as systemd user units by the distribution, not by helm.
-helm's obligations are three: (a) not to break the user-unit ordering — this is
+**Must realm provide, integrate, or not break?** **Integrate.** PipeWire and
+WirePlumber are started as systemd user units by the distribution, not by realm.
+realm's obligations are three: (a) not to break the user-unit ordering — this is
 the sibling file's session-contract territory; (b) to read the default sink's
 volume and mute state for the bar; (c) to *change* them, because under river the
 window manager owns every key binding, including `XF86AudioRaiseVolume`. That
 last point is easy to miss: on a conventional desktop, media keys are handled by
 a settings daemon. Under `river-xkb-bindings-v1` there is no settings daemon —
-helm binds the key or nothing does.
+realm binds the key or nothing does.
 
 **Candidates.**
 
@@ -165,7 +165,7 @@ helm binds the key or nothing does.
 
 **Fit.** Excellent for the read/write path: PipeWire pushes parameter changes,
 so the `♪ 64%` module is event-driven with no timer, which is exactly what the
-bar contract demands. `wiremix` is the right per-app mixer for helm — Rust,
+bar contract demands. `wiremix` is the right per-app mixer for realm — Rust,
 keyboard-driven, ANSI-themed for free — with one caveat that is a packaging
 problem rather than a fit problem: it is absent from Debian and Ubuntu, so the
 `.deb` either builds it or falls back to `pulsemixer`. `pavucontrol` fits badly
@@ -195,8 +195,8 @@ and urania's `♆ ping 11ms · vpn ◉ warded` line report.
 `wpa_supplicant.conf` or driving `iwctl`. On a laptop that moves between two
 buildings, this ends the week test immediately.
 
-**Must helm provide, integrate, or not break?** **Integrate**, and depend on
-one. helm must not ship its own connection manager.
+**Must realm provide, integrate, or not break?** **Integrate**, and depend on
+one. realm must not ship its own connection manager.
 
 **Candidates.**
 
@@ -216,10 +216,10 @@ Arch and nixpkgs — verified), and there is an `impala-nm` crate suggesting a
 NetworkManager variant exists. `iwmenu` and `networkmanager-dmenu` drive a
 launcher instead of a TUI.
 
-**Fit.** NetworkManager is not a natural fit for helm's aesthetic and it is
+**Fit.** NetworkManager is not a natural fit for realm's aesthetic and it is
 still the right answer, because VPN is in the design. urania's `vpn ◉ warded`
 readout is a NetworkManager `ActiveConnection` of type `vpn` — reproducing that
-over iwd would mean helm implementing WireGuard or OpenVPN management itself.
+over iwd would mean realm implementing WireGuard or OpenVPN management itself.
 The D-Bus surface is properly event-driven: `PropertiesChanged` on devices and
 active connections, plus `StateChanged`, so the bar's up/down/SSID state costs
 no timer (assumed for the exact signal set; the D-Bus interface is
@@ -230,7 +230,7 @@ the event-driven audit below: byte counters are not pushed by anything.
 
 **Integration cost.** Config-only for the dependency and the `nmtui` binding.
 A small Rust subscriber (zbus) for the bar's connectivity state, plus a second
-one for VPN state. If helm wants the picker to look like helm rather than like
+one for VPN state. If realm wants the picker to look like realm rather than like
 nmtui, that is hecate work — see §17.
 
 **Priority: MVP.** The stated example. **Milestone: M3.**
@@ -247,7 +247,7 @@ phones. The audio side is PipeWire's, but the pairing side is BlueZ's.
 and which people get wrong (`scan on`, `pair`, `trust`, `connect`, in that
 order, with a device address you have to read off a scrolling log).
 
-**Must helm provide, integrate, or not break?** **Integrate.** BlueZ is the only
+**Must realm provide, integrate, or not break?** **Integrate.** BlueZ is the only
 Bluetooth stack on Linux; `bluetoothd` is a system service the distribution
 starts.
 
@@ -264,7 +264,7 @@ starts.
 Nix only, which means the `.deb` and `.rpm` must build it from crates.io or fall
 back to `bluetoothctl`. BlueZ's D-Bus API is `ObjectManager`-based
 (`InterfacesAdded`, `InterfacesRemoved`, `PropertiesChanged`), so a
-connected/disconnected indicator is event-driven if helm ever wants one — the
+connected/disconnected indicator is event-driven if realm ever wants one — the
 mockup does not have a Bluetooth module in the bar, and it should stay that way
 unless a device is connected.
 
@@ -287,16 +287,16 @@ projector; refresh rate; and remembering all of that per docking situation.
 **Without it.** Plug in a projector and either nothing happens or it mirrors at
 the wrong resolution, with no command to fix it.
 
-**Must helm provide, integrate, or not break?** Split, and the split is the
+**Must realm provide, integrate, or not break?** Split, and the split is the
 interesting part.
 
-- **helm must handle hotplug**, because the workarea changes.
+- **realm must handle hotplug**, because the workarea changes.
   `river_output_v1` delivers `position` and `dimensions` events to the window
   manager, and an `output`/`removed` pair on the manager
   ([`river-window-management-v1.xml`](https://codeberg.org/river/river/raw/branch/main/protocol/river-window-management-v1.xml),
   verified). ADR 0013 already maps this to `Workarea`. Hotplug arrives as a
   protocol event; there is nothing to poll and no excuse for getting it wrong.
-- **helm must not configure outputs**, because it cannot. I read the
+- **realm must not configure outputs**, because it cannot. I read the
   `river_output_v1` interface in full: its requests are `destroy` and
   `set_presentation_mode`; its events are `removed`, `wl_output`, `position`,
   `dimensions` and `capture_sessions` (verified). **There is no scale, no mode,
@@ -306,7 +306,7 @@ interesting part.
   `manager_test`/`manager_apply` — verified), and which is spoken by ordinary
   clients.
 
-So the tool that positions monitors is a normal client, not part of helm, and
+So the tool that positions monitors is a normal client, not part of realm, and
 this is a clean seam rather than a gap.
 
 **Candidates.**
@@ -315,28 +315,28 @@ this is a clean seam rather than a gap.
 |---|---|---|---|
 | [`kanshi`](https://repology.org/project/kanshi/versions) | C | 1.9.0 newest; Ubuntu 24.04 has 1.5.1, Fedora 43 has 1.8.0, Ubuntu 26.04 has 1.9.0 | Profile-based: match a set of connected outputs, apply a layout. Packaged on every target |
 | [`shikane`](https://crates.io/crates/shikane) | Rust | v1.1.1, 2026-06-10; **Arch and nixpkgs only** | kanshi's model with regex matching and better ordering. Right language, wrong packaging |
-| `wlr-randr` | C | packaged everywhere | One-shot imperative changes; the right thing for a keybinding or `helmctl` to shell out to |
+| `wlr-randr` | C | packaged everywhere | One-shot imperative changes; the right thing for a keybinding or `realmctl` to shell out to |
 | `wdisplays` / `nwg-displays` | C/GTK, Python/GTK | packaged | Graphical, mouse-driven. Against the grain of the whole project |
 
-**Fit.** kanshi's config file is declarative, static and lives beside helm's
+**Fit.** kanshi's config file is declarative, static and lives beside realm's
 other generated configs — a good fit for a DE that already believes in
 generated config. shikane is the better Rust citizen and costs two extra
 packaging jobs; that trade is a judgement call, and kanshi's presence on all
 three distros makes it the MVP answer.
 
-**Fractional scaling is a live risk to helm's central invariant.** river rounds
+**Fractional scaling is a live risk to realm's central invariant.** river rounds
 each output's scale to the nearest 1/120 so it is exactly representable in
 `fractional-scale-v1`, and hands the window manager logical dimensions computed
-as physical divided by scale (`Output.zig`, verified). helm's exact-tiling
+as physical divided by scale (`Output.zig`, verified). realm's exact-tiling
 guarantee is over *logical* integers. At scale 1.25 or 1.5, an exact logical
 partition can still land on a half-physical-pixel boundary, and the compositor —
-not helm — decides how that rounds when it draws the 1px border. `PITFALLS.md`
+not realm — decides how that rounds when it draws the 1px border. `PITFALLS.md`
 has a row for fractional scaling blur with a planned M2 test; that test should
 assert seam exactness at 1.25, 1.5 and 1.75 as well as at 1.0, or the pitfall
 is only half-closed.
 
 **Integration cost.** Config-only for kanshi (plus a generated profile stanza if
-helm ever wants to own it). Hotplug handling inside `RiverBackend` is real work
+realm ever wants to own it). Hotplug handling inside `RiverBackend` is real work
 but is already M2's, not new.
 
 **Priority: MVP** for "hotplug does not break and the workarea updates";
@@ -355,8 +355,8 @@ backlight on its key.
 the two dedicated keys on the keyboard do nothing. This is one of the most
 immediately noticeable absences in any minimal desktop.
 
-**Must helm provide, integrate, or not break?** **Provide the binding, integrate
-with logind.** As with volume, there is no settings daemon under river: helm
+**Must realm provide, integrate, or not break?** **Provide the binding, integrate
+with logind.** As with volume, there is no settings daemon under river: realm
 binds `XF86MonBrightnessUp` or nobody does.
 
 **Candidates.**
@@ -364,13 +364,13 @@ binds `XF86MonBrightnessUp` or nobody does.
 | Option | Mechanism | Notes |
 |---|---|---|
 | **systemd-logind `SetBrightness`** | D-Bus, on `org.freedesktop.login1.Session`, signature `SetBrightness(in s subsystem, in s name, in u brightness)`, subsystem `"backlight"` or `"leds"` | **No polkit privilege required**; the caller must own the session and the session must be active ([verified against the org.freedesktop.login1 manual](https://manpages.debian.org/testing/systemd/org.freedesktop.login1.5.en.html)). Available since systemd 243, so every target qualifies (Ubuntu 24.04 ships 255). **This is the right answer**: pure zbus, no extra binary, no setuid, no udev rule, and it covers the keyboard backlight through the same call with `"leds"` |
-| [`brightnessctl`](https://repology.org/project/brightnessctl/versions) | Small C tool; uses logind when built with it, else a setuid helper or udev rule | 0.5.1 on every target including Ubuntu 24.04 (verified). The pragmatic fallback and the thing `helmctl doctor` can point at |
+| [`brightnessctl`](https://repology.org/project/brightnessctl/versions) | Small C tool; uses logind when built with it, else a setuid helper or udev rule | 0.5.1 on every target including Ubuntu 24.04 (verified). The pragmatic fallback and the thing `realmctl doctor` can point at |
 | [`brightness` crate](https://crates.io/crates/brightness) | Rust, sysfs | v0.8.0, 2025-09-02. Cross-platform; wants write access to sysfs, which is the problem logind exists to solve |
 | `ddcutil` | I²C to external monitors over DDC/CI | 2.2.7, packaged everywhere. The *only* way to set an external monitor's brightness. Slow (tens of milliseconds per transaction), needs `i2c-dev` and group membership |
 | [`wluma`](https://repology.org/project/wluma/versions) | Rust, adaptive brightness from ambient light and screen contents | 4.11.1, nixpkgs only. Uses screen capture, so it costs power continuously. Interesting, wrong for a zero-idle-CPU project |
 
 **Fit.** logind's `SetBrightness` is close to a perfect fit: one D-Bus call from
-a crate helm already needs, no privilege escalation, no polling. Reading the
+a crate realm already needs, no privilege escalation, no polling. Reading the
 current value still means reading `/sys/class/backlight/*/brightness`, and
 changes made by the firmware (the hardware brightness keys on some laptops act
 below the OS) surface as udev `change` events on the `backlight` subsystem
@@ -396,9 +396,9 @@ switch.
 switches off mid-sentence), and a lid that closes without suspending — which is
 a security problem as much as a battery one.
 
-**Must helm provide, integrate, or not break?** **Integrate**, with one thing to
+**Must realm provide, integrate, or not break?** **Integrate**, with one thing to
 *not break*: lid handling belongs to logind (`HandleLidSwitch` in
-`logind.conf`), and it works whether or not helm does anything, provided helm
+`logind.conf`), and it works whether or not realm does anything, provided realm
 does not take a permanent sleep inhibitor. The classic bug is a desktop that
 inhibits sleep "while the session is active" and then never releases it.
 
@@ -407,7 +407,7 @@ inhibits sleep "while the session is active" and then never releases it.
 | Concern | Component | Interface | Status |
 |---|---|---|---|
 | Battery state | [UPower](https://upower.freedesktop.org/) | `org.freedesktop.UPower`, the `DisplayDevice` aggregate at `/org/freedesktop/UPower/devices/DisplayDevice`, with `Percentage`, `TimeToEmpty`, `State`, `WarningLevel` (Unknown/None/Discharging/Low/Critical/Action) and `PropertiesChanged` | 1.90–1.91 on every target (verified). Fully push-based |
-| Low-battery warning | UPower `WarningLevel` | as above | Using `WarningLevel` rather than a hardcoded percentage is the documented way; the thresholds are UPower's configuration, not helm's invention |
+| Low-battery warning | UPower `WarningLevel` | as above | Using `WarningLevel` rather than a hardcoded percentage is the documented way; the thresholds are UPower's configuration, not realm's invention |
 | Power profiles | [power-profiles-daemon](https://repology.org/project/power-profiles-daemon/versions) 0.21–0.30, or [tuned-ppd](https://fedoraproject.org/wiki/Changes/TunedAsTheDefaultPowerProfileManagementDaemon) | same D-Bus API — tuned-ppd is explicitly a drop-in translation layer, which is why Fedora could switch defaults from ppd to tuned in F41 without desktops changing code | Integrate against the API, not the implementation, and both distros are covered |
 | Suspend/hibernate/lid | systemd-logind | `Manager.Suspend()`, `PrepareForSleep` signal, `Inhibit()` with `block`/`delay` modes; `HandleLidSwitch*` properties (verified from the manual) | Nothing to build. `PrepareForSleep(true)` is where a lock screen hooks in — sibling file's territory |
 | Battery notifications | [`poweralertd`](https://repology.org/project/poweralertd/versions) 0.3.0 (Debian 13, Ubuntu 25.10+, nixpkgs; **not in Fedora**) | UPower to notifications | The off-the-shelf option, and it depends on a notification daemon, which is the sibling file's decision |
@@ -416,7 +416,7 @@ inhibits sleep "while the session is active" and then never releases it.
 UPower pushes, logind pushes, power-profiles-daemon pushes. A battery module
 with a timer in it would be a bug, not a compromise.
 
-One helm-specific wrinkle: a low-battery *warning* needs somewhere to appear.
+One realm-specific wrinkle: a low-battery *warning* needs somewhere to appear.
 The mockup has no notification surface — urania has a "wards" footer and the bar
 has a battery module that could turn gold and then red via `palette.toml`'s
 `accent.gold`. Recolouring the existing module is free, requires no notification
@@ -425,7 +425,7 @@ more assertive is warranted; that is a design decision worth taking
 deliberately rather than by default.
 
 **Integration cost.** A small Rust subscriber (zbus, UPower) plus palette
-thresholds. Power profiles are a `helmctl power` verb and one more D-Bus proxy —
+thresholds. Power profiles are a `realmctl power` verb and one more D-Bus proxy —
 cheap, and not MVP.
 
 **Priority: MVP** for battery percentage, warning level and lid-close suspend.
@@ -442,9 +442,9 @@ you configured it a decade ago and never think about.
 **Without it.** Covered in §0.1: no layout switching, no bar indicator, and no
 touchpad configuration at all.
 
-**Must helm provide, integrate, or not break?**
+**Must realm provide, integrate, or not break?**
 
-- **Layouts and pointer configuration: helm must provide**, because under river
+- **Layouts and pointer configuration: realm must provide**, because under river
   0.4 the window manager *is* the input configuration (§0.1).
 - **Input methods: not break**, and that is genuinely all — but it needs
   checking rather than assuming, and the check came out well.
@@ -460,36 +460,36 @@ river does not have that limitation. fcitx5 is at 5.1.19 on Ubuntu 26.04, 5.1.21
 on Fedora 43 (verified), and fcitx5's own issue tracker records river being
 fixed upstream for the 5.1.9 `zwp_input_method_v2` regression ahead of sway.
 
-The remaining caveat is terminal-shaped and lands squarely on helm, because helm
+The remaining caveat is terminal-shaped and lands squarely on realm, because realm
 is a terminal-centric desktop: [foot supports only pure-Wayland IMEs and
 requires the compositor to implement `text-input-v3`](https://codeberg.org/dnkl/foot/issues/345)
 — which river does — so CJK input in foot should work. That "should" is the
 honest word: I did not test it, and it is exactly the kind of claim that needs a
-`doctor` check or a manual verification note before helm claims CJK support.
+`doctor` check or a manual verification note before realm claims CJK support.
 
 **Candidates.**
 
 | Concern | Option | Notes |
 |---|---|---|
-| Layout, switching, caps/num lock | `river-xkb-config-v1`, implemented by helm | Gives a `layout(index, name)` **event** — the bar's layout indicator is push-driven, free of timers |
+| Layout, switching, caps/num lock | `river-xkb-config-v1`, implemented by realm | Gives a `layout(index, name)` **event** — the bar's layout indicator is push-driven, free of timers |
 | Fixed layout without protocol work | `XKB_DEFAULT_LAYOUT` etc. in the session environment | Verified fallback path. Must be added to ADR 0011's import list, or a non-US user's layout will not survive into anything the bus activates |
-| Touchpad, mouse | `river-libinput-config-v1`, implemented by helm | The `_support` events mean helm can grey out or refuse settings the hardware cannot do, rather than silently ignoring them |
+| Touchpad, mouse | `river-libinput-config-v1`, implemented by realm | The `_support` events mean realm can grey out or refuse settings the hardware cannot do, rather than silently ignoring them |
 | CJK | fcitx5 (5.1.x, all targets) or ibus | fcitx5 is the better Wayland citizen in 2026. Integration is environment variables plus an autostarted user unit |
-| On-screen keyboard | `squeekboard` (1.43.1, Arch/Ubuntu 26.04/nixpkgs) | Only relevant on touch hardware, which helm does not target. Note for accessibility, §12 |
+| On-screen keyboard | `squeekboard` (1.43.1, Arch/Ubuntu 26.04/nixpkgs) | Only relevant on touch hardware, which realm does not target. Note for accessibility, §12 |
 
 **Fit.** Implementing two more protocols is unwelcome scope, and it is also the
-price of ADR 0013 — the same bargain that gave helm frame-perfect layout gave it
-the input configuration to own. The protocol shapes are helm-friendly: they are
+price of ADR 0013 — the same bargain that gave realm frame-perfect layout gave it
+the input configuration to own. The protocol shapes are realm-friendly: they are
 declarative setters with capability events, which maps onto a `[input]` section
-in helm's own config and a `helmctl input` verb. There is nothing to poll.
+in realm's own config and a `realmctl input` verb. There is nothing to poll.
 
 The keymap indicator in the bar is a design gap worth naming: `HANDOFF.md`'s bar
 has no layout module, because the design assumes one layout. Anyone with two
 layouts needs to see which is active; the mode badge area is the natural place,
-and it costs one more `HelmState` field.
+and it costs one more `RealmState` field.
 
 **Integration cost.** Real work — two protocol implementations in
-`helm-session`, plus a config surface for them, plus the fcitx5 environment
+`realm-session`, plus a config surface for them, plus the fcitx5 environment
 wiring (config-only). This is the largest single item in this document.
 
 **Priority: MVP** for layout selection and touchpad tap/scroll/accel — a
@@ -509,7 +509,7 @@ reach; unplug it safely; unlock a LUKS volume.
 **Without it.** `udisksctl mount -b /dev/sdb1` — or worse, `sudo mount`. A file
 manager that cannot open a USB stick is a file manager with a hole in it.
 
-**Must helm provide, integrate, or not break?** **Integrate.** udisks2 is a
+**Must realm provide, integrate, or not break?** **Integrate.** udisks2 is a
 system D-Bus service (2.10–2.11 on all targets, verified) that already handles
 the privilege problem via polkit; the desktop's job is to ask it to mount things
 and to notice when a device appears.
@@ -519,12 +519,12 @@ and to notice when a device appears.
 | Option | Language | Status | Notes |
 |---|---|---|---|
 | [`udiskie`](https://github.com/coldfix/udiskie) | Python | 2.7.0 released 2026-07-29 (verified via PyPI); 2.5.x–2.6.x in the distros | The standard automounter. Runs headless with `--no-tray`; the tray icon and notifications are optional. Python in the dependency set |
-| [`udisks2` crate](https://crates.io/crates/udisks2) | Rust, zbus | v0.3.1, 2026-01-21 | Bindings, not a daemon. The building block if helm writes its own ~200-line automounter |
+| [`udisks2` crate](https://crates.io/crates/udisks2) | Rust, zbus | v0.3.1, 2026-01-21 | Bindings, not a daemon. The building block if realm writes its own ~200-line automounter |
 | `udevil` / `pmount` | C | mostly unmaintained | No |
 | yazi plugins | Lua | community plugins exist for mount/unmount | The natural place for the *manual* path, and it keeps the interaction inside charon where the user already is |
 
 **Fit.** udisks2's `ObjectManager` interface (`InterfacesAdded`) is push-based,
-so an automounter is an event loop, not a poll loop. udiskie fits helm's *needs*
+so an automounter is an event loop, not a poll loop. udiskie fits realm's *needs*
 badly only in that it is Python and tray-shaped; run with `--no-tray` under a
 systemd user unit it is invisible and works. Writing a Rust replacement is
 tempting and is roughly a weekend, but it is a weekend spent on something
@@ -555,7 +555,7 @@ CUPS directly, discovering IPP printers over mDNS without any per-desktop
 component. There has been no need for a desktop-supplied print dialog since
 driverless printing became the norm.
 
-**Must helm provide, integrate, or not break?** **Not break.** Concretely: do
+**Must realm provide, integrate, or not break?** **Not break.** Concretely: do
 not break Avahi/mDNS resolution, and make sure the GTK and Qt print dialogs open
 — which is the same portal and toolkit-theming question the sibling file covers
 for file dialogs.
@@ -563,9 +563,9 @@ for file dialogs.
 **State of the art, verified.** [libcups v3.0.0 shipped on 2026-01-08](https://openprinting.github.io/libcups-3.0.0/)
 and [CUPS 3.0's design](https://github.com/OpenPrinting/cups/wiki/CUPS-3.0)
 drops PPDs entirely in favour of IPP Everywhere plus Printer Applications, with
-a per-user local server. That is the future; it is not the present on helm's
+a per-user local server. That is the future; it is not the present on realm's
 targets, which all still ship CUPS 2.4.x (2.4.7 on Ubuntu 24.04, 2.4.11 on
-Fedora 42, 2.4.19 on Arch — verified). So helm should assume 2.4 behaviour and
+Fedora 42, 2.4.19 on Arch — verified). So realm should assume 2.4 behaviour and
 should not build anything that would need reworking for 3.0.
 
 **Fit.** The best fit is nothing at all. A printer-management TUI would be a
@@ -590,14 +590,14 @@ calibrated display; HDR.
 notice the absence of immediately, and which urania's mockup explicitly promises
 (`20:14 ☉ sunset · night palette engages`).
 
-**Must helm provide, integrate, or not break?** **Integrate** for night light.
+**Must realm provide, integrate, or not break?** **Integrate** for night light.
 **Not break** for ICC and HDR, which are out of reach under river anyway.
 
 **Night-light candidates.**
 
 | Option | Language | Status (verified) | Notes |
 |---|---|---|---|
-| [`wl-gammarelay-rs`](https://github.com/MaxVerevkin/wl-gammarelay-rs) | Rust | 1.0.1 in nixpkgs; crates.io release stale at 0.3.2 (2023) while the repo has moved on — the packaging, not the project, is what to trust here | Exposes a **D-Bus interface** (`rs.wl.gammarelay`, methods `UpdateTemperature`, `UpdateBrightness`, `UpdateGamma`, `ToggleInverted`). That makes colour temperature a helm keybinding and a helm state value rather than a daemon with opinions. Single-threaded, no runtime dependencies. **Best fit** |
+| [`wl-gammarelay-rs`](https://github.com/MaxVerevkin/wl-gammarelay-rs) | Rust | 1.0.1 in nixpkgs; crates.io release stale at 0.3.2 (2023) while the repo has moved on — the packaging, not the project, is what to trust here | Exposes a **D-Bus interface** (`rs.wl.gammarelay`, methods `UpdateTemperature`, `UpdateBrightness`, `UpdateGamma`, `ToggleInverted`). That makes colour temperature a realm keybinding and a realm state value rather than a daemon with opinions. Single-threaded, no runtime dependencies. **Best fit** |
 | [`wlsunset`](https://repology.org/project/wlsunset/versions) | C | 0.4.0; Ubuntu still on 0.3.0 | Sunrise/sunset by latitude and longitude, no D-Bus. Simple, on every target |
 | [`gammastep`](https://repology.org/project/gammastep/versions) | C | 2.0.11; 2.0.9 on Ubuntu/Debian | redshift's Wayland fork; geoclue support if you want automatic location |
 
@@ -618,23 +618,23 @@ However: I grepped river's `Output.zig` for HDR, ICC, bit-depth, primaries and
 transfer-function handling and **found none** (verified). sway exposes HDR
 through its own config (`render_bit_depth 10`, `hdr`, `color_profile icc`);
 river 0.4 has no config file, and `river_output_v1` has no colour requests, so
-there is currently **no way for a helm user to enable HDR on river**.
+there is currently **no way for a realm user to enable HDR on river**.
 
-**Fit.** wl-gammarelay-rs fits helm unusually well: a D-Bus knob means the night
-palette can be a helm state transition (`helmctl night on`) that also swaps the
+**Fit.** wl-gammarelay-rs fits realm unusually well: a D-Bus knob means the night
+palette can be a realm state transition (`realmctl night on`) that also swaps the
 `palette.toml` contrast variant, making the mockup's "night palette engages"
 literally true rather than decorative. It is not packaged outside nixpkgs, so
 Debian and Fedora would build it from source or fall back to wlsunset.
 
 **Integration cost.** Config-only for wlsunset. A small Rust shim plus a
-`helmctl` verb for the wl-gammarelay-rs version, plus the sunset calculation —
+`realmctl` verb for the wl-gammarelay-rs version, plus the sunset calculation —
 the [`sunrise` crate](https://crates.io/crates/sunrise) (v3.0.0, 2026-01-01)
 does the astronomy, and urania needs it anyway for `☉ sets 20:14`.
 
 **Priority: STRATEGIC** for night light — the design promises it, the week test
-survives without it. **LATER / not applicable** for ICC and HDR: helm cannot
+survives without it. **LATER / not applicable** for ICC and HDR: realm cannot
 deliver them on river, and should say so rather than implying otherwise.
-**Milestone: M4** (night light), **M5** for HDR if `helm-compositor` chooses to
+**Milestone: M4** (night light), **M5** for HDR if `realm-compositor` chooses to
 support it.
 
 ---
@@ -649,7 +649,7 @@ process.
 that disagree with each other about the date format because some inherited
 `LANG` and some did not.
 
-**Must helm provide, integrate, or not break?** **Integrate**, plus one concrete
+**Must realm provide, integrate, or not break?** **Integrate**, plus one concrete
 gap to close.
 
 **The gap.** [ADR 0011](../adr/0011-session-integration-contract.md)'s import
@@ -698,7 +698,7 @@ formally, the ability to use the desktop entirely without a keyboard — which i
 the case for many users with severe RSI or motor impairments, who drive their
 machines by voice or by switch access.
 
-**Without it.** A blind user cannot use helm at all. Not "with difficulty" — at
+**Without it.** A blind user cannot use realm at all. Not "with difficulty" — at
 all.
 
 **What the research actually says, and what I could and could not verify.**
@@ -717,41 +717,41 @@ all.
   is not a shipping cross-desktop protocol as of August 2026. I could **not**
   verify a specific "Orca on river" report either way; my claim is that it does
   not work, based on the absence of the mechanism rather than on a bug report.
-- **Magnification.** GNOME's magnifier is compositor-level. Under river, helm
-  cannot implement magnification at all: helm positions windows and river
+- **Magnification.** GNOME's magnifier is compositor-level. Under river, realm
+  cannot implement magnification at all: realm positions windows and river
   renders them, and `river-window-management-v1` has no zoom, no transform and
   no scale request (verified — the `river_output_v1` interface listing in §4).
-  So screen magnification is **architecturally impossible before M5**, when helm
-  owns `helm-compositor`. That is a real finding and it should be written down
+  So screen magnification is **architecturally impossible before M5**, when realm
+  owns `realm-compositor`. That is a real finding and it should be written down
   rather than discovered by a user.
 - **Sticky keys, slow keys, bounce keys.** These are AccessX features. On X11
   the server implemented them; on Wayland the compositor must, and libxkbcommon
   does not do it for you. GNOME and KDE implement them; wlroots compositors do
   not (assumed for river specifically — I found no AccessX handling in river's
-  input files, but I did not read `Keyboard.zig` in full). Worse for helm: under
-  `river-xkb-bindings-v1`, helm sees *bound* keys, not the raw key stream, so
-  helm probably could not implement sticky keys itself even if it wanted to.
+  input files, but I did not read `Keyboard.zig` in full). Worse for realm: under
+  `river-xkb-bindings-v1`, realm sees *bound* keys, not the raw key stream, so
+  realm probably could not implement sticky keys itself even if it wanted to.
   That needs confirming against the protocol before anyone promises otherwise.
 - **The keyboard-first promise cuts both ways.** For a user with low vision who
-  can type, helm is unusually good: everything is reachable by key, there are no
+  can type, realm is unusually good: everything is reachable by key, there are no
   animations (which matters for vestibular disorders and for motion-triggered
   migraine), contrast is a first-class derived setting rather than a filter, and
   the layout never moves under you. Those are genuine accessibility wins that
   the project got for free by having good taste, and it is fair to claim them.
   For a user who cannot use a keyboard the way the design assumes — one-handed,
-  switch-access, voice-driven, or unable to chord — helm's core interaction
+  switch-access, voice-driven, or unable to chord — realm's core interaction
   model is a chorded modifier under `mod`, and that is precisely the interaction
-  sticky keys exist to fix. helm cannot currently offer sticky keys. That is not
+  sticky keys exist to fix. realm cannot currently offer sticky keys. That is not
   a gap in polish; it is the main interaction model being unavailable to a
   group of users.
 
-**Must helm provide, integrate, or not break?** Today, realistically: **not
+**Must realm provide, integrate, or not break?** Today, realistically: **not
 break, and not lie.** Concretely —
 
-1. **Say so.** The install documentation and `helmctl doctor` should state
-   plainly that helm does not support screen readers, and that this is a
+1. **Say so.** The install documentation and `realmctl doctor` should state
+   plainly that realm does not support screen readers, and that this is a
    property of the wlroots/river stack, not a decision. A user who needs Orca
-   should learn that from helm's own documentation in thirty seconds, not from a
+   should learn that from realm's own documentation in thirty seconds, not from a
    failed installation.
 2. **Do not obstruct what does work.** XWayland-based magnifiers and any
    AT-SPI-based tooling that a user brings should not be actively broken; the
@@ -762,7 +762,7 @@ break, and not lie.** Concretely —
    propagates — `palette.toml` has `size_body` and friends, and fontconfig
    plus the bar honour them, which is more than most tiling desktops offer.
 4. **Own the parts that become possible at M5.** Magnification and AccessX
-   belong in `helm-compositor`'s requirements from the day its spec is written,
+   belong in `realm-compositor`'s requirements from the day its spec is written,
    not as M6 polish. Writing them down now costs nothing and changes what the
    compositor's architecture has to allow.
 
@@ -785,14 +785,14 @@ Plex Mono", and what it falls back to for a rune, a planetary symbol or an
 Egyptian hieroglyph.
 
 **Without it.** Tofu. [ADR 0012](../adr/0012-font-fallback-is-a-contract.md)
-already treats this as a contract and `helm-core::glyphs` already implements the
+already treats this as a contract and `realm-core::glyphs` already implements the
 inventory and probe, so most of the work is done.
 
 **The gap I found.** `palette.toml` declares an ordered `typography.fallback`
-chain, and `glyphs::probe()` verifies coverage *in helm's own renderer*
+chain, and `glyphs::probe()` verifies coverage *in realm's own renderer*
 (`cosmic-text`, per ADR 0008). Nothing makes **fontconfig** honour that order,
 and fontconfig is what resolves fonts for GTK, Qt, foot, Firefox and every other
-program in the session. So helm can pass its own glyph probe while yazi shows a
+program in the session. So realm can pass its own glyph probe while yazi shows a
 box, because yazi is a foot client and foot asks fontconfig, which will happily
 substitute a colour emoji font for `☾` — the exact failure `PITFALLS.md` lists
 as "emoji font hijacks symbols".
@@ -807,7 +807,7 @@ is ADR 0005's whole thesis applied to fonts.
 2.17.1 on Ubuntu 26.04, 2.17.0 on Fedora 43, 2.18.x on Arch and nixpkgs —
 verified). There is no alternative and no need for one.
 
-**Fit.** Perfect: a generated config file is exactly the mechanism helm already
+**Fit.** Perfect: a generated config file is exactly the mechanism realm already
 has.
 
 **Integration cost.** One template plus one test that renders it and parses it
@@ -829,10 +829,10 @@ of the reasons the session starts in under 900 ms.
 **What it costs, concretely.** yazi does not need a thumbnailer bolted on: it
 has built-in image preview over the [Kitty graphics protocol, Sixel, iTerm2 and
 Ghostty protocols](https://yazi-rs.github.io/docs/image-preview/), and **foot
-supports Sixel**, which means image preview works out of the box in helm's
+supports Sixel**, which means image preview works out of the box in realm's
 default terminal (verified from yazi's documentation; the foot-specific path is
-documented by yazi as Sixel). So "never" is not helm avoiding a feature that
-would be expensive to build — it is helm switching off a feature that is
+documented by yazi as Sixel). So "never" is not realm avoiding a feature that
+would be expensive to build — it is realm switching off a feature that is
 already there and already fast.
 
 The people who lose are specific: anyone triaging a directory of screenshots,
@@ -856,7 +856,7 @@ budget when it is off.
 "ever" to "not by default": ship yazi with image preview disabled, document the
 one-line change that enables it, and keep the promise the budget actually needs
 — *nothing generates a thumbnail unless the user asked for it in this session*.
-That preserves the cold-start number, preserves the aesthetic, and stops helm
+That preserves the cold-start number, preserves the aesthetic, and stops realm
 from being the file manager someone cannot use for the one job they have.
 
 This is a **design decision for a human**, not a research finding; see §19.
@@ -874,8 +874,8 @@ charon portal work.
 **Without it.** The user runs `apt`, `dnf` or `nixos-rebuild` themselves, which
 is what a power-user desktop's audience does anyway.
 
-**Must helm provide, integrate, or not break?** **Not break.** There is no
-credible way for helm to own this across three package managers with three
+**Must realm provide, integrate, or not break?** **Not break.** There is no
+credible way for realm to own this across three package managers with three
 different security models.
 
 **The landscape, verified.** Fedora moved PackageKit to a DNF5 backend and
@@ -900,7 +900,7 @@ writes themselves.
 
 **Priority: LATER**, and possibly never in the bar. If urania wants the line,
 make it a user-supplied "spell" — a script whose output urania displays — rather
-than a helm feature with three distro backends. **Milestone: M6.**
+than a realm feature with three distro backends. **Milestone: M6.**
 
 ---
 
@@ -915,10 +915,10 @@ focused; skipping a track; knowing what is playing.
 
 **Without it.** The dedicated media keys on every laptop keyboard made since
 2005 do nothing, and pausing music means finding the tab. Under river this is
-guaranteed to be broken unless helm acts, for the same reason as §1 and §5:
-helm owns every binding.
+guaranteed to be broken unless realm acts, for the same reason as §1 and §5:
+realm owns every binding.
 
-**Must helm provide, integrate, or not break?** **Provide the binding, integrate
+**Must realm provide, integrate, or not break?** **Provide the binding, integrate
 with MPRIS.** MPRIS is a D-Bus specification every media player and browser
 implements.
 
@@ -928,13 +928,13 @@ implements.
 |---|---|---|---|
 | [`playerctl`](https://repology.org/project/playerctl/versions) | C | 2.4.1 on **every** target including Ubuntu 24.04 | The universal CLI. `playerctl play-pause` in the keymap is a one-line, zero-risk MVP answer |
 | [`mpris` crate](https://crates.io/crates/mpris) | Rust, zbus-based | v2.1.0, 2026-04-18 | For a native now-playing bar module with `PropertiesChanged` push |
-| [`mpris-server`](https://crates.io/crates/mpris-server) | Rust | v0.10.0, 2026-04-19 | Only relevant if helm ever *publishes* a player, which it will not |
+| [`mpris-server`](https://crates.io/crates/mpris-server) | Rust | v0.10.0, 2026-04-19 | Only relevant if realm ever *publishes* a player, which it will not |
 
 **Idle inhibition belongs with this.** A video should not blank the screen.
 river creates an idle-inhibit manager (`IdleInhibitManager.zig`, verified) and
 an `ext-idle-notify-v1` notifier (`wlr.IdleNotifierV1` in `InputManager.zig`,
 verified), so browsers and video players inhibit idling automatically and any
-idle daemon helm ships gets proper notifications rather than polling for input.
+idle daemon realm ships gets proper notifications rather than polling for input.
 The choice of idle daemon is the sibling file's.
 
 **Fit.** Excellent and cheap. A now-playing module is not in the mockup's bar
@@ -960,11 +960,11 @@ problems (`impala`, `bluetui`, `wiremix` and `wlr-randr` are between them
 missing from Debian, Ubuntu and Fedora in various combinations — all verified
 above).
 
-`helm-hecate` (M4) is already a fuzzy list over a source of items, driven by
+`realm-hecate` (M4) is already a fuzzy list over a source of items, driven by
 `nucleo`. Making its item source pluggable — a trait with implementations for
 PATH entries, desktop files, spells, wifi networks, Bluetooth devices and audio
 sinks — turns four dependencies into four ~150-line providers over D-Bus
-subscriptions helm already needs for the bar. The interaction is identical to
+subscriptions realm already needs for the bar. The interaction is identical to
 the launcher, so there is nothing new for the user to learn, and it is themed by
 `palette.toml` directly rather than through a terminal's ANSI approximation.
 
@@ -979,37 +979,37 @@ way ADR 0007's seam rule requires.
 
 | Component | Provide / integrate / not break | Recommended choice | Fit | Cost | Priority | Milestone |
 |---|---|---|---|---|---|---|
-| Audio volume and mute | integrate + provide the bindings | `pipewire` crate subscriber in `helm-session`; `wpctl` for actions | good — genuinely push-based | small Rust shim + keymap | **MVP** | M3 |
+| Audio volume and mute | integrate + provide the bindings | `pipewire` crate subscriber in `realm-session`; `wpctl` for actions | good — genuinely push-based | small Rust shim + keymap | **MVP** | M3 |
 | Per-app audio routing | integrate | `wiremix`, `pulsemixer` fallback on Debian/Ubuntu | good — Rust TUI, ANSI-themed free | config-only | STRATEGIC | M4 |
 | Wifi / wired / connectivity | integrate | NetworkManager + `nmtui`; hecate picker later | adequate; the VPN requirement decides it | config + Rust shim | **MVP** | M3 |
 | VPN readout | integrate | NetworkManager `ActiveConnection` | good | Rust shim | STRATEGIC | M4 |
 | Net throughput (`↑ ↓`) | provide | sampled `/proc/net/dev`, or move to horus | **poor — cannot be pushed** | bar module + a justified timer | STRATEGIC | M4 |
 | Bluetooth | integrate | `bluetui`, `bluetoothctl` fallback | good shape, poor packaging | config-only | **MVP** | M3 |
 | Output hotplug / workarea | provide | `river_output_v1` events in `RiverBackend` | perfect — protocol events | part of M2 | **MVP** | M2/M3 |
-| Multi-monitor profiles | integrate | `kanshi` (shikane if packaging allows) | good; declarative config suits helm | config-only | LATER | M6 |
+| Multi-monitor profiles | integrate | `kanshi` (shikane if packaging allows) | good; declarative config suits realm | config-only | LATER | M6 |
 | Fractional scaling exactness | provide | extend the M2 seam test to 1.25/1.5/1.75 | risk to the central invariant | test work | **MVP** | M2 |
 | Screen brightness | provide the binding | logind `SetBrightness` via zbus | excellent — no privilege, no polling | small Rust shim | **MVP** | M3 |
 | Keyboard backlight | provide the binding | same call, `"leds"` subsystem | excellent | trivial once the above exists | STRATEGIC | M4 |
 | External monitor brightness | integrate | `ddcutil`, opt-in | poor — slow, needs group membership | config + docs | LATER | M6 |
 | Battery + warning level | integrate | UPower `DisplayDevice` over zbus | excellent — fully push-based | small Rust shim | **MVP** | M3 |
 | Suspend / lid | not break | logind `HandleLidSwitch`; never hold a permanent inhibitor | excellent — nothing to build | config-only | **MVP** | M3 |
-| Power profiles | integrate | `power-profiles-daemon` API (tuned-ppd satisfies it) | good — one API, both distros | Rust shim + `helmctl` verb | STRATEGIC | M4 |
-| Keyboard layout | **provide** | implement `river-xkb-config-v1`; `XKB_DEFAULT_*` in the meantime | protocol is push-based and helm-shaped | **real work** | **MVP** | M2/M3 |
+| Power profiles | integrate | `power-profiles-daemon` API (tuned-ppd satisfies it) | good — one API, both distros | Rust shim + `realmctl` verb | STRATEGIC | M4 |
+| Keyboard layout | **provide** | implement `river-xkb-config-v1`; `XKB_DEFAULT_*` in the meantime | protocol is push-based and realm-shaped | **real work** | **MVP** | M2/M3 |
 | Touchpad / pointer config | **provide** | implement `river-libinput-config-v1` | as above | **real work** | **MVP** | M2/M3 |
 | Input methods / CJK | not break | fcitx5; river already serves `input-method-v2` **with popups** | good — better than sway | config-only + verification | LATER | M4 |
 | Removable media | integrate | `udiskie --no-tray` as a user unit + yazi keymap | fine; Python is the only blemish | config-only | **MVP** | M3 |
 | Printing | not break | CUPS as the distro ships it; document `localhost:631` | fine — nothing to do | docs | LATER | M6 |
-| Night light | integrate | `wl-gammarelay-rs` (D-Bus), `wlsunset` fallback | very good — becomes a helm state | small Rust shim | STRATEGIC | M4 |
+| Night light | integrate | `wl-gammarelay-rs` (D-Bus), `wlsunset` fallback | very good — becomes a realm state | small Rust shim | STRATEGIC | M4 |
 | ICC / HDR | not break | nothing — unreachable on river | n/a | none | LATER | M5 |
 | Timezone / DST | integrate | `timedate1` `PropertiesChanged` + `jiff` | good — the signal exists | small Rust shim | **MVP** | M3 |
 | `LANG` / `XKB_DEFAULT_*` import | provide | add to ADR 0011's two import lists | trivial and currently missing | config-only | **MVP** | M3 |
 | Time sync | not break | timesyncd or chrony as shipped | fine | doctor line | LATER | M6 |
 | Screen reader | not break + document | none exists on this stack | **none — no option at any price** | docs now, compositor work at M5 | **MVP** (the statement) | M3/M5 |
-| Magnification | provide, eventually | impossible under river; `helm-compositor` requirement | blocked architecturally | M5 requirement | LATER | M5 |
-| Sticky / slow keys | provide, eventually | same | blocked; helm may not even see raw keys | M5 requirement | LATER | M5 |
+| Magnification | provide, eventually | impossible under river; `realm-compositor` requirement | blocked architecturally | M5 requirement | LATER | M5 |
+| Sticky / slow keys | provide, eventually | same | blocked; realm may not even see raw keys | M5 requirement | LATER | M5 |
 | Fonts / fallback chain | provide | generated `fonts.conf` from `typography.fallback` | perfect fit for the existing mechanism | one template | **MVP** | M3 |
 | Thumbnails | decide | default off, one-line opt-in | see §14 | config-only | decision | M4 |
-| System updates | not break | a user "spell", not a helm feature | poor for all candidates | none | LATER | M6 |
+| System updates | not break | a user "spell", not a realm feature | poor for all candidates | none | LATER | M6 |
 | Media keys (MPRIS) | provide the binding | `playerctl` in the keymap | excellent — one line | config-only | **MVP** | M3 |
 | Idle inhibition while playing | not break | river's `IdleInhibitManager` handles it | good | none | **MVP** | M3 |
 
@@ -1040,7 +1040,7 @@ seriously, because the mockup's own bar contains modules that cannot honour it.
 | Timezone changed | `timedate1` `PropertiesChanged` on `Timezone` | yes — timedate1 manual |
 | Backlight changed by firmware | udev `change` on the `backlight` subsystem | **assumed — test on real hardware** |
 | Idle / active | `ext-idle-notify-v1` (river creates `wlr.IdleNotifierV1`) | yes — river source |
-| Theme generation selection | SPEC 0011 `current` pointer commit; no reload or notification, future launches only | yes — accepted Helm contract |
+| Theme generation selection | SPEC 0011 `current` pointer commit; no reload or notification, future launches only | yes — accepted Realm contract |
 
 ### Cannot be pushed — the bar's design has a problem here
 
@@ -1064,8 +1064,8 @@ So the rule as written ("no timers except the clock") cannot survive contact
 with the mockup. There are four honest options:
 
 1. **Accept one sampling timer, deliberately.** A single shared sampler in
-   `helm-session` at a stated interval (2 s is the usual choice; 5 s is
-   defensible and halves the wakeups), producing one `HelmState` update that
+   `realm-session` at a stated interval (2 s is the usual choice; 5 s is
+   defensible and halves the wakeups), producing one `RealmState` update that
    coalesces cpu, mem, gpu and net rates. One timer for the whole desktop,
    not four. The bar still redraws only when a value *changed*, so
    `renders_same_as` still does its job, and `mem 9.8G` changing at 5 s
@@ -1107,18 +1107,18 @@ Two smaller consequences fall out of the same audit:
 
 ## 20. The uncomfortable list
 
-Where the best available option fits helm's vision badly and there is no good
+Where the best available option fits realm's vision badly and there is no good
 answer.
 
 1. **Accessibility, and specifically the screen reader.** There is no option.
-   Not a bad option — none. A blind user cannot use helm, cannot use sway,
+   Not a bad option — none. A blind user cannot use realm, cannot use sway,
    cannot use river, and this will not change until Newton ships and a
-   compositor implements it. helm's honest positions are to document it
-   prominently and to make `helm-compositor` a place where it becomes possible.
+   compositor implements it. realm's honest positions are to document it
+   prominently and to make `realm-compositor` a place where it becomes possible.
    Anything else is marketing.
-2. **Sticky keys versus a chorded keymap.** helm's core interaction is a
+2. **Sticky keys versus a chorded keymap.** realm's core interaction is a
    modifier chord. The accessibility feature that makes chords usable one-handed
-   is the one feature helm cannot implement on river, and possibly cannot
+   is the one feature realm cannot implement on river, and possibly cannot
    implement even in principle given that `river-xkb-bindings-v1` delivers bound
    keys rather than raw ones. A keyboard-first desktop owes this more than a
    mouse-first one does.
@@ -1128,19 +1128,19 @@ answer.
    which is how frame budgets die.
 4. **The best-fitting tools are the worst-packaged.** `wiremix`, `impala`,
    `bluetui`, `shikane` and `wl-gammarelay-rs` are the five candidates that fit
-   helm best on every axis that matters — Rust, keyboard-driven, themeable
+   realm best on every axis that matters — Rust, keyboard-driven, themeable
    through the ANSI palette, no toolkit. Between them they are absent from
    Debian, Ubuntu and Fedora in almost every combination (verified). The
    well-packaged alternatives (`pavucontrol`, `blueman`, `nmtui`,
    `nm-connection-editor`, `gammastep`) are mostly GTK, mouse-shaped, or both.
-   helm can build them from crates.io in its own packages, which means owning
+   realm can build them from crates.io in its own packages, which means owning
    five more builds; or ship worse defaults on two of three targets; or write
    its own (§17). None of the three is comfortable.
 5. **udiskie is Python.** In a Rust-first desktop, the automounter is a Python
    daemon. The alternative is writing one, which ADR 0007 says not to do without
    a written reason, and "it is not Rust" is not a written reason.
 6. **NetworkManager is a large, opinionated daemon in a minimal desktop.** iwd
-   is what helm would choose on taste. VPN is what makes the choice for us, and
+   is what realm would choose on taste. VPN is what makes the choice for us, and
    the design put `vpn ◉ warded` in the mockup.
 7. **HDR is unreachable and will be asked about.** river creates the
    colour-management global only on a capable renderer and exposes no way to
@@ -1151,23 +1151,23 @@ answer.
 
 ---
 
-## 21. What helm should build itself
+## 21. What realm should build itself
 
 [ADR 0007](../adr/0007-reuse-yazi-btop-starship.md) demands a written reason for
-anything helm writes rather than reuses. Four items qualify.
+anything realm writes rather than reuses. Four items qualify.
 
-### 21.1 The hardware state layer in `helm-session` (not a status bar)
+### 21.1 The hardware state layer in `realm-session` (not a status bar)
 
 **Reason.** Every off-the-shelf status bar — waybar, i3status-rs, eww — polls on
-an interval, ships its own theming language, and owns its own process. helm
+an interval, ships its own theming language, and owns its own process. realm
 already has a state broadcaster (ADR 0003), a wire format (ADR 0004), a palette
 (ADR 0005) and a bar (ADR 0008). Adding a second state-owning process to feed
 the first would create the second source of truth ADR 0001 exists to prevent.
 The build is a set of subscribers — zbus for UPower, logind, NetworkManager,
-timedated; the `pipewire` crate for audio — folded into `HelmState`, on a
+timedated; the `pipewire` crate for audio — folded into `RealmState`, on a
 thread that never touches the window-management event loop.
 
-**Not built:** the daemons themselves. helm subscribes; it does not implement a
+**Not built:** the daemons themselves. realm subscribes; it does not implement a
 battery monitor, a network manager or an audio server.
 
 ### 21.2 The two river configuration protocols
@@ -1180,19 +1180,19 @@ client). §0.1.
 ### 21.3 A generated `fonts.conf`
 
 **Reason.** The alternative is the fallback chain being written down twice — in
-`palette.toml` for helm's own renderer and in a hand-maintained fontconfig file
+`palette.toml` for realm's own renderer and in a hand-maintained fontconfig file
 for everything else — which is precisely what ADR 0005 forbids. §13.
 
 ### 21.4 Picker providers for hecate, later
 
-**Reason.** helm is already building hecate for other reasons; four TUI
+**Reason.** realm is already building hecate for other reasons; four TUI
 dependencies that fit badly and package worse can be replaced by four small
-providers over D-Bus connections helm already holds. This is reuse of helm's own
+providers over D-Bus connections realm already holds. This is reuse of realm's own
 component rather than a rewrite of anyone else's: `impala` and `bluetui` stay
 supported for people who prefer them. §17. **Not before M4**, and not at the
 cost of M3.
 
-### What helm should *not* build
+### What realm should *not* build
 
 An audio server, a network manager, a Bluetooth stack, an automounter (§20.5), a
 night-light daemon, a display-configuration tool, a printing system, a screen
@@ -1224,13 +1224,13 @@ implementation choice in a PR.
 
 **C. "No thumbnails, ever" (§14).**
 Options: (a) keep "ever" as an absolute; (b) default off with a documented
-one-line opt-in; (c) default off with a helm-level toggle in charon's config.
-**Recommendation: (b).** It costs nothing, keeps every budget, and stops helm
+one-line opt-in; (c) default off with a realm-level toggle in charon's config.
+**Recommendation: (b).** It costs nothing, keeps every budget, and stops realm
 from being unusable for one common job.
 
 **D. Packaging the well-fitting Rust tools (§20.4).**
 Options: (a) build `wiremix`, `impala`, `bluetui` and `wl-gammarelay-rs` from
-crates.io inside helm's `.deb` and `.rpm`; (b) ship `pulsemixer`, `nmtui`,
+crates.io inside realm's `.deb` and `.rpm`; (b) ship `pulsemixer`, `nmtui`,
 `bluetoothctl` and `wlsunset` on Debian/Ubuntu and the better tools on Arch and
 Nix, accepting an inconsistent desktop; (c) accept the distro-packaged options
 everywhere and lose the fit.
@@ -1249,7 +1249,7 @@ Critical.
 **F. Accessibility posture (§12, §20.1–2).**
 Options: (a) say nothing and let users discover it; (b) a clear statement in
 INSTALL and a `doctor` line; (c) (b) plus a written commitment that
-`helm-compositor` will support magnification and AccessX, recorded as a
+`realm-compositor` will support magnification and AccessX, recorded as a
 requirement in M5's spec before M5 begins.
 **Recommendation: (c).** (a) is not acceptable; (b) alone leaves the situation
 permanent by default.
@@ -1300,5 +1300,5 @@ river 0.3.x or river-classic", and it strengthens the case for vendoring.
 - Whether thermal netlink threshold events cover consumer GPU sensors, as
   opposed to CPU thermal zones.
 - Whether `river-xkb-bindings-v1` could expose a raw key stream sufficient for
-  helm to implement sticky keys itself. This determines whether §20.2 is
+  realm to implement sticky keys itself. This determines whether §20.2 is
   permanent or merely current.

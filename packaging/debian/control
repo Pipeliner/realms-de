@@ -1,4 +1,4 @@
-# helm — Debian/Ubuntu source control.
+# realm — Debian/Ubuntu source control.
 #
 # Target: Ubuntu 24.04 LTS and newer (ARCHITECTURE.md §5). Every package name
 # below was checked against noble's own apt lists on 2026-08-26; where something
@@ -13,11 +13,11 @@
 # self-hosted apt repo behind reprepro/aptly, or GitHub Releases with .deb
 # artifacts and no apt metadata. Until this is decided, the only supported route
 # is "build it yourself" — see docs/INSTALL.md.
-Source: helm
+Source: realm
 Section: x11
 Priority: optional
-Maintainer: helm contributors <vadim.evard@gmail.com>
-# Ubuntu 24.04's default rustc/cargo is 1.75, below helm's declared MSRV of 1.85
+Maintainer: realm contributors <vadim.evard@gmail.com>
+# Ubuntu 24.04's default rustc/cargo is 1.75, below realm's declared MSRV of 1.85
 # (Cargo.toml). The archive carries versioned toolchain packages: rustc-1.85 and
 # cargo-1.85 are present as 1.85.1+dfsg0ubuntu2~bpo0 (verified against noble's
 # package lists on 2026-08-26). Those are named first, and debian/rules puts the
@@ -35,15 +35,15 @@ Rules-Requires-Root: no
 # ${shlibs:Depends} resolves to nothing until a compiled binary is packaged, and
 # dpkg-gencontrol warns that it is undefined. That warning is expected before M2
 # and disappears with the first ELF file.
-Package: helm
+Package: realm
 Architecture: any
-# helm-river is the vendored, pinned river 0.4.x described in debian/rules.
+# realm-river is the vendored, pinned river 0.4.x described in debian/rules.
 # Plain `river` is offered as an alternative for distributions that ship 0.4.x
 # themselves; Ubuntu 24.04 ships no river at all (verified), so on noble the
 # vendored package is the only option.
 Depends: ${shlibs:Depends},
          ${misc:Depends},
-         helm-river (>= 0.4.0) | river (>= 0.4.0),
+         realm-river (>= 0.4.0) | river (>= 0.4.0),
          dbus-user-session,
          systemd,
          xdg-desktop-portal,
@@ -57,11 +57,11 @@ Depends: ${shlibs:Depends},
 # satisfy `gtk | wlr | gnome` with a backend that implements no ScreenCast, and
 # the user meets that as screen sharing that silently produces nothing
 # (SPEC 0005 §5). gtk answers FileChooser and Settings; wlr answers ScreenCast
-# and Screenshot, which is what configs/portal/helm-portals.conf routes to it.
+# and Screenshot, which is what configs/portal/realm-portals.conf routes to it.
 # slurp is xdg-desktop-portal-wlr's default output chooser, hence the Recommends.
 #
 # fonts-ibm-plex is the design's typeface but lives in multiverse, which is not
-# enabled everywhere; a hard dependency would make helm uninstallable on a
+# enabled everywhere; a hard dependency would make realm uninstallable on a
 # main+universe box. The glyph probe (ADR 0012) degrades to the system mono
 # font instead of drawing tofu, so this is a Recommends and the install docs
 # say how to get the real face.
@@ -76,19 +76,19 @@ Recommends: fonts-ibm-plex,
 Suggests: yazi,
           starship
 Description: keyboard-first, gapless-tiling Wayland desktop environment
- helm is a Wayland desktop built around one idea: an ordered ledger of windows
+ realm is a Wayland desktop built around one idea: an ordered ledger of windows
  is the only state that matters, and every layout is a pure projection of it.
  Undo is exact, focus never moves a rectangle, and nothing animates.
  .
  It reuses proven tools rather than rewriting them — yazi, btop, zsh with
  starship, fuzzel and foot — and themes all of them from a single palette file.
- The compositor is river 0.4, driven by helm's own window manager over
+ The compositor is river 0.4, driven by realm's own window manager over
  river-window-management-v1.
  .
  THIS PACKAGE IS PRE-ALPHA (0.1.0) AND DOES NOT INSTALL A WORKING DESKTOP.
- helmctl is installed with its `theme apply`, `theme lint`, and `theme diff`
+ realmctl is installed with its `theme apply`, `theme lint`, and `theme diff`
  commands. The window manager and bar are not written yet.
  What it installs today is the session contract: the wayland-session entry, the
  session wrapper that performs the systemd/D-Bus environment handshake, the
  systemd user units and the palette. Logging into it gives you river with no
- window management attached. See /usr/share/doc/helm/INSTALL.md.gz.
+ window management attached. See /usr/share/doc/realm/INSTALL.md.gz.

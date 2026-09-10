@@ -19,8 +19,8 @@ Copy [`template.md`](template.md) to start a new one.
 |---|---|---|---|---|
 | [0001](0001-ledger-as-single-source-of-truth.md) | The ledger is the single source of truth | Accepted | Ordered `Vec<WinId>` per orbit; layouts are pure projections; undo restores an older ledger | **Structural** — the whole DE assumes it |
 | [0002](0002-borrow-a-compositor-first.md) | Borrow a compositor first; write ours later | ~~Superseded~~ by [0013](0013-river-window-management-backend.md) | Ship on niri behind a `WmBackend` trait. Kept in full: its mapping table is the evidence for the move | — |
-| [0003](0003-session-daemon-owns-state.md) | A session daemon owns the state | Accepted — theme-reload consequence superseded by [0017](0017-immutable-theme-activation-generations.md) | `helm-session` holds `HelmState`; clients subscribe and hold nothing | Low |
-| [0004](0004-ndjson-control-socket.md) | Newline-delimited JSON over a unix socket | Accepted | One JSON value per line at `$XDG_RUNTIME_DIR/helm/ctl.sock`, with a version handshake | Low — a D-Bus surface would be additive |
+| [0003](0003-session-daemon-owns-state.md) | A session daemon owns the state | Accepted — theme-reload consequence superseded by [0017](0017-immutable-theme-activation-generations.md) | `realm-session` holds `RealmState`; clients subscribe and hold nothing | Low |
+| [0004](0004-ndjson-control-socket.md) | Newline-delimited JSON over a unix socket | Accepted | One JSON value per line at `$XDG_RUNTIME_DIR/realm/ctl.sock`, with a version handshake | Low — a D-Bus surface would be additive |
 | [0005](0005-palette-toml-single-source.md) | One `palette.toml`, everything generated | Accepted — activation clauses partially superseded by [0017](0017-immutable-theme-activation-generations.md) | No colour is written down twice; derive, lint, and render from one palette | Low per target |
 | [0006](0006-oklab-contrast-not-filters.md) | Contrast derived in OKLab, gamut-capped | Accepted | A `contrast()` filter costs a fullscreen pass per frame and rotates accent hues | Low |
 | [0007](0007-reuse-yazi-btop-starship.md) | Reuse yazi, btop and zsh+starship | Accepted | charon and horus are ~90% theme and keymap; always behind a seam | Low per tool |
@@ -29,10 +29,10 @@ Copy [`template.md`](template.md) to start a new one.
 | [0010](0010-nix-flake-as-reference-build.md) | The Nix flake is the reference build | Accepted — Fedora baseline clauses partially superseded by [0015](0015-fedora-44-pre-alpha-baseline.md) | root flake plus tracked native distro packaging; a NixOS VM test boots the session | **Medium** |
 | [0011](0011-session-integration-contract.md) | The session entry owns the environment handshake | Accepted | Import into systemd **and** D-Bus before starting anything, or portals hang | Low — the requirement is not reversible |
 | [0012](0012-font-fallback-is-a-contract.md) | Font fallback is a contract | Accepted — guard pending | Glyph inventory, a startup probe, and an ASCII fallback for all 37 glyphs | Low |
-| [0013](0013-river-window-management-backend.md) | helm **is** the window manager, on river's protocol | Accepted — supersedes [0002](0002-borrow-a-compositor-first.md); Fedora part of Decision 4 superseded by [0015](0015-fedora-44-pre-alpha-baseline.md) | river 0.4 moved window management out of the compositor; every row 0002 marked lossy becomes faithful | **Medium** — back to niri is an architecture change, not a module swap |
+| [0013](0013-river-window-management-backend.md) | realm **is** the window manager, on river's protocol | Accepted — supersedes [0002](0002-borrow-a-compositor-first.md); Fedora part of Decision 4 superseded by [0015](0015-fedora-44-pre-alpha-baseline.md) | river 0.4 moved window management out of the compositor; every row 0002 marked lossy becomes faithful | **Medium** — back to niri is an architecture change, not a module swap |
 | [0014](0014-local-agent-sdd-pilot-governance.md) | Local agent-SDD pilot records are tracked but non-authoritative | Accepted | Metadata-only checkpoints/evidence aid handoff; docs, GitHub and tests retain their existing authority | Low — remove pilot records and validator |
 | [0015](0015-fedora-44-pre-alpha-baseline.md) | Fedora 44 is the sole explicit pre-alpha Fedora baseline | Accepted — partially supersedes [0010](0010-nix-flake-as-reference-build.md) and [0013](0013-river-window-management-backend.md) for Fedora | One exact Fedora release and native River candidate, without implying RPM/session support | Low — accept a successor baseline and replace the single lane |
-| [0016](0016-packaged-helm-sdd-carries-git.md) | The Nix-installed `helm-sdd` carries Git in its own runtime closure | Accepted | Git is wrapped only for the local Git-backed validator, never the desktop session | Low — replace with a separately specified interface |
+| [0016](0016-packaged-realm-sdd-carries-git.md) | The Nix-installed `realm-sdd` carries Git in its own runtime closure | Accepted | Git is wrapped only for the local Git-backed validator, never the desktop session | Low — replace with a separately specified interface |
 | [0017](0017-immutable-theme-activation-generations.md) | Theme activation uses sealed immutable generations | Accepted — partially supersedes [0005](0005-palette-toml-single-source.md) | Launches pin a digest-bound sealed tree; pointer commits change future launches only and never reload | Medium — changes #22/#132 launcher and lifecycle seams |
 | [0018](0018-fresh-desktop-exec-only.md) | Desktop launch is fresh-process Exec only | Accepted | Reject D-Bus activation before side effects; plain Exec is a fresh child-only immutable plan | Medium — a future D-Bus path is additive only |
 | [0019](0019-nix-ci-cache-is-optional.md) | Nix CI cache is optional | Accepted | External cache authentication may not prevent the reference build or VM evidence | Low — add only reviewed non-blocking cache support |
@@ -50,10 +50,10 @@ named, with its options and a recommendation, rather than guessed at.
 
 | ADR | Question | Recommendation |
 |---|---|---|
-| [0013](0013-river-window-management-backend.md) | `river-window-management-v1` is declared stable with a compatibility pledge, but river is pre-1.0 and its last release cycle was extremely breaking. What do we do if the pledge does not hold? | Pin and follow, with an accelerated `helm-compositor` as the standing mitigation |
+| [0013](0013-river-window-management-backend.md) | `river-window-management-v1` is declared stable with a compatibility pledge, but river is pre-1.0 and its last release cycle was extremely breaking. What do we do if the pledge does not hold? | Pin and follow, with an accelerated `realm-compositor` as the standing mitigation |
 | [0013](0013-river-window-management-backend.md) | Confirm whether Ubuntu 24.04 supplies a River release compatible with `river-window-management-v1`. The remaining Ubuntu decision to vendor a pinned 0.4.x rests on this | Verify in Ubuntu packaging CI before packaging work starts |
 | [0010](0010-nix-flake-as-reference-build.md) | Where do the `.deb` and `.rpm` actually live: GitHub Releases, a self-hosted apt repo plus Copr, or official distro repositories? Who holds the signing key? | Releases for M3; a repo and Copr once there are users to upgrade |
-| [0011](0011-session-integration-contract.md) | Which lock screen ships? `ext-session-lock-v1` is now a hard requirement, so the real choice is waylock (small attack surface, colour-only theming) versus gtklock (looks like helm, drags GTK into the lock path). SPEC 0005 and `docs/integration/session-services.md` disagree | waylock, with the fidelity loss recorded in ADR 0005's limits table |
+| [0011](0011-session-integration-contract.md) | Which lock screen ships? `ext-session-lock-v1` is now a hard requirement, so the real choice is waylock (small attack surface, colour-only theming) versus gtklock (looks like realm, drags GTK into the lock path). SPEC 0005 and `docs/integration/session-services.md` disagree | waylock, with the fidelity loss recorded in ADR 0005's limits table |
 | [0011](0011-session-integration-contract.md) | Idle policy defaults: blank timeout, lock timeout, and whether lid-close locks unconditionally | Not to be guessed; these are user-visible security defaults |
 
 ### Resolved
@@ -66,7 +66,7 @@ named, with its options and a recommendation, rather than guessed at.
 
 ## Guards at a glance
 
-The tests that currently exist in `crates/helm-core` and would fail if a
+The tests that currently exist in `crates/realm-core` and would fail if a
 decision silently stopped being true:
 
 | ADR | Guard |

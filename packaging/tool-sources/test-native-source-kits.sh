@@ -5,7 +5,7 @@ set -eu
 root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 builder=$root/packaging/tool-sources/build-native-source-kits.sh
 checker=$root/packaging/tool-sources/check-native-source-kit.py
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/helm-native-source-kits.XXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/realm-native-source-kits.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 if [ ! -x "$builder" ] || [ ! -x "$checker" ]; then
@@ -17,14 +17,14 @@ mkdir -p "$tmp/sentinels"
 for command in git curl wget ssh scp; do
     sed "s/@COMMAND@/$command/g" >"$tmp/sentinels/$command" <<'EOF'
 #!/bin/sh
-printf 'forbidden source-kit command: @COMMAND@ %s\n' "$*" >>"${HELM_KIT_SENTINEL_LOG:?}"
+printf 'forbidden source-kit command: @COMMAND@ %s\n' "$*" >>"${REALM_KIT_SENTINEL_LOG:?}"
 exit 97
 EOF
     chmod +x "$tmp/sentinels/$command"
 done
 : >"$tmp/sentinel.log"
 PATH="$tmp/sentinels:/usr/bin:/bin" \
-    HELM_KIT_SENTINEL_LOG="$tmp/sentinel.log" \
+    REALM_KIT_SENTINEL_LOG="$tmp/sentinel.log" \
     "$builder" "$tmp/output"
 
 if [ -s "$tmp/sentinel.log" ]; then
@@ -33,9 +33,9 @@ if [ -s "$tmp/sentinel.log" ]; then
     exit 1
 fi
 
-debian=$tmp/output/helm-debian-0.1.0
-rpm_archive=$tmp/output/helm-0.1.0.tar.gz
-rpm_spec=$tmp/output/helm.spec
+debian=$tmp/output/realm-debian-0.1.0
+rpm_archive=$tmp/output/realm-0.1.0.tar.gz
+rpm_spec=$tmp/output/realm.spec
 if [ ! -d "$debian" ] || [ ! -f "$rpm_archive" ] || [ ! -f "$rpm_spec" ]; then
     echo "native source-kit producer omitted an output" >&2
     exit 1
@@ -44,7 +44,7 @@ fi
 "$checker" debian "$debian"
 mkdir -p "$tmp/rpm"
 tar -C "$tmp/rpm" -xzf "$rpm_archive"
-rpm=$tmp/rpm/helm-0.1.0
+rpm=$tmp/rpm/realm-0.1.0
 "$checker" rpm "$rpm"
 
 guide_failures=0
@@ -134,14 +134,14 @@ fi
 
 diff -qr "$root/packaging/debian" "$debian/debian"
 diff -qr "$root/packaging/fedora" "$rpm/packaging/fedora"
-cmp "$root/packaging/fedora/helm.spec" "$rpm_spec"
-for helper in check-bundle-linkage.py check-native-source-kit.py stage-helm-workspace.py; do
+cmp "$root/packaging/fedora/realm.spec" "$rpm_spec"
+for helper in check-bundle-linkage.py check-native-source-kit.py stage-realm-workspace.py; do
     cmp "$root/packaging/tool-sources/$helper" \
         "$debian/packaging/tool-sources/$helper"
     cmp "$root/packaging/tool-sources/$helper" \
         "$rpm/packaging/tool-sources/$helper"
 done
-diff -qr "$root/packaging/tool-sources/bundles/helm-workspace" \
-    "$debian/packaging/tool-sources/bundles/helm-workspace"
-diff -qr "$root/packaging/tool-sources/bundles/helm-workspace" \
-    "$rpm/packaging/tool-sources/bundles/helm-workspace"
+diff -qr "$root/packaging/tool-sources/bundles/realm-workspace" \
+    "$debian/packaging/tool-sources/bundles/realm-workspace"
+diff -qr "$root/packaging/tool-sources/bundles/realm-workspace" \
+    "$rpm/packaging/tool-sources/bundles/realm-workspace"

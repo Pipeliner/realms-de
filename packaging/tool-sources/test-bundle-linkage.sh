@@ -3,13 +3,14 @@
 set -eu
 root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 checker=$root/packaging/tool-sources/check-bundle-linkage.py
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/helm-bundle-linkage.XXXXXX")
-escaped=$(mktemp "${TMPDIR:-/tmp}/helm-bundle-escape.XXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/realm-bundle-linkage.XXXXXX")
+escaped=$(mktemp "${TMPDIR:-/tmp}/realm-bundle-escape.XXXXXX")
 trap 'rm -rf "$tmp" "$escaped"' EXIT HUP INT TERM
 failures=0
 
 "$checker" "$root/packaging/tool-sources/bundles/starship-1.23.0"
 "$checker" "$root/packaging/tool-sources/bundles/yazi-25.4.8"
+"$checker" "$root/packaging/tool-sources/bundles/realm-workspace"
 
 rejects() {
     expected=$1
@@ -215,68 +216,68 @@ archive_sha256=$(sha256sum "$tmp/bundle/vendor.tar.zst" | awk '{print $1}')
 sed -i "s/^vendor_archive_sha256 = .*/vendor_archive_sha256 = \"$archive_sha256\"/" "$tmp/bundle.toml"
 rejects 'vendor archive contains unsafe member' "$tmp"
 
-write_helm_fixture() {
-    mkdir -p "$tmp/helm/bundle/.cargo" "$tmp/helm/source-input/helm-workspace"
-    cp "$tmp/bundle/Cargo.lock" "$tmp/helm/bundle/Cargo.lock"
-    cp "$tmp/bundle/.cargo/config.toml" "$tmp/helm/bundle/.cargo/config.toml"
-    cp "$tmp/bundle/licenses.tsv" "$tmp/helm/bundle/licenses.tsv"
-    cp "$tmp/valid-vendor.tar.zst" "$tmp/helm/bundle/vendor.tar.zst"
-    cp "$tmp/helm/bundle/Cargo.lock" "$tmp/helm/source-input/helm-workspace/Cargo.lock"
-    printf 'fixture source authority\n' >"$tmp/helm/source-input/helm-workspace/README"
+write_realm_fixture() {
+    mkdir -p "$tmp/realm/bundle/.cargo" "$tmp/realm/source-input/realm-workspace"
+    cp "$tmp/bundle/Cargo.lock" "$tmp/realm/bundle/Cargo.lock"
+    cp "$tmp/bundle/.cargo/config.toml" "$tmp/realm/bundle/.cargo/config.toml"
+    cp "$tmp/bundle/licenses.tsv" "$tmp/realm/bundle/licenses.tsv"
+    cp "$tmp/valid-vendor.tar.zst" "$tmp/realm/bundle/vendor.tar.zst"
+    cp "$tmp/realm/bundle/Cargo.lock" "$tmp/realm/source-input/realm-workspace/Cargo.lock"
+    printf 'fixture source authority\n' >"$tmp/realm/source-input/realm-workspace/README"
     tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
-        -C "$tmp/helm/source-input" -czf "$tmp/helm/source.tar.gz" helm-workspace
-    printf 'fixture provenance\n' >"$tmp/helm/provenance.md"
-    helm_source_sha256=$(sha256sum "$tmp/helm/source.tar.gz" | awk '{print $1}')
-    helm_provenance_sha256=$(sha256sum "$tmp/helm/provenance.md" | awk '{print $1}')
-    helm_lockfile_sha256=$(sha256sum "$tmp/helm/bundle/Cargo.lock" | awk '{print $1}')
-    helm_config_sha256=$(sha256sum "$tmp/helm/bundle/.cargo/config.toml" | awk '{print $1}')
-    helm_license_sha256=$(sha256sum "$tmp/helm/bundle/licenses.tsv" | awk '{print $1}')
-    helm_vendor_sha256=$(sha256sum "$tmp/helm/bundle/vendor.tar.zst" | awk '{print $1}')
-    cat >"$tmp/helm/bundle.toml" <<EOF
+        -C "$tmp/realm/source-input" -czf "$tmp/realm/source.tar.gz" realm-workspace
+    printf 'fixture provenance\n' >"$tmp/realm/provenance.md"
+    realm_source_sha256=$(sha256sum "$tmp/realm/source.tar.gz" | awk '{print $1}')
+    realm_provenance_sha256=$(sha256sum "$tmp/realm/provenance.md" | awk '{print $1}')
+    realm_lockfile_sha256=$(sha256sum "$tmp/realm/bundle/Cargo.lock" | awk '{print $1}')
+    realm_config_sha256=$(sha256sum "$tmp/realm/bundle/.cargo/config.toml" | awk '{print $1}')
+    realm_license_sha256=$(sha256sum "$tmp/realm/bundle/licenses.tsv" | awk '{print $1}')
+    realm_vendor_sha256=$(sha256sum "$tmp/realm/bundle/vendor.tar.zst" | awk '{print $1}')
+    cat >"$tmp/realm/bundle.toml" <<EOF
 [bundle]
-name = "helm-workspace"
+name = "realm-workspace"
 version = "0.1.0"
 commit = "1111111111111111111111111111111111111111"
 commit_timestamp = "2026-09-01T00:00:00Z"
 source = "source.tar.gz"
-source_sha256 = "$helm_source_sha256"
+source_sha256 = "$realm_source_sha256"
 source_archive_format = "tar.gz"
 source_provenance = "provenance.md"
-source_provenance_sha256 = "$helm_provenance_sha256"
+source_provenance_sha256 = "$realm_provenance_sha256"
 lockfile = "bundle/Cargo.lock"
-lockfile_sha256 = "$helm_lockfile_sha256"
+lockfile_sha256 = "$realm_lockfile_sha256"
 cargo_config = "bundle/.cargo/config.toml"
-cargo_config_sha256 = "$helm_config_sha256"
+cargo_config_sha256 = "$realm_config_sha256"
 license_report = "bundle/licenses.tsv"
-license_report_sha256 = "$helm_license_sha256"
+license_report_sha256 = "$realm_license_sha256"
 vendor_archive = "bundle/vendor.tar.zst"
-vendor_archive_sha256 = "$helm_vendor_sha256"
+vendor_archive_sha256 = "$realm_vendor_sha256"
 vendor_archive_format = "tar.zst"
 EOF
 }
 
-helm_source_digest() {
-    helm_source_sha256=$(sha256sum "$tmp/helm/source.tar.gz" | awk '{print $1}')
-    sed -i "s/^source_sha256 = .*/source_sha256 = \"$helm_source_sha256\"/" "$tmp/helm/bundle.toml"
+realm_source_digest() {
+    realm_source_sha256=$(sha256sum "$tmp/realm/source.tar.gz" | awk '{print $1}')
+    sed -i "s/^source_sha256 = .*/source_sha256 = \"$realm_source_sha256\"/" "$tmp/realm/bundle.toml"
 }
 
-write_helm_source() {
-    rm -rf "$tmp/helm/source-input"
-    mkdir -p "$tmp/helm/source-input/helm-workspace"
-    cp "$tmp/helm/bundle/Cargo.lock" "$tmp/helm/source-input/helm-workspace/Cargo.lock"
-    printf 'fixture source authority\n' >"$tmp/helm/source-input/helm-workspace/README"
+write_realm_source() {
+    rm -rf "$tmp/realm/source-input"
+    mkdir -p "$tmp/realm/source-input/realm-workspace"
+    cp "$tmp/realm/bundle/Cargo.lock" "$tmp/realm/source-input/realm-workspace/Cargo.lock"
+    printf 'fixture source authority\n' >"$tmp/realm/source-input/realm-workspace/README"
     tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
-        -C "$tmp/helm/source-input" -czf "$tmp/helm/source.tar.gz" helm-workspace
-    helm_source_digest
+        -C "$tmp/realm/source-input" -czf "$tmp/realm/source.tar.gz" realm-workspace
+    realm_source_digest
 }
 
 race_source_replacement() {
     mode=$1
-    source=$tmp/helm/source.tar.gz
-    replacement=$tmp/helm/attacker-source.tar.gz
-    opened=$tmp/helm/opened-source.tar.gz
+    source=$tmp/realm/source.tar.gz
+    replacement=$tmp/realm/attacker-source.tar.gz
+    opened=$tmp/realm/opened-source.tar.gz
     printf attacker >"$replacement"
-    "$checker" "$tmp/helm" >"$tmp/out" 2>"$tmp/err" &
+    "$checker" "$tmp/realm" >"$tmp/out" 2>"$tmp/err" &
     checker_pid=$!
     if ! python3 -c '
 import os
@@ -322,71 +323,71 @@ sys.exit(1)
     mv "$opened" "$source"
 }
 
-write_helm_fixture
-"$checker" "$tmp/helm"
+write_realm_fixture
+"$checker" "$tmp/realm"
 
 # The descriptor-selected source authority cannot disappear after the manifest binds it.
-mv "$tmp/helm/source.tar.gz" "$tmp/helm/source.saved.tar.gz"
-rejects 'bundle source is missing or symlinked' "$tmp/helm"
-mv "$tmp/helm/source.saved.tar.gz" "$tmp/helm/source.tar.gz"
+mv "$tmp/realm/source.tar.gz" "$tmp/realm/source.saved.tar.gz"
+rejects 'bundle source is missing or symlinked' "$tmp/realm"
+mv "$tmp/realm/source.saved.tar.gz" "$tmp/realm/source.tar.gz"
 
 # A same-name replacement with different bytes must fail the source digest binding.
-printf replacement >>"$tmp/helm/source.tar.gz"
-rejects 'source SHA-256 mismatch' "$tmp/helm"
-write_helm_source
+printf replacement >>"$tmp/realm/source.tar.gz"
+rejects 'source SHA-256 mismatch' "$tmp/realm"
+write_realm_source
 
 # Provenance is a separately retained, digest-bound source authority record.
-printf replacement >>"$tmp/helm/provenance.md"
-rejects 'source_provenance SHA-256 mismatch' "$tmp/helm"
-printf 'fixture provenance\n' >"$tmp/helm/provenance.md"
+printf replacement >>"$tmp/realm/provenance.md"
+rejects 'source_provenance SHA-256 mismatch' "$tmp/realm"
+printf 'fixture provenance\n' >"$tmp/realm/provenance.md"
 
 # Archive members must not escape, duplicate, introduce unsafe types, or make roots ambiguous.
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
-    --transform='s|^helm-workspace/|helm-workspace/../|' \
-    -C "$tmp/helm/source-input" -czf "$tmp/helm/source.tar.gz" helm-workspace
-helm_source_digest
-rejects 'source archive member path escapes source root' "$tmp/helm"
-write_helm_source
+    --transform='s|^realm-workspace/|realm-workspace/../|' \
+    -C "$tmp/realm/source-input" -czf "$tmp/realm/source.tar.gz" realm-workspace
+realm_source_digest
+rejects 'source archive member path escapes source root' "$tmp/realm"
+write_realm_source
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
-    -C "$tmp/helm/source-input" -czf "$tmp/helm/source.tar.gz" helm-workspace helm-workspace
-helm_source_digest
-rejects 'source archive has duplicate member' "$tmp/helm"
-write_helm_source
-ln -s Cargo.lock "$tmp/helm/source-input/helm-workspace/unsafe-link"
+    -C "$tmp/realm/source-input" -czf "$tmp/realm/source.tar.gz" realm-workspace realm-workspace
+realm_source_digest
+rejects 'source archive has duplicate member' "$tmp/realm"
+write_realm_source
+ln -s Cargo.lock "$tmp/realm/source-input/realm-workspace/unsafe-link"
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
-    -C "$tmp/helm/source-input" -czf "$tmp/helm/source.tar.gz" helm-workspace
-helm_source_digest
-rejects 'source archive contains unsafe member' "$tmp/helm"
-rm "$tmp/helm/source-input/helm-workspace/unsafe-link"
-write_helm_source
-mkdir -p "$tmp/helm/source-input/another-root"
-printf other >"$tmp/helm/source-input/another-root/README"
+    -C "$tmp/realm/source-input" -czf "$tmp/realm/source.tar.gz" realm-workspace
+realm_source_digest
+rejects 'source archive contains unsafe member' "$tmp/realm"
+rm "$tmp/realm/source-input/realm-workspace/unsafe-link"
+write_realm_source
+mkdir -p "$tmp/realm/source-input/another-root"
+printf other >"$tmp/realm/source-input/another-root/README"
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
-    -C "$tmp/helm/source-input" -czf "$tmp/helm/source.tar.gz" helm-workspace another-root
-helm_source_digest
-rejects 'source archive must contain one regular top-level root' "$tmp/helm"
-write_helm_source
-printf mismatch >>"$tmp/helm/source-input/helm-workspace/Cargo.lock"
+    -C "$tmp/realm/source-input" -czf "$tmp/realm/source.tar.gz" realm-workspace another-root
+realm_source_digest
+rejects 'source archive must contain one regular top-level root' "$tmp/realm"
+write_realm_source
+printf mismatch >>"$tmp/realm/source-input/realm-workspace/Cargo.lock"
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
-    -C "$tmp/helm/source-input" -czf "$tmp/helm/source.tar.gz" helm-workspace
-helm_source_digest
-rejects 'source archive Cargo.lock differs from retained lockfile' "$tmp/helm"
-write_helm_source
+    -C "$tmp/realm/source-input" -czf "$tmp/realm/source.tar.gz" realm-workspace
+realm_source_digest
+rejects 'source archive Cargo.lock differs from retained lockfile' "$tmp/realm"
+write_realm_source
 
 # A workspace archive must not recursively embed independent retained authorities.
-mkdir -p "$tmp/helm/source-input/helm-workspace/packaging/tool-sources/bundles/other"
-printf nested >"$tmp/helm/source-input/helm-workspace/packaging/tool-sources/bundles/other/source.tar.gz"
+mkdir -p "$tmp/realm/source-input/realm-workspace/packaging/tool-sources/bundles/other"
+printf nested >"$tmp/realm/source-input/realm-workspace/packaging/tool-sources/bundles/other/source.tar.gz"
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
-    -C "$tmp/helm/source-input" -czf "$tmp/helm/source.tar.gz" helm-workspace
-helm_source_digest
-rejects 'source archive contains nested retained authority' "$tmp/helm"
-write_helm_source
+    -C "$tmp/realm/source-input" -czf "$tmp/realm/source.tar.gz" realm-workspace
+realm_source_digest
+rejects 'source archive contains nested retained authority' "$tmp/realm"
+write_realm_source
 
 # Replacing the pathname after open cannot substitute bytes for the staged descriptor.
-dd if=/dev/urandom of="$tmp/helm/source-input/helm-workspace/padding" bs=1M count=32 status=none
+dd if=/dev/urandom of="$tmp/realm/source-input/realm-workspace/padding" bs=1M count=32 status=none
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
-    -C "$tmp/helm/source-input" -czf "$tmp/helm/source.tar.gz" helm-workspace
-helm_source_digest
+    -C "$tmp/realm/source-input" -czf "$tmp/realm/source.tar.gz" realm-workspace
+realm_source_digest
 race_source_replacement replace
 race_source_replacement symlink
 

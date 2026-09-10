@@ -186,7 +186,7 @@ jobs:
           # the memory file and a change to this prompt are visible as drift in
           # the same review.
           cat > "$RUNNER_TEMP/iteration-prompt.md" <<'PROMPT'
-          You are running one iteration of the helm agentic loop.
+          You are running one iteration of the realm agentic loop.
 
           Read `CLAUDE.md` and `.claude/memory/00-standing-orders.md` first.
           The protocol below is `.claude/memory/40-loop.md`; that file is the

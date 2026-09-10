@@ -1,17 +1,17 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: helm
-Upstream-Contact: helm contributors <vadim.evard@gmail.com>
+Upstream-Name: realm
+Upstream-Contact: realm contributors <vadim.evard@gmail.com>
 Source: https://github.com/pipeliner/realms-de
-Comment: helm is dual-licensed MIT OR Apache-2.0, at the recipient's option —
+Comment: realm is dual-licensed MIT OR Apache-2.0, at the recipient's option —
  the Rust ecosystem's convention. Debian's copyright format expresses the
  choice as two licence stanzas; either alone satisfies it.
 
 Files: *
-Copyright: 2026 the helm contributors
+Copyright: 2026 the realm contributors
 License: MIT or Apache-2.0
 
 Files: debian/*
-Copyright: 2026 the helm contributors
+Copyright: 2026 the realm contributors
 License: MIT or Apache-2.0
 
 License: MIT

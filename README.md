@@ -1,4 +1,4 @@
-<h1 align="center">✦ helm</h1>
+<h1 align="center">✦ realm</h1>
 
 <p align="center">
   <strong>a keyboard-first, gapless-tiling, Rust-first Wayland desktop environment</strong><br>
@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="Concept rendering, not a screenshot. The intended helm desktop: a 32-pixel bar carrying six runic orbits, a layout indicator, a mode badge and a clock; below it a gapless triptych of five panes — odin, thoth, hermes, horus and urania — separated by one-pixel violet seams; a which-key strip along the bottom." width="100%">
+  <img src="docs/assets/hero.svg" alt="Concept rendering, not a screenshot. The intended realm desktop: a 32-pixel bar carrying six runic orbits, a layout indicator, a mode badge and a clock; below it a gapless triptych of five panes — odin, thoth, hermes, horus and urania — separated by one-pixel violet seams; a which-key strip along the bottom." width="100%">
 </p>
 
 <p align="center">
-  <sub><strong>Concept rendering — not a screenshot.</strong> No part of this image was produced by running helm;
+  <sub><strong>Concept rendering — not a screenshot.</strong> No part of this image was produced by running realm;
   it is hand-drawn SVG to the same measurements the compositor will use.<br>
   It will be replaced by a real screen capture once there is something to capture. See <a href="#status">Status</a>.</sub>
 </p>
@@ -47,9 +47,9 @@
 - **Proven tools, kept behind seams.** charon is yazi, horus is btop, thoth is
   zsh with starship — themed and rekeyed from the same palette, each sitting
   behind a config or a trait so it can be retired without touching its callers.
-  The compositor is the same bargain: helm is the *window manager* for river
+  The compositor is the same bargain: realm is the *window manager* for river
   0.4, which hands window management to an external process, so the ledger
-  drives real pixels years before `helm-compositor` exists.
+  drives real pixels years before `realm-compositor` exists.
   [ADR 0007](docs/adr/0007-reuse-yazi-btop-starship.md) ·
   [ADR 0013](docs/adr/0013-river-window-management-backend.md)
 
@@ -111,13 +111,13 @@ What exists, honestly:
 
 | | |
 |---|---|
-| `helm-core` | **Implemented and tested.** Ledger, layout projection, OKLab palette derivation and lint, keymap, glyph inventory and IPC types. [`cargo test`](#try-it) is the current executable evidence. |
+| `realm-core` | **Implemented and tested.** Ledger, layout projection, OKLab palette derivation and lint, keymap, glyph inventory and IPC types. [`cargo test`](#try-it) is the current executable evidence. |
 | Architecture, MVP cut line, failure register | **Written.** [ARCHITECTURE](docs/ARCHITECTURE.md) · [MVP](docs/MVP.md) · [PITFALLS](docs/PITFALLS.md) |
 | Specs and ADRs | **In progress.** [`docs/specs/`](docs/specs/) · [`docs/adr/`](docs/adr/) |
-| `helm-theme` | **Implemented and tested pre-alpha library.** It renders and validates sealed generations, but has no user-facing `helmctl theme` command yet. |
-| `helm-ctl`, `helm-session`, `helm-bar`, `helm-hecate`, `helm-odin`, `helm-compositor` | **Planned.** The binaries that make a usable desktop do not exist yet. |
-| Package/session/portal assets | **Tracked pre-alpha contract.** The repository contains a session entry and wrapper, systemd units, portal configuration, Nix module and native package definitions; none creates a usable Helm desktop yet. |
-| Every image in this repository | **Concept art.** Hand-drawn SVG and the design handoff's HTML prototypes. There are no screenshots of helm, because helm does not run yet. |
+| `realm-theme` | **Implemented and tested pre-alpha library.** It renders and validates sealed generations, but has no user-facing `realmctl theme` command yet. |
+| `realm-ctl`, `realm-session`, `realm-bar`, `realm-hecate`, `realm-odin`, `realm-compositor` | **Planned.** The binaries that make a usable desktop do not exist yet. |
+| Package/session/portal assets | **Tracked pre-alpha contract.** The repository contains a session entry and wrapper, systemd units, portal configuration, Nix module and native package definitions; none creates a usable Realm desktop yet. |
+| Every image in this repository | **Concept art.** Hand-drawn SVG and the design handoff's HTML prototypes. There are no screenshots of realm, because realm does not run yet. |
 
 Crates join the Cargo workspace only when they gain a real implementation, so a
 fresh clone always builds. If a crate is not in
@@ -128,8 +128,8 @@ is in [docs/ROADMAP.md](docs/ROADMAP.md). **M3 is the MVP.**
 
 ## Try it
 
-You cannot log into helm yet. A tracked session entry intentionally aborts
-because `helm-wm` is not implemented; the bar is also absent, so the
+You cannot log into realm yet. A tracked session entry intentionally aborts
+because `realm-wm` is not implemented; the bar is also absent, so the
 package/session assets are not a usable desktop. `cargo test` exercises the
 implemented pre-alpha libraries, not a running desktop.
 
@@ -143,7 +143,7 @@ The first release anyone can log into is **M3**, whose cut line is written down
 in [docs/MVP.md](docs/MVP.md): log in, tile windows across six orbits, see and
 discover the keys, launch things, files, monitor, shell, one coherent theme
 across GTK/Qt/TUIs, working portals, packages for NixOS, Ubuntu and Fedora, and
-a `helm ctl doctor` that says what is wrong before you file a bug.
+a `realmctl doctor` that says what is wrong before you file a bug.
 
 ---
 
@@ -157,7 +157,7 @@ label at **2026-08-30T06:18:36Z**; follow the label for the live state.
 | Issue | What it blocks |
 |---|---|
 | [#168 — Reconcile generation GC with transferred lifecycle leases and M1/M2 launch sequencing](https://github.com/Pipeliner/realms-de/issues/168) | An accepted lifecycle-lease/GC contract and truthful M1/M2 launch sequencing. |
-| [#166 — Specify JSON schemas for helmctl theme lint and diff](https://github.com/Pipeliner/realms-de/issues/166) | The public `theme lint` and `theme diff` JSON contracts. |
+| [#166 — Specify JSON schemas for realmctl theme lint and diff](https://github.com/Pipeliner/realms-de/issues/166) | The public `theme lint` and `theme diff` JSON contracts. |
 | [#135 — Complete exact M1 activation assets and supported-consumer probes](https://github.com/Pipeliner/realms-de/issues/135) | Exact M1 consumer assets and supported-consumer black-box probes. |
 | [#134 — Decide supported M1 package sources and catalog migration for Yazi and Starship](https://github.com/Pipeliner/realms-de/issues/134) | The supported Yazi/Starship package-source and catalog-migration policy. |
 | [#133 — Specify truthful desktop-entry and D-Bus activation for themed Qt launches](https://github.com/Pipeliner/realms-de/issues/133) | A truthful desktop-entry and D-Bus activation contract for themed Qt launches. |
@@ -166,7 +166,7 @@ label at **2026-08-30T06:18:36Z**; follow the label for the live state.
 | [#30 — Template: starship prompt for thoth, with the 𓂃 sigil and its ASCII fallback](https://github.com/Pipeliner/realms-de/issues/30) | The Starship prompt’s default-glyph decision. |
 | [#25 — Template: GTK 3, GTK 4 and libadwaita stylesheets](https://github.com/Pipeliner/realms-de/issues/25) | An accepted GTK configuration-location contract. |
 | [#24 — Extend the "no colour outside palette.toml" CI guard to templates and generated outputs](https://github.com/Pipeliner/realms-de/issues/24) | A palette-literal guard for templates and generated outputs. |
-| [#23 — Add `helmctl theme apply`, `lint` and `diff`](https://github.com/Pipeliner/realms-de/issues/23) | The complete `helmctl theme` interface. |
+| [#23 — Add `realmctl theme apply`, `lint` and `diff`](https://github.com/Pipeliner/realms-de/issues/23) | The complete `realmctl theme` interface. |
 | [#17 — Configure branch protection on the default branch with the CI checks as required](https://github.com/Pipeliner/realms-de/issues/17) | Enforced required CI checks and branch protection. |
 | [#16 — Enable Dependabot alerts and version updates, and create the labels its config references](https://github.com/Pipeliner/realms-de/issues/16) | Dependabot activation and the labels it requires. |
 
@@ -177,8 +177,8 @@ label at **2026-08-30T06:18:36Z**; follow the label for the live state.
 ```
 realms-de/
 ├─ crates/
-│  └─ helm-core/        the contracts: ledger, layout, palette, keys, ipc, glyphs
-├─ configs/             shipped configs for the tools helm reuses
+│  └─ realm-core/        the contracts: ledger, layout, palette, keys, ipc, glyphs
+├─ configs/             shipped configs for the tools realm reuses
 │  ├─ templates/          rendered theme inputs for GTK, Qt, TUI and prompt targets
 │  └─ portal/             xdg-desktop-portal wiring
 ├─ packaging/
@@ -208,7 +208,7 @@ realms-de/
 | [MVP.md](docs/MVP.md) | What is in, what is deliberately out, and the test the MVP has to pass. |
 | [ROADMAP.md](docs/ROADMAP.md) | M0–M6: one-line goal, workstreams, exit criterion and what each milestone unblocks. |
 | [INTERFACES.md](docs/INTERFACES.md) | The seams — `WmBackend`, the template contract, the bar render contract — written with real signatures before the crates that implement them. |
-| [PITFALLS.md](docs/PITFALLS.md) | The ways desktop environments break, what helm does about each, and which test would catch a regression. |
+| [PITFALLS.md](docs/PITFALLS.md) | The ways desktop environments break, what realm does about each, and which test would catch a regression. |
 | [`docs/specs/`](docs/specs/) | What a component must do, written before it does it. Acceptance criteria become the happy-path tests. |
 | [`docs/adr/`](docs/adr/) | Why we chose this over that, and what changing our mind would cost. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to build it, the house style, the spec-first workflow, commit conventions. |
@@ -235,7 +235,7 @@ Everyone taking part is held to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## How this repository was built
 
-helm is designed and built by AI agents (Claude), under human direction and
+realm is designed and built by AI agents (Claude), under human direction and
 review. That is worth stating plainly rather than leaving to be inferred:
 
 - **The design is AI-authored too.** `design/HANDOFF.md` and the `.dc.html`
@@ -258,12 +258,12 @@ review. That is worth stating plainly rather than leaving to be inferred:
   tested, it names the test. Where something does not exist, it says so. If you
   find a claim that cannot be checked against the repository, that is a bug —
   please file it.
-- **Nothing here has run on real hardware.** No maintainer has logged into helm,
+- **Nothing here has run on real hardware.** No maintainer has logged into realm,
   because there is not yet a session to log into.
 
 ## Credits
 
-helm reuses good work rather than repeating it, and owes a debt to
+realm reuses good work rather than repeating it, and owes a debt to
 [river](https://codeberg.org/river/river) — whose 0.4 window-management protocol
 is what lets the ledger drive real pixels this early —
 [Smithay](https://smithay.github.io/),
@@ -284,4 +284,4 @@ Unless you state otherwise, any contribution you intentionally submit for
 inclusion in this work, as defined in the Apache-2.0 licence, shall be
 dual-licensed as above, with no additional terms or conditions.
 
-<p align="center"><sub>© 2026 the helm contributors · ᚠ ᚢ ᚦ ᚨ ᚱ ᚲ</sub></p>
+<p align="center"><sub>© 2026 the realm contributors · ᚠ ᚢ ᚦ ᚨ ᚱ ᚲ</sub></p>

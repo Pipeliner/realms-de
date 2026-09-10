@@ -1,7 +1,7 @@
 # ADR 0020 — Transfer recovery bounds retained descriptors per pair
 
 - **Status:** Accepted (2026-09-01)
-- **Deciders:** helm maintainers, repo owner
+- **Deciders:** realm maintainers, repo owner
 - **Supersedes / Superseded by:** Supplements [ADR 0017](0017-immutable-theme-activation-generations.md) and accepted [SPEC 0012](../specs/0012-activation-launch-lifecycle.md).
 
 ## Context

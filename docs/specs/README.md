@@ -1,6 +1,6 @@
 # Specs
 
-helm is built spec-first (standing order S14). Nothing non-trivial is
+realm is built spec-first (standing order S14). Nothing non-trivial is
 implemented before its behaviour is written down here, and the happy-path tests
 come from this directory before the code does.
 
@@ -56,12 +56,12 @@ Sequential, never reused. A superseded spec keeps its number and gains a
 
 | Spec | Title | Status |
 |---|---|---|
-| [0001](0001-helm-core-contracts.md) | helm-core contracts | Implemented |
+| [0001](0001-realm-core-contracts.md) | realm-core contracts | Implemented |
 | [0002](0002-theme-pipeline.md) | Theme pipeline | Implemented |
 | [0007](0007-control-socket-security.md) | Control-socket security amendment | Accepted |
 | [0008](0008-agent-sdd-pilot-governance.md) | Local agent-SDD pilot governance | Accepted |
 | [0009](0009-fedora-44-pre-alpha-baseline.md) | Fedora 44 pre-alpha packaging and CI baseline | Accepted |
-| [0010](0010-packaged-helm-sdd-git-runtime.md) | Packaged `helm-sdd` Git runtime | Accepted |
+| [0010](0010-packaged-realm-sdd-git-runtime.md) | Packaged `realm-sdd` Git runtime | Accepted |
 | [0011](0011-theme-activation-generations.md) | Immutable theme activation generations | Accepted |
 | [0012](0012-activation-launch-lifecycle.md) | Activation launch lifecycle | Accepted |
 | [0013](0013-truthful-fresh-desktop-exec.md) | Truthful fresh desktop Exec launch | Accepted |
@@ -69,8 +69,9 @@ Sequential, never reused. A superseded spec keeps its number and gains a
 | [0017](0017-contribution-templates.md) | Contribution templates | Accepted |
 | [0018](0018-agent-sdd-pilot-procedures.md) | Local agent-SDD pilot procedures | Accepted |
 | [0019](0019-ubuntu-versioned-rust-toolchain.md) | Ubuntu versioned Rust toolchain guard | Accepted |
-| [0020](0020-helmctl-theme-json.md) | helmctl theme JSON output | Accepted |
+| [0020](0020-realmctl-theme-json.md) | realmctl theme JSON output | Accepted |
 | [0021](0021-github-publication-body-safety.md) | GitHub publication body safety | Accepted |
 | [0022](0022-colour-template-literal-guard.md) | Colour-template literal guard | Accepted |
 | [0023](0023-m1-tool-source-intake.md) | M1 Yazi and Starship source intake | Accepted |
 | [0024](0024-m1-private-tool-bundle.md) | M1 private Yazi and Starship tool bundle | Accepted |
+| [0025](0025-realm-project-namespace.md) | Realm project namespace | Accepted |

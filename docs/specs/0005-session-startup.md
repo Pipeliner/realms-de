@@ -25,11 +25,11 @@
 
 ## Purpose
 
-A helm login must produce a desktop in which file dialogs open, screen sharing
-works, the cursor is helm's cursor, and a crashed component is repaired rather
+A realm login must produce a desktop in which file dialogs open, screen sharing
+works, the cursor is realm's cursor, and a crashed component is repaired rather
 than fatal. None of that follows from the compositor starting. It follows from
 an ordering contract between five things that do not know about each other: the
-display manager, river, helm's window manager, the systemd user manager and the
+display manager, river, realm's window manager, the systemd user manager and the
 D-Bus session bus.
 
 This is the single most common way a minimal Wayland desktop breaks, and it
@@ -39,16 +39,16 @@ river 0.4 the stakes are higher still, because the compositor does no window
 management of its own — a session that comes up in the wrong order can be not
 merely unthemed but literally unusable, with windows that are never placed.
 
-Without this component helm is a compositor with an environment hole in it.
+Without this component realm is a compositor with an environment hole in it.
 
 ## Scope
 
-**In:** the session entry `helm-session` and the order it does things in; the
+**In:** the session entry `realm-session` and the order it does things in; the
 exact environment set and where it is published; discovery of `WAYLAND_DISPLAY`
 and `DISPLAY`; the systemd user units and their supervision policy; portal
 backend selection and verification; the non-systemd and non-D-Bus degraded
 paths; session teardown; the log-line contract; and the list of checks
-`helm ctl doctor` owes the user.
+`realmctl doctor` owes the user.
 
 **Out:**
 
@@ -65,17 +65,17 @@ paths; session teardown; the log-line contract; and the list of checks
 
 ### NixOS session discovery contract
 
-On NixOS, helm supplies its session entry through
-`services.displayManager.sessionPackages`. Helm neither enables nor selects a
+On NixOS, realm supplies its session entry through
+`services.displayManager.sessionPackages`. Realm neither enables nor selects a
 display manager. A display manager is responsible for materialising the
 registered session entry in its session-data directory and presenting it to a
 user.
 
-`/run/current-system/sw/share/wayland-sessions/helm.desktop` is **not** a helm
+`/run/current-system/sw/share/wayland-sessions/realm.desktop` is **not** a realm
 contract: the NixOS system profile does not normally link that directory.
 Tests must enable a concrete supported display-manager integration, discover
 the session through NixOS display-manager session data, and assert both the
-`helm.desktop` identity and its rewritten `Exec` target. A test that uses no
+`realm.desktop` identity and its rewritten `Exec` target. A test that uses no
 display manager may test package contents directly, but must not claim to test
 NixOS session discovery.
 - Choosing the lock screen and the idle defaults — see **Open questions**.
@@ -86,10 +86,10 @@ NixOS session discovery.
 
 | Name | What it is |
 |---|---|
-| `helm-session` | The **session entry**: the shell script a display manager execs. It owns the ordering contract. |
-| `helm-wm` | The **window manager and session daemon** binary (crate `helm-session`, ADR 0003). Under river it *is* the window manager. |
-| `helm-session.target` | The systemd user target that anchors everything needing a display. |
-| `helm-wm.service` | The unit that supervises `helm-wm`. |
+| `realm-session` | The **session entry**: the shell script a display manager execs. It owns the ordering contract. |
+| `realm-wm` | The **window manager and session daemon** binary (crate `realm-session`, ADR 0003). Under river it *is* the window manager. |
+| `realm-session.target` | The systemd user target that anchors everything needing a display. |
+| `realm-wm.service` | The unit that supervises `realm-wm`. |
 | launcher helper | A fixed, target-owned session UI that requests a launch. |
 | profile launch | The separately owned user application; never a target member. |
 
@@ -109,11 +109,11 @@ environment ownership/restoration semantics.
 #### Step 1 — Identity, before anything is started
 
 ```sh
-export XDG_CURRENT_DESKTOP=helm
+export XDG_CURRENT_DESKTOP=realm
 export XDG_SESSION_TYPE=wayland
-export XDG_SESSION_DESKTOP=helm
-export XCURSOR_THEME="$HELM_CURSOR_THEME"
-export XCURSOR_SIZE="$HELM_CURSOR_SIZE"
+export XDG_SESSION_DESKTOP=realm
+export XCURSOR_THEME="$REALM_CURSOR_THEME"
+export XCURSOR_SIZE="$REALM_CURSOR_SIZE"
 ```
 
 `XDG_RUNTIME_DIR` is *not* set here. It is set by `pam_systemd` at login and is
@@ -122,7 +122,7 @@ immediately with `FATAL NO-RUNTIME-DIR`: nothing Wayland works without it, and
 proceeding produces a cascade of unrelated-looking errors.
 
 **If this moves later:** portal backend selection reads `XDG_CURRENT_DESKTOP`
-at the moment `xdg-desktop-portal` is *activated*, which can be before any helm
+at the moment `xdg-desktop-portal` is *activated*, which can be before any realm
 code runs — the first D-Bus-activated application in the session wins. A late
 `XDG_CURRENT_DESKTOP` means a portal that already chose the wrong backend, and
 the symptom is screen sharing that offers no sources with no error anywhere.
@@ -133,10 +133,10 @@ leaves an X11 black arrow over anything that started early.
 
 The entry must survive the compositor: it has work to do afterwards, and it is
 the session's teardown owner. river is started as a child, its pid recorded, and
-the entry's own pid written to `$XDG_RUNTIME_DIR/helm/session.pid` for the abort
+the entry's own pid written to `$XDG_RUNTIME_DIR/realm/session.pid` for the abort
 path in §2.
 
-river is started with no helm-specific arguments. In particular the entry does
+river is started with no realm-specific arguments. In particular the entry does
 **not** use a compositor-side startup hook to launch the window manager, because
 that would run it before step 4.
 
@@ -157,13 +157,13 @@ must be discovered, in two phases:
 2. **Liveness.** The socket file appearing proves `bind(2)`, not that the
    compositor is dispatching. Confirm with a connect-and-roundtrip probe —
    connect, bind `wl_registry`, `wl_display_roundtrip` — and proceed only when
-   it returns. `helm ctl wait-display --timeout <s>` is the required
-   implementation of this probe and is a hard requirement on `helm-ctl`. Until
+   it returns. `realmctl wait-display --timeout <s>` is the required
+   implementation of this probe and is a hard requirement on `realm-ctl`. Until
    it exists, the entry falls back to file existence alone and logs
    `DEGRADED NO-DISPLAY-PROBE`, because file existence is a weaker claim than
    the one the next step relies on.
 
-Both phases run under one deadline (`HELM_WAIT_SECONDS`, default 10) and abort
+Both phases run under one deadline (`REALM_WAIT_SECONDS`, default 10) and abort
 early if the compositor pid dies. On expiry: `FATAL NO-SOCKET`, naming the
 runtime directory that was watched.
 
@@ -209,8 +209,8 @@ That asymmetry is precisely why this bug survives manual testing.
 #### Step 5 — Mirror the cursor into gsettings
 
 ```sh
-gsettings set org.gnome.desktop.interface cursor-theme "$HELM_CURSOR_THEME"
-gsettings set org.gnome.desktop.interface cursor-size  "$HELM_CURSOR_SIZE"
+gsettings set org.gnome.desktop.interface cursor-theme "$REALM_CURSOR_THEME"
+gsettings set org.gnome.desktop.interface cursor-size  "$REALM_CURSOR_SIZE"
 ```
 
 **Why here and not earlier:** `gsettings` writes through dconf, which is
@@ -222,13 +222,13 @@ Missing `gsettings` or missing `gsettings-desktop-schemas` is
 `DEGRADED NO-GSETTINGS`, not fatal: Wayland clients still get the cursor from
 `XCURSOR_*`, GTK apps do not.
 
-#### Step 6 — Start `helm-session.target`
+#### Step 6 — Start `realm-session.target`
 
-One target, never a list of services. Adding a client to helm means adding a
+One target, never a list of services. Adding a client to realm means adding a
 unit and a `.wants` symlink, not editing this script.
 
 ```sh
-systemctl --user start helm-session.target
+systemctl --user start realm-session.target
 ```
 
 **This step's exit status is not a success signal.** See §2 and failure mode
@@ -237,10 +237,10 @@ still activates, and `systemctl start` still exits 0. After starting the target
 the entry must verify, per unit:
 
 ```sh
-systemctl --user show -p ActiveState -p ConditionResult -p Result helm-wm.service
+systemctl --user show -p ActiveState -p ConditionResult -p Result realm-wm.service
 ```
 
-`ActiveState=active` is the only acceptable answer for `helm-wm.service`.
+`ActiveState=active` is the only acceptable answer for `realm-wm.service`.
 `ConditionResult=no` is reported as `FATAL WM-ABORT` with the specific message
 that the environment handshake did not reach the user manager.
 
@@ -252,43 +252,43 @@ runs the teardown in §7 from an `EXIT INT TERM HUP` trap.
 ### 2. The river-specific ordering problem
 
 Under river 0.4 the compositor performs no window management. Between step 2 and
-the moment `helm-wm` binds `river_window_manager_v1`, there is a window in
+the moment `realm-wm` binds `river_window_manager_v1`, there is a window in
 which river is running and nothing is placing windows.
 
 **What the user sees in that window.** The background and the cursor, and
 nothing else. There is no bar, because `wlr-layer-shell` is served under river
 only if the window manager implements `river-layer-shell-v1` — so during the
-gap even a running `helm-bar` maps nothing. Any window opened in the gap exists
+gap even a running `realm-bar` maps nothing. Any window opened in the gap exists
 but is unplaced and, depending on river's defaults, may not be drawn at all.
 The correct name for this state is "inert", and it is indistinguishable by eye
 from a crashed session.
 
 **Requirements:**
 
-1. The gap is bounded and measured. `helm-wm` reaches readiness within the
+1. The gap is bounded and measured. `realm-wm` reaches readiness within the
    cold-start budget (§Budgets). `Type=notify` with `sd_notify(READY=1)` sent
    once the window-management global **and** the layer-shell manager global are
    both bound is the required readiness definition, so that "the target is
    active" and "windows can be placed" are the same statement. (**OQ-6**: the
    current unit is `Type=exec` pending the daemon existing.)
-2. **`helm-wm` never connects.** After the start limit is reached the
+2. **`realm-wm` never connects.** After the start limit is reached the
    entry must not leave the user staring at an inert compositor. It logs
-   `FATAL WM-ABORT`, with the one-line explanation *"river is running but helm
+   `FATAL WM-ABORT`, with the one-line explanation *"river is running but realm
    is not managing it: no window can be placed. See <log path>."*, tears the
    session down and returns the user to the display manager. A returned login
    is strictly better than a black screen, because the black screen has no
    surface on which to tell the user anything — with no window manager there is
-   no layer shell, so helm cannot draw its own error.
-3. **`helm-wm` dies later.** Supervised restart, with the ledger recovered
+   no layer shell, so realm cannot draw its own error.
+3. **`realm-wm` dies later.** Supervised restart, with the ledger recovered
    rather than lost. On every ledger mutation the daemon queues a snapshot to
-   `$XDG_RUNTIME_DIR/helm/ledger.snapshot`; the write happens on a separate
+   `$XDG_RUNTIME_DIR/realm/ledger.snapshot`; the write happens on a separate
    thread and never on the protocol input path, because under river a stall is a
    session failure and not a slow frame (ADR 0013). On restart, if the snapshot's
    compositor instance id matches the running river, the ledger is restored:
    windows river no longer reports are dropped, windows the snapshot does not
    know about are appended in river's order.
 4. **river refuses the connection.** Only one window-management client may
-   connect; river answers `unavailable` to a second. A leftover `helm-wm`
+   connect; river answers `unavailable` to a second. A leftover `realm-wm`
    from a previous session, or one started by hand, therefore makes the
    supervised one unstartable *forever* — and a naive `Restart=` turns that into
    a permanent restart loop. See failure mode **N2**.
@@ -301,7 +301,7 @@ from a crashed session.
 | `RestartSec=` | `1s` | Every second here is a second the user cannot move a window. |
 | `RestartPreventExitStatus=` | `69 78` | `69` = river answered `unavailable`; `78` = protocol version mismatch against the pinned river. Restarting cannot help with either, and looping hides the message. |
 | `StartLimitIntervalSec=` / `StartLimitBurst=` | `30` / `5` | Five failures in thirty seconds is a real bug. It must surface as a dead unit, not a hot laptop. |
-| `OnFailure=` | `helm-session-abort.service` | Fires when the unit enters `failed`, which with `Restart=always` means *after* the start limit is hit — exactly once, at the right moment. That unit runs `helm-session --abort`, which reads `$XDG_RUNTIME_DIR/helm/session.pid` and signals the entry to tear down (requirement 2). |
+| `OnFailure=` | `realm-session-abort.service` | Fires when the unit enters `failed`, which with `Restart=always` means *after* the start limit is hit — exactly once, at the right moment. That unit runs `realm-session --abort`, which reads `$XDG_RUNTIME_DIR/realm/session.pid` and signals the entry to tear down (requirement 2). |
 | `TimeoutStopSec=` | `10s` | Bounded, so teardown cannot hang on it. |
 | `Slice=` | `session.slice` | The window manager is essential to the session; under memory pressure it must not be the first thing killed. |
 
@@ -318,9 +318,9 @@ a CI test asserts they are equal (A3).
 
 | Variable | Set by | Exported before river | Imported | Why it is in the set |
 |---|---|---|---|---|
-| `XDG_CURRENT_DESKTOP=helm` | entry | yes | **yes** | Selects the portal backend: `xdg-desktop-portal` matches this (split on `:`) against `helm-portals.conf`. Also drives `OnlyShowIn`/`NotShowIn` in `.desktop` files. |
-| `XDG_SESSION_DESKTOP=helm` | entry | yes | **yes** | The session's identity for logind and for tools that read it instead of the above. Cheap to set, confusing to omit. |
-| `XDG_SESSION_TYPE=wayland` | entry | yes | **yes** | Toolkit backend selection. logind usually sets it, but a start from a bare TTY does not, and helm must work from a TTY. |
+| `XDG_CURRENT_DESKTOP=realm` | entry | yes | **yes** | Selects the portal backend: `xdg-desktop-portal` matches this (split on `:`) against `realm-portals.conf`. Also drives `OnlyShowIn`/`NotShowIn` in `.desktop` files. |
+| `XDG_SESSION_DESKTOP=realm` | entry | yes | **yes** | The session's identity for logind and for tools that read it instead of the above. Cheap to set, confusing to omit. |
+| `XDG_SESSION_TYPE=wayland` | entry | yes | **yes** | Toolkit backend selection. logind usually sets it, but a start from a bare TTY does not, and realm must work from a TTY. |
 | `XDG_RUNTIME_DIR` | `pam_systemd` | inherited | **yes** | Not ours to set; imported because a bus-activated service that cannot find the runtime directory cannot find any socket in it. Fatal if absent. |
 | `WAYLAND_DISPLAY` | river, discovered in step 3 | no (does not exist yet) | **yes** | The display socket. This is the one whose absence costs twenty-five seconds. |
 | `DISPLAY` | XWayland, discovered (§XWayland) | no | **yes, when known** | XWayland clients, and D-Bus-activated X11 applications. |
@@ -334,15 +334,15 @@ facts:
 |---|---|---|
 | `MOZ_ENABLE_WAYLAND` | `1` | A wrong value stuck in the user manager outlives the session and is very hard to diagnose. Anything launched from the session inherits it anyway. |
 | `QT_QPA_PLATFORM` | `wayland;xcb` | Ordered preference with an X11 fallback, so a Qt app without Wayland support still starts. |
-| `QT_WAYLAND_DISABLE_WINDOWDECORATION` | `1` | helm draws the seams; Qt must not add its own. |
+| `QT_WAYLAND_DISABLE_WINDOWDECORATION` | `1` | realm draws the seams; Qt must not add its own. |
 | `GDK_BACKEND` | `wayland,x11` | Forcing this into every user unit breaks GTK apps that legitimately want X11. |
 | `_JAVA_AWT_WM_NONREPARENTING` | `1` | Java toolkits assume a reparenting WM; without it menus land in the top-left corner under every tiling WM. |
 
 **`PATH` is not in the import set.** Importing it replaces the user manager's
 `PATH` for every user unit for the lifetime of the manager, including units that
-have nothing to do with helm, and it persists after logout on a lingering user.
+have nothing to do with realm, and it persists after logout on a lingering user.
 Where a `PATH` fix is genuinely needed — a Nix profile that the user manager
-does not know about — it is opt-in through `HELM_IMPORT_PATH=1`. See **OQ-3**;
+does not know about — it is opt-in through `REALM_IMPORT_PATH=1`. See **OQ-3**;
 the current session entry imports it unconditionally.
 
 **XWayland.** Enabled (ADR 0011 step 7). Scaling for X11 clients is integer
@@ -370,42 +370,42 @@ is guaranteed installed on any of the three targets. It connects to
 ```
                 graphical-session-pre.target
                             │
-   helm-session.target ─────┤  BindsTo= + Before= graphical-session.target
+   realm-session.target ─────┤  BindsTo= + Before= graphical-session.target
                             ▼
                   graphical-session.target
                      │            │            │
-        helm-wm.service   helm-bar.service   xdg-desktop-portal.service
+        realm-wm.service   realm-bar.service   xdg-desktop-portal.service
         (the window manager)   (Wants=daemon)    (upstream; PartOf= the target)
                      │
-             helm-idle.service  ← blocked on OQ-1
+             realm-idle.service  ← blocked on OQ-1
 ```
 
 | Unit | `[Unit]` | `[Service]` | `[Install]` |
 |---|---|---|---|
-| `helm-session.target` | `BindsTo=graphical-session.target`, `Before=graphical-session.target`, `Wants=graphical-session-pre.target`, `After=graphical-session-pre.target` | — | **none** |
-| `helm-wm.service` | `PartOf=helm-session.target graphical-session.target`, `After=graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=helm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=helm-session.target` |
-| `helm-bar.service` | `PartOf=helm-session.target graphical-session.target`, `After=graphical-session.target helm-wm.service`, `Wants=helm-wm.service`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5` | `Type=exec`, `Restart=on-failure`, `RestartSec=1`, `TimeoutStopSec=5`, `Slice=app.slice` | `WantedBy=helm-session.target` |
+| `realm-session.target` | `BindsTo=graphical-session.target`, `Before=graphical-session.target`, `Wants=graphical-session-pre.target`, `After=graphical-session-pre.target` | — | **none** |
+| `realm-wm.service` | `PartOf=realm-session.target graphical-session.target`, `After=graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=realm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=realm-session.target` |
+| `realm-bar.service` | `PartOf=realm-session.target graphical-session.target`, `After=graphical-session.target realm-wm.service`, `Wants=realm-wm.service`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5` | `Type=exec`, `Restart=on-failure`, `RestartSec=1`, `TimeoutStopSec=5`, `Slice=app.slice` | `WantedBy=realm-session.target` |
 
 The reasoning behind each relationship, because these are easy to copy wrongly:
 
 - **`BindsTo=graphical-session.target` on the target, plus `Before=`.** `BindsTo`
-  implies `Requires`, so starting `helm-session.target` brings
+  implies `Requires`, so starting `realm-session.target` brings
   `graphical-session.target` up, and anything else on the system that keys off
   `graphical-session.target` — a notification daemon, an idle daemon, the
-  upstream portal unit — works under helm without knowing what helm is. The
+  upstream portal unit — works under realm without knowing what realm is. The
   `Before=` is what makes `After=graphical-session.target` on the client units a
   real ordering barrier rather than a coincidence of an empty target activating
   quickly. This is systemd's documented shape for a session unit
   (`systemd.special(7)`).
 - **`PartOf=`, never `BindsTo=`, on session helpers.** Helpers name both
-  `helm-session.target` and `graphical-session.target`: the first makes an
-  explicit Helm-target stop propagate, while the second retains graphical
+  `realm-session.target` and `graphical-session.target`: the first makes an
+  explicit Realm-target stop propagate, while the second retains graphical
   session integration. `BindsTo` would additionally
   propagate *failure* upwards, so a crashed bar would take the session with it —
   which is a listed pitfall, not a design.
 - **`Wants=`, never `Requires=`, from the target to the clients.** A bar that
   cannot start must leave a usable desktop.
-- **`Wants=helm-wm.service` from the bar.** The bar reconnects to the
+- **`Wants=realm-wm.service` from the bar.** The bar reconnects to the
   control socket on its own, so a window manager that is briefly down — a
   restart, exactly the case §2 designs for — must not stop the bar running.
 - **Different slices.** The window manager is in `session.slice`; the bar is in
@@ -419,10 +419,10 @@ The reasoning behind each relationship, because these are easy to copy wrongly:
   takes effect when something processes it (`systemctl --user enable`,
   `dh_installsystemduser`, an rpm preset). Relying on `[Install]` alone is not
   portable across the three packagers, and if the symlinks are missing then
-  `systemctl --user start helm-session.target` starts *nothing at all* and
+  `systemctl --user start realm-session.target` starts *nothing at all* and
   reports success. Ship
-  `lib/systemd/user/helm-session.target.wants/helm-wm.service` and
-  `.../helm-bar.service` as real symlinks in every package.
+  `lib/systemd/user/realm-session.target.wants/realm-wm.service` and
+  `.../realm-bar.service` as real symlinks in every package.
 - **`ConditionEnvironment=` requires systemd ≥ 246**, which all three targets
   exceed. It is worth having because it converts "started with an empty
   display" into "did not start" — but see **N1**: it converts it into a *silent*
@@ -431,15 +431,15 @@ The reasoning behind each relationship, because these are easy to copy wrongly:
 ### 5. Portals
 
 **Backend selection.** `xdg-desktop-portal` (≥ 1.18, which all three targets
-ship) reads, in order: `$XDG_CONFIG_HOME/xdg-desktop-portal/helm-portals.conf`,
-then `.../portals.conf`, then `/etc/xdg-desktop-portal/helm-portals.conf`, then
-`/usr/share/xdg-desktop-portal/helm-portals.conf`. The `helm` in those names is
+ship) reads, in order: `$XDG_CONFIG_HOME/xdg-desktop-portal/realm-portals.conf`,
+then `.../portals.conf`, then `/etc/xdg-desktop-portal/realm-portals.conf`, then
+`/usr/share/xdg-desktop-portal/realm-portals.conf`. The `realm` in those names is
 `XDG_CURRENT_DESKTOP`, split on `:`. That is the whole of what
-`XDG_CURRENT_DESKTOP=helm` implies for portals — and it is why the variable must
-be set before the first activation, not merely before helm's own code runs.
+`XDG_CURRENT_DESKTOP=realm` implies for portals — and it is why the variable must
+be set before the first activation, not merely before realm's own code runs.
 
-**helm ships `configs/portal/helm-portals.conf`**, installed to
-`/usr/share/xdg-desktop-portal/helm-portals.conf`, naming a concrete backend per
+**realm ships `configs/portal/realm-portals.conf`**, installed to
+`/usr/share/xdg-desktop-portal/realm-portals.conf`, naming a concrete backend per
 interface rather than letting behaviour depend on what happens to be installed:
 
 ```ini
@@ -453,7 +453,7 @@ org.freedesktop.impl.portal.Screenshot=wlr
 
 The values are `.portal` file basenames (`gtk.portal` → `gtk`). `Settings=gtk`
 is explicit so another installed backend cannot silently take over that
-contract; `Inhibit=none` is explicit because helm makes no supported
+contract; `Inhibit=none` is explicit because realm makes no supported
 inhibition-policy promise. The GTK backend implements `FileChooser` and
 `Settings` but **not** `ScreenCast` on wlroots-based compositors, so screen
 sharing must be routed to a wlroots backend explicitly. Packaging installs this
@@ -482,7 +482,7 @@ that it works.
   ```
   It must answer immediately. A pause of about twenty-five seconds *is* the
   D-Bus activation timeout and *is* the diagnosis.
-- Round trip, on demand and in the VM test — `helm ctl doctor --portal-roundtrip`:
+- Round trip, on demand and in the VM test — `realmctl doctor --portal-roundtrip`:
   issue `org.freedesktop.portal.FileChooser.OpenFile` (signature `ssa{sv}` →
   object path), assert a handle within two seconds, then close it via
   `org.freedesktop.portal.Request.Close`. This opens a real dialog, which is why
@@ -499,7 +499,7 @@ The rule is absolute: **degrade with a named log line, never a silent hang.**
 Every degradation emits exactly one line of the form
 
 ```
-<timestamp> helm-session: DEGRADED <CODE>: <one sentence naming what the user will lose>
+<timestamp> realm-session: DEGRADED <CODE>: <one sentence naming what the user will lose>
 ```
 
 with a stable `CODE`, so the line can be grepped, documented and referenced by
@@ -510,11 +510,11 @@ with a stable `CODE`, so the line can be grepped, documented and referenced by
 | `NO-RUNTIME-DIR` | `XDG_RUNTIME_DIR` unset or not a directory | **Fatal.** Nothing works without it. |
 | `NO-COMPOSITOR` | river not on `PATH` | **Fatal.** |
 | `NO-SOCKET` | no new Wayland socket within the deadline | **Fatal.** |
-| `WM-ABORT` | `helm-wm.service` failed, or was condition-skipped | **Fatal**, per §2 requirement 2. |
-| `NO-SESSION-BUS` | no `DBUS_SESSION_BUS_ADDRESS` and no `$XDG_RUNTIME_DIR/bus` | Re-exec once under `dbus-run-session -- helm-session`, guarded by `HELM_DBUS_REEXEC=1` so it cannot loop. If that binary is absent, continue and state plainly that portals, file dialogs and screen sharing will not work in this session. |
+| `WM-ABORT` | `realm-wm.service` failed, or was condition-skipped | **Fatal**, per §2 requirement 2. |
+| `NO-SESSION-BUS` | no `DBUS_SESSION_BUS_ADDRESS` and no `$XDG_RUNTIME_DIR/bus` | Re-exec once under `dbus-run-session -- realm-session`, guarded by `REALM_DBUS_REEXEC=1` so it cannot loop. If that binary is absent, continue and state plainly that portals, file dialogs and screen sharing will not work in this session. |
 | `NO-DBUS-ACTIVATION` | `dbus-update-activation-environment` absent | Continue. State that D-Bus-activated services will not see the display, so file dialogs will hang for twenty-five seconds. Suggest `dbus-user-session` (Debian/Ubuntu) or the equivalent dbus package (Fedora, Nix). |
 | `NO-SYSTEMD-USER` | `systemctl --user show-environment` does not succeed | Continue on the direct-launch path below. |
-| `NO-DISPLAY-PROBE` | `helm ctl wait-display` not installed | Continue with file-existence detection only. |
+| `NO-DISPLAY-PROBE` | `realmctl wait-display` not installed | Continue with file-existence detection only. |
 | `NO-XWAYLAND` | no new X11 socket appeared | Continue; `DISPLAY` is absent from both imports. |
 | `NO-GSETTINGS` | `gsettings` or the schemas absent | Continue; GTK apps get the wrong cursor. |
 | `NO-CURSOR-THEME` | the named theme resolves to no directory under any icon path | Continue; the cursor will be the default arrow. |
@@ -528,7 +528,7 @@ test is `systemctl --user show-environment` succeeding.
 and in containers:
 
 1. `dbus-update-activation-environment` is called **without** `--systemd`.
-2. `helm-wm` and `helm-bar` are started directly, each under a bounded
+2. `realm-wm` and `realm-bar` are started directly, each under a bounded
    shell respawn loop with the same policy as the units: restart on non-zero
    exit, at most five times in thirty seconds, never on exit codes 69 or 78.
 3. Exceeding the window manager's limit is `FATAL WM-ABORT`, exactly as under
@@ -545,13 +545,13 @@ A2 and A4 CI rows rather than VM rows.
 ### 7. Session teardown
 
 Triggered by the compositor exiting, or by `EXIT INT TERM HUP` on the entry, or
-by `helm-session --abort` (§2). The whole sequence has a hard deadline of 15
+by `realm-session --abort` (§2). The whole sequence has a hard deadline of 15
 seconds, after which the entry proceeds regardless — teardown may never be the
 thing that hangs a logout.
 
 1. **Freeze launch admission, then stop the target.** Durably enter SPEC 0012's
    `admission-frozen` state before
-   `systemctl --user stop helm-session.target`. `PartOf=helm-session.target`,
+   `systemctl --user stop realm-session.target`. `PartOf=realm-session.target`,
    not `WantedBy=`, propagates that stop to helpers. Their `After=` ordering is
    reversed on stop, so the bar stops before the window manager. Verify every
    helper inactive before clearing the environment. Profile-launch scopes have
@@ -559,10 +559,10 @@ thing that hangs a logout.
 2. **A client that refuses to exit** is in its unit's cgroup and is killed:
    `SIGTERM`, then `SIGKILL` after `TimeoutStopSec` (5 s for the bar, 10 s for
    the window manager). No client can extend the teardown beyond those bounds.
-   Applications the *user* launched are not part of `helm-session.target` — they
-   live in `app.slice` scopes under the user manager — and helm does not kill
+   Applications the *user* launched are not part of `realm-session.target` — they
+   live in `app.slice` scopes under the user manager — and realm does not kill
    them. Whether they survive logout is `logind`'s `KillUserProcesses` policy,
-   which is a system decision and not helm's to override.
+   which is a system decision and not realm's to override.
 3. **Then, and only then, clear the environment.** Order matters here too: a
    unit restarting during teardown must not come up after the display is gone
    but before it is stopped.
@@ -587,7 +587,7 @@ thing that hangs a logout.
    visibly instead. This is written down because it looks like sloppiness and is
    not.
 5. **Kill the compositor** if it is still alive, then reap the pid file and the
-   runtime directory `$XDG_RUNTIME_DIR/helm/`.
+   runtime directory `$XDG_RUNTIME_DIR/realm/`.
 
 Why any of this is needed at all: the systemd user manager and the session bus
 routinely **outlive the session** — always for a lingering user, and often for a
@@ -595,7 +595,7 @@ plain relogin. Without step 3 the next login inherits a `WAYLAND_DISPLAY`
 naming a dead socket, and the symptoms are identical to never having imported it
 (failure mode **N3**).
 
-### 8. What `helm ctl doctor` must check (input to SPEC 0006)
+### 8. What `realmctl doctor` must check (input to SPEC 0006)
 
 Every step above has a check. The names below are the contract; SPEC 0006 owns
 the implementation. Each check must print **the symptom it prevents**, not a
@@ -604,32 +604,32 @@ gate (ADR 0011's guard).
 
 | Check id | Proves | Symptom prevented | Where testable |
 |---|---|---|---|
-| `env/identity` | `XDG_CURRENT_DESKTOP=helm`, `XDG_SESSION_TYPE=wayland`, `XDG_SESSION_DESKTOP=helm` in the process | Portal picks the wrong backend | VM |
+| `env/identity` | `XDG_CURRENT_DESKTOP=realm`, `XDG_SESSION_TYPE=wayland`, `XDG_SESSION_DESKTOP=realm` in the process | Portal picks the wrong backend | VM |
 | `env/wayland-display/process` | Present in `doctor`'s own environment | — | VM |
 | `env/wayland-display/systemd` | Present in `systemctl --user show-environment` | Nothing themed after login; units come up displayless | VM |
 | `env/wayland-display/dbus` | Present in the bus activation environment | File dialogs hang ~25 s | VM |
-| `env/desktop/systemd`, `env/desktop/dbus` | `XDG_CURRENT_DESKTOP=helm` in both | Screen share offers no sources | VM |
+| `env/desktop/systemd`, `env/desktop/dbus` | `XDG_CURRENT_DESKTOP=realm` in both | Screen share offers no sources | VM |
 | `env/agree` | All three views hold the *same* values | The import ran too early or was skipped | VM |
 | `env/list-matches-entry` | `doctor`'s variable list equals the session entry's | A variable added in one place and forgotten in the other | **CI** |
 | `env/cursor` | `XCURSOR_THEME`/`SIZE` in all three, theme resolves on disk, gsettings agrees | Black X11 arrow; cursor resizes across windows | VM |
 | `env/xwayland` | `DISPLAY` in all three when XWayland is up; integer-scale policy in force | X11 apps absent or blurred | VM |
-| `units/target` | `helm-session.target` active, and its `.wants` symlinks exist | A target that starts nothing and reports success | VM |
-| `units/wm` | `helm-wm.service` `ActiveState=active`; `ConditionResult` reported separately | **N1** — a condition-skipped unit read as success | VM |
-| `units/bar` | `helm-bar.service` active or cleanly restarting | Bar gone unnoticed | VM |
+| `units/target` | `realm-session.target` active, and its `.wants` symlinks exist | A target that starts nothing and reports success | VM |
+| `units/wm` | `realm-wm.service` `ActiveState=active`; `ConditionResult` reported separately | **N1** — a condition-skipped unit read as success | VM |
+| `units/bar` | `realm-bar.service` active or cleanly restarting | Bar gone unnoticed | VM |
 | `units/restart-policy` | The shipped units carry the policy in §4 | A crashed bar taking the session down | **CI** |
 | `units/idle-lock` | An idle and a lock unit are part of `graphical-session.target` | Lid closes, session stays unlocked | VM *(blocked on OQ-1)* |
-| `wm/attached` | helm holds river's window-management global; reports the holder if not | **N2** — inert compositor, or a restart loop against a stale holder | VM |
-| `wm/layer-shell` | helm is serving `river-layer-shell-v1` | The bar never appears, and it looks like the bar's fault | VM |
+| `wm/attached` | realm holds river's window-management global; reports the holder if not | **N2** — inert compositor, or a restart loop against a stale holder | VM |
+| `wm/layer-shell` | realm is serving `river-layer-shell-v1` | The bar never appears, and it looks like the bar's fault | VM |
 | `wm/capabilities` | `Capabilities`, including `unsupported` ([INTERFACES.md §1](../INTERFACES.md)) | A backend gap that looks like a bug | VM |
 | `wm/protocol-version` | Bound interface versions match the pinned river | Session fails after a routine upgrade | VM |
 | `portal/answers` | `org.freedesktop.portal.Desktop` responds without a pause | The 25 s hang | VM |
-| `portal/config` | A `helm-portals.conf` is found and names a backend per interface | Behaviour that changes with what is installed | **CI** (file) / VM (effect) |
+| `portal/config` | A `realm-portals.conf` is found and names a backend per interface | Behaviour that changes with what is installed | **CI** (file) / VM (effect) |
 | `portal/filechooser` | `--portal-roundtrip`: a handle within 2 s | "Open File does nothing" | VM |
 | `portal/screencast` | The interface exists and the configured impl implements it | Screen share silently produces nothing | VM; the real capture is **HARDWARE** |
-| `session/socket` | `$XDG_RUNTIME_DIR/helm/ctl.sock` answers `Hello` | — | VM |
-| `session/protocol-version` | Matches `helm_core::ipc::PROTOCOL_VERSION` | Bar and session disagree | **CI** |
+| `session/socket` | `$XDG_RUNTIME_DIR/realm/ctl.sock` answers `Hello` | — | VM |
+| `session/protocol-version` | Matches `realm_core::ipc::PROTOCOL_VERSION` | Bar and session disagree | **CI** |
 | `session/degraded` | Reports each `DEGRADED` code in force this session | A degraded session pretending to be healthy | **CI** (degraded paths) |
-| `fonts/glyphs` | `helm_core::glyphs::Probe::summary()` | Tofu in the bar | **CI** |
+| `fonts/glyphs` | `realm_core::glyphs::Probe::summary()` | Tofu in the bar | **CI** |
 | `tools/floors` | Reused tools present at their version floors (ADR 0007) | charon or horus missing | **CI** |
 
 Two constraints on `doctor` that come from this spec rather than from SPEC 0006:
@@ -637,7 +637,7 @@ Two constraints on `doctor` that come from this spec rather than from SPEC 0006:
 1. **It must not shell out to tools that may be absent.** `xlsclients`,
    `xdpyinfo` and `wayland-info` are not guaranteed on any of the three targets.
    `doctor` opens the sockets and makes the bus calls itself.
-2. **It must run outside a session** and report "no helm session running"
+2. **It must run outside a session** and report "no realm session running"
    rather than failing confusingly. Half of its value is being run over SSH by
    someone whose desktop will not start.
 
@@ -657,12 +657,12 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A5 | Given a booted session, when `systemctl --user show-environment` and the bus activation environment are read, then every imported variable is present in both with values equal to the compositor's `/proc/<pid>/environ` | VM | |
 | A6 | Given a session started with the D-Bus import deliberately suppressed, when `doctor` runs, then `env/wayland-display/dbus` fails, names the twenty-five second hang, and `doctor` exits non-zero | VM | |
 | A7 | Given a booted session, when the cursor is checked, then the environment, the imported environment and `gsettings` all name the same theme and size, and the theme resolves to a directory on disk | VM | |
-| A8 | Given river started, when `helm-wm` attaches, then `doctor` reports `wm/attached` and `wm/layer-shell` served, and the measured unmanaged interval is inside the cold-start budget | VM | |
-| A9 | Given `helm-wm` removed from the image, when the session starts, then the entry logs `FATAL WM-ABORT` with the "no window can be placed" message, tears river down, and exits non-zero — and the same happens when the unit is condition-skipped rather than failed | VM | |
-| A10 | Given a running session with three windows, when `helm-wm` is killed, then it is restarted within `RestartSec`, the ledger is recovered from the snapshot, the three windows return to their projected rectangles, and `helm-bar.service` never leaves `active` | VM | |
-| A11 | Given a stale window manager already holding river's window-management global, when `helm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed naming the holding process | VM | |
-| A12 | Given a running session, when `helm-bar` is killed, then it is restarted, and `helm-session.target` and `helm-wm.service` both stay `active` throughout | VM | |
-| A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the running portal chose the backends named in `helm-portals.conf` | VM | |
+| A8 | Given river started, when `realm-wm` attaches, then `doctor` reports `wm/attached` and `wm/layer-shell` served, and the measured unmanaged interval is inside the cold-start budget | VM | |
+| A9 | Given `realm-wm` removed from the image, when the session starts, then the entry logs `FATAL WM-ABORT` with the "no window can be placed" message, tears river down, and exits non-zero — and the same happens when the unit is condition-skipped rather than failed | VM | |
+| A10 | Given a running session with three windows, when `realm-wm` is killed, then it is restarted within `RestartSec`, the ledger is recovered from the snapshot, the three windows return to their projected rectangles, and `realm-bar.service` never leaves `active` | VM | |
+| A11 | Given a stale window manager already holding river's window-management global, when `realm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed naming the holding process | VM | |
+| A12 | Given a running session, when `realm-bar` is killed, then it is restarted, and `realm-session.target` and `realm-wm.service` both stay `active` throughout | VM | |
+| A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the running portal chose the backends named in `realm-portals.conf` | VM | |
 | A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
 | A16 | Given a real laptop, when the lid is closed, then the session locks within the configured delay and the screen is blank on reopen until authentication | **HARDWARE** *(blocked on OQ-1)* | |
@@ -675,9 +675,9 @@ From [ARCHITECTURE.md §4](../ARCHITECTURE.md); no new numbers are invented here
 
 | Path | Budget | How it is measured |
 |---|---|---|
-| Cold session start → usable | **< 900 ms** (§4) | From the entry's first line to `helm-wm` sending `READY=1`. river's own start-up dominates and is measured separately so a river regression is attributable. |
+| Cold session start → usable | **< 900 ms** (§4) | From the entry's first line to `realm-wm` sending `READY=1`. river's own start-up dominates and is measured separately so a river regression is attributable. |
 | The unmanaged window (§2) | **< 300 ms**, hard ceiling the 900 ms above | From the Wayland socket becoming live to the window-management global being bound. `doctor` reports the measured value. |
-| Environment publication (step 4) | **< 50 ms** | Two D-Bus calls. If this is ever slow, the bus is the problem, not helm. |
+| Environment publication (step 4) | **< 50 ms** | Two D-Bus calls. If this is ever slow, the bus is the problem, not realm. |
 | Portal `FileChooser` round trip | **< 2 s** | ADR 0011's guard. The failure it exists to catch is 25 s. |
 | Teardown, total | **< 15 s** | Hard deadline; the entry proceeds regardless afterwards. |
 | Wayland socket wait | **10 s deadline**, 50 ms poll | A *timeout*, not a budget. |
@@ -696,12 +696,12 @@ Rows this component is responsible for not causing, from
 |---|---|---|
 | `WAYLAND_DISPLAY` never reaches D-Bus | Session integration | Steps 3–4; `env/wayland-display/dbus`; A5, A6 |
 | `XDG_CURRENT_DESKTOP` unset | Session integration | Step 1; `env/desktop/*`; A5 |
-| No portal backend installed | Session integration | §5 named dependencies and `helm-portals.conf`; `portal/config`; A13 |
+| No portal backend installed | Session integration | §5 named dependencies and `realm-portals.conf`; `portal/config`; A13 |
 | Session dies with a client | Session integration | §4 `PartOf`/`Wants`, never `BindsTo`/`Requires`; A12 |
-| No lock/idle handling | Session integration | §4 `helm-idle.service`; `units/idle-lock`; A16 — **blocked on OQ-1** |
+| No lock/idle handling | Session integration | §4 `realm-idle.service`; `units/idle-lock`; A16 — **blocked on OQ-1** |
 | XWayland apps unstyled or scaled wrong | Session integration | §3 XWayland; `env/xwayland` |
 | Cursor theme unset | Session integration | Steps 1 and 5; `env/cursor`; A7 |
-| `helm-session` dies | river | §2 supervision policy and ledger recovery; A10 |
+| `realm-session` dies | river | §2 supervision policy and ledger recovery; A10 |
 | Layer-shell not served | river | `wm/layer-shell`; A8 |
 | Protocol version drift after a river bump | river | Exit 78 + `RestartPreventExitStatus`; `wm/protocol-version` |
 | Works on the author's distro only | Packaging | Three distro jobs plus the VM test; §4's shipped-symlink requirement |
@@ -712,16 +712,16 @@ register yet. They are recorded here as findings for a human to add.
 - **N1 — A unit is skipped, not failed.** *(Session integration.)* When
   `ConditionEnvironment=WAYLAND_DISPLAY` is not met, the unit does not fail: it
   is `inactive (dead)` with `ConditionResult=no`, and `systemctl --user start
-  helm-session.target` still exits 0. The user gets an inert desktop with
+  realm-session.target` still exits 0. The user gets an inert desktop with
   nothing in `systemctl --user --failed`, which is the hardest possible thing to
-  diagnose. *helm's answer:* the entry verifies `ActiveState=active` per unit
+  diagnose. *realm's answer:* the entry verifies `ActiveState=active` per unit
   after starting the target, and `doctor` reports `ConditionResult` separately
   from `ActiveState`. *Guard:* `units/wm`; A9.
 - **N2 — A stale window manager holds river's global.** *(river.)* Only one
   window-management client may connect; river answers `unavailable` to a second.
-  A leftover `helm-wm`, or one started by hand for testing, makes the
+  A leftover `realm-wm`, or one started by hand for testing, makes the
   supervised one permanently unstartable, and a naive restart policy turns that
-  into an endless loop that buries the one message explaining it. *helm's
+  into an endless loop that buries the one message explaining it. *realm's
   answer:* a distinct exit code (69) plus `RestartPreventExitStatus=`, and
   `doctor` names the holding process. *Guard:* A11.
 - **N3 — The user manager outlives the session.** *(Session integration.)* With
@@ -729,7 +729,7 @@ register yet. They are recorded here as findings for a human to add.
   persist across logout, so the next login inherits the previous session's
   `WAYLAND_DISPLAY` — pointing at a socket that no longer exists — unless
   teardown clears it. The symptoms are identical to never having imported it,
-  which sends the diagnosis to the wrong place entirely. *helm's answer:*
+  which sends the diagnosis to the wrong place entirely. *realm's answer:*
   teardown clears both environments, in that order, after stopping the target;
   and the entry treats an inherited `WAYLAND_DISPLAY` naming a non-existent
   socket as stale rather than as a value. *Guard:* A14.
@@ -740,16 +740,16 @@ register yet. They are recorded here as findings for a human to add.
   matters most.** Carried forward from ADR 0011, sharpened by ADR 0013.
 
   *Locker.* river 0.4 implements `ext-session-lock-v1` and reports
-  `session_locked`/`session_unlocked` to the window manager, so helm can disable
+  `session_locked`/`session_unlocked` to the window manager, so realm can disable
   every non-lock binding while locked. That makes an `ext-session-lock-v1`
   client a hard requirement rather than a preference: a locker that draws a
-  layer-shell overlay instead depends on helm serving `river-layer-shell-v1` and
-  on helm granting it exclusive focus, so a crash in *helm* would expose the
+  layer-shell overlay instead depends on realm serving `river-layer-shell-v1` and
+  on realm granting it exclusive focus, so a crash in *realm* would expose the
   desktop. Options: **gtklock** (proper `ext-session-lock-v1`; GTK, which we
   already theme); **waylock** (same protocol, minimal, but Zig — a toolchain we
   otherwise removed from the workspace by ADR 0013); **swaylock**, only in
   versions that speak `ext-session-lock-v1`, older ones must be excluded;
-  **`helm-ward`**, our own, which is the worst class of bug to get wrong and is
+  **`realm-ward`**, our own, which is the worst class of bug to get wrong and is
   not before M6. *Recommendation: gtklock for M3*, per ADR 0011, with waylock as
   the minimalist alternative if the Zig dependency is acceptable to packaging.
 
@@ -768,7 +768,7 @@ register yet. They are recorded here as findings for a human to add.
 - **OQ-2 — ScreenCast under river 0.4.** Does river 0.4.8 still export
   `wlr-screencopy-unstable-v1`, and does `xdg-desktop-portal-wlr` work when
   window management lives outside the compositor? *Recommendation:* ship the
-  `helm-portals.conf` routing above, mark screen sharing **unverified** in
+  `realm-portals.conf` routing above, mark screen sharing **unverified** in
   `docs/INSTALL.md` until A15 passes on hardware, and do not claim MVP
   capability 11 complete on the strength of the file chooser alone.
 
@@ -777,16 +777,16 @@ register yet. They are recorded here as findings for a human to add.
   that the systemd user manager's environment outlives the session and a wrong
   value there is very hard to diagnose. The counter-argument is real: a
   D-Bus-activated Electron app will not see `MOZ_ENABLE_WAYLAND`.
-  *Recommendation:* keep the narrow list; add `HELM_IMPORT_PATH=1` for Nix-style
+  *Recommendation:* keep the narrow list; add `REALM_IMPORT_PATH=1` for Nix-style
   profiles; revisit if a concrete app is shown to need a hint at activation
   time. The session entry currently imports `PATH` unconditionally.
 
-- **OQ-4 — the four-way name collision.** `helm-session` (script),
-  `helm-session` (crate), `helm-wm` (binary), `helm-session.target`
-  (target) and `helm-wm.service` (the unit running `helm-wm`) are five
-  names for three things. *Recommendation:* rename `helm-wm.service` →
-  `helm-wm.service` so the unit matches its binary, and leave the entry
-  script's name alone because display managers and `helm.desktop` already point
+- **OQ-4 — the four-way name collision.** `realm-session` (script),
+  `realm-session` (crate), `realm-wm` (binary), `realm-session.target`
+  (target) and `realm-wm.service` (the unit running `realm-wm`) are five
+  names for three things. *Recommendation:* rename `realm-wm.service` →
+  `realm-wm.service` so the unit matches its binary, and leave the entry
+  script's name alone because display managers and `realm.desktop` already point
   at it. Low stakes, certain to confuse every future reader if left.
 
 - **OQ-5 — does river honour a pre-set `WAYLAND_DISPLAY`?** If river 0.4.8 uses
@@ -796,9 +796,9 @@ register yet. They are recorded here as findings for a human to add.
   river 0.4.8 during M3; keep discovery regardless, because it is also the
   fallback and because the liveness probe is needed either way.
 
-- **OQ-6 — `Type=notify` for `helm-wm.service`.** Readiness should mean "the
+- **OQ-6 — `Type=notify` for `realm-wm.service`.** Readiness should mean "the
   window-management global and the layer-shell manager are both bound", which is
-  what makes `After=helm-wm.service` meaningful for the bar and what makes
+  what makes `After=realm-wm.service` meaningful for the bar and what makes
   the unmanaged-window budget measurable. *Recommendation:* adopt in M2 when the
   daemon exists; the unit is `Type=exec` until then, and the budget in §Budgets
   is unmeasurable until it changes.

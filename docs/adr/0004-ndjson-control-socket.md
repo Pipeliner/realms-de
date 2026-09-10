@@ -1,7 +1,7 @@
 # ADR 0004 — Newline-delimited JSON over a unix socket
 
 - **Status:** Accepted (2026-08-26; IPC security amendment accepted 2026-08-28)
-- **Deciders:** helm maintainers
+- **Deciders:** realm maintainers
 - **Supersedes / Superseded by:** —
 
 ## Context
@@ -9,10 +9,10 @@
 ADR 0003 puts one daemon in charge of state. It needs a wire protocol with four
 properties, in this order of importance:
 
-1. **Scriptable by hand.** helm is a keyboard-first, power-user desktop. A user
+1. **Scriptable by hand.** realm is a keyboard-first, power-user desktop. A user
    who wants to bind something we did not think of should be able to do it from
    a shell script, today, without a library. `echo '{"cmd":"switch-orbit",
-   "arg":3}' | socat - $XDG_RUNTIME_DIR/helm/ctl.sock` is the bar we are aiming
+   "arg":3}' | socat - $XDG_RUNTIME_DIR/realm/ctl.sock` is the bar we are aiming
    at.
 2. **Unmisreadable framing.** A half-written frame must never parse as a
    complete one. `docs/PITFALLS.md` lists version skew between components as a
@@ -30,16 +30,16 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 
 ### Endpoint and admission
 
-- The only production endpoint is `$XDG_RUNTIME_DIR/helm/ctl.sock`.
+- The only production endpoint is `$XDG_RUNTIME_DIR/realm/ctl.sock`.
   `XDG_RUNTIME_DIR` must be an absolute existing directory; if it is absent,
   relative, or not a directory, path resolution fails with
   `IpcPathError::MissingRuntimeDir` and neither a client nor the daemon falls
-  back to `/tmp`. `helm-wm` exits non-zero before binding; `helmctl` reports the
-  same condition as "not inside a helm session" and does not connect anywhere.
-- `HELM_SOCKET` is not a production override and `helmctl --socket` is not a
+  back to `/tmp`. `realm-wm` exits non-zero before binding; `realmctl` reports the
+  same condition as "not inside a realm session" and does not connect anywhere.
+- `REALM_SOCKET` is not a production override and `realmctl --socket` is not a
   public option. The only test seam is a non-production path resolver which
   receives an explicit temporary runtime directory. It must produce the same
-  `helm/ctl.sock` descendant and perform the same ownership/type checks as the
+  `realm/ctl.sock` descendant and perform the same ownership/type checks as the
   production resolver; it must not accept an arbitrary socket pathname. This
   seam exists solely to make isolated integration fixtures possible without
   mutating process environment.
@@ -91,9 +91,9 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 
 | Option | Why it was attractive | Why it lost |
 |---|---|---|
-| **D-Bus** | The correct desktop citizenship answer, and it is not close. We already require a session bus for portals (ADR 0011), so it is running regardless. Free service activation, free signal broadcast to multiple subscribers, introspection, `busctl` and `gdbus` as ready-made debugging tools, and other desktop components could integrate with helm without us shipping a library | Scripting D-Bus is meaningfully worse than scripting a socket: `busctl call` needs a signature string and gets the marshalling wrong in ways that are hard to diagnose. It adds a dependency (`zbus`) to every client including the bar. And it inverts a startup ordering we would rather control: the session would need the bus healthy before it could serve, when in fact the session is what puts `WAYLAND_DISPLAY` *into* the bus environment. This was the closest call in this ADR, and D-Bus remains the right answer if helm ever needs third-party integrations |
-| **A binary codec** (bincode, postcard, CBOR) | Smaller frames, faster encode/decode, self-delimiting length prefixes | Solves a problem we do not have. `HelmState` is a few hundred bytes and serialises in microseconds against an 8 ms budget. It costs the entire scriptability property, which is requirement 1 |
-| **A Wayland protocol extension** | The most "correct" place for compositor state; no second socket; automatic lifetime tied to the display | Only reachable from a Wayland client, so `helm ctl` from a TTY or an SSH session could not use it. Requires the compositor to serve it, which couples clients to the compositor and undoes ADR 0002 and ADR 0003. Extension design and codegen is real work for no user-visible gain |
+| **D-Bus** | The correct desktop citizenship answer, and it is not close. We already require a session bus for portals (ADR 0011), so it is running regardless. Free service activation, free signal broadcast to multiple subscribers, introspection, `busctl` and `gdbus` as ready-made debugging tools, and other desktop components could integrate with realm without us shipping a library | Scripting D-Bus is meaningfully worse than scripting a socket: `busctl call` needs a signature string and gets the marshalling wrong in ways that are hard to diagnose. It adds a dependency (`zbus`) to every client including the bar. And it inverts a startup ordering we would rather control: the session would need the bus healthy before it could serve, when in fact the session is what puts `WAYLAND_DISPLAY` *into* the bus environment. This was the closest call in this ADR, and D-Bus remains the right answer if realm ever needs third-party integrations |
+| **A binary codec** (bincode, postcard, CBOR) | Smaller frames, faster encode/decode, self-delimiting length prefixes | Solves a problem we do not have. `RealmState` is a few hundred bytes and serialises in microseconds against an 8 ms budget. It costs the entire scriptability property, which is requirement 1 |
+| **A Wayland protocol extension** | The most "correct" place for compositor state; no second socket; automatic lifetime tied to the display | Only reachable from a Wayland client, so `realmctl` from a TTY or an SSH session could not use it. Requires the compositor to serve it, which couples clients to the compositor and undoes ADR 0002 and ADR 0003. Extension design and codegen is real work for no user-visible gain |
 | **HTTP on a unix socket** | Every language has a client; trivially introspectable with `curl` | Request/response only. Push subscription needs SSE or websockets bolted on, and we would have written a worse version of what NDJSON already does |
 
 ## Consequences
@@ -101,7 +101,7 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 ### Good
 
 - `socat`, `nc -U`, `jq` and a shell are a complete client: write the mandatory
-  Hello frame first. `helmctl` is a thin wrapper rather than a privileged path.
+  Hello frame first. `realmctl` is a thin wrapper rather than a privileged path.
 - Framing is unambiguous by inspection: if there is no newline yet, the frame is
   not complete. There is no length prefix to get wrong; the explicit connection
   state machine in SPEC 0007 governs handshake, queues, and deadlines.
@@ -114,12 +114,12 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 ### Bad
 
 - JSON is not free. Every state push allocates and formats. It is well inside
-  budget at current sizes, but it puts a ceiling on how large `HelmState` may
+  budget at current sizes, but it puts a ceiling on how large `RealmState` may
   grow, and nothing enforces that ceiling today.
 - No service activation. Something must start the session before a client
   connects, and clients need a connect-retry loop for the startup race.
 - We are not a D-Bus citizen, so a third-party panel or a desktop integration
-  cannot talk to helm without implementing our protocol.
+  cannot talk to realm without implementing our protocol.
 - A JSON value containing a literal newline inside a string is escaped by serde,
   so framing is safe — but only because we always encode through `ipc::encode`.
   A hand-rolled writer elsewhere could break it.
@@ -132,13 +132,13 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 
 ## Reversal
 
-Low. The wire format is confined to `helm-core::ipc` plus one transport module
+Low. The wire format is confined to `realm-core::ipc` plus one transport module
 per client. Adding a D-Bus surface *alongside* the socket, rather than instead
 of it, is the likely path and would be additive: a D-Bus object that proxies the
 same `Request`/`Response` types. Estimated a week for the proxy, no changes to
 existing clients.
 
-The signal to reconsider is a concrete integration request from outside helm —
+The signal to reconsider is a concrete integration request from outside realm —
 someone wanting to drive orbits from an existing panel or a global hotkey daemon
 — or evidence that startup ordering would be simpler with bus activation.
 
@@ -151,7 +151,7 @@ someone wanting to drive orbits from an existing panel or a global hotkey daemon
   command or malformed input must be a decode error.
 - *Required before M2 implementation:* `ipc::tests::socket_path_requires_xdg_runtime_dir`,
   `ipc::tests::test_runtime_dir_resolver_preserves_the_fixed_descendant`, and
-  `ipc::tests::production_path_ignores_helm_socket`.
+  `ipc::tests::production_path_ignores_realm_socket`.
 - *Required before M2 implementation:* `control_socket::tests::rejects_foreign_uid_before_read`,
   `control_socket::tests::rejects_missing_peer_credentials_before_read`,
   `control_socket::tests::path_resolution_is_descriptor_relative`, and

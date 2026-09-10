@@ -77,7 +77,7 @@ must never push a red build.
 
 The repo is part of the product. README, docs, diagrams, commit messages and
 code comments are held to the same standard as the DE's visual design. A
-newcomer should be able to tell what helm is, and why it is built this way,
+newcomer should be able to tell what realm is, and why it is built this way,
 within a minute of landing on the front page.
 
 ## S11 — Use subagents heavily wherever it makes sense
@@ -129,7 +129,7 @@ The repository must never imply capability it does not have.
 - **Every claim is checkable.** If the README says a thing is tested, it names
   the test. If a component does not exist, it says so in those words. Status
   tables list what is *not* done as prominently as what is.
-- **No aspirational tense.** "helm does X" means it does X today. Anything else
+- **No aspirational tense.** "realm does X" means it does X today. Anything else
   is written as planned, with its milestone.
 
 This is not modesty. An unverifiable claim on a front page devalues the

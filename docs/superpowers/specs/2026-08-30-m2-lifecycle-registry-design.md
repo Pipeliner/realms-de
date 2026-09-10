@@ -36,7 +36,7 @@ never accepted by byte or path coincidence. A consumed rejected selection is
 destructor-disarmed without touching its foreign process lease; its originating
 store retains cleanup authority.
 
-`helm-theme` remains the sealed-generation and generic-GC owner.  Generic GC
+`realm-theme` remains the sealed-generation and generic-GC owner.  Generic GC
 only retains lifecycle evidence; it does not query, create, replace, or release
 registry leases.  Systemd and direct process observations live behind adapters;
 their accepted proofs in SPEC 0012 remain the authority.
@@ -68,7 +68,7 @@ is conservatively retained.  That discriminator-and-identity guard closes the
 replacement→fsync→disarm unwind window.
 The cleanup read is bounded at 4097 bytes so records exceeding the 4096-byte
 contract are retained without an unbounded allocation. Cleanup uses the same
-cooperative Helm-writer proof-to-unlink boundary as retirement: pre-/at-proof
+cooperative Realm-writer proof-to-unlink boundary as retirement: pre-/at-proof
 swaps retain, while hostile same-UID post-proof mutation is outside M2 and no
 unlink-by-fd property is claimed. Cleanup itself acquires the selection's saved
 originating-store mutex and shared activation lock for that proof/unlink span.
@@ -144,7 +144,7 @@ and controller proof, may normalize a classified pair before a later retry.
 Preparation reserves a launch id across both canonical and fixed
 `.launch-retire-<id>` forms. Either collision rejects before mutation.
 
-M2 assumes conforming same-UID Helm writers respect the lock order and reserved
+M2 assumes conforming same-UID Realm writers respect the lock order and reserved
 retirement namespace. Atomic retirement and post-move proof cover races before
 or at the move. Hostile same-UID mutation after retirement proof is explicitly
 outside the account-compromise boundary; the design claims no unlink-by-fd
@@ -181,5 +181,5 @@ are complete.
 ## Non-goals
 
 - No public wire protocol or history store.
-- No placeholder `helm-session` crate without the red fixtures above.
+- No placeholder `realm-session` crate without the red fixtures above.
 - No cleanup policy that trades uncertain direct evidence for quota recovery.

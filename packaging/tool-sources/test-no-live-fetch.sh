@@ -4,11 +4,11 @@
 set -eu
 root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 if grep -n -E -i '(curl|wget|git[[:space:]]+clone)' \
-    "$root/packaging/debian/rules" "$root/packaging/fedora/helm.spec"; then
+    "$root/packaging/debian/rules" "$root/packaging/fedora/realm.spec"; then
     echo 'native package construction contains a live upstream acquisition path' >&2
     exit 1
 fi
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/helm-offline-policy.XXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/realm-offline-policy.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 cp "$root/packaging/debian/rules" "$tmp/rules"
 printf '\ncurl https://upstream.invalid/source.tar.gz\n' >>"$tmp/rules"

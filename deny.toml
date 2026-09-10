@@ -1,5 +1,5 @@
 # Dependency policy for cargo-deny. This deliberately covers dev-dependencies:
-# CI executes them, so they remain part of helm's supply-chain trust boundary.
+# CI executes them, so they remain part of realm's supply-chain trust boundary.
 
 [graph]
 all-features = true

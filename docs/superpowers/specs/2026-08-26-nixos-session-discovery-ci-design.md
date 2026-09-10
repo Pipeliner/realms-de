@@ -3,7 +3,7 @@
 ## Context
 
 Issue #112 blocks every open pull request. The NixOS VM starts successfully,
-but its first assertion expects `helm.desktop` in the system profile. That is
+but its first assertion expects `realm.desktop` in the system profile. That is
 not the path NixOS promises for display-manager sessions: the module registers
 a rewritten package through `services.displayManager.sessionPackages`, while
 the fixture deliberately enables no display manager.
@@ -14,15 +14,15 @@ not a KVM failure.
 
 ## Decision
 
-Helm's NixOS contract is the native `services.displayManager.sessionPackages`
-interface. Helm must not enable or choose a display manager. The NixOS VM test
+Realm's NixOS contract is the native `services.displayManager.sessionPackages`
+interface. Realm must not enable or choose a display manager. The NixOS VM test
 will enable one supported display-manager integration solely as a consumer of
-that contract, then assert the registered session data contains `helm.desktop`
-with `DesktopNames=helm` and an `Exec` pointing at the module-generated
+that contract, then assert the registered session data contains `realm.desktop`
+with `DesktopNames=realm` and an `Exec` pointing at the module-generated
 launcher.
 
 The system-profile path `/run/current-system/sw/share/wayland-sessions` is not
-a public Helm contract and will not be forced into `environment.pathsToLink`.
+a public Realm contract and will not be forced into `environment.pathsToLink`.
 
 ## Remote CI contract
 

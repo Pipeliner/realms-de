@@ -13,7 +13,7 @@ if [ ! -x "$guard" ]; then
     exit 1
 fi
 
-tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/helm-fedora-projections-test.XXXXXX")
+tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/realm-fedora-projections-test.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 
 canonical_image='registry.fedoraproject.org/fedora:44@sha256:df52038ff64ee61affa188d78beb85cf6eecfe4e9f6042238269ccdc8e944392'
@@ -24,7 +24,7 @@ tests_run=0
 # an explicit addition here and in the production guard.
 current_inputs='
 .github/workflows/distro.yml
-packaging/fedora/helm.spec
+packaging/fedora/realm.spec
 README.md
 docs/INSTALL.md
 docs/ARCHITECTURE.md
@@ -32,7 +32,7 @@ docs/MVP.md
 docs/ROADMAP.md
 docs/integration/session-services.md
 .github/ISSUE_TEMPLATE/bug.yml
-docs/specs/0006-helm-ctl.md
+docs/specs/0006-realm-ctl.md
 packaging/fedora/baseline.toml'
 
 # These are the only files containing accepted negative fixtures, superseded
@@ -94,7 +94,7 @@ docs/adr/0010-nix-flake-as-reference-build.md:::- **Supersedes / Superseded by:*
 docs/adr/0010-nix-flake-as-reference-build.md:::NixOS/Nix, Ubuntu 24.04 LTS and later, Fedora 41 and later. All three are tested
 docs/adr/0010-nix-flake-as-reference-build.md:::4. **CI builds and installs all three once each package path is buildable.** A
 docs/adr/0010-nix-flake-as-reference-build.md:::7. **A pinned river 0.4.x is vendored**, per
-docs/adr/0010-nix-flake-as-reference-build.md:::   requirements but do not yet build or bundle a verified `helm-river` package.
+docs/adr/0010-nix-flake-as-reference-build.md:::   requirements but do not yet build or bundle a verified `realm-river` package.
 docs/adr/0013-river-window-management-backend.md:::4. Packaging vendors a pinned river 0.4.x. Ubuntu 24.04 and Fedora 41 ship
 docs/adr/0015-fedora-44-pre-alpha-baseline.md:::- **Supersedes / Superseded by:** Supersedes ADR 0010's Fedora 41-or-later baseline and Fedora portion of decision 7; supersedes ADR 0013 decision 4 only for Fedora
 docs/adr/0015-fedora-44-pre-alpha-baseline.md:::ADR 0010 selected one Fedora target but named Fedora 41 and later. ADR 0013
@@ -110,29 +110,29 @@ docs/adr/0015-fedora-44-pre-alpha-baseline.md:::| **Fedora 43 and Fedora 44** | 
 docs/adr/0015-fedora-44-pre-alpha-baseline.md:::| **Fedora 43 only** | It was still current and could be called the oldest supported Fedora | Preserves the unimplemented vendored-River burden and forces another baseline change after only 95 days |
 docs/adr/0015-fedora-44-pre-alpha-baseline.md:::| **Keep Fedora 41 or create a frozen F41 fixture** | Minimizes visible edits or preserves old compatibility investigations | F41 is EOL; a truthful offline fixture would require retained images, repository metadata, RPMs, and toolchains. No named regression question justifies that scope |
 docs/adr/0015-fedora-44-pre-alpha-baseline.md:::| **Use `latest`, Rawhide, or `44+`** | Avoids future release-number edits and may reveal future breakage early | Silently makes unadmitted releases support targets and makes CI advance without a reviewed product decision |
-docs/adr/0015-fedora-44-pre-alpha-baseline.md:::  Fedora-specific `helm-river` path.
+docs/adr/0015-fedora-44-pre-alpha-baseline.md:::  Fedora-specific `realm-river` path.
 docs/adr/0015-fedora-44-pre-alpha-baseline.md:::  for F41, F42, F43, `44+`, `latest`, Rawhide, and implicit-future wording, and
-docs/specs/0009-fedora-44-pre-alpha-baseline.md:::Helm currently names Fedora 41 as a first-class target and runs its only
+docs/specs/0009-fedora-44-pre-alpha-baseline.md:::Realm currently names Fedora 41 as a first-class target and runs its only
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::Fedora smoke job in a floating Fedora 41 container. Fedora 41 is archived and
-docs/specs/0009-fedora-44-pre-alpha-baseline.md:::- retiring Fedora 41 from required CI and current Helm support claims;
+docs/specs/0009-fedora-44-pre-alpha-baseline.md:::- retiring Fedora 41 from required CI and current Realm support claims;
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::- declining Fedora 43 and any implicit future-release support;
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::- an offline Fedora 41 fixture, unless a later issue names a concrete
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::   `Fedora 44+`, `Fedora 44 and later`, `latest`, Rawhide, or an unbounded
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::3. Fedora 41 and Fedora 42 are EOL and are not current targets. Fedora 41 must
-docs/specs/0009-fedora-44-pre-alpha-baseline.md:::   not remain in a required job or live Helm support instruction. No Fedora 41
-docs/specs/0009-fedora-44-pre-alpha-baseline.md:::4. Fedora 43 is not a Helm target. Although Fedora still marked it current on
+docs/specs/0009-fedora-44-pre-alpha-baseline.md:::   not remain in a required job or live Realm support instruction. No Fedora 41
+docs/specs/0009-fedora-44-pre-alpha-baseline.md:::4. Fedora 43 is not a Realm target. Although Fedora still marked it current on
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::ADR 0013; Fedora 43's 0.3.14 does not provide it. Therefore Fedora 44 package
-docs/specs/0009-fedora-44-pre-alpha-baseline.md:::unimplemented `helm-river` alternative.
+docs/specs/0009-fedora-44-pre-alpha-baseline.md:::unimplemented `realm-river` alternative.
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::ADR 0015 supersedes ADR 0010's Fedora 41-or-later baseline clauses as well as
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::example in SPEC 0006 must not present Fedora 41 as current.
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::third-party historical facts, such as a package being available in Fedora 41,
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::1. ADR 0010's header/index must mark its Fedora 41-or-later baseline and the
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::The correction must not describe a direct Fedora 41 to Fedora 44 operating
-docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A1 | Given the machine-checked inventory of live Fedora claims, when `status = "pre-alpha"` it is validated, then the only admitted release is exactly `44`; when `status = "unsupported"`, no Fedora release is admitted; `41`, `42`, `43`, `44+`, `latest`, Rawhide, and implicit newer releases are always rejected as current Helm targets | *Planned (#138):* `fedora_baseline::only_fedora_44_is_a_live_target`; includes one failing fixture per rejected form and one unsupported-state fixture |
+docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A1 | Given the machine-checked inventory of live Fedora claims, when `status = "pre-alpha"` it is validated, then the only admitted release is exactly `44`; when `status = "unsupported"`, no Fedora release is admitted; `41`, `42`, `43`, `44+`, `latest`, Rawhide, and implicit newer releases are always rejected as current Realm targets | *Planned (#138):* `fedora_baseline::only_fedora_44_is_a_live_target`; includes one failing fixture per rejected form and one unsupported-state fixture |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A2 | Given the repository workflow files, when `status = "pre-alpha"`, then exactly one `fedora-44-cargo-smoke` Cargo lane and exactly one `fedora-rpm-package` retained-source RPM build lane resolve to the exact official Fedora 44 digest above; no other Fedora-family container image is present anywhere under `.github/workflows/`, regardless of scalar or mapping YAML syntax. The RPM lane runs the retained-source-kit producer, copies `Source0` and the RPM spec into the build tree, and invokes `rpmbuild -bb --nodeps`, but does not clean-install the resulting package. Cargo and RPM build facts are allowed; neither lane is graphical-session or SELinux evidence. When `status = "unsupported"`, it contains no required Fedora lane; neither state adds a Fedora 41/Fedora 43 lane, runner, or architecture claim | `packaging/fedora/test-check-projections.sh`: `fedora_baseline::required_ci_uses_one_pinned_f44_cargo_smoke_and_one_retained_source_rpm_build` |
-docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A3 | Given the Fedora RPM metadata, when it is inspected, then it identifies Fedora 44, requires Fedora's `river >= 0.4.0`, contains no `helm-river` alternative or false “River unavailable on Fedora” claim, and continues to state that the package is pre-alpha and not a working desktop | *Planned (#138):* `fedora_baseline::rpm_metadata_matches_the_f44_pre_alpha_contract` |
+docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A3 | Given the Fedora RPM metadata, when it is inspected, then it identifies Fedora 44, requires Fedora's `river >= 0.4.0`, contains no `realm-river` alternative or false “River unavailable on Fedora” claim, and continues to state that the package is pre-alpha and not a working desktop | *Planned (#138):* `fedora_baseline::rpm_metadata_matches_the_f44_pre_alpha_contract` |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A6 | Given a seeded stale live-support claim such as `Fedora 41+`, when the consistency guard runs, then it fails; given an exact reviewed historical exception in a superseded ADR or third-party history, then it passes without treating that text as current support | *Planned (#138):* `fedora_baseline::stale_live_claims_fail_and_exact_history_exceptions_pass` |
-docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A8 | Given current user-facing and normative documentation, when the consistency guard and doc review run, then Fedora 41 is absent from live Helm support/install examples, Fedora 44 is described as the sole pre-alpha baseline, no text upgrades the Cargo smoke to RPM/session evidence, and no direct Fedora 41 to Fedora 44 OS upgrade is called supported | *Planned (#138):* `fedora_baseline::docs_state_the_evidence_level_truthfully` plus review of rendered Markdown |
+docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A8 | Given current user-facing and normative documentation, when the consistency guard and doc review run, then Fedora 41 is absent from live Realm support/install examples, Fedora 44 is described as the sole pre-alpha baseline, no text upgrades the Cargo smoke to RPM/session evidence, and no direct Fedora 41 to Fedora 44 OS upgrade is called supported | *Planned (#138):* `fedora_baseline::docs_state_the_evidence_level_truthfully` plus review of rendered Markdown |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A9 | Given the completed #138 diff, when scope is reviewed, then it contains no Yazi/Starship source decision, package publishing/signing infrastructure, extra Fedora lane, KVM/native-runner acquisition, scheduled network job, Fedora 41 fixture, generation rollback design, or `flake.lock` strategy | Required reviewer checklist on the #138 pull request |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::- Fedora Bodhi: F41 `archived`, EOL 2025-12-15; F42 `archived`, EOL
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::  2026-05-27; F43 `current`, EOL 2026-12-02; F44 `current`, EOL 2027-06-02.
@@ -151,7 +151,7 @@ docs/superpowers/plans/2026-08-29-fedora-44-baseline.md:::- Fedora 44 only; no F
 docs/superpowers/plans/2026-08-29-fedora-44-baseline.md:::- [ ] Verify every referenced document/path exists and docs contain no live F41 claim outside exact historical exceptions.
 docs/superpowers/plans/2026-08-29-fedora-44-baseline.md:::- [ ] Write fixtures that fail for EOL equality, post-EOL, an unknown field, and a pre-alpha F41 record.
 docs/superpowers/plans/2026-08-29-fedora-44-baseline.md:::- [ ] Add a failing consistency inventory for F41/F43/unbounded-target claims and false evidence-level wording.
-docs/superpowers/plans/2026-08-29-fedora-44-baseline.md:::- [ ] Use Fedora `river >= 0.4.0`; remove the `helm-river` alternative and false unavailable statement without imposing `<0.5`.
+docs/superpowers/plans/2026-08-29-fedora-44-baseline.md:::- [ ] Use Fedora `river >= 0.4.0`; remove the `realm-river` alternative and false unavailable statement without imposing `<0.5`.
 docs/superpowers/plans/2026-08-29-fedora-44-baseline.md:::- [ ] Reconcile current support documents, retaining only enumerated historical F41 references.
 docs/integration/hardware-media.md:::| [`wiremix`](https://crates.io/crates/wiremix) | Rust, ratatui | v0.11.0, 2026-06-05 | TUI mixer, an ncpamixer clone. Packaged in Arch, Fedora 41–43 and nixpkgs; **not in Debian or Ubuntu** (verified via repology) |
 docs/integration/hardware-media.md:::| Power profiles | [power-profiles-daemon](https://repology.org/project/power-profiles-daemon/versions) 0.21–0.30, or [tuned-ppd](https://fedoraproject.org/wiki/Changes/TunedAsTheDefaultPowerProfileManagementDaemon) | same D-Bus API — tuned-ppd is explicitly a drop-in translation layer, which is why Fedora could switch defaults from ppd to tuned in F41 without desktops changing code | Integrate against the API, not the implementation, and both distros are covered |
@@ -291,7 +291,7 @@ expect_fail_message misnamed-retained-source-rpm-lane "$case_root" \
 expect_pass canonical-projections "$tmp_dir/canonical"
 
 case_root=$(clone_case current-f41-claim)
-append_line "$case_root/README.md" 'Fedora 41 is a current Helm target.'
+append_line "$case_root/README.md" 'Fedora 41 is a current Realm target.'
 expect_fail_message current-f41-claim "$case_root" 'forbidden Fedora 41 current claim'
 
 case_root=$(clone_case fedora-43-lane)
@@ -403,17 +403,17 @@ expect_pass mapping-canonical-rpm-container "$case_root"
 case_root=$(clone_case noop-rpm-source-kit-producer)
 # shellcheck disable=SC2016 # The fixture must match literal CI variable names.
 replace_once "$case_root/.github/workflows/distro.yml" \
-    'packaging/tool-sources/build-native-source-kits.sh "$RUNNER_TEMP/helm-native-kits"' ':'
+    'packaging/tool-sources/build-native-source-kits.sh "$RUNNER_TEMP/realm-native-kits"' ':'
 # shellcheck disable=SC2016 # The fixture must match literal CI variable names.
 replace_once "$case_root/.github/workflows/distro.yml" \
-    'packaging/tool-sources/build-native-source-kits.sh "$RUNNER_TEMP/helm-native-kits"' ':'
+    'packaging/tool-sources/build-native-source-kits.sh "$RUNNER_TEMP/realm-native-kits"' ':'
 expect_fail_message noop-rpm-source-kit-producer "$case_root" \
     'RPM lane must run the retained-source producer and Source0 RPM build'
 
 case_root=$(clone_case noop-rpm-source0-copy)
 # shellcheck disable=SC2016 # The fixture must match literal CI variable names.
 replace_once "$case_root/.github/workflows/distro.yml" \
-    '          cp "$RUNNER_TEMP/helm-native-kits/helm-0.1.0.tar.gz" "$RUNNER_TEMP/rpmbuild/SOURCES/"' \
+    '          cp "$RUNNER_TEMP/realm-native-kits/realm-0.1.0.tar.gz" "$RUNNER_TEMP/rpmbuild/SOURCES/"' \
     '          :'
 expect_fail_message noop-rpm-source0-copy "$case_root" \
     'RPM lane must run the retained-source producer and Source0 RPM build'
@@ -481,7 +481,7 @@ for path in $current_inputs; do
     replace_all "$case_root/$path" 'fedora-44' 'retired-fedora'
     replace_all "$case_root/$path" 'fedora:44' 'retired-fedora'
 done
-write_file "$case_root/docs/fedora-44-support.md" 'Fedora 44 is a current Helm support target.'
+write_file "$case_root/docs/fedora-44-support.md" 'Fedora 44 is a current Realm support target.'
 expect_fail_message unsupported-unlisted-f44-current-claim "$case_root" \
     'unsupported Fedora status requires no Fedora lane or current support claim'
 
@@ -507,42 +507,42 @@ for path in $current_inputs; do
     replace_all "$case_root/$path" 'fedora-44' 'retired-fedora'
     replace_all "$case_root/$path" 'fedora:44' 'retired-fedora'
 done
-write_file "$case_root/docs/fedora-44-platform.md" "Fedora 44 is Helm's Fedora platform."
+write_file "$case_root/docs/fedora-44-platform.md" "Fedora 44 is Realm's Fedora platform."
 expect_fail_message unsupported-unlisted-f44-identity "$case_root" \
     'unsupported Fedora status requires no Fedora lane or current support claim'
 
-case_root=$(clone_case helm-river-rpm-alternative)
-replace_once "$case_root/packaging/fedora/helm.spec" 'Requires:       river >= 0.4.0' \
+case_root=$(clone_case realm-river-rpm-alternative)
+replace_once "$case_root/packaging/fedora/realm.spec" 'Requires:       river >= 0.4.0' \
     'Requires:       river >= 0.4.0
-Requires:       (river >= 0.4.0 or helm-river >= 0.4.0)'
-expect_fail_message helm-river-rpm-alternative "$case_root" \
+Requires:       (river >= 0.4.0 or realm-river >= 0.4.0)'
+expect_fail_message realm-river-rpm-alternative "$case_root" \
     'RPM must contain only the canonical active river dependency'
 
 # SPEC 0009 A3: the active dependency form is exactly the protocol floor; an
 # invented ceiling or another River dependency is not an equivalent projection.
 case_root=$(clone_case rpm-river-ceiling)
-replace_once "$case_root/packaging/fedora/helm.spec" 'Requires:       river >= 0.4.0' \
+replace_once "$case_root/packaging/fedora/realm.spec" 'Requires:       river >= 0.4.0' \
     'Requires:       river >= 0.4.0
 Requires:       river < 0.5.0'
 expect_fail_message rpm-river-ceiling "$case_root" \
     'RPM must contain only the canonical active river dependency'
 
 case_root=$(clone_case rpm-second-river-requirement)
-replace_once "$case_root/packaging/fedora/helm.spec" 'Requires:       river >= 0.4.0' \
+replace_once "$case_root/packaging/fedora/realm.spec" 'Requires:       river >= 0.4.0' \
     'Requires:       river >= 0.4.0
 Requires:       river >= 0.4.1'
 expect_fail_message rpm-second-river-requirement "$case_root" \
     'RPM must contain only the canonical active river dependency'
 
 case_root=$(clone_case rpm-river-classic-requirement)
-replace_once "$case_root/packaging/fedora/helm.spec" 'Requires:       river >= 0.4.0' \
+replace_once "$case_root/packaging/fedora/realm.spec" 'Requires:       river >= 0.4.0' \
     'Requires:       river >= 0.4.0
 Requires:       river-classic'
 expect_fail_message rpm-river-classic-requirement "$case_root" \
     'RPM must contain only the canonical active river dependency'
 
 case_root=$(clone_case universal-fedora-river-vendoring)
-append_line "$case_root/docs/ARCHITECTURE.md" 'Helm vendors River in every target package, including Fedora.'
+append_line "$case_root/docs/ARCHITECTURE.md" 'Realm vendors River in every target package, including Fedora.'
 expect_fail_message universal-fedora-river-vendoring "$case_root" 'universal River sourcing claim'
 
 # The platform table must distinguish intended delivery targets from the
@@ -558,7 +558,7 @@ write_file "$case_root/docs/fedora-runtime-overclaim.md" 'The Fedora 44 lane pro
 expect_fail_message false-fedora-runtime-evidence "$case_root" 'Fedora evidence exceeds build-only contract'
 
 case_root=$(clone_case missing-rpm-pre-alpha-boundary)
-replace_once "$case_root/packaging/fedora/helm.spec" \
+replace_once "$case_root/packaging/fedora/realm.spec" \
     'THIS PACKAGE IS PRE-ALPHA AND DOES NOT INSTALL A WORKING DESKTOP.' \
     'THIS PACKAGE INSTALLS A WORKING DESKTOP.'
 expect_fail_message missing-rpm-pre-alpha-boundary "$case_root" 'RPM must retain the pre-alpha no-working-desktop boundary'
@@ -570,7 +570,7 @@ expect_fail_message unlisted-historical-f41-line "$case_root" 'unreviewed histor
 # A support projection cannot escape review merely by being placed in a new
 # document outside the former hand-maintained current-input inventory.
 case_root=$(clone_case unlisted-current-support-document)
-write_file "$case_root/docs/fedora-support.md" 'Fedora 41 is a current Helm support target.'
+write_file "$case_root/docs/fedora-support.md" 'Fedora 41 is a current Realm support target.'
 expect_fail_message unlisted-current-support-document "$case_root" \
     'forbidden Fedora 41 current claim'
 

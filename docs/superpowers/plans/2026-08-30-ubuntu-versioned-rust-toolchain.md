@@ -45,7 +45,7 @@ and `.claude/memory/40-loop.md`.
 
 1. Capture the fresh, clean result against the preceding code commit using only
    the two SPEC 0008 record files.
-2. Run `helm-sdd gate --issue 104 --from probe --to spike`, record recovery,
+2. Run `realm-sdd gate --issue 104 --from probe --to spike`, record recovery,
    overhead, and limits as revisable operational memory, then commit the record
    separately and open the PR.
 

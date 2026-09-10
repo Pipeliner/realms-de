@@ -1,12 +1,12 @@
 name: Bug report
-description: Something helm does that it should not, or fails to do that it should
+description: Something realm does that it should not, or fails to do that it should
 title: "<component>: <what goes wrong>"
 labels: ["bug", "needs-triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        helm is **pre-alpha (M0)**. Most of it is not built yet — see
+        realm is **pre-alpha (M0)**. Most of it is not built yet — see
         [ROADMAP.md](https://github.com/Pipeliner/realms-de/blob/main/docs/ROADMAP.md)
         for what exists. A report against something that has not landed is not
         a bug; it is a milestone.
@@ -32,13 +32,13 @@ body:
   - type: dropdown
     id: component
     attributes:
-      label: Which part of helm
+      label: Which part of realm
       options:
-        - helm-core (ledger, layout, palette, keys, ipc)
-        - helm-theme / generated theme files
-        - helm-ctl
-        - helm-session
-        - helm-bar / which-key
+        - realm-core (ledger, layout, palette, keys, ipc)
+        - realm-theme / generated theme files
+        - realm-ctl
+        - realm-session
+        - realm-bar / which-key
         - hecate (launcher)
         - charon (yazi) / horus (btop) / thoth (shell)
         - session entry, systemd units, portals
@@ -51,8 +51,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: helm version
-      description: "`helm ctl --version` if you have it, otherwise the commit you built from (`git rev-parse --short HEAD`)."
+      label: realm version
+      description: "`realmctl --version` if you have it, otherwise the commit you built from (`git rev-parse --short HEAD`)."
       placeholder: "0.1.0 (a1b2c3d), or just a1b2c3d"
     validations:
       required: true
@@ -61,7 +61,7 @@ body:
     id: distro
     attributes:
       label: Distribution and version
-      description: And how helm was installed — flake, .deb, .rpm, or built from source.
+      description: And how realm was installed — flake, .deb, .rpm, or built from source.
       placeholder: "Fedora 44, built from source"
     validations:
       required: true
@@ -70,7 +70,7 @@ body:
     id: compositor
     attributes:
       label: Compositor and version
-      description: "`river --version`, or the compositor you are actually running under if it is not river. Include the package or source used; availability does not imply a tested Helm pairing."
+      description: "`river --version`, or the compositor you are actually running under if it is not river. Include the package or source used; availability does not imply a tested Realm pairing."
       placeholder: "river 0.4.8 (Fedora package)"
     validations:
       required: true
@@ -78,7 +78,7 @@ body:
   - type: dropdown
     id: doctor
     attributes:
-      label: Did `helm ctl doctor` pass?
+      label: Did `realmctl doctor` pass?
       description: If it did not, paste its output below — it usually names the problem outright.
       options:
         - "Yes — clean"
@@ -91,7 +91,7 @@ body:
   - type: textarea
     id: doctor-output
     attributes:
-      label: "`helm ctl doctor` output"
+      label: "`realmctl doctor` output"
       description: Paste it verbatim, even if it passed. Leave blank if the command does not exist yet.
       render: console
 
@@ -99,7 +99,7 @@ body:
     id: logs
     attributes:
       label: Logs
-      description: "`journalctl --user -u helm-session -b`, or whatever your session wrote. Trim to the relevant part."
+      description: "`journalctl --user -u realm-session -b`, or whatever your session wrote. Trim to the relevant part."
       render: console
 
   - type: input

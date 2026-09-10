@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (ratified 2026-08-28); theme-apply mechanism partially
   superseded by [ADR 0017](0017-immutable-theme-activation-generations.md)
-- **Deciders:** helm maintainers
+- **Deciders:** realm maintainers
 - **Supersedes / Superseded by:** ADR 0017 supersedes only the per-file
   replacement mechanism in the theme-apply budget row; the < 150 ms budget
   remains active and now includes sealed generation publication.
@@ -34,7 +34,7 @@ single pixel, so there is nothing to animate even in principle.
 
 **v1 has no animations, no transitions, no blur, no shadows and no rounded
 corners.** `Palette` enforces the last of these at parse time:
-`metrics.radius != 0` is a hard error with the message "helm has no rounded
+`metrics.radius != 0` is a hard error with the message "realm has no rounded
 corners".
 
 Every state change is instant: orbit switch, focus, swap, launcher open and
@@ -47,10 +47,10 @@ change that misses a budget is a regression, not a trade-off.
 | Path | Budget | How it is held | Gate |
 |---|---|---|---|
 | Key press to new geometry submitted | < 4 ms | The projection is pure integer arithmetic over a short list; no allocation on the hot path | *planned:* M2 benchmark |
-| State change to bar redraw | < 8 ms | Damage-tracked CPU rasterising (ADR 0008); `HelmState::renders_same_as` drops no-op frames | *planned:* M2 benchmark |
+| State change to bar redraw | < 8 ms | Damage-tracked CPU rasterising (ADR 0008); `RealmState::renders_same_as` drops no-op frames | *planned:* M2 benchmark |
 | Bar idle CPU | ~0% | Event-driven modules; the clock ticks to the next minute boundary and a shared 1 Hz sampler runs off the input path. Held-key repeat is a separately bounded active-input exception below | *planned:* M2 idle-frame count test |
 | Cold session start to usable | < 900 ms | No GPU context, no icon-cache scan, no thumbnailer | *planned:* M2 startup benchmark |
-| `helm ctl theme apply` | < 150 ms | Templates rendered serially and replaced atomically per file | *planned:* M1 benchmark |
+| `realmctl theme apply` | < 150 ms | Templates rendered serially and replaced atomically per file | *planned:* M1 benchmark |
 
 Benchmarks run on a fixed CI runner class so the numbers are comparable across
 commits. M6's acceptance criterion is holding the same budgets on a 2015-era
@@ -68,7 +68,7 @@ not a one-second redraw. Neither timer licenses polling by individual clients.
 [ADR 0013](0013-river-window-management-backend.md) found that
 `river_xkb_binding_v1` sends `stop_repeat`, which establishes that key repeat
 for bound keys is the **window manager's** job. If `mod+j` should repeat while
-held, `helm-session` repeats it; river does not. That is an active-input timer,
+held, `realm-session` repeats it; river does not. That is an active-input timer,
 not permission for background polling.
 
 It is scoped so that the idle claim survives intact:
@@ -104,7 +104,7 @@ taste judgement.
 
 | Option | Why it was attractive | Why it lost |
 |---|---|---|
-| **Ship subtle motion from the start** (a 100 ms crossfade on orbit switch) | Motion communicates causality: a fade tells the user *why* the screen changed, which is genuinely useful when six orbits look similar. It is also what every mainstream desktop does, and its absence reads as unfinished to some people | It costs the thing helm is for. In a keyboard-first desktop the orbit switch is a hundred-times-a-day operation, and 100 ms times a hundred is real. It also requires the compositor to hold two frames and interpolate, which conflicts with damage-tracked "only what changed is redrawn" |
+| **Ship subtle motion from the start** (a 100 ms crossfade on orbit switch) | Motion communicates causality: a fade tells the user *why* the screen changed, which is genuinely useful when six orbits look similar. It is also what every mainstream desktop does, and its absence reads as unfinished to some people | It costs the thing realm is for. In a keyboard-first desktop the orbit switch is a hundred-times-a-day operation, and 100 ms times a hundred is real. It also requires the compositor to hold two frames and interpolate, which conflicts with damage-tracked "only what changed is redrawn" |
 | **Make motion a setting from day one** | Users choose; nobody is forced | Doubles the tested surface at the point in the project where we have the least capacity to test it. Both paths need the budgets held, and the animated one needs a frame-pacing story we have not designed. Deferring it to M6 costs nothing, because motion added later is additive |
 | **Keep "snappy" as a review standard rather than a CI gate** | Benchmarks in CI are noisy, and a flaky performance gate is worse than no gate; reviewers can catch obvious regressions | Reviewers do not catch a 0.4 ms creep per commit, and that is how desktops become slow. The noise problem is real and is handled by generous absolute thresholds on a fixed runner class, not by abandoning the gate |
 | **Budget in frames rather than milliseconds** | Matches how compositors actually schedule; automatically adapts to a 144 Hz display | Only three of the five paths are frame-scheduled at all. Theme apply and cold start are not, and expressing them in frames would be a fiction |
@@ -118,7 +118,7 @@ taste judgement.
 - The design and the performance rules agree: no shadows and no rounded corners
   is both what the handoff asks for and what the rasteriser is good at.
 - Battery life and fan noise benefit from idle actually being idle.
-- helm is usable over a remote session and in a VM, where animation is the first
+- realm is usable over a remote session and in a VM, where animation is the first
   thing to fall apart.
 - No frame-pacing code, no interpolation state, no partially-animated states to
   reason about. The screen always shows a state the ledger contained.
@@ -134,12 +134,12 @@ taste judgement.
 - Performance gates cost CI time and will occasionally be flaky. Someone has to
   own the thresholds.
 - "No animations" is a positioning statement as much as a technical one, and it
-  will lose helm some users at first glance.
+  will lose realm some users at first glance.
 
 ### Neutral
 
 - Under [ADR 0013](0013-river-window-management-backend.md) this rule stops
-  depending on anyone else's configuration. helm is the window manager, so
+  depending on anyone else's configuration. realm is the window manager, so
   window positions come from `layout::project` on every render sequence and
   there is no compositor-side motion to disable. ADR 0002's niri backend needed
   a shipped config turning animations off, and that config was itself a thing
@@ -148,7 +148,7 @@ taste judgement.
 ## Reversal
 
 Low for the policy, cheap for the implementation. Adding opt-in opacity fades on
-overlays touches `helm-bar` and `helm-hecate` only, and the policy above already
+overlays touches `realm-bar` and `realm-hecate` only, and the policy above already
 specifies the constraints. Estimated a few days once the compositor is ours.
 
 Removing the budgets is a one-line CI change and would be a mistake; they are
@@ -171,4 +171,4 @@ active rune, a momentary orbit name in the bar — before reaching for motion.
   build on regression past its threshold.
 - *Planned (M2):* an integration assertion that a ledger mutation produces
   exactly one render sequence and one frame, with no intermediate geometry —
-  the structural form of "no animation" now that helm sets positions itself.
+  the structural form of "no animation" now that realm sets positions itself.

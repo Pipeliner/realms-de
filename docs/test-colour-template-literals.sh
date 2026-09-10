@@ -3,14 +3,14 @@ set -eu
 
 root=$(CDPATH='' cd "$(dirname "$0")/.." && pwd)
 checker=$root/scripts/check-colour-template-literals
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/helm-colour-template-test.XXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/realm-colour-template-test.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 fixture=$tmp/repo
 mkdir -p "$fixture"
 cp -R "$root/configs" "$fixture/configs"
-mkdir -p "$fixture/crates/helm-theme/src" "$fixture/.github/workflows"
-cp "$root/crates/helm-theme/src/template.rs" "$fixture/crates/helm-theme/src/template.rs"
+mkdir -p "$fixture/crates/realm-theme/src" "$fixture/.github/workflows"
+cp "$root/crates/realm-theme/src/template.rs" "$fixture/crates/realm-theme/src/template.rs"
 cp "$root/.github/workflows/palette.yml" "$fixture/.github/workflows/palette.yml"
 
 run=0
@@ -116,54 +116,54 @@ printf '\n[Other]\nvalue=unchanged\n' >>"$fixture/configs/templates/qt6ct-colors
 expect_fail qt-missing-required-key-after-section 'qt6ct-colors.conf' "$checker" --root "$fixture"
 cp "$root/configs/templates/qt6ct-colors.conf" "$fixture/configs/templates/qt6ct-colors.conf"
 
-sed -i '/^    ]$/i\        Template { source: include_str!("../../../configs/templates/gtk3.css") },' "$fixture/crates/helm-theme/src/template.rs"
+sed -i '/^    ]$/i\        Template { source: include_str!("../../../configs/templates/gtk3.css") },' "$fixture/crates/realm-theme/src/template.rs"
 expect_fail catalogue-duplicate-operand 'template.rs' "$checker" --root "$fixture"
-cp "$root/crates/helm-theme/src/template.rs" "$fixture/crates/helm-theme/src/template.rs"
+cp "$root/crates/realm-theme/src/template.rs" "$fixture/crates/realm-theme/src/template.rs"
 
-sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/helm-theme/src/template.rs"
+sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/realm-theme/src/template.rs"
 expect_fail catalogue-redirected-source 'template.rs' "$checker" --root "$fixture"
-cp "$root/crates/helm-theme/src/template.rs" "$fixture/crates/helm-theme/src/template.rs"
+cp "$root/crates/realm-theme/src/template.rs" "$fixture/crates/realm-theme/src/template.rs"
 
-sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/helm-theme/src/template.rs"
-sed -i '1i\/* pub fn templates() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }] } */' "$fixture/crates/helm-theme/src/template.rs"
+sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/realm-theme/src/template.rs"
+sed -i '1i\/* pub fn templates() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }] } */' "$fixture/crates/realm-theme/src/template.rs"
 expect_fail catalogue-comment-spoof 'template.rs' "$checker" --root "$fixture"
-cp "$root/crates/helm-theme/src/template.rs" "$fixture/crates/helm-theme/src/template.rs"
+cp "$root/crates/realm-theme/src/template.rs" "$fixture/crates/realm-theme/src/template.rs"
 
-sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/helm-theme/src/template.rs"
-sed -i '1i\const SPOOF: \&str = r#"" pub fn templates() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }] } ""#;' "$fixture/crates/helm-theme/src/template.rs"
+sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/realm-theme/src/template.rs"
+sed -i '1i\const SPOOF: \&str = r#"" pub fn templates() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }] } ""#;' "$fixture/crates/realm-theme/src/template.rs"
 expect_fail catalogue-raw-string-spoof 'template.rs' "$checker" --root "$fixture"
-cp "$root/crates/helm-theme/src/template.rs" "$fixture/crates/helm-theme/src/template.rs"
+cp "$root/crates/realm-theme/src/template.rs" "$fixture/crates/realm-theme/src/template.rs"
 
-sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/helm-theme/src/template.rs"
-sed -i '1i\const SPOOF: \&[u8\] = br#"" pub fn templates() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }] } ""#;' "$fixture/crates/helm-theme/src/template.rs"
+sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/realm-theme/src/template.rs"
+sed -i '1i\const SPOOF: \&[u8\] = br#"" pub fn templates() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }] } ""#;' "$fixture/crates/realm-theme/src/template.rs"
 expect_fail catalogue-raw-byte-string-spoof 'template.rs' "$checker" --root "$fixture"
-cp "$root/crates/helm-theme/src/template.rs" "$fixture/crates/helm-theme/src/template.rs"
+cp "$root/crates/realm-theme/src/template.rs" "$fixture/crates/realm-theme/src/template.rs"
 
-sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/helm-theme/src/template.rs"
-sed -i '1i\const SPOOF: \&core::ffi::CStr = cr#"" pub fn templates() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }] } ""#;' "$fixture/crates/helm-theme/src/template.rs"
+sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/realm-theme/src/template.rs"
+sed -i '1i\const SPOOF: \&core::ffi::CStr = cr#"" pub fn templates() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }] } ""#;' "$fixture/crates/realm-theme/src/template.rs"
 expect_fail catalogue-raw-c-string-spoof 'template.rs' "$checker" --root "$fixture"
-cp "$root/crates/helm-theme/src/template.rs" "$fixture/crates/helm-theme/src/template.rs"
+cp "$root/crates/realm-theme/src/template.rs" "$fixture/crates/realm-theme/src/template.rs"
 
-sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/helm-theme/src/template.rs"
-sed -i '1i\mod spoof { struct Template<T> { source: T } pub fn templates() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }]; } }' "$fixture/crates/helm-theme/src/template.rs"
+sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/realm-theme/src/template.rs"
+sed -i '1i\mod spoof { struct Template<T> { source: T } pub fn templates() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }]; } }' "$fixture/crates/realm-theme/src/template.rs"
 expect_fail catalogue-nested-function-spoof 'template.rs' "$checker" --root "$fixture"
-cp "$root/crates/helm-theme/src/template.rs" "$fixture/crates/helm-theme/src/template.rs"
+cp "$root/crates/realm-theme/src/template.rs" "$fixture/crates/realm-theme/src/template.rs"
 
-sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/helm-theme/src/template.rs"
-sed -i '1i\#[cfg(any())] pub fn templates() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }]; }' "$fixture/crates/helm-theme/src/template.rs"
+sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/realm-theme/src/template.rs"
+sed -i '1i\#[cfg(any())] pub fn templates() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }]; }' "$fixture/crates/realm-theme/src/template.rs"
 expect_fail catalogue-cfg-disabled-top-level-spoof 'template.rs' "$checker" --root "$fixture"
-cp "$root/crates/helm-theme/src/template.rs" "$fixture/crates/helm-theme/src/template.rs"
+cp "$root/crates/realm-theme/src/template.rs" "$fixture/crates/realm-theme/src/template.rs"
 
-sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/helm-theme/src/template.rs"
-sed -i 's/^pub fn templates()/fn templates_impl()/' "$fixture/crates/helm-theme/src/template.rs"
-sed -i '1i\pub fn templates() -> Vec<Template> { #[cfg(any())] fn decoy() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }]; } templates_impl() }' "$fixture/crates/helm-theme/src/template.rs"
+sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/realm-theme/src/template.rs"
+sed -i 's/^pub fn templates()/fn templates_impl()/' "$fixture/crates/realm-theme/src/template.rs"
+sed -i '1i\pub fn templates() -> Vec<Template> { #[cfg(any())] fn decoy() { vec![Template { source: include_str!("../../../configs/templates/gtk3.css") }, Template { source: include_str!("../../../configs/templates/gtk4.css") }, Template { source: include_str!("../../../configs/templates/foot.ini") }, Template { source: include_str!("../../../configs/templates/yazi-theme.toml") }, Template { source: include_str!("../../../configs/templates/btop.theme") }, Template { source: include_str!("../../../configs/templates/starship.toml") }, Template { source: include_str!("../../../configs/templates/fuzzel.ini") }, Template { source: include_str!("../../../configs/templates/qt6ct-colors.conf") }]; } templates_impl() }' "$fixture/crates/realm-theme/src/template.rs"
 expect_fail catalogue-disabled-inner-decoy-spoof 'template.rs' "$checker" --root "$fixture"
-cp "$root/crates/helm-theme/src/template.rs" "$fixture/crates/helm-theme/src/template.rs"
+cp "$root/crates/realm-theme/src/template.rs" "$fixture/crates/realm-theme/src/template.rs"
 
-sed -i 's/::core::include_str!/include_str!/g' "$fixture/crates/helm-theme/src/template.rs"
-sed -i '1i\macro_rules! include_str { ($path:literal) => { ::core::include_str!("../../../configs/templates/gtk4.css") }; }' "$fixture/crates/helm-theme/src/template.rs"
+sed -i 's/::core::include_str!/include_str!/g' "$fixture/crates/realm-theme/src/template.rs"
+sed -i '1i\macro_rules! include_str { ($path:literal) => { ::core::include_str!("../../../configs/templates/gtk4.css") }; }' "$fixture/crates/realm-theme/src/template.rs"
 expect_fail catalogue-shadowed-include-str 'template.rs' "$checker" --root "$fixture"
-cp "$root/crates/helm-theme/src/template.rs" "$fixture/crates/helm-theme/src/template.rs"
+cp "$root/crates/realm-theme/src/template.rs" "$fixture/crates/realm-theme/src/template.rs"
 
 mkdir -p "$fixture/configs/templates/extra"
 printf 'x = "#abcdef"\n' >"$fixture/configs/templates/extra/unclassified.conf"

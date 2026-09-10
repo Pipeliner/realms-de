@@ -54,8 +54,8 @@ require_section "$rules_section" 'docs/adr/0005-palette-toml-single-source.md' \
     'README must link ADR 0005'
 require_section "$rules_section" 'docs/adr/0009-no-animation-budget.md' \
     'README must link ADR 0009'
-require_section "$rules_section" 'helm is the *window manager* for river' \
-    "README must state that helm is river's window manager"
+require_section "$rules_section" 'realm is the *window manager* for river' \
+    "README must state that realm is river's window manager"
 require_section "$status_section" 'Milestone M0 is in progress' \
     'README status must state that M0 is in progress'
 require_section "$status_section" '**M3 is the MVP.**' \
@@ -74,27 +74,27 @@ fi
 
 for path in \
     flake.nix \
-    crates/helm-theme/Cargo.toml \
-    crates/helm-theme/src/lib.rs \
-    crates/helm-theme/src/theme.rs \
-    packaging/session/helm.desktop \
-    packaging/session/helm-session \
-    packaging/systemd/helm-session.target \
-    configs/portal/helm-portals.conf \
+    crates/realm-theme/Cargo.toml \
+    crates/realm-theme/src/lib.rs \
+    crates/realm-theme/src/theme.rs \
+    packaging/session/realm.desktop \
+    packaging/session/realm-session \
+    packaging/systemd/realm-session.target \
+    configs/portal/realm-portals.conf \
     packaging/nix/nixos-module.nix \
     packaging/debian/control \
-    packaging/fedora/helm.spec; do
+    packaging/fedora/realm.spec; do
     [ -e "$root/$path" ] || fail "README truth snapshot artifact is missing: $path"
 done
 
-grep -F -q -e '#[test]' "$root/crates/helm-theme/src/theme.rs" \
-    || fail 'README truth snapshot helm-theme must retain test evidence'
+grep -F -q -e '#[test]' "$root/crates/realm-theme/src/theme.rs" \
+    || fail 'README truth snapshot realm-theme must retain test evidence'
 
-if [ -e "$root/crates/helm-session/Cargo.toml" ] || [ -e "$root/crates/helm-bar/Cargo.toml" ]; then
-    fail 'README must not say helm-wm is absent after its implementation crate lands'
+if [ -e "$root/crates/realm-session/Cargo.toml" ] || [ -e "$root/crates/realm-bar/Cargo.toml" ]; then
+    fail 'README must not say realm-wm is absent after its implementation crate lands'
 fi
-if find "$root/crates" -type f -path '*/src/bin/helm-wm.rs' -print -quit | grep -q .; then
-    fail 'README must not say helm-wm is absent after its binary lands'
+if find "$root/crates" -type f -path '*/src/bin/realm-wm.rs' -print -quit | grep -q .; then
+    fail 'README must not say realm-wm is absent after its binary lands'
 fi
 
 while IFS='|' read -r path map_name; do
@@ -124,8 +124,8 @@ fi
 if printf '%s\n' "$status_section" | grep -F -q -e 'There is nothing to install: no session entry'; then
     fail 'README must not deny the tracked session entry'
 fi
-require_section "$status_section" 'helm-theme' \
-    'README status must identify the implemented helm-theme library'
+require_section "$status_section" 'realm-theme' \
+    'README status must identify the implemented realm-theme library'
 require_section "$status_section" 'Tracked pre-alpha contract' \
     'README status must identify tracked pre-alpha delivery assets'
 require_section "$map_section" 'root Nix reference-build entry point' \
@@ -151,7 +151,7 @@ while IFS='|' read -r issue title; do
         || fail 'needs-human snapshot blocker is empty'
 done <<'EOF'
 168|Reconcile generation GC with transferred lifecycle leases and M1/M2 launch sequencing
-166|Specify JSON schemas for helmctl theme lint and diff
+166|Specify JSON schemas for realmctl theme lint and diff
 135|Complete exact M1 activation assets and supported-consumer probes
 134|Decide supported M1 package sources and catalog migration for Yazi and Starship
 133|Specify truthful desktop-entry and D-Bus activation for themed Qt launches
@@ -160,7 +160,7 @@ done <<'EOF'
 30|Template: starship prompt for thoth, with the 𓂃 sigil and its ASCII fallback
 25|Template: GTK 3, GTK 4 and libadwaita stylesheets
 24|Extend the "no colour outside palette.toml" CI guard to templates and generated outputs
-23|Add `helmctl theme apply`, `lint` and `diff`
+23|Add `realmctl theme apply`, `lint` and `diff`
 17|Configure branch protection on the default branch with the CI checks as required
 16|Enable Dependabot alerts and version updates, and create the labels its config references
 EOF

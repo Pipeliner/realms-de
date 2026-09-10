@@ -12,20 +12,20 @@
 
 ## 1. `WmBackend` — the compositor seam (ADR 0002, 0003)
 
-The whole point of this trait is that `helm-session` never learns which
+The whole point of this trait is that `realm-session` never learns which
 compositor it is talking to. `RiverBackend` implements it in phase 1 by *being*
 river's window manager; `NativeBackend` implements it in-process against
-`helm-compositor` in M5. Nothing above this line changes when we swap them.
+`realm-compositor` in M5. Nothing above this line changes when we swap them.
 
 ```rust
-/// A window manager helm can drive.
+/// A window manager realm can drive.
 ///
-/// Implementations translate helm's ledger operations into whatever the
+/// Implementations translate realm's ledger operations into whatever the
 /// underlying compositor understands, and translate the compositor's events
 /// back into ledger deltas. They own no policy: the ledger decides what should
 /// happen, the backend only makes it so.
 pub trait WmBackend: Send {
-    /// Human-readable name, shown by `helm ctl doctor`.
+    /// Human-readable name, shown by `realmctl doctor`.
     fn name(&self) -> &str;
 
     /// Connect, and report what the backend can actually honour.
@@ -50,22 +50,22 @@ pub trait WmBackend: Send {
     fn next_event(&mut self, deadline: Option<Instant>) -> Result<Option<BackendEvent>>;
 }
 
-/// What a backend can and cannot do, so helm degrades honestly rather than
-/// pretending. `helm ctl doctor` prints this.
+/// What a backend can and cannot do, so realm degrades honestly rather than
+/// pretending. `realmctl doctor` prints this.
 pub struct Capabilities {
     /// True when the *rendered* rectangle is exactly the projected one.
     ///
     /// Not "can we ask for arbitrary rects" — we always can. This asks whether
     /// what lands on screen matches, which `propose_dimensions` alone cannot
     /// promise because clients may quantise. True at `river_window_v1` >= 3,
-    /// where `set_content_clip_box` lets helm clip to the exact tile; false
+    /// where `set_content_clip_box` lets realm clip to the exact tile; false
     /// below it, with `"unclipped-dimension-quantisation"` in `unsupported`.
     pub exact_geometry: bool,
     pub server_side_borders: bool,
     pub hide_show: bool,          // is stow expressible?
     pub explicit_ordering: bool,  // can we set stacking order directly?
     pub fullscreen: bool,
-    pub unsupported: Vec<&'static str>, // named helm behaviours this backend cannot honour
+    pub unsupported: Vec<&'static str>, // named realm behaviours this backend cannot honour
 }
 
 /// Something the compositor did that the ledger needs to know about.
@@ -75,32 +75,32 @@ pub enum BackendEvent {
     TitleChanged { win: WinId, title: String },
     FocusChanged(Option<WinId>),
     WorkareaChanged(Workarea),
-    /// The compositor moved a window itself. helm treats this as advisory: the
+    /// The compositor moved a window itself. realm treats this as advisory: the
     /// ledger remains the truth and the next projection will overrule it.
     GeometryDrifted { win: WinId, rect: Rect },
     Disconnected,
 }
 ```
 
-### Why river fits: helm *is* the window manager
+### Why river fits: realm *is* the window manager
 
 river 0.4 removed window-management policy from the compositor entirely and
-defers it to an external process over `river-window-management-v1`. helm is that
+defers it to an external process over `river-window-management-v1`. realm is that
 process. The protocol's vocabulary is close enough to the ledger's that the
 backend is a translation rather than an approximation:
 
-| helm concept | river request | Fidelity |
+| realm concept | river request | Fidelity |
 |---|---|---|
 | Placement rectangle | `river_node_v1::set_position` + `river_window_v1::propose_dimensions` | **Approximate** — see the quantisation note below |
-| Ledger order | *helm's own*, expressed through the positions it computes | Exact, because helm owns it outright |
+| Ledger order | *realm's own*, expressed through the positions it computes | Exact, because realm owns it outright |
 | Stacking (mono occlusion, overlays) | `river_node_v1::place_top` / `place_bottom` / `place_above` / `place_below` | Exact |
 | Stow | `river_window_v1::hide` / `show` — *rendering* state, so the window stays managed and stays in the ledger | Exact, and a closer match to `Orbit::stowed` than we expected |
-| Focus | `river_seat_v1::focus_window` / `clear_focus` | Exact. Note `focus_exclusive` / `focus_non_exclusive` / `focus_none` are **events**, not requests: helm is told about exclusive focus, it does not grant it |
+| Focus | `river_seat_v1::focus_window` / `clear_focus` | Exact. Note `focus_exclusive` / `focus_non_exclusive` / `focus_none` are **events**, not requests: realm is told about exclusive focus, it does not grant it |
 | 1px seams | `set_borders`, drawn by the compositor | Exact |
 | Fullscreen | `fullscreen` / `exit_fullscreen` | Exact. Whether the bar draws over a fullscreen window is decided by the bar's chosen *layer*, not by node ordering: `river-layer-shell-v1` exposes no node and no ordering request at all |
-| Window identity | `river_window_v1` `identifier` (up to 32 printable ASCII bytes) | **Requires a mapping.** `WinId` is a `u64`, so helm-session holds a bijection and allocates ids from a monotonic counter keyed on river's identifier. The never-reused property survives, but via helm's counter rather than river's string |
+| Window identity | `river_window_v1` `identifier` (up to 32 printable ASCII bytes) | **Requires a mapping.** `WinId` is a `u64`, so realm-session holds a bijection and allocates ids from a monotonic counter keyed on river's identifier. The never-reused property survives, but via realm's counter rather than river's string |
 | Workarea | `river_layer_shell_output_v1::non_exclusive_area` | Exact — arrives as an event. It is a free rectangle in global coordinates, *not* the `Workarea::new(w, h, top, bottom)` shape, so the backend converts |
-| Atomic relayout | the `manage` **and** `render` sequences, in that order | Exact, but it is **two** phases and helm must respect the boundary — see below |
+| Atomic relayout | the `manage` **and** `render` sequences, in that order | Exact, but it is **two** phases and realm must respect the boundary — see below |
 
 **A placement spans both phases.** `propose_dimensions` is window-management
 state; `set_position` is *rendering* state. So a single `apply()` is not one
@@ -110,7 +110,7 @@ positions go after `render_start`.
 The reason is a **data dependency**, not a prohibition. `propose_dimensions` is
 manage-only; the resulting `dimensions` events arrive before `render_start`; and
 a position cannot be finalised until then, because a window may not take the
-size it was offered — the same quantisation problem flagged above. So helm keeps
+size it was offered — the same quantisation problem flagged above. So realm keeps
 positions in the render phase because that is where it first knows enough to
 compute them.
 
@@ -119,11 +119,11 @@ manage phase raises `error::sequence_order`. The XML does not support that: the
 `river_window_manager_v1` description permits rendering state to be modified
 during *either* sequence and errors only outside both, and `set_position`'s own
 text defers to that description by explicit cross-reference. The protocol is
-arguably self-contradictory here; helm's behaviour is correct under either
+arguably self-contradictory here; realm's behaviour is correct under either
 reading, which is why the conclusion survived the correction.)
 
 `place_*` orders the **render list**, not the ledger. The ledger is *layout*
-order, which helm computes itself and expresses as positions; the `place_*`
+order, which realm computes itself and expresses as positions; the `place_*`
 requests exist for mono's occlusion stack and for overlay surfaces. Faithful
 either way, but not for the reason a first reading suggests.
 
@@ -134,21 +134,21 @@ size being the named case. A terminal that rounds 700×580 down to 696×576 puts
 `every_layout_tiles_exactly_for_every_plausible_size` would still pass while the
 screen showed cracks — the test checks the projection, not what the client did
 with it. river offers `set_content_clip_box`, which clips content to a rect and
-draws borders around the intersection, so helm can propose at or above the tile
+draws borders around the intersection, so realm can propose at or above the tile
 and clip to the exact rectangle. That is the plan; it is an M2 experiment with
 its own guard, not a solved problem.
 
-### What helm must implement, not merely call
+### What realm must implement, not merely call
 
 Under river, a window manager is not only a client of the WM protocol. river's
 `protocol/` directory holds **six** protocols, and five of them are obligations
-helm must serve. The first is load-bearing and the last two are the difference
+realm must serve. The first is load-bearing and the last two are the difference
 between a desktop and a demo on a laptop:
 
-| Protocol | What helm owes it | Consequence if unimplemented |
+| Protocol | What realm owes it | Consequence if unimplemented |
 |---|---|---|
 | `river-layer-shell-v1` | Serve layer-shell on river's behalf | **The bar does not appear at all.** `wlr-layer-shell` works under river only if the window manager implements it |
-| `river-xkb-bindings-v1` | The entire keymap, **and key repeat for bound keys** | No keybinding works. `ensure_next_key_eaten` and `ate_unbound_key` (on `river_xkb_bindings_seat_v1`, reached via `get_seat`) are purpose-built for chorded submaps, which is exactly helm's chord model. `stop_repeat` establishes that repeat for bound keys is the window manager's job, so helm owns a second timer — armed only between `pressed` and `released`, which is the justification ADR 0009's no-timers rule requires |
+| `river-xkb-bindings-v1` | The entire keymap, **and key repeat for bound keys** | No keybinding works. `ensure_next_key_eaten` and `ate_unbound_key` (on `river_xkb_bindings_seat_v1`, reached via `get_seat`) are purpose-built for chorded submaps, which is exactly realm's chord model. `stop_repeat` establishes that repeat for bound keys is the window manager's job, so realm owns a second timer — armed only between `pressed` and `released`, which is the justification ADR 0009's no-timers rule requires |
 | `river-input-management-v1` | Seats, repeat rate, pointer config | No input configuration |
 | `river-xkb-config-v1` | Keymap selection (`set_layout_by_name`), the `layout` event, caps and num lock | Layouts are frozen at whatever `XKB_DEFAULT_LAYOUT` was when river started, with no way to switch |
 | `river-libinput-config-v1` | Tap-to-click, drag, natural scroll, accel profile and speed, click and scroll method, calibration | **A laptop has no tap-to-click and no way to get one.** Under river 0.4 there is no input config file — the window manager *is* the input configuration |
@@ -161,12 +161,12 @@ Two consequences worth stating plainly, because they cut both ways:
 1. **`apply()` maps onto one `manage` sequence.** river applies window-management
    state atomically between `manage_start` and `manage_finish`, which is exactly
    the guarantee the projection wants: a relayout is never observed half-done.
-2. **`helm-session` is now on the compositor's input path, with a hard liveness
+2. **`realm-session` is now on the compositor's input path, with a hard liveness
    requirement.** Under niri, a crashed session daemon left a working if
    unmanaged desktop. Under river it leaves windows unplaced and keys dead, and
    the protocol has an `unresponsive` error: `modifiers_update` warns that the
    compositor's input buffering is finite. **A stall is a session failure, not a
-   slow frame.** Nothing in `helm-session` may block — not a theme apply, not a
+   slow frame.** Nothing in `realm-session` may block — not a theme apply, not a
    socket write to a wedged subscriber. This promotes the frame budgets in
    ARCHITECTURE §4 from performance goals to correctness requirements. See
    ADR 0013.
@@ -177,7 +177,7 @@ On stability: `river-window-management-v1` is **declared stable** as of river
 document called it registry-classified unstable. That was wrong: the
 work-in-progress language came from a tracking issue that predates the release.)
 The residual risk is not a protocol classification but trust in a single
-maintainer of a pre-1.0 project, which is a different and smaller thing. helm
+maintainer of a pre-1.0 project, which is a different and smaller thing. realm
 pins a tested river and treats a protocol bump as a tracked event.
 
 ADR 0002 records the superseded plan to ship on niri, and the mapping table that
@@ -185,14 +185,14 @@ argued us out of it — worth reading before anyone proposes going back.
 
 ---
 
-## 2. Theme generation contract — `helm-theme` (ADR 0005, ADR 0017)
+## 2. Theme generation contract — `realm-theme` (ADR 0005, ADR 0017)
 
 One captured input set in, one sealed immutable generation selected for future
 launches. [SPEC 0011](specs/0011-theme-activation-generations.md) supersedes the
 former mutable target and reload interface for the supported path.
 
 ```rust
-/// A file helm generates from the palette.
+/// A file realm generates from the palette.
 pub struct Template {
     /// Stable id, e.g. "gtk4", "foot", "yazi".
     pub id: &'static str,
@@ -213,8 +213,8 @@ pub enum Reload {
     Signal { process: &'static str, signal: i32 },
     /// Catalogue records a possible command for that future protocol.
     Command(Vec<String>),
-    /// Catalogue identifies Helm-owned clients; apply sends no notification.
-    HelmClients,
+    /// Catalogue identifies Realm-owned clients; apply sends no notification.
+    RealmClients,
 }
 
 /// Publication result returned directly by the supported apply boundary.
@@ -276,14 +276,14 @@ silently blank colour is exactly the bug this whole design exists to prevent.
 
 ---
 
-## 3. Bar render contract — `helm-bar` (ADR 0008, 0009)
+## 3. Bar render contract — `realm-bar` (ADR 0008, 0009)
 
-The bar is a pure function of `HelmState` plus the palette. It owns no state
+The bar is a pure function of `RealmState` plus the palette. It owns no state
 beyond its Wayland surface.
 
 ```rust
 /// Draw one frame. Called only when the state or the palette changed.
-fn render(state: &HelmState, palette: &Palette, probe: &Probe, canvas: &mut Pixmap) -> Damage;
+fn render(state: &RealmState, palette: &Palette, probe: &Probe, canvas: &mut Pixmap) -> Damage;
 
 /// The region that actually changed, so the compositor is handed a damage
 /// rectangle rather than a whole-surface repaint.
@@ -293,16 +293,16 @@ pub struct Damage(Option<Rect>);
 Rules, enforced by review and by the budgets in ARCHITECTURE.md §4:
 
 1. **The bar owns no timer at all.** Every value it draws arrives in
-   `HelmState`. Four of the mockup's modules — cpu, mem, gpu temperature and the
+   `RealmState`. Four of the mockup's modules — cpu, mem, gpu temperature and the
    `↑ 18k ↓ 1.2M` throughput half of net — are *rates over counters*, and the
    kernel exposes no event for those; no bar on any platform gets them without
-   sampling. So the sampling lives in **one shared sampler in `helm-session`**,
+   sampling. So the sampling lives in **one shared sampler in `realm-session`**,
    off the window-management event loop, and is the single documented exception
    to ADR 0009's no-timers rule. The bar stays a pure function of state, which
    is the property that actually mattered.
    The clock ticks to the next **minute** boundary, not every second: the design
    shows `14:32`, so 59 of every 60 wakeups would redraw nothing.
-2. **No redraw when nothing changed.** `HelmState::renders_same_as` gates the
+2. **No redraw when nothing changed.** `RealmState::renders_same_as` gates the
    frame before any drawing happens.
 3. **Every glyph goes through `Probe::resolve`.** Drawing a raw `char` from the
    inventory bypasses the fallback contract and is how tofu ships.
@@ -313,7 +313,7 @@ Rules, enforced by review and by the budgets in ARCHITECTURE.md §4:
 ## 4. Control socket — client side (ADR 0004)
 
 ```rust
-/// A connection to helm-session.
+/// A connection to realm-session.
 impl Client {
     /// Resolve the fixed XDG runtime endpoint and complete the mandatory version
     /// handshake. Refuses a missing runtime directory or mismatch rather than
@@ -326,8 +326,8 @@ impl Client {
 }
 ```
 
-The wire types (`Request`, `Response`, `Event`, `HelmState`) already exist in
-`helm-core::ipc` and `helm-core::state` and are the normative definition; this
+The wire types (`Request`, `Response`, `Event`, `RealmState`) already exist in
+`realm-core::ipc` and `realm-core::state` and are the normative definition; this
 is only the ergonomic wrapper.
 
 ---
@@ -336,7 +336,7 @@ is only the ergonomic wrapper.
 
 Accepted [SPEC 0012](specs/0012-activation-launch-lifecycle.md) keeps lifecycle
 selection, ownership evidence, lease transfer/release, durable state
-transitions, and execution-gate authority private to `helm-theme`'s lifecycle
+transitions, and execution-gate authority private to `realm-theme`'s lifecycle
 owner.  No `GenerationSelection` lifecycle-transfer method, lease reference, or
 caller-constructed `LifecycleOwner` is a public interface.  The planned
 fresh-Exec desktop-launch boundary is the consuming high-level facade constrained by
@@ -356,4 +356,4 @@ their concrete Rust types are not external compatibility interfaces.
   failure ADR 0001 exists to prevent.
 - **The layout projection.** Same reason: layouts are an enum with a pure
   function, not a plugin surface. A layout that cannot be expressed as
-  `fn(&Ledger, Workarea) -> Vec<Placement>` is a layout helm does not want.
+  `fn(&Ledger, Workarea) -> Vec<Placement>` is a layout realm does not want.

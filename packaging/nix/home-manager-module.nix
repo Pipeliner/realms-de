@@ -1,7 +1,7 @@
-# programs.helm — the home-manager module.
+# programs.realm — the home-manager module.
 #
 # User-level half of the desktop: the palette, the generated configs for the
-# tools helm reuses, and the user units. The system half (session entry,
+# tools realm reuses, and the user units. The system half (session entry,
 # portals, fonts) is packaging/nix/nixos-module.nix.
 { self, support }:
 {
@@ -11,7 +11,7 @@
   ...
 }:
 let
-  cfg = config.programs.helm;
+  cfg = config.programs.realm;
 
   shipped = name: self + "/configs/${name}";
 
@@ -22,23 +22,23 @@ let
     lib.optionalAttrs (builtins.pathExists (shipped name)) { ${target}.source = shipped name; };
 in
 {
-  options.programs.helm = {
-    enable = lib.mkEnableOption "helm user configuration";
+  options.programs.realm = {
+    enable = lib.mkEnableOption "realm user configuration";
 
     package = lib.mkOption {
       type = lib.types.package;
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
-      defaultText = lib.literalExpression "helm.packages.\${system}.default";
-      description = "The helm package whose units and wrapper this user runs.";
+      defaultText = lib.literalExpression "realm.packages.\${system}.default";
+      description = "The realm package whose units and wrapper this user runs.";
     };
 
     paletteFile = lib.mkOption {
       type = lib.types.path;
-      default = "${cfg.package}/share/helm/palette.toml";
-      defaultText = lib.literalExpression "\${cfg.package}/share/helm/palette.toml";
+      default = "${cfg.package}/share/realm/palette.toml";
+      defaultText = lib.literalExpression "\${cfg.package}/share/realm/palette.toml";
       description = ''
-        This user's palette, linked to ~/.config/helm/palette.toml.
-        `helm ctl theme apply` (M1) renders every themed file from it.
+        This user's palette, linked to ~/.config/realm/palette.toml.
+        `realmctl theme apply` (M1) renders every themed file from it.
       '';
     };
 
@@ -46,7 +46,7 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Run helm-bar as a user unit under helm-session.target. The unit is
+        Run realm-bar as a user unit under realm-session.target. The unit is
         installed either way; this only controls whether the session target
         wants it.
       '';
@@ -58,16 +58,16 @@ in
 
     xdg.configFile =
       {
-        "helm/palette.toml".source = cfg.paletteFile;
+        "realm/palette.toml".source = cfg.paletteFile;
         # A user-level portal policy overrides the system one, and on
         # nix-on-non-NixOS it may be the only one that exists (SPEC 0005 §5).
-        "xdg-desktop-portal/helm-portals.conf".source =
-          "${cfg.package}/share/xdg-desktop-portal/helm-portals.conf";
+        "xdg-desktop-portal/realm-portals.conf".source =
+          "${cfg.package}/share/xdg-desktop-portal/realm-portals.conf";
       }
-      # M1 replaces these static links with helm-theme's generated output; the
+      # M1 replaces these static links with realm-theme's generated output; the
       # destination paths do not change.
       // linkIfPresent "yazi" "yazi"
-      // linkIfPresent "btop/themes/helm.theme" "btop/helm.theme"
+      // linkIfPresent "btop/themes/realm.theme" "btop/realm.theme"
       // linkIfPresent "starship.toml" "starship/starship.toml"
       // linkIfPresent "foot/foot.ini" "foot/foot.ini"
       // linkIfPresent "fuzzel/fuzzel.ini" "fuzzel/fuzzel.ini";
@@ -75,29 +75,29 @@ in
     # These mirror packaging/systemd/*. home-manager writes its own copies into
     # ~/.config/systemd/user, which take precedence over the package's units —
     # keep the two in step.
-    systemd.user.targets.helm-session = {
+    systemd.user.targets.realm-session = {
       Unit = {
-        Description = "helm desktop session";
+        Description = "realm desktop session";
         BindsTo = [ "graphical-session.target" ];
         Wants = [ "graphical-session-pre.target" ];
         After = [ "graphical-session-pre.target" ];
       };
     };
 
-    systemd.user.services.helm-wm = {
+    systemd.user.services.realm-wm = {
       Unit = {
-        Description = "helm window manager and session daemon";
+        Description = "realm window manager and session daemon";
         PartOf = [ "graphical-session.target" ];
         After = [ "graphical-session.target" ];
         ConditionEnvironment = "WAYLAND_DISPLAY";
         StartLimitIntervalSec = 30;
         StartLimitBurst = 5;
-        OnFailure = [ "helm-session-abort.service" ];
+        OnFailure = [ "realm-session-abort.service" ];
       };
       Service = {
         # PRE-ALPHA: this binary does not exist yet (M2). The unit is here so
         # the session shape is complete and testable.
-        ExecStart = "${cfg.package}/bin/helm-wm";
+        ExecStart = "${cfg.package}/bin/realm-wm";
         # always, not on-failure: under river 0.4 this process *is* the window
         # manager, and quit goes through river's exit_session rather than
         # through this exiting — so a clean exit is not a normal path and must
@@ -110,36 +110,36 @@ in
         Slice = "session.slice";
         TimeoutStopSec = 10;
       };
-      Install.WantedBy = [ "helm-session.target" ];
+      Install.WantedBy = [ "realm-session.target" ];
     };
 
     # The abort path: fires once the window manager has exhausted its restart
     # limit, and signals the session entry to return the user to the display
     # manager rather than leaving them on an inert compositor (SPEC 0005 §2).
-    systemd.user.services.helm-session-abort = {
-      Unit.Description = "helm session abort (window manager did not attach)";
+    systemd.user.services.realm-session-abort = {
+      Unit.Description = "realm session abort (window manager did not attach)";
       Service = {
         Type = "oneshot";
-        ExecStart = "${cfg.package}/bin/helm-session --abort";
+        ExecStart = "${cfg.package}/bin/realm-session --abort";
       };
     };
 
-    systemd.user.services.helm-bar = {
+    systemd.user.services.realm-bar = {
       Unit = {
-        Description = "helm bar";
+        Description = "realm bar";
         PartOf = [ "graphical-session.target" ];
         After = [
           "graphical-session.target"
-          "helm-wm.service"
+          "realm-wm.service"
         ];
-        Wants = [ "helm-wm.service" ];
+        Wants = [ "realm-wm.service" ];
         ConditionEnvironment = "WAYLAND_DISPLAY";
         StartLimitIntervalSec = 30;
         StartLimitBurst = 5;
       };
       Service = {
-        # PRE-ALPHA: lands in M2, like helm-wm above.
-        ExecStart = "${cfg.package}/bin/helm-bar";
+        # PRE-ALPHA: lands in M2, like realm-wm above.
+        ExecStart = "${cfg.package}/bin/realm-bar";
         # A crashed bar restarts itself and never takes the session with it
         # (docs/PITFALLS.md). app.slice, not session.slice: under memory
         # pressure the restartable thing should be reaped before the window
@@ -149,7 +149,7 @@ in
         Slice = "app.slice";
         TimeoutStopSec = 5;
       };
-      Install.WantedBy = lib.optionals cfg.startBar [ "helm-session.target" ];
+      Install.WantedBy = lib.optionals cfg.startBar [ "realm-session.target" ];
     };
   };
 }

@@ -1,13 +1,13 @@
-# helm — canonical palette. Single source of truth for every themed surface.
+# realm — canonical palette. Single source of truth for every themed surface.
 #
-# `helm ctl theme apply` reads this file, renders every template in
+# `realmctl theme apply` reads this file, renders every template in
 # `configs/templates/`, and hot-reloads live clients. Nothing downstream may
 # hardcode a colour: if a value is missing here, add it here.
 #
-# Hue discipline: keep saturated accents >25 deg apart. `helm ctl theme lint`
+# Hue discipline: keep saturated accents >25 deg apart. `realmctl theme lint`
 # enforces this, plus WCAG contrast floors for text-on-background pairs.
 
-name = "helm-void"
+name = "realm-void"
 variant = "dark"
 
 # Contrast is a *derivation* setting, not a filter. Values in [0.85, 1.40];
@@ -68,7 +68,7 @@ charon = "violet"
 
 [typography]
 family = "IBM Plex Mono"
-# Fallbacks are tried in order. helm-core::glyphs::probe() verifies every
+# Fallbacks are tried in order. realm-core::glyphs::probe() verifies every
 # glyph the DE renders is covered before the bar draws a single frame.
 fallback = [
     "IBM Plex Mono",
