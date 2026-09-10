@@ -85,10 +85,11 @@ counts.
 
 | Crate | Kind | Owns | Lands in |
 |---|---|---|---|
-| `realm-core` | lib | Ledger, layout projection, palette, keymap, IPC types, glyph inventory | **M0 — done** |
+| `realm-core` | lib | Ledger, layout projection, palette, keymap, portable IPC wire values/codec/version, glyph inventory; no path or socket operations | **M0 — done** |
 | `realm-theme` | lib | `palette.toml` → normalized outputs in one sealed immutable generation. Serial rendering, validation, future-launch pointer publication, and read-only generation diff; no pointer-switch reload | M1 |
-| `realm-ctl` | bin (`realmctl`) | `realmctl theme/orbit/ledger/doctor/run`. The scriptable surface | M1–M2 |
-| `realm-session` | bin (`realm-wm`) | Holds `RealmState`, drives a `WmBackend`, serves the control socket, launches clients. Under river it *is* the window manager, hence the binary name | M2 |
+| `realm-control` | Linux-only lib | Shared retained endpoint capabilities; later #41 client/server socket transport. Fails non-Linux compilation explicitly | M2 |
+| `realm-ctl` | bin (`realmctl`) | `realmctl theme/orbit/ledger/doctor/run`. The scriptable surface; uses `realm-control`, never `realm-session` | M1–M2 |
+| `realm-session` | bin (`realm-wm`) | Holds `RealmState`, drives a `WmBackend`, serves the control socket through `realm-control`, launches clients. Under river it *is* the window manager, hence the binary name | M2 |
 | `realm-bar` | bin | Layer-shell bar, which-key strip, mode badge, chord echo | M2 |
 | `realm-hecate` | bin | Layer-shell fuzzy launcher (`nucleo`) | M4 |
 | `realm-odin` | bin | `ratatui` agent-harness TUI | M4 |

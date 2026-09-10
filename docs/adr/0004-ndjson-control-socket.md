@@ -43,10 +43,30 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
   production resolver; it must not accept an arbitrary socket pathname. This
   seam exists solely to make isolated integration fixtures possible without
   mutating process environment.
+- The planned Linux-only `realm-control` workspace library owns the shared
+  server/client endpoint capabilities and later transport. `realm-core::ipc`
+  retains only portable wire values and codec/version work; `realm-ctl` does
+  not depend on `realm-session`. Non-Linux `realm-control` builds fail
+  explicitly.
 - Endpoint identity, descriptor-relative resolution, ownership/mode policy,
-  stale reclaim predicate, and post-bind verification are defined completely
-  by SPEC 0007. In particular, only verified `ECONNREFUSED` authorizes reclaim;
-  a timeout, permission failure, or overloaded peer never authorizes unlink.
+  stale reclaim predicate, and the bind/activate capability transition are
+  defined completely by SPEC 0007. Linux has no `bindat` or `connectat`, so the
+  shared crate binds and connects through a private generated
+  `/proc/self/fd/<realm-dir-fd>/ctl.sock` bridge after capability validation;
+  inaccessible procfs fails closed with no display-path fallback.
+- Before inspecting an existing socket, a server holds an exclusive
+  nonblocking `flock` on a private, independent
+  `O_DIRECTORY | O_CLOEXEC` description of the validated realm directory.
+  `FD_CLOEXEC` is verified and the fd is never exposed, so an exec-launched
+  client cannot inherit ownership. This protects the bound-but-not-listening
+  recovery window, where connect refusal alone cannot distinguish a live owner
+  from a stale socket. After bind, pathname ownership is proved from no-follow
+  pathname metadata plus `getsockname` and `SO_ACCEPTCONN`, not by comparing
+  the pathname inode with the distinct sockfs inode returned for the socket fd.
+  Only verified `ECONNREFUSED` under the singleton lock authorizes a stale
+  candidate; timeout, success, permission failure, overload, and every other
+  result preserve the entry. Listening is a consuming one-shot operation after
+  session recovery reaches `Live`, and readiness follows verified activation.
 - Before reading any frame, the listener obtains Linux `SO_PEERCRED`. It admits
   only peers whose uid equals the daemon's effective uid. A missing credential,
   credential lookup failure, or different uid closes that connection without a
@@ -132,11 +152,11 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 
 ## Reversal
 
-Low. The wire format is confined to `realm-core::ipc` plus one transport module
-per client. Adding a D-Bus surface *alongside* the socket, rather than instead
-of it, is the likely path and would be additive: a D-Bus object that proxies the
-same `Request`/`Response` types. Estimated a week for the proxy, no changes to
-existing clients.
+Low. The wire format is confined to `realm-core::ipc`; Linux endpoint and
+transport mechanics are confined to shared `realm-control`. Adding a D-Bus
+surface *alongside* the socket, rather than instead of it, is the likely path
+and would be additive: a D-Bus object that proxies the same `Request`/`Response`
+types. Estimated a week for the proxy, no changes to existing clients.
 
 The signal to reconsider is a concrete integration request from outside realm —
 someone wanting to drive orbits from an existing panel or a global hotkey daemon
@@ -149,13 +169,11 @@ someone wanting to drive orbits from an existing panel or a global hotkey daemon
 - `ipc::tests::responses_round_trip`.
 - `ipc::tests::unknown_frames_are_an_error_not_a_panic` — an unrecognised
   command or malformed input must be a decode error.
-- *Required before M2 implementation:* `ipc::tests::socket_path_requires_xdg_runtime_dir`,
-  `ipc::tests::test_runtime_dir_resolver_preserves_the_fixed_descendant`, and
-  `ipc::tests::production_path_ignores_realm_socket`.
+- *Required before M2 implementation:* SPEC 0007 A1–A12's `realm_control`
+  endpoint capability, singleton ownership, stale-probe, activation, cleanup,
+  client-retry, compile-fail, and readiness tests.
 - *Required before M2 implementation:* `control_socket::tests::rejects_foreign_uid_before_read`,
-  `control_socket::tests::rejects_missing_peer_credentials_before_read`,
-  `control_socket::tests::path_resolution_is_descriptor_relative`, and
-  `control_socket::tests::stale_same_uid_socket_is_reclaimed_only_after_verified_refusal`.
+  and `control_socket::tests::rejects_missing_peer_credentials_before_read`.
 - *Planned (M2):* a CI job that drives a live session end to end with `socat`
   and `jq` only, so the scriptability claim is tested rather than asserted.
 - *Required before M2 implementation:* `control_socket::tests::protocol_state_machine_is_total`,

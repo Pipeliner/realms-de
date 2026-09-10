@@ -1,6 +1,7 @@
 # SPEC 0006 — realmctl
 
-- **Status:** Accepted (2026-08-26; generation contract reconciled by #159) —
+- **Status:** Accepted (2026-08-26; generation contract reconciled by #159;
+  endpoint capability correction 2026-09-10) —
   `theme apply`, `theme lint`, and `theme diff` implemented; remaining command
   surface not yet implemented
 - **Milestone:** M3, with `theme` and the argument surface in M1 and
@@ -73,7 +74,7 @@ realmctl --version
 
 The control endpoint is always the fixed descendant resolved by SPEC 0007;
 `realmctl` has no `--socket` or `REALM_SOCKET` override. Isolated tests use its
-non-production runtime-directory resolver, never an arbitrary socket path.
+non-production `RuntimeDirResolver`, never an arbitrary socket path.
 `--palette` overrides the palette search order (`$XDG_CONFIG_HOME/realm/palette.toml`,
 then the shipped `palette.toml`). Both exist so that tests and the NixOS VM can
 point at a fixture without an environment dance. `--portal-roundtrip` is
@@ -91,11 +92,24 @@ a real `FileChooser.OpenFile` call, which opens a dialog, so it is opt-in.
 | `run ARGV…` | `Spawn(argv)` | `Ok` \| `Error` |
 | `doctor` | `Hello`, then `GetHealth` (new); skipped entirely when no session is running | `Hello`, `Health` (new) |
 
-Every socket-backed command opens the socket and completes the `Hello`
-handshake first, as [INTERFACES.md §4](../INTERFACES.md) requires:
-`Client::connect()` refuses on a version mismatch rather than guessing at field
-meanings. `theme apply`, `theme lint`, `theme diff`, and `doctor` do not require
-the socket at all (§4).
+For each ordinary invocation that needs a live session, `realmctl` calls its
+selected `RuntimeDirResolver` exactly once. If resolution succeeds, it consumes
+that one `RuntimeDir` to derive one `ClientEndpoint` and retains that endpoint
+across SPEC 0007's bounded connect schedule. Every attempt calls
+`ClientEndpoint::connect(&self)`; the endpoint reopens and validates `realm`
+relative to its retained runtime fd without rereading `XDG_RUNTIME_DIR`. The
+successful call completes `Hello` before returning `Client`; version mismatch
+and every non-retryable error fail immediately rather than guessing at field
+meanings. Only `ENOENT` and `ECONNREFUSED` advance the unchanged 10, 20, 40, 80,
+and 160 ms bounded retry schedule in SPEC 0007.
+
+`theme apply`, `theme lint`, and `theme diff` remain session-independent: they
+do not call a runtime resolver, derive a `ClientEndpoint`, or open the control
+socket. `doctor` does not require a successful socket connection. Its optional
+session-health connection uses the same single resolver/capability rule, but an
+unresolvable, absent, or still-refused endpoint becomes the existing no-session
+diagnostic path in §4; `doctor` continues the checks that can run and never
+turns that outcome into exit 3.
 
 `run` is fire-and-forget by construction. `Response::Ok` means the session
 accepted the argv, not that the program started — `execve` fails after the fork
@@ -440,13 +454,13 @@ Each row is one happy path and becomes one test.
 | B4 | Given a session with windows in orbits 1 and 3, when `orbit list` runs, then it prints six rows carrying rune, name, window count and layout, with orbit 1 marked active | |
 | B5 | Given a running session, when `orbit switch 3` runs, then it sends `Request::SwitchOrbit(3)`, prints the new orbit and exits 0 | |
 | B6 | Given a session whose backend has disconnected, when `orbit switch 2` runs and the session answers `Error { kind: backend-refused }`, then the CLI prints the session's message and exits 5 | |
-| B7 | Given no listener at SPEC 0007's fixed endpoint after its bounded retry, when `orbit switch 2` runs, then it exits 3, names the path it tried, and suggests how to start a session | |
+| B7 | Given no listener at SPEC 0007's fixed endpoint and an `XDG_RUNTIME_DIR` change after the first refused attempt, when `orbit switch 2` runs, then exactly one `RuntimeDir` is resolved, one `ClientEndpoint` is reused for every unchanged bounded attempt through `ClientEndpoint::connect`, and exhaustion exits 3, names the original capability's display path, and suggests how to start a session | |
 | B8 | Given a session answering `Hello` with a different `version`, when any command runs, then the CLI refuses before sending anything else, prints both versions and exits 4 | |
 | B9 | Given a session with three windows in orbit 1, when `ledger show 1 --json` runs, then stdout is exactly one object that deserialises as `Response::Ledger` with the windows in ledger order and the focused one marked | |
 | B10 | Given a running session, when `run foot -e yazi` runs, then it sends `Request::Spawn(["foot","-e","yazi"])`, exits 0 without waiting, and reports the argv as accepted rather than launched | |
 | B11 | Given a healthy session, when `doctor` runs, then every check reports `ok` or `warn`, the header names the tool, protocol, distribution, kernel and compositor versions, and it exits 0 | |
 | B12 | Given `WAYLAND_DISPLAY` absent from the D-Bus activation environment, when `doctor` runs, then `env/wayland-display/dbus` fails within its 2 s deadline, prints the 25-second-hang symptom and the `dbus-update-activation-environment` remedy, and the command exits 1 | |
-| B13 | Given no session running and a font stack that covers ASCII only, when `doctor` runs, then the session checks are `skip` with a banner, `fonts/glyphs` warns with `Probe::summary()`'s wording, and it exits 0 | |
+| B13 | Given no session running and a font stack that covers ASCII only, when `doctor` runs, then its optional session probe resolves at most one `RuntimeDir` and reuses one `ClientEndpoint`, the session checks are `skip` with a banner, `fonts/glyphs` warns with `Probe::summary()`'s wording, and it exits 0 rather than 3 | |
 | B14 | Given no session bus and no session running, when `doctor` runs, then the D-Bus and portal checks are `skip` and not `fail`, and it exits 0 | |
 | B15 | Given `theme apply` returns `Committed(generation)`, when the CLI reports it, then it exits 0 and reports exactly that generation as selected for future launches | `theme_cli::apply_reports_selected_future_generation_without_reload_or_session` |
 | B16 | Given `theme apply` returns `CommittedWithCleanupPending { generation, cause }`, when the CLI reports it, then it exits 0, reports exactly that generation as selected for future launches, and emits the safely escaped committed-cleanup warning | `realmctl::tests::cleanup_pending_reports_selected_generation_with_escaped_warning` |

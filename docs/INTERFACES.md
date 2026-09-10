@@ -364,25 +364,110 @@ Rules, enforced by review and by the budgets in ARCHITECTURE.md §4:
 
 ---
 
-## 4. Control socket — client side (ADR 0004)
+## 4. Control endpoint and client — `realm-control` (ADR 0004)
 
 ```rust
-/// A connection to realm-session.
+/// Validated Linux path capabilities. Their fields and owned descriptors are
+/// private; accessors return display paths or borrows only.
+pub struct RuntimeDir(/* absolute display path, retained fd, daemon euid */);
+pub struct RealmDir(/* retained descriptor; exposes a borrowed fd */);
+pub struct SocketEndpoint(/* exact ctl.sock display path + RealmDir */);
+pub struct BoundControlEndpoint(/* non-listening fd + lock + path identity */);
+pub struct ActiveControlListener(/* listening fd + lock + path identity */);
+pub struct ClientEndpoint(/* retained RuntimeDir for retry */);
+pub struct Client(/* connected transport wrapper added by #41 */);
+
+pub enum IpcPathError {
+    MissingRuntimeDir,
+    UnsafeRuntimeDir,
+    UnsafeRealmDirectory,
+    UnsafeSocketEntry,
+    EndpointInUse,
+    Io(std::io::Error),
+}
+
+pub trait RuntimeDirResolver {
+    fn resolve(&self) -> Result<RuntimeDir, IpcPathError>;
+}
+
+pub fn production_runtime_dir() -> Result<RuntimeDir, IpcPathError>;
+pub fn test_runtime_dir(path: &Path) -> Result<RuntimeDir, IpcPathError>;
+
+impl RuntimeDir {
+    pub fn path(&self) -> &Path;
+    pub fn prepare_server_endpoint(self) -> Result<SocketEndpoint, IpcPathError>;
+    pub fn client_endpoint(self) -> ClientEndpoint;
+}
+
+impl RealmDir {
+    /// Used later for descriptor-relative ledger.json work.
+    pub fn as_fd(&self) -> BorrowedFd<'_>;
+}
+
+impl SocketEndpoint {
+    pub fn path(&self) -> &Path;
+    pub fn realm_dir(&self) -> &RealmDir;
+    pub fn bind(self) -> Result<BoundControlEndpoint, IpcPathError>;
+}
+
+impl BoundControlEndpoint {
+    pub fn endpoint(&self) -> &SocketEndpoint;
+    pub fn realm_dir(&self) -> &RealmDir;
+    pub fn activate(self) -> Result<ActiveControlListener, IpcPathError>;
+}
+
+impl ActiveControlListener {
+    pub fn endpoint(&self) -> &SocketEndpoint;
+    pub fn realm_dir(&self) -> &RealmDir;
+}
+
+impl AsFd for ActiveControlListener { /* poll/accept only */ }
+
+/// A connection to realm-session, added with the #41 transport slice.
 impl Client {
-    /// Resolve the fixed XDG runtime endpoint and complete the mandatory version
-    /// handshake. Refuses a missing runtime directory or mismatch rather than
-    /// guessing at field meanings.
-    pub fn connect() -> Result<Client>;
     pub fn request(&mut self, req: Request) -> Result<Response>;
     /// Subscribe after a successful Hello; yields an immediate state snapshot
     /// and every later change until dropped. No further request is valid.
     pub fn subscribe(self) -> Result<impl Iterator<Item = Result<Event>>>;
 }
+
+impl ClientEndpoint {
+    /// Reopen and validate realm relative to the retained runtime capability,
+    /// connect through a generated procfd bridge, and complete Hello.
+    pub fn connect(&self) -> Result<Client>;
+}
 ```
 
+`realm-control` is a new Linux-only shared workspace library; non-Linux
+compilation fails explicitly. `realm-core` remains portable and owns only wire
+values plus encode/decode/version. `BoundControlEndpoint` is not `Clone` and
+intentionally has no `AsFd`; `activate(self)` is the only public path to
+`listen(..., 64)`. It verifies `SO_ACCEPTCONN` before returning the not-`Clone`
+active wrapper. That wrapper alone implements `AsFd` for the session poll set.
+Both wrappers retain a separately opened singleton-lock description and the
+no-follow pathname identity used for ownership-safe Drop cleanup. That private
+lock fd is opened independently with
+`O_RDONLY | O_DIRECTORY | O_CLOEXEC` (or an exact equivalent), is checked for
+`FD_CLOEXEC`, and is never returned by an accessor or `AsFd`; the active
+wrapper's `AsFd` exposes only its listener. An exec-launched client therefore
+cannot retain singleton ownership after the daemon exits.
+
+Linux has no `bindat` or `connectat`. Bind, stale-probe connect, and
+shared-client connect use only an internally generated
+`/proc/self/fd/<realm-dir-fd>/ctl.sock` address; missing procfs fails closed.
+The canonical address and a worst-case procfd address, including terminating
+NULs, are checked against `sockaddr_un` and procfs accessibility is proved
+before server-side filesystem mutation. The canonical public path is a
+display/external-client path, not a shared-crate resolution route.
+`ClientEndpoint` retains the validated runtime capability and reopens `realm`
+relative to it on every retry; it never rereads `XDG_RUNTIME_DIR` or creates the
+directory. SPEC 0007 is the complete construction, singleton ownership, stale
+reclaim, transition, and cleanup contract.
+
 The wire types (`Request`, `Response`, `Event`, `RealmState`) already exist in
-`realm-core::ipc` and `realm-core::state` and are the normative definition; this
-is only the ergonomic wrapper.
+`realm-core::ipc` and `realm-core::state` and remain normative. The `Client`
+declaration and methods above describe the later ergonomic #41 transport
+wrapper, not a claim that the endpoint slice implements it.
 
 ---
 
