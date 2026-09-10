@@ -666,10 +666,16 @@ Recovery is an explicit three-phase state machine:
    snapshot. `WindowOpened` records are accumulated in backend report order;
    the first occurrence fixes order and the latest metadata wins. A
    snapshotted identity reserves its recorded `WinId`; a new identity consumes
-   nothing yet. Window/workarea lifecycle observations update only the replay
+   nothing yet. Window-open/workarea observations update only the replay
    accumulator. Realm emits no visible state, assigns no identity, applies no
    projection, accepts no desired mutation, and produces no persistence record
-   in this phase.
+   in this phase. The River adapter coalesces raw child events and emits
+   `WindowOpened` only for complete identities that are still live at its first
+   `ManageStart`. Therefore Session accepts only `WindowOpened`,
+   `WorkareaChanged`, `Disconnected`, and the one `InitialReplayComplete`
+   barrier before finalization; `TitleChanged`, `WindowClosed`, focus, exclusive
+   focus, or geometry drift before the barrier is a backend protocol error and
+   is never deferred.
 2. **`FinalizingReplay`.** The backend emits the explicit
    `BackendEvent::InitialReplayComplete` barrier exactly once per backend
    incarnation; a second barrier is a protocol failure. Realm stages the whole
@@ -696,6 +702,16 @@ immediate retry for the next event-loop turn. `has_pending_backend_work()` is
 the mechanical read gate: while true, the loop must call
 `retry_pending_backend_work()` and must not call `next_event`. Retry success
 resumes the interrupted phase and restores one retry allowance for later work.
+While this gate is set, every desired ledger operation and close request is
+rejected as unavailable without a backend call, and non-fallible which-key or
+module updates are unchanged without publication. The only publication query
+allowed during pending work is the §6 authoritative `Live` persistence
+snapshot; `FinalizingReplay` still exposes none.
+A library-level event injection while work is pending must be rejected without
+changing phase or authoritative state. The library test proves that rejection
+and exposes the read-gate predicate; proof that the outer loop does not invoke
+`WmBackend::next_event` while the predicate is true belongs to the event-loop
+binary slice and remains required before that binary is accepted.
 A second failure of the same pending work is a restartable fatal session error;
 it is not retried indefinitely. `Disconnected` and `Unavailable` are
 immediately fatal because that backend incarnation is gone; `Unsupported`
@@ -894,9 +910,9 @@ Each row is one happy path and becomes one test.
 | A27 | Given a stable session, when `toggle_whichkey()` runs, then `whichkey` and the revision change once with no backend apply; only a later observed `WorkareaChanged` may re-project windows | `session::tests::whichkey_toggle_only_emits_state_until_workarea_is_observed` |
 | A28 | Given a staged mutating socket request, when its backend transaction has not completed, then no ordinary reply is queued and the connection reads no second request; backend success commits and queues `Response::Ok`, while backend failure rejects the candidate and queues `Response::Error`, without blocking the event loop or writing before `manage_finish` | Socket adapter coverage belongs to #41 |
 | A29 | Given absent, wrong-version, malformed, semantically invalid, and valid `SessionSnapshotV1` records, when they are classified, then absence and invalid content start fresh without partial state, valid content is accepted, and a non-`NotFound` read error is fatal | `session::tests::snapshot_validation_is_closed_and_total`; file-error coverage belongs to the event-loop binary slice |
-| A30 | Given a valid snapshot and an initial replay, when restored and new identities arrive before `InitialReplayComplete`, then each is assigned exactly once, no projection/state/snapshot is produced early, and the event order deterministically fixes new ids | `session::tests::initial_replay_is_silent_and_rebinds_each_identity_once` |
+| A30 | Given a valid snapshot and an initial replay, when restored, duplicate, and new identities arrive before `InitialReplayComplete`, then the first occurrence retains report order, latest metadata wins, each identity is assigned exactly once after the barrier, no projection/state/snapshot is produced early, and event order deterministically fixes new ids. Any non-replay event forbidden by §6 is a protocol error rather than deferred work | `session::tests::initial_replay_is_silent_and_rebinds_each_identity_once`, `session::tests::pre_barrier_non_replay_events_are_protocol_errors` |
 | A31 | Given snapshotted identities that do not all reappear plus new identities, when `InitialReplayComplete` arrives, then missing windows are removed before new windows are summoned in report order, undo is empty, one forced complete projection succeeds, and exactly one revision-1 state is published before entering `Live` | `session::tests::replay_barrier_reconciles_then_publishes_once` |
-| A32 | Given assignment or projection fails once, when pending backend work exists, then no backend event is read and exactly one next-turn retry can complete the interrupted phase; if that retry fails, the session reports a restartable fatal error | `session::tests::backend_work_gets_one_retry_and_gates_event_reads` |
+| A32 | Given assignment or projection fails once, when pending backend work exists, then the library rejects an injected backend event and every desired/control publication path without a state transition or backend call, still exposes an authoritative Live persistence snapshot, exposes the read gate, and exactly one next-turn retry can complete the interrupted phase; if that retry fails, the session reports a restartable fatal error. The event-loop binary must separately prove that it does not call `next_event` while the gate is set | `session::tests::backend_work_gets_one_retry_and_gates_event_reads`, `session::tests::pending_backend_work_gates_actions_and_publication`; outer-loop read-call coverage belongs to the event-loop binary slice |
 | A33 | Given `InitialReplay`, `FinalizingReplay`, a live failed desired candidate, and a live observed change awaiting projection repair, when persistence is requested, then only the two live cases produce a snapshot and both contain authoritative state rather than a replay accumulator or rejected candidate | `session::tests::persistence_exposes_only_authoritative_live_state` |
 | A34 | Given `next_win_id == u64::MAX` and an unknown identity buffered during replay, when the replay barrier stages reconciliation, then it is refused as exhausted without assigning `WinId(u64::MAX)`, changing the ledger, or publishing state | `session::tests::exhausted_watermark_never_allocates_the_sentinel` |
 

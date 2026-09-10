@@ -5,11 +5,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use realm_core::ipc::Capabilities;
 use realm_core::ipc::PROTOCOL_VERSION;
 use realm_core::layout::{project, Layout, Placement, TriptychParams, Workarea};
-use realm_core::ledger::Dir;
-use realm_core::ledger::ORBIT_COUNT;
+use realm_core::ledger::{Dir, Orbit, ORBIT_COUNT};
 use realm_core::state::{Module, OrbitCell, OrbitDisplay, RealmState};
 use realm_core::{Ledger, OrbitId, WinId};
 use serde::de::{Error as _, MapAccess, Visitor};
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::backend::{BackendError, BackendEvent, BackendResult, BackendWindowId, WmBackend};
@@ -74,8 +74,163 @@ impl<'de> Deserialize<'de> for SnapshotBinding {
     }
 }
 
+#[derive(Serialize)]
+struct SnapshotOrbitWire {
+    id: OrbitId,
+    windows: Vec<WinId>,
+    focus: Option<usize>,
+    stowed: Vec<WinId>,
+    layout: Layout,
+    fullscreen: Option<WinId>,
+    name: String,
+}
+
+impl<'de> Deserialize<'de> for SnapshotOrbitWire {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct OrbitVisitor;
+
+        impl<'de> Visitor<'de> for OrbitVisitor {
+            type Value = SnapshotOrbitWire;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an orbit with its seven fields in canonical order")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                require_field(&mut map, "id", 1)?;
+                let id = map.next_value()?;
+                require_field(&mut map, "windows", 2)?;
+                let windows = map.next_value()?;
+                require_field(&mut map, "focus", 3)?;
+                let focus = map.next_value()?;
+                require_field(&mut map, "stowed", 4)?;
+                let stowed = map.next_value()?;
+                require_field(&mut map, "layout", 5)?;
+                let layout = map.next_value()?;
+                require_field(&mut map, "fullscreen", 6)?;
+                let fullscreen = map.next_value()?;
+                require_field(&mut map, "name", 7)?;
+                let name = map.next_value()?;
+                reject_extra_field(&mut map, "orbit")?;
+                Ok(SnapshotOrbitWire {
+                    id,
+                    windows,
+                    focus,
+                    stowed,
+                    layout,
+                    fullscreen,
+                    name,
+                })
+            }
+        }
+
+        deserializer.deserialize_map(OrbitVisitor)
+    }
+}
+
+impl From<&Orbit> for SnapshotOrbitWire {
+    fn from(orbit: &Orbit) -> Self {
+        Self {
+            id: orbit.id,
+            windows: orbit.windows.clone(),
+            focus: orbit.focus,
+            stowed: orbit.stowed.clone(),
+            layout: orbit.layout,
+            fullscreen: orbit.fullscreen,
+            name: orbit.name.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SnapshotLedgerWire {
+    orbits: Vec<SnapshotOrbitWire>,
+    active: OrbitId,
+}
+
+impl SnapshotLedgerWire {
+    fn into_ledger(self) -> Result<Ledger, serde_json::Error> {
+        serde_json::from_value(serde_json::to_value(self)?)
+    }
+}
+
+impl From<&Ledger> for SnapshotLedgerWire {
+    fn from(ledger: &Ledger) -> Self {
+        Self {
+            orbits: ledger.orbits().iter().map(Into::into).collect(),
+            active: ledger.active(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SnapshotLedgerWire {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct LedgerVisitor;
+
+        impl<'de> Visitor<'de> for LedgerVisitor {
+            type Value = SnapshotLedgerWire;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a ledger with fields orbits, active in canonical order")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                require_field(&mut map, "orbits", 1)?;
+                let orbits = map.next_value()?;
+                require_field(&mut map, "active", 2)?;
+                let active = map.next_value()?;
+                reject_extra_field(&mut map, "ledger")?;
+                Ok(SnapshotLedgerWire { orbits, active })
+            }
+        }
+
+        deserializer.deserialize_map(LedgerVisitor)
+    }
+}
+
+fn require_field<'de, A>(
+    map: &mut A,
+    expected: &'static str,
+    ordinal: usize,
+) -> Result<(), A::Error>
+where
+    A: MapAccess<'de>,
+{
+    match map.next_key::<String>()? {
+        Some(key) if key == expected => Ok(()),
+        Some(_) => Err(A::Error::custom(format_args!(
+            "{expected} must be field {ordinal}"
+        ))),
+        None => Err(A::Error::missing_field(expected)),
+    }
+}
+
+fn reject_extra_field<'de, A>(map: &mut A, record: &'static str) -> Result<(), A::Error>
+where
+    A: MapAccess<'de>,
+{
+    if map.next_key::<String>()?.is_some() {
+        return Err(A::Error::custom(format_args!(
+            "{record} has an extra field"
+        )));
+    }
+    Ok(())
+}
+
 /// Closed, versioned persistence record for one authoritative live session.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SessionSnapshotV1 {
     schema_version: u32,
     protocol_version: u32,
@@ -83,6 +238,22 @@ pub struct SessionSnapshotV1 {
     bindings: Vec<SnapshotBinding>,
     next_win_id: u64,
     active_orbit: OrbitId,
+}
+
+impl Serialize for SessionSnapshotV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut record = serializer.serialize_struct("SessionSnapshotV1", 6)?;
+        record.serialize_field("schema_version", &self.schema_version)?;
+        record.serialize_field("protocol_version", &self.protocol_version)?;
+        record.serialize_field("ledger", &SnapshotLedgerWire::from(&self.ledger))?;
+        record.serialize_field("bindings", &self.bindings)?;
+        record.serialize_field("next_win_id", &self.next_win_id)?;
+        record.serialize_field("active_orbit", &self.active_orbit)?;
+        record.end()
+    }
 }
 
 impl<'de> Deserialize<'de> for SessionSnapshotV1 {
@@ -128,7 +299,10 @@ impl<'de> Deserialize<'de> for SessionSnapshotV1 {
                     Some(_) => return Err(A::Error::custom("ledger must be the third field")),
                     None => return Err(A::Error::missing_field("ledger")),
                 }
-                let ledger = map.next_value()?;
+                let ledger = map
+                    .next_value::<SnapshotLedgerWire>()?
+                    .into_ledger()
+                    .map_err(A::Error::custom)?;
                 match map.next_key::<String>()? {
                     Some(key) if key == "bindings" => {}
                     Some(_) => return Err(A::Error::custom("bindings must be the fourth field")),
@@ -261,11 +435,11 @@ impl SessionSnapshotV1 {
                 None if !orbit.windows.is_empty() => {
                     return Err(SessionSnapshotError::Invalid("occupied orbit has no focus"));
                 }
-                Some(focus) if focus >= orbit.windows.len() => {
-                    return Err(SessionSnapshotError::Invalid("orbit focus is out of range"));
-                }
                 Some(_) if orbit.windows.is_empty() => {
                     return Err(SessionSnapshotError::Invalid("empty orbit has a focus"));
+                }
+                Some(focus) if focus >= orbit.windows.len() => {
+                    return Err(SessionSnapshotError::Invalid("orbit focus is out of range"));
                 }
                 _ => {}
             }
@@ -298,6 +472,11 @@ impl SessionSnapshotV1 {
         let mut backend_ids = BTreeSet::new();
         let mut previous = None;
         for binding in &self.bindings {
+            if !bound_windows.insert(binding.win_id) || !backend_ids.insert(&binding.backend_id) {
+                return Err(SessionSnapshotError::Invalid(
+                    "bindings must be a one-to-one mapping",
+                ));
+            }
             if previous.is_some_and(|win| win >= binding.win_id) {
                 return Err(SessionSnapshotError::Invalid(
                     "bindings must be strictly sorted by window id",
@@ -311,11 +490,6 @@ impl SessionSnapshotV1 {
             {
                 return Err(SessionSnapshotError::Invalid(
                     "backend identity must be 1-32 printable ASCII bytes",
-                ));
-            }
-            if !bound_windows.insert(binding.win_id) || !backend_ids.insert(&binding.backend_id) {
-                return Err(SessionSnapshotError::Invalid(
-                    "bindings must be a one-to-one mapping",
                 ));
             }
         }
@@ -401,6 +575,9 @@ pub enum SessionEventError {
     /// The backend emitted its one-shot replay barrier more than once.
     #[error("initial replay completion barrier was repeated")]
     RepeatedInitialReplayComplete,
+    /// The backend emitted an event that cannot exist before replay completes.
+    #[error("unexpected event during initial replay: {0:?}")]
+    UnexpectedInitialReplayEvent(BackendEvent),
 }
 
 /// The compositor-independent owner of Realm's ledger and visible state.
@@ -573,9 +750,9 @@ impl<B: WmBackend> Session<B> {
 
     /// Ask the focused window to close without changing authoritative state.
     pub fn request_close_focused(&mut self) -> BackendResult<Option<WinId>> {
-        if self.phase != RecoveryPhase::Live {
+        if self.phase != RecoveryPhase::Live || self.pending_backend_work {
             return Err(BackendError::Unavailable {
-                message: "session recovery is not complete".to_owned(),
+                message: "session is not ready for close requests".to_owned(),
             });
         }
         let Some(win) = self.ledger.focused() else {
@@ -587,7 +764,7 @@ impl<B: WmBackend> Session<B> {
 
     /// Toggle the visible which-key strip without applying a projection.
     pub fn toggle_whichkey(&mut self) -> SessionUpdate {
-        if self.phase != RecoveryPhase::Live {
+        if self.phase != RecoveryPhase::Live || self.pending_backend_work {
             return SessionUpdate::unchanged();
         }
         let mut changed = self.state.clone();
@@ -605,9 +782,9 @@ impl<B: WmBackend> Session<B> {
         &mut self,
         update: impl FnOnce(&mut Ledger),
     ) -> BackendResult<SessionUpdate> {
-        if self.phase != RecoveryPhase::Live {
+        if self.phase != RecoveryPhase::Live || self.pending_backend_work {
             return Err(BackendError::Unavailable {
-                message: "session recovery is not complete".to_owned(),
+                message: "session is not ready for desired operations".to_owned(),
             });
         }
         let mut candidate = self.ledger.clone();
@@ -691,7 +868,9 @@ impl<B: WmBackend> Session<B> {
             | BackendEvent::ExclusiveFocusChanged(_)
             | BackendEvent::GeometryDrifted { .. }
             | BackendEvent::TitleChanged { .. }
-            | BackendEvent::WindowClosed(_)) => Ok(SessionUpdate::deferred(event)),
+            | BackendEvent::WindowClosed(_)) => {
+                Err(SessionEventError::UnexpectedInitialReplayEvent(event))
+            }
         }
     }
 
@@ -750,7 +929,7 @@ impl<B: WmBackend> Session<B> {
 
     /// Replace bar-module values without issuing a compositor request.
     pub fn update_modules(&mut self, modules: Vec<Module>) -> SessionUpdate {
-        if self.phase != RecoveryPhase::Live {
+        if self.phase != RecoveryPhase::Live || self.pending_backend_work {
             return SessionUpdate::unchanged();
         }
         if self.state.modules == modules {
@@ -1038,7 +1217,10 @@ mod tests {
 
     use crate::backend::{BackendError, BackendEvent, BackendResult, BackendWindowId, WmBackend};
 
-    use super::{RecoveryPhase, Session, SessionEventError, SessionSnapshotV1, SnapshotBinding};
+    use super::{
+        RecoveryPhase, Session, SessionEventError, SessionSnapshotV1, SessionUpdate,
+        SnapshotBinding,
+    };
 
     struct FakeBackend {
         connect_calls: usize,
@@ -1197,37 +1379,46 @@ mod tests {
         let snapshot = recovery_snapshot();
         let encoded = snapshot.to_json().unwrap();
         assert_eq!(SessionSnapshotV1::from_json(&encoded).unwrap(), snapshot);
-
-        let mut unknown: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
-        unknown["unexpected"] = serde_json::json!(true);
-        assert!(SessionSnapshotV1::from_json(&serde_json::to_vec(&unknown).unwrap()).is_err());
-
-        let mut wrong_schema: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
-        wrong_schema["schema_version"] = serde_json::json!(2);
-        assert!(SessionSnapshotV1::from_json(&serde_json::to_vec(&wrong_schema).unwrap()).is_err());
-
-        let mut wrong_protocol: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
-        wrong_protocol["protocol_version"] = serde_json::json!(PROTOCOL_VERSION + 1);
-        assert!(
-            SessionSnapshotV1::from_json(&serde_json::to_vec(&wrong_protocol).unwrap()).is_err()
-        );
-
-        let mut mismatched_active: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
-        mismatched_active["active_orbit"] = serde_json::json!(1);
-        assert!(
-            SessionSnapshotV1::from_json(&serde_json::to_vec(&mismatched_active).unwrap()).is_err()
-        );
-
-        let mut incomplete: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
-        incomplete["bindings"].as_array_mut().unwrap().pop();
-        assert!(SessionSnapshotV1::from_json(&serde_json::to_vec(&incomplete).unwrap()).is_err());
-
         let encoded = String::from_utf8(encoded).unwrap();
-        let out_of_order = encoded.replacen(
-            "\"schema_version\":1,\"protocol_version\":1",
-            "\"protocol_version\":1,\"schema_version\":1",
+        let unknown = encoded.replacen(
+            "\"active_orbit\":0}",
+            "\"active_orbit\":0,\"unexpected\":true}",
             1,
         );
+        assert_ne!(unknown, encoded);
+        assert!(SessionSnapshotV1::from_json(unknown.as_bytes()).is_err());
+        assert_snapshot_invalid(
+            &encoded,
+            "\"schema_version\":1",
+            "\"schema_version\":2",
+            "unsupported schema version",
+        );
+        let protocol = format!("\"protocol_version\":{PROTOCOL_VERSION}");
+        let wrong_protocol = format!("\"protocol_version\":{}", PROTOCOL_VERSION + 1);
+        assert_snapshot_invalid(
+            &encoded,
+            &protocol,
+            &wrong_protocol,
+            "protocol version mismatch",
+        );
+        assert_snapshot_invalid(
+            &encoded,
+            "\"active_orbit\":0}",
+            "\"active_orbit\":1}",
+            "active orbit disagrees with ledger",
+        );
+        assert_snapshot_invalid(
+            &encoded,
+            ",{\"win_id\":9,\"backend_id\":\"missing-9\"}",
+            "",
+            "bindings must cover the ledger exactly",
+        );
+        let canonical_prefix =
+            format!("\"schema_version\":1,\"protocol_version\":{PROTOCOL_VERSION}");
+        let reversed_prefix =
+            format!("\"protocol_version\":{PROTOCOL_VERSION},\"schema_version\":1");
+        let out_of_order = encoded.replacen(&canonical_prefix, &reversed_prefix, 1);
+        assert_ne!(out_of_order, encoded);
         assert!(SessionSnapshotV1::from_json(out_of_order.as_bytes()).is_err());
         let out_of_order_binding = encoded.replacen(
             "\"win_id\":7,\"backend_id\":\"restored-7\"",
@@ -1235,6 +1426,166 @@ mod tests {
             1,
         );
         assert!(SessionSnapshotV1::from_json(out_of_order_binding.as_bytes()).is_err());
+    }
+
+    fn assert_snapshot_invalid(encoded: &str, from: &str, to: &str, expected: &'static str) {
+        let changed = encoded.replacen(from, to, 1);
+        assert_ne!(changed, encoded);
+        let result = SessionSnapshotV1::from_json(changed.as_bytes());
+        assert!(
+            matches!(
+                &result,
+                Err(super::SessionSnapshotError::Invalid(message)) if *message == expected
+            ),
+            "mutation {from:?} produced {result:?}, expected {expected:?}"
+        );
+    }
+
+    #[test]
+    fn nested_snapshot_records_are_closed_and_canonically_ordered() {
+        let encoded = String::from_utf8(recovery_snapshot().to_json().unwrap()).unwrap();
+        let malformed = [
+            encoded.replacen(
+                "\"ledger\":{\"orbits\":",
+                "\"ledger\":{\"unexpected\":true,\"orbits\":",
+                1,
+            ),
+            encoded.replacen(",\"active\":0},\"bindings\":", "},\"bindings\":", 1),
+            encoded.replacen(
+                "\"ledger\":{\"orbits\":",
+                "\"ledger\":{\"orbits\":[],\"orbits\":",
+                1,
+            ),
+            encoded.replacen(
+                "\"ledger\":{\"orbits\":",
+                "\"ledger\":{\"active\":0,\"orbits\":",
+                1,
+            ),
+            encoded.replacen(
+                "{\"id\":0,\"windows\":",
+                "{\"unexpected\":true,\"id\":0,\"windows\":",
+                1,
+            ),
+            encoded.replacen(",\"name\":\"triptych\"", "", 1),
+            encoded.replacen(
+                "{\"id\":0,\"windows\":",
+                "{\"id\":0,\"id\":0,\"windows\":",
+                1,
+            ),
+            encoded.replacen(
+                "{\"id\":0,\"windows\":",
+                "{\"windows\":[],\"id\":0,\"windows\":",
+                1,
+            ),
+        ];
+        for record in malformed {
+            assert_ne!(record, encoded);
+            assert!(SessionSnapshotV1::from_json(record.as_bytes()).is_err());
+        }
+    }
+
+    #[test]
+    fn snapshot_semantic_validation_exercises_every_invariant_family() {
+        let encoded = String::from_utf8(recovery_snapshot().to_json().unwrap()).unwrap();
+        for (from, to, expected) in [
+            (
+                "{\"id\":0,\"windows\":",
+                "{\"id\":1,\"windows\":",
+                "orbit ids are not canonical",
+            ),
+            (
+                "\"name\":\"triptych\"",
+                "\"name\":\"not-triptych\"",
+                "orbit names are not canonical",
+            ),
+            (
+                "\"windows\":[7],\"focus\":0",
+                "\"windows\":[7],\"focus\":1",
+                "orbit focus is out of range",
+            ),
+            (
+                "\"windows\":[7],\"focus\":0",
+                "\"windows\":[7],\"focus\":null",
+                "occupied orbit has no focus",
+            ),
+            (
+                "\"windows\":[],\"focus\":null",
+                "\"windows\":[],\"focus\":0",
+                "empty orbit has a focus",
+            ),
+            (
+                "\"windows\":[9],\"focus\":0",
+                "\"windows\":[7],\"focus\":0",
+                "window ids must be unique and below the watermark",
+            ),
+            (
+                "\"windows\":[7],\"focus\":0,\"stowed\":[]",
+                "\"windows\":[7],\"focus\":0,\"stowed\":[9]",
+                "stowed windows must be a unique subset of the orbit",
+            ),
+            (
+                "\"windows\":[7],\"focus\":0,\"stowed\":[]",
+                "\"windows\":[7],\"focus\":0,\"stowed\":[7,7]",
+                "stowed windows must be a unique subset of the orbit",
+            ),
+            (
+                "\"fullscreen\":null",
+                "\"fullscreen\":9",
+                "fullscreen window must belong to the orbit",
+            ),
+            (
+                "\"backend_id\":\"restored-7\"",
+                "\"backend_id\":\"\"",
+                "backend identity must be 1-32 printable ASCII bytes",
+            ),
+            (
+                "\"backend_id\":\"restored-7\"",
+                "\"backend_id\":\"123456789012345678901234567890123\"",
+                "backend identity must be 1-32 printable ASCII bytes",
+            ),
+            (
+                "\"backend_id\":\"restored-7\"",
+                "\"backend_id\":\"bad\\nidentity\"",
+                "backend identity must be 1-32 printable ASCII bytes",
+            ),
+            (
+                "\"backend_id\":\"missing-9\"",
+                "\"backend_id\":\"restored-7\"",
+                "bindings must be a one-to-one mapping",
+            ),
+            (
+                "\"win_id\":9",
+                "\"win_id\":7",
+                "bindings must be a one-to-one mapping",
+            ),
+            (
+                "[{\"win_id\":7,\"backend_id\":\"restored-7\"},{\"win_id\":9,\"backend_id\":\"missing-9\"}]",
+                "[{\"win_id\":9,\"backend_id\":\"missing-9\"},{\"win_id\":7,\"backend_id\":\"restored-7\"}]",
+                "bindings must be strictly sorted by window id",
+            ),
+            (
+                "\"next_win_id\":10",
+                "\"next_win_id\":7",
+                "window ids must be unique and below the watermark",
+            ),
+            (
+                ",{\"id\":5,\"windows\":[],\"focus\":null,\"stowed\":[],\"layout\":\"triptych\",\"fullscreen\":null,\"name\":\"crypt\"}",
+                "",
+                "ledger must contain six orbits",
+            ),
+        ] {
+            assert_snapshot_invalid(&encoded, from, to, expected);
+        }
+
+        let active_out_of_range = encoded
+            .replacen("\"active\":0", "\"active\":6", 1)
+            .replacen("\"active_orbit\":0}", "\"active_orbit\":6}", 1);
+        assert!(matches!(
+            SessionSnapshotV1::from_json(active_out_of_range.as_bytes()),
+            Err(super::SessionSnapshotError::Invalid(
+                "active orbit is out of range"
+            ))
+        ));
     }
 
     #[test]
@@ -1246,8 +1597,8 @@ mod tests {
         assert!(session.snapshot().is_none());
         for event in [
             window_opened("restored-7", "old title"),
-            window_opened("restored-7", "latest title"),
             window_opened("new-10", "new"),
+            window_opened("restored-7", "latest title"),
         ] {
             let update = session.handle_backend_event(event).unwrap();
             assert!(!update.projection_applied);
@@ -1257,6 +1608,83 @@ mod tests {
         assert!(session.backend.assignment_attempts.is_empty());
         assert!(session.backend.apply_attempts.is_empty());
         assert!(session.snapshot().is_none());
+
+        session
+            .handle_backend_event(BackendEvent::InitialReplayComplete)
+            .unwrap();
+        assert_eq!(
+            session.ledger().active_orbit().windows,
+            [WinId(7), WinId(10)]
+        );
+        assert_eq!(
+            session.window_metadata(WinId(7)).unwrap().title,
+            "latest title"
+        );
+        assert_eq!(
+            session.window_id(&BackendWindowId("new-10".to_owned())),
+            Some(WinId(10))
+        );
+        assert_eq!(session.backend.assignment_attempts.len(), 2);
+        assert_eq!(
+            session
+                .backend
+                .assignment_attempts
+                .iter()
+                .filter(|(backend_id, _)| backend_id.0 == "restored-7")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn pre_barrier_non_replay_events_are_protocol_errors() {
+        for event in [
+            BackendEvent::TitleChanged {
+                win: WinId(7),
+                title: "impossible".to_owned(),
+            },
+            BackendEvent::WindowClosed(WinId(7)),
+            BackendEvent::FocusChanged(Some(WinId(7))),
+            BackendEvent::ExclusiveFocusChanged(true),
+            BackendEvent::GeometryDrifted {
+                win: WinId(7),
+                rect: Rect::new(0, 0, 10, 10),
+            },
+        ] {
+            let mut session = Session::connect(FakeBackend::new()).unwrap();
+            let error = session.handle_backend_event(event).unwrap_err();
+            assert!(matches!(
+                error,
+                SessionEventError::UnexpectedInitialReplayEvent(_)
+            ));
+            assert_eq!(session.phase(), RecoveryPhase::InitialReplay);
+            assert!(session.snapshot().is_none());
+        }
+    }
+
+    #[test]
+    fn restored_only_replay_preserves_persisted_focus() {
+        let mut session =
+            Session::connect_with_snapshot(FakeBackend::new(), Some(recovery_snapshot())).unwrap();
+        session
+            .handle_backend_event(window_opened("missing-9", "second"))
+            .unwrap();
+        session
+            .handle_backend_event(window_opened("restored-7", "first"))
+            .unwrap();
+
+        session
+            .handle_backend_event(BackendEvent::InitialReplayComplete)
+            .unwrap();
+
+        assert_eq!(session.ledger().focused(), Some(WinId(7)));
+        assert_eq!(
+            session
+                .ledger()
+                .orbit(OrbitId::from_human(2).unwrap())
+                .focused(),
+            Some(WinId(9))
+        );
     }
 
     #[test]
@@ -1319,6 +1747,18 @@ mod tests {
         assert!(session.has_pending_backend_work());
         assert_eq!(session.phase(), RecoveryPhase::FinalizingReplay);
         assert_eq!(session.backend.next_event_calls, 0);
+        let ledger = session.ledger().clone();
+        let error = session
+            .handle_backend_event(window_opened("must-wait", "blocked"))
+            .unwrap_err();
+        assert_eq!(error, SessionEventError::BackendWorkPending);
+        assert_eq!(session.phase(), RecoveryPhase::FinalizingReplay);
+        assert_eq!(session.ledger(), &ledger);
+        assert_eq!(
+            session.window_id(&BackendWindowId("must-wait".to_owned())),
+            None
+        );
+        assert_eq!(session.backend.next_event_calls, 0);
 
         let recovered = session.retry_pending_backend_work().unwrap();
         assert!(!session.has_pending_backend_work());
@@ -1342,7 +1782,62 @@ mod tests {
     }
 
     #[test]
+    fn pending_backend_work_gates_actions_and_publication() {
+        let mut session = live_session(FakeBackend::new());
+        session
+            .handle_backend_event(window_opened("one", "one"))
+            .unwrap();
+        session
+            .handle_backend_event(window_opened("two", "two"))
+            .unwrap();
+        let snapshot = session.snapshot().unwrap();
+        session.backend.fail_next_apply = Some(BackendError::Io {
+            message: "candidate failed".to_owned(),
+        });
+        session.set_layout(Layout::Mono).unwrap_err();
+        assert!(session.has_pending_backend_work());
+
+        let state = session.state().clone();
+        let apply_attempts = session.backend.apply_attempts.len();
+        assert!(matches!(
+            session.set_layout(Layout::Mono),
+            Err(BackendError::Unavailable { .. })
+        ));
+        assert!(matches!(
+            session.request_close_focused(),
+            Err(BackendError::Unavailable { .. })
+        ));
+        assert_eq!(session.toggle_whichkey(), SessionUpdate::unchanged());
+        assert_eq!(
+            session.update_modules(vec![Module {
+                id: "clock".to_owned(),
+                text: "12:34".to_owned(),
+                accent: None,
+                urgent: false,
+            }]),
+            SessionUpdate::unchanged()
+        );
+        assert_eq!(session.backend.apply_attempts.len(), apply_attempts);
+        assert!(session.backend.close_attempts.is_empty());
+        assert_eq!(session.state(), &state);
+        assert_eq!(session.snapshot().unwrap(), snapshot);
+
+        session.retry_pending_backend_work().unwrap();
+        assert!(session.toggle_whichkey().state.is_some());
+    }
+
+    #[test]
     fn persistence_exposes_only_authoritative_live_state() {
+        let mut finalizing = Session::connect(FakeBackend::new()).unwrap();
+        finalizing.backend.fail_next_apply = Some(BackendError::Io {
+            message: "recovery projection pending".to_owned(),
+        });
+        finalizing
+            .handle_backend_event(BackendEvent::InitialReplayComplete)
+            .unwrap_err();
+        assert_eq!(finalizing.phase(), RecoveryPhase::FinalizingReplay);
+        assert!(finalizing.snapshot().is_none());
+
         let mut session = Session::connect(FakeBackend::new()).unwrap();
         assert!(session.snapshot().is_none());
         session
@@ -1989,6 +2484,7 @@ mod tests {
 
         assert_eq!(session.ledger(), &ledger);
         assert_eq!(session.state(), &state);
+        session.retry_pending_backend_work().unwrap();
         let retry = session.undo().unwrap();
         assert!(retry.projection_applied);
         assert_eq!(session.ledger().active_orbit().layout, Layout::Triptych);
