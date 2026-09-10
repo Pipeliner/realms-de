@@ -63,6 +63,8 @@ pub enum BackendEvent {
     },
     /// The compositor's current keyboard focus changed.
     FocusChanged(Option<WinId>),
+    /// A layer surface acquired or released exclusive keyboard focus.
+    ExclusiveFocusChanged(bool),
     /// The output workarea available for projection changed.
     WorkareaChanged(Workarea),
     /// The compositor moved a window independently.
@@ -230,5 +232,13 @@ mod tests {
                 ..
             } if observed == backend_id
         ));
+    }
+
+    #[test]
+    fn exclusive_layer_focus_is_distinct_from_window_focus() {
+        assert_ne!(
+            BackendEvent::ExclusiveFocusChanged(true),
+            BackendEvent::FocusChanged(None)
+        );
     }
 }

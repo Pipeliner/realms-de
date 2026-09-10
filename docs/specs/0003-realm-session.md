@@ -300,6 +300,11 @@ step 3 and in the workarea note above. One further correction:
 > focused-window border and `RealmState::focused_title`; on `focus_none`, return
 > focus to `Ledger::focused()`.
 
+The compositor seam preserves that distinction: ordinary effective window
+focus is `BackendEvent::FocusChanged`, while layer-shell exclusivity is
+`BackendEvent::ExclusiveFocusChanged`. A generic session must not infer one
+from `FocusChanged(None)`.
+
 **`river-xkb-bindings-v1` — the keymap does not exist until this is served.**
 No `river_xkb_binding_v1` object means no keybinding fires at all; the desktop
 is a mouse-only tiler.

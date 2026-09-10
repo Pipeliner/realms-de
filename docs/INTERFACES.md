@@ -104,7 +104,10 @@ pub enum BackendEvent {
     WindowOpened { backend_id: BackendWindowId, app_id: String, title: String },
     WindowClosed(WinId),
     TitleChanged { win: WinId, title: String },
+    /// Effective keyboard focus among managed windows changed.
     FocusChanged(Option<WinId>),
+    /// A layer surface acquired or released exclusive keyboard focus.
+    ExclusiveFocusChanged(bool),
     WorkareaChanged(Workarea),
     /// The compositor moved a window itself. realm treats this as advisory: the
     /// ledger remains the truth and the next projection will overrule it.
