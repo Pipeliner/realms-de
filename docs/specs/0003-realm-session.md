@@ -505,6 +505,12 @@ window. Before any desired projection is submitted, the ledger's window set,
 the window-metadata keys, and the values of the stable identity map must be the
 same set. This makes it impossible to send a placement for a `WinId` that has
 not been observed and successfully assigned.
+Typed desired operations and `request_close_focused()` return a
+`SessionActionError`: local pre-Live or pending-work refusal is
+`SessionActionError::NotReady`, while compositor failures are wrapped as
+`SessionActionError::Backend(BackendError)`. `BackendError::Unavailable` is
+reserved for a backend that cannot be or remain the active window manager and
+must never represent local session readiness.
 
 `BackendEvent::GeometryDrifted` is advisory and does not itself bypass
 projection deduplication. The ledger and last-successful-projection cache remain
@@ -703,8 +709,8 @@ the mechanical read gate: while true, the loop must call
 `retry_pending_backend_work()` and must not call `next_event`. Retry success
 resumes the interrupted phase and restores one retry allowance for later work.
 While this gate is set, every desired ledger operation and close request is
-rejected as unavailable without a backend call, and non-fallible which-key or
-module updates are unchanged without publication. The only publication query
+rejected as `SessionActionError::NotReady` without a backend call, and
+non-fallible which-key or module updates are unchanged without publication. The only publication query
 allowed during pending work is the §6 authoritative `Live` persistence
 snapshot; `FinalizingReplay` still exposes none.
 A library-level event injection while work is pending must be rejected without
@@ -899,7 +905,7 @@ Each row is one happy path and becomes one test.
 | A16 | Given a module that recomputes to the text it already had, when derivation runs, then `revision` does not increment and no `Event::State` is sent | `session::tests::module_change_emits_once_without_backend_apply` |
 | A17 | Given a client that quantises its dimensions down to a multiple of a 9×18 cell, when a triptych of three such clients is applied, then after at most one corrective `propose_dimensions` per window each `set_content_clip_box` equals that window's projected rect and the clip boxes tile the workarea exactly | |
 | A18 | Given a successfully persisted ledger snapshot holding three windows across two orbits, their `BackendWindowId` mappings, and a next-`WinId` watermark, when the session is killed, all three identities replay, and the first manage sequence after restart completes, then each restored window is back in its snapshotted orbit and ledger position, persisted focus is restored when no new identity appears, otherwise the last report-order summon is focused, a newly reported identity receives the persisted next id rather than a reused id, immediate Undo is a no-op, and the first full `RealmState` has the ledger-derived fields from the snapshot, revision 1, `Mode::Nav`, empty chord/module state, and the default which-key state | |
-| A19 | Given two observed and assigned windows, when a typed desired layout operation is staged and a backend that advertises the required capability as unsupported rejects its projection with `BackendError::Unsupported` carrying that name, then the staged ledger and projection are not committed and the visible state and revision remain unchanged | `session::tests::unsupported_apply_rolls_back_and_emits_no_state`; socket-frame coverage remains SPEC 0007 |
+| A19 | Given two observed and assigned windows, when a typed desired layout operation is staged and a backend that advertises the required capability as unsupported rejects its projection, then `SessionActionError::Backend(BackendError::Unsupported)` carries that capability name, the staged ledger and projection are not committed, and the visible state and revision remain unchanged | `session::tests::unsupported_apply_rolls_back_and_emits_no_state`; socket-frame coverage remains SPEC 0007 |
 | A20 | Given projection P1 succeeded, an attempted projection P2 may have partially applied before returning an error, and authoritative state later projects to P1 again, when projection is retried, then both the session and backend treat their caches as dirty and the backend issues the complete P1 projection rather than suppressing it by equality with the last-successful cache | `session::tests::failed_apply_marks_projection_dirty_until_a_complete_repair`; the River backend cache contract remains part of #40 |
 | A21 | Given a newly observed backend window identity and an error-atomic transient `assign_window` failure, when the event is handled and the outer loop retries before reading another backend event, then the ledger, metadata, stable mapping, and advanced non-reuse watermark survive the error, no state is published before binding succeeds, and retry binds the same `WinId` before applying and publishing it | `session::tests::failed_identity_binding_preserves_observed_window_for_retry` |
 | A22 | Given two tiled windows, when `focus_step(Dir::Prev)` succeeds, then the focused id and title change, the revision advances once, and exactly one complete candidate projection is submitted; if that submission fails, the candidate ledger and state are rejected and the next repair submits the complete prior authoritative projection | `session::tests::focus_step_commits_one_projection_and_one_visible_state`, `session::tests::failed_focus_step_rejects_the_candidate_and_repairs_authoritative_state` |

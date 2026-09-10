@@ -580,6 +580,20 @@ pub enum SessionEventError {
     UnexpectedInitialReplayEvent(BackendEvent),
 }
 
+/// Failure of a caller-requested session action.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SessionActionError {
+    /// The session is recovering or must repair pending backend work first.
+    #[error("session is not ready for actions")]
+    NotReady,
+    /// The action reached the compositor backend and it failed.
+    #[error(transparent)]
+    Backend(#[from] BackendError),
+}
+
+/// Result of a caller-requested session action.
+pub type SessionActionResult<T> = Result<T, SessionActionError>;
+
 /// The compositor-independent owner of Realm's ledger and visible state.
 pub struct Session<B: WmBackend> {
     backend: B,
@@ -699,61 +713,59 @@ impl<B: WmBackend> Session<B> {
     }
 
     /// Switch the visible orbit transactionally.
-    pub fn switch_orbit(&mut self, orbit: OrbitId) -> BackendResult<SessionUpdate> {
+    pub fn switch_orbit(&mut self, orbit: OrbitId) -> SessionActionResult<SessionUpdate> {
         self.stage_ledger_update(|ledger| ledger.switch_orbit(orbit))
     }
 
     /// Change the active orbit's layout transactionally.
-    pub fn set_layout(&mut self, layout: Layout) -> BackendResult<SessionUpdate> {
+    pub fn set_layout(&mut self, layout: Layout) -> SessionActionResult<SessionUpdate> {
         self.stage_ledger_update(|ledger| ledger.set_layout(layout))
     }
 
     /// Move focus by one ledger position transactionally.
-    pub fn focus_step(&mut self, direction: Dir) -> BackendResult<SessionUpdate> {
+    pub fn focus_step(&mut self, direction: Dir) -> SessionActionResult<SessionUpdate> {
         self.stage_ledger_update(|ledger| ledger.focus_step(direction))
     }
 
     /// Swap the focused window with its neighbour transactionally.
-    pub fn swap(&mut self, direction: Dir) -> BackendResult<SessionUpdate> {
+    pub fn swap(&mut self, direction: Dir) -> SessionActionResult<SessionUpdate> {
         self.stage_ledger_update(|ledger| {
             ledger.swap(direction);
         })
     }
 
     /// Move the focused window to another orbit transactionally.
-    pub fn move_focused_to_orbit(&mut self, orbit: OrbitId) -> BackendResult<SessionUpdate> {
+    pub fn move_focused_to_orbit(&mut self, orbit: OrbitId) -> SessionActionResult<SessionUpdate> {
         self.stage_ledger_update(|ledger| {
             ledger.move_to_orbit(orbit);
         })
     }
 
     /// Toggle the focused window's stowed state transactionally.
-    pub fn toggle_stow(&mut self) -> BackendResult<SessionUpdate> {
+    pub fn toggle_stow(&mut self) -> SessionActionResult<SessionUpdate> {
         self.stage_ledger_update(|ledger| {
             ledger.toggle_stow();
         })
     }
 
     /// Toggle fullscreen for the focused window transactionally.
-    pub fn toggle_fullscreen(&mut self) -> BackendResult<SessionUpdate> {
+    pub fn toggle_fullscreen(&mut self) -> SessionActionResult<SessionUpdate> {
         self.stage_ledger_update(|ledger| {
             ledger.toggle_fullscreen();
         })
     }
 
     /// Restore the previous ledger state transactionally.
-    pub fn undo(&mut self) -> BackendResult<SessionUpdate> {
+    pub fn undo(&mut self) -> SessionActionResult<SessionUpdate> {
         self.stage_ledger_update(|ledger| {
             ledger.undo();
         })
     }
 
     /// Ask the focused window to close without changing authoritative state.
-    pub fn request_close_focused(&mut self) -> BackendResult<Option<WinId>> {
+    pub fn request_close_focused(&mut self) -> SessionActionResult<Option<WinId>> {
         if self.phase != RecoveryPhase::Live || self.pending_backend_work {
-            return Err(BackendError::Unavailable {
-                message: "session is not ready for close requests".to_owned(),
-            });
+            return Err(SessionActionError::NotReady);
         }
         let Some(win) = self.ledger.focused() else {
             return Ok(None);
@@ -781,11 +793,9 @@ impl<B: WmBackend> Session<B> {
     fn stage_ledger_update(
         &mut self,
         update: impl FnOnce(&mut Ledger),
-    ) -> BackendResult<SessionUpdate> {
+    ) -> SessionActionResult<SessionUpdate> {
         if self.phase != RecoveryPhase::Live || self.pending_backend_work {
-            return Err(BackendError::Unavailable {
-                message: "session is not ready for desired operations".to_owned(),
-            });
+            return Err(SessionActionError::NotReady);
         }
         let mut candidate = self.ledger.clone();
         update(&mut candidate);
@@ -793,7 +803,7 @@ impl<B: WmBackend> Session<B> {
             Ok(update) => Ok(update),
             Err(error) => {
                 self.pending_backend_work = should_retry_desired_repair(&error);
-                Err(error)
+                Err(error.into())
             }
         }
     }
@@ -1218,8 +1228,8 @@ mod tests {
     use crate::backend::{BackendError, BackendEvent, BackendResult, BackendWindowId, WmBackend};
 
     use super::{
-        RecoveryPhase, Session, SessionEventError, SessionSnapshotV1, SessionUpdate,
-        SnapshotBinding,
+        RecoveryPhase, Session, SessionActionError, SessionEventError, SessionSnapshotV1,
+        SessionUpdate, SnapshotBinding,
     };
 
     struct FakeBackend {
@@ -1783,6 +1793,16 @@ mod tests {
 
     #[test]
     fn pending_backend_work_gates_actions_and_publication() {
+        let mut pre_live = Session::connect(FakeBackend::new()).unwrap();
+        assert_eq!(
+            pre_live.set_layout(Layout::Mono),
+            Err(SessionActionError::NotReady)
+        );
+        assert_eq!(
+            pre_live.request_close_focused(),
+            Err(SessionActionError::NotReady)
+        );
+
         let mut session = live_session(FakeBackend::new());
         session
             .handle_backend_event(window_opened("one", "one"))
@@ -1801,11 +1821,11 @@ mod tests {
         let apply_attempts = session.backend.apply_attempts.len();
         assert!(matches!(
             session.set_layout(Layout::Mono),
-            Err(BackendError::Unavailable { .. })
+            Err(SessionActionError::NotReady)
         ));
         assert!(matches!(
             session.request_close_focused(),
-            Err(BackendError::Unavailable { .. })
+            Err(SessionActionError::NotReady)
         ));
         assert_eq!(session.toggle_whichkey(), SessionUpdate::unchanged());
         assert_eq!(
@@ -2098,9 +2118,9 @@ mod tests {
 
         assert_eq!(
             error,
-            BackendError::Unsupported {
+            SessionActionError::Backend(BackendError::Unsupported {
                 capability: "exact-geometry".to_owned()
-            }
+            })
         );
         assert_eq!(session.ledger(), &ledger);
         assert_eq!(session.state(), &state);
