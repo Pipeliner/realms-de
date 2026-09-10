@@ -62,6 +62,11 @@ impl RuntimeDir {
         &self.path
     }
 
+    #[cfg(test)]
+    pub(crate) fn raw_fd(&self) -> RawFd {
+        self.fd.as_raw_fd()
+    }
+
     /// Prepares the fixed `realm/ctl.sock` server endpoint.
     pub fn prepare_server_endpoint(self) -> Result<SocketEndpoint, IpcPathError> {
         self.prepare_server_endpoint_with(&ProcFdRuntimeBridge, SUN_PATH_CAPACITY)

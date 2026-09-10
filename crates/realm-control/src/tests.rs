@@ -12,14 +12,11 @@ use rustix::process::{geteuid, umask};
 
 use crate::{production_runtime_dir, test_runtime_dir, IpcPathError, RuntimeDir, SocketEndpoint};
 
-fn environment_lock() -> &'static Mutex<()> {
+fn process_test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn umask_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 struct ProcessUmaskRestore {
@@ -48,7 +45,7 @@ fn current_umask() -> u32 {
 
 #[derive(Clone)]
 enum BridgeOpen {
-    Requested,
+    Requested { expected: PathBuf },
     ProcFdParent,
     OtherDirectory(PathBuf),
     Error(Errno),
@@ -72,10 +69,40 @@ struct InjectedRuntimeBridge {
 }
 
 impl InjectedRuntimeBridge {
-    fn actual() -> Self {
+    fn requested(runtime: &RuntimeDir, stat: BridgeStat) -> Self {
         Self {
-            open: BridgeOpen::Requested,
-            stat: BridgeStat::Actual,
+            open: BridgeOpen::Requested {
+                expected: PathBuf::from(format!("/proc/self/fd/{}", runtime.raw_fd())),
+            },
+            stat,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum BridgeScenario {
+    Requested(BridgeStat),
+    ProcFdParent,
+    OtherDirectory(PathBuf),
+    Error(Errno),
+}
+
+impl BridgeScenario {
+    fn bridge(&self, runtime: &RuntimeDir) -> InjectedRuntimeBridge {
+        match self {
+            Self::Requested(stat) => InjectedRuntimeBridge::requested(runtime, *stat),
+            Self::ProcFdParent => InjectedRuntimeBridge {
+                open: BridgeOpen::ProcFdParent,
+                stat: BridgeStat::Actual,
+            },
+            Self::OtherDirectory(path) => InjectedRuntimeBridge {
+                open: BridgeOpen::OtherDirectory(path.clone()),
+                stat: BridgeStat::Actual,
+            },
+            Self::Error(error) => InjectedRuntimeBridge {
+                open: BridgeOpen::Error(*error),
+                stat: BridgeStat::Actual,
+            },
         }
     }
 }
@@ -83,7 +110,10 @@ impl InjectedRuntimeBridge {
 impl crate::sys::RuntimeBridge for InjectedRuntimeBridge {
     fn open(&self, requested: &Path) -> rustix::io::Result<OwnedFd> {
         let path = match &self.open {
-            BridgeOpen::Requested => requested,
+            BridgeOpen::Requested { expected } => {
+                assert_eq!(requested, expected);
+                requested
+            }
             BridgeOpen::ProcFdParent => Path::new("/proc/self/fd"),
             BridgeOpen::OtherDirectory(path) => path,
             BridgeOpen::Error(error) => return Err(*error),
@@ -147,7 +177,7 @@ impl Drop for EnvironmentRestore {
 /// its override into later tests.
 #[test]
 fn environment_restore_guard_restores_overrides_after_panic() {
-    let _lock = environment_lock().lock().unwrap();
+    let _lock = process_test_lock();
     let _actual_environment = EnvironmentRestore::capture();
     std::env::set_var("XDG_RUNTIME_DIR", "/before-panic");
     std::env::set_var("REALM_SOCKET", "/before-panic.sock");
@@ -194,6 +224,7 @@ fn is_unsafe_runtime(error: &IpcPathError) -> bool {
 /// error is collapsed into a generic path failure.
 #[test]
 fn runtime_capability_rejects_every_unsafe_input_and_openat2_failure() {
+    let _lock = process_test_lock();
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("runtime");
     fs::create_dir(&root).unwrap();
@@ -253,7 +284,7 @@ fn runtime_capability_rejects_every_unsafe_input_and_openat2_failure() {
 /// accepts an unset/relative XDG runtime path.
 #[test]
 fn production_runtime_reads_only_xdg_runtime_dir() {
-    let _guard = environment_lock().lock().unwrap();
+    let _lock = process_test_lock();
     let _environment = EnvironmentRestore::capture();
     let temporary = tempfile::tempdir().unwrap();
     let runtime = temporary.path().join("runtime");
@@ -276,6 +307,7 @@ fn production_runtime_reads_only_xdg_runtime_dir() {
 /// path or accepted with a non-exact directory mode.
 #[test]
 fn realm_directory_validation_is_descriptor_relative_and_exact() {
+    let _lock = process_test_lock();
     let temporary = tempfile::tempdir().unwrap();
     let runtime_path = temporary.path().join("runtime");
     fs::create_dir(&runtime_path).unwrap();
@@ -336,9 +368,10 @@ fn entry_fingerprint(path: &Path) -> EntryFingerprint {
     }
 }
 
-fn assert_preflight_failure_preserves_namespace(bridge: InjectedRuntimeBridge) {
+fn assert_preflight_failure_preserves_namespace(scenario: BridgeScenario) {
     let (_temporary, runtime_path) = runtime_fixture();
     let runtime = test_runtime_dir(&runtime_path).unwrap();
+    let bridge = scenario.bridge(&runtime);
     endpoint_error(runtime.prepare_server_endpoint_with(&bridge, 108));
     assert!(!runtime_path.join("realm").exists());
 
@@ -352,6 +385,7 @@ fn assert_preflight_failure_preserves_namespace(bridge: InjectedRuntimeBridge) {
     let before = entry_fingerprint(&socket_path);
 
     let runtime = test_runtime_dir(&runtime_path).unwrap();
+    let bridge = scenario.bridge(&runtime);
     endpoint_error(runtime.prepare_server_endpoint_with(&bridge, 108));
     assert_eq!(entry_fingerprint(&socket_path), before);
 }
@@ -360,9 +394,7 @@ fn assert_preflight_failure_preserves_namespace(bridge: InjectedRuntimeBridge) {
 /// replaces or chmods an existing realm, or leaks its temporary umask.
 #[test]
 fn server_creates_realm_exactly_once_under_scoped_umask() {
-    let _lock = umask_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _lock = process_test_lock();
     let (temporary, runtime_path) = runtime_fixture();
     let _restore = ProcessUmaskRestore::replace(0o777);
 
@@ -423,75 +455,40 @@ fn server_creates_realm_exactly_once_under_scoped_umask() {
 /// traversing and validating the bridge for the retained runtime descriptor.
 #[test]
 fn actual_runtime_procfd_bridge_is_verified_before_mutation() {
-    let _lock = umask_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _lock = process_test_lock();
     let (_temporary, runtime_path) = runtime_fixture();
-    let endpoint = test_runtime_dir(&runtime_path)
-        .unwrap()
-        .prepare_server_endpoint_with(&InjectedRuntimeBridge::actual(), 108)
-        .unwrap();
+    let runtime = test_runtime_dir(&runtime_path).unwrap();
+    let bridge = InjectedRuntimeBridge::requested(&runtime, BridgeStat::Actual);
+    let endpoint = runtime.prepare_server_endpoint_with(&bridge, 108).unwrap();
     assert_eq!(
         endpoint.path(),
         runtime_path.join("realm/ctl.sock").as_path()
     );
     assert!(runtime_path.join("realm").is_dir());
 
-    assert_preflight_failure_preserves_namespace(InjectedRuntimeBridge {
-        open: BridgeOpen::ProcFdParent,
-        stat: BridgeStat::Actual,
-    });
+    assert_preflight_failure_preserves_namespace(BridgeScenario::ProcFdParent);
 }
 
 /// Catches regressions that ignore bridge open/stat failures or omit any of
 /// the retained runtime identity, type, owner, and exact-mode comparisons.
 #[test]
 fn missing_inaccessible_or_mismatched_procfd_fails_before_mutation() {
-    let _lock = umask_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _lock = process_test_lock();
     let other = tempfile::tempdir().unwrap();
     set_mode(other.path(), 0o700);
 
-    for bridge in [
-        InjectedRuntimeBridge {
-            open: BridgeOpen::Error(Errno::NOENT),
-            stat: BridgeStat::Actual,
-        },
-        InjectedRuntimeBridge {
-            open: BridgeOpen::Error(Errno::ACCESS),
-            stat: BridgeStat::Actual,
-        },
-        InjectedRuntimeBridge {
-            open: BridgeOpen::OtherDirectory(other.path().to_path_buf()),
-            stat: BridgeStat::Actual,
-        },
-        InjectedRuntimeBridge {
-            open: BridgeOpen::Requested,
-            stat: BridgeStat::Error(Errno::IO),
-        },
-        InjectedRuntimeBridge {
-            open: BridgeOpen::Requested,
-            stat: BridgeStat::WrongDevice,
-        },
-        InjectedRuntimeBridge {
-            open: BridgeOpen::Requested,
-            stat: BridgeStat::WrongInode,
-        },
-        InjectedRuntimeBridge {
-            open: BridgeOpen::Requested,
-            stat: BridgeStat::WrongType,
-        },
-        InjectedRuntimeBridge {
-            open: BridgeOpen::Requested,
-            stat: BridgeStat::WrongOwner,
-        },
-        InjectedRuntimeBridge {
-            open: BridgeOpen::Requested,
-            stat: BridgeStat::WrongMode,
-        },
+    for scenario in [
+        BridgeScenario::Error(Errno::NOENT),
+        BridgeScenario::Error(Errno::ACCESS),
+        BridgeScenario::OtherDirectory(other.path().to_path_buf()),
+        BridgeScenario::Requested(BridgeStat::Error(Errno::IO)),
+        BridgeScenario::Requested(BridgeStat::WrongDevice),
+        BridgeScenario::Requested(BridgeStat::WrongInode),
+        BridgeScenario::Requested(BridgeStat::WrongType),
+        BridgeScenario::Requested(BridgeStat::WrongOwner),
+        BridgeScenario::Requested(BridgeStat::WrongMode),
     ] {
-        assert_preflight_failure_preserves_namespace(bridge);
+        assert_preflight_failure_preserves_namespace(scenario);
     }
 }
 
@@ -499,9 +496,7 @@ fn missing_inaccessible_or_mismatched_procfd_fails_before_mutation() {
 /// addresses are rejected only after `realm` has already been created.
 #[test]
 fn sockaddr_un_overflow_fails_before_mutation_without_fallback() {
-    let _lock = umask_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _lock = process_test_lock();
     let temporary = tempfile::tempdir().unwrap();
     let long_runtime = temporary.path().join("x".repeat(100));
     fs::create_dir(&long_runtime).unwrap();
@@ -527,11 +522,9 @@ fn sockaddr_un_overflow_fails_before_mutation_without_fallback() {
             .len()
             < 33
     );
-    endpoint_error(
-        test_runtime_dir(short_runtime.path())
-            .unwrap()
-            .prepare_server_endpoint_with(&InjectedRuntimeBridge::actual(), 33),
-    );
+    let runtime = test_runtime_dir(short_runtime.path()).unwrap();
+    let bridge = InjectedRuntimeBridge::requested(&runtime, BridgeStat::Actual);
+    endpoint_error(runtime.prepare_server_endpoint_with(&bridge, 33));
     assert!(!short_runtime.path().join("realm").exists());
 
     let (_temporary, actual_runtime) = runtime_fixture();
@@ -546,6 +539,7 @@ fn sockaddr_un_overflow_fails_before_mutation_without_fallback() {
         )
     })
     .unwrap();
-    endpoint_error(runtime.prepare_server_endpoint_with(&InjectedRuntimeBridge::actual(), 108));
+    let bridge = InjectedRuntimeBridge::requested(&runtime, BridgeStat::Actual);
+    endpoint_error(runtime.prepare_server_endpoint_with(&bridge, 108));
     assert!(!actual_runtime.join("realm").exists());
 }
