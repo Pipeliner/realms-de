@@ -80,13 +80,15 @@ prevent.
 refuses to start without `WAYLAND_DISPLAY` (already enforced by the unit's
 `ConditionEnvironment`).
 
-1. **Bind the control socket first.** Bind the fixed endpoint through the
-   Accepted resolver, filesystem, admission, and stale-reclaim contract in
+1. **Prepare and bind the control endpoint first, without listening.** While
+   the process is still single-threaded, prepare the fixed endpoint and obtain
+   `BoundControlEndpoint` through the Accepted capability, filesystem,
+   singleton-ownership, and stale-reclaim contract in
    [SPEC 0007](0007-control-socket-security.md). This session specification
-   does not define another path, reclaim predicate, or transport
-   API. Binding before touching Wayland means a client that races the session
-   gets the bounded retry behaviour specified there rather than hanging on a
-   socket nobody is listening to.
+   does not define another path, reclaim predicate, or transport API. The
+   bound fd remains private and has `SO_ACCEPTCONN == false`; pre-recovery
+   clients therefore receive the bounded retry behaviour specified there
+   rather than entering a socket that cannot yet answer.
 2. **Connect to river and negotiate versions.** Bind, from the registry:
 
    | Global | Bind at | Refuse below | Because |
@@ -131,13 +133,22 @@ refuses to start without `WAYLAND_DISPLAY` (already enforced by the unit's
    assignment are set once at connect time, outside any sequence. The seat named
    `default` always exists and need not be created *(verified)*; realm does not
    create seats in M2. (ADR 0013's "Seat creation" is available but unused.)
-6. **Create bindings and enter the loop.** §3 covers the keymap. The loop is
-   §2's manage/render cycle plus the poll set in §4.
-7. **Report ready.** Once the socket is bound *and* the first `manage_finish`
-   has been made, the session is usable. `realm-wm.service` currently uses
-   `Type=exec`; M2 switches it to `Type=notify` with `sd_notify READY=1` at
-   exactly this point, so `realm-bar.service` can order after a session that
-   answers.
+6. **Create bindings, recover, and project.** §3 covers the keymap. Complete
+   §6's replay/reconciliation, submit the required complete projection, and
+   transition the session to `Live`. The bound endpoint remains non-listening
+   throughout recovery and no readiness notification is permitted.
+7. **Activate, verify, then report ready.** Consume the one
+   `BoundControlEndpoint` to call `listen(..., 64)` exactly once. Continue only
+   with the returned `ActiveControlListener`, which proves
+   `SO_ACCEPTCONN == true`; activation or verification failure is fatal and
+   sends no readiness. Only then call `sd_notify(READY=1)` and enter the normal
+   poll loop (§4). `realm-wm.service` switches from `Type=exec` to
+   `Type=notify`, so `realm-bar.service` can order after a session that answers.
+
+The capability-order invariant is therefore exact: prepare/bind endpoint;
+recover and project; transition to `Live`; consume the bound capability to
+activate; verify the listener; only then send `READY=1`. No error path may
+reorder or skip one of these boundaries.
 
 **Shutdown.** `Request::Quit` and `Action::Quit` mean the user asked to log out.
 Broadcast `Event::Shutdown` to every subscriber, flush, then make
@@ -741,10 +752,12 @@ and `WindowIdExhausted` is terminal. A failed desired candidate is rejected
 before its authoritative repair is scheduled; an observed lifecycle change
 remains authoritative and withholds publication until its repair succeeds.
 
-The control socket path may be safely created and bound before recovery, but
-the event-loop binary must not call `listen(2)` or signal readiness until the
-session is `Live`. Pre-live clients therefore receive `ECONNREFUSED`, not a
-provisional empty state.
+The control socket path is safely created and bound before recovery, but the
+event-loop binary must retain the non-listening `BoundControlEndpoint` and must
+not consume it for activation or signal readiness until the session is `Live`.
+It then verifies the returned active listener before `sd_notify(READY=1)`.
+Listen or verification failure is fatal and readiness remains absent. Pre-live
+clients therefore receive `ECONNREFUSED`, not a provisional empty state.
 
 **What a restart must *not* restore:** the input mode (reset to `Mode::Nav` — a
 restart with a dangling `ensure_next_key_eaten` in the compositor would eat the
@@ -916,6 +929,7 @@ Each row is one happy path and becomes one test.
 | A14c | Given every accepted connection state and frame error class, when input is read, then the response, drain deadline, and close/continue result match SPEC 0007's total table without affecting another peer | `control_socket::tests::protocol_state_machine_is_total` |
 | A14d | Given a matching Hello followed by `Subscribe`, when the session accepts it, then it sends an immediate `Event::State`; later input and all queue/write limits follow SPEC 0007 | `control_socket::tests::subscribe_requires_matching_hello_and_emits_snapshot` |
 | A14e | Given 64 admitted peers, a 65th peer, oversized/unterminated input, excess pipeline, a stalled subscriber, or a stalled ordinary client, when a limit/deadline is reached, then only the affected peer is closed and the event loop remains live | `control_socket::tests::connection_and_queue_limits_preserve_admitted_peers`, `control_socket::tests::all_write_classes_have_bounded_nonblocking_drain`, `control_socket::tests::stalled_peer_preserves_key_path` |
+| A14f | Given a bound endpoint and incomplete or failed recovery, when startup runs, then the endpoint remains non-listening and no readiness is sent; given successful projection and transition to `Live`, then the bound capability is consumed once, the listener is verified active, and only then is `READY=1` sent; listen failure is fatal and sends no readiness | `realm_session::tests::readiness_follows_live_listener_activation` |
 | A15 | Given an idle session, when the clock module's tick changes the clock text, then exactly one `Event::State` is broadcast and no `manage_dirty` and no other river request is made | `session::tests::module_change_emits_once_without_backend_apply` covers the in-process state effect; socket coverage remains SPEC 0007 |
 | A16 | Given a module that recomputes to the text it already had, when derivation runs, then `revision` does not increment and no `Event::State` is sent | `session::tests::module_change_emits_once_without_backend_apply` |
 | A17 | Given a client that quantises its dimensions down to a multiple of a 9×18 cell, when a triptych of three such clients is applied, then after at most one corrective `propose_dimensions` per window each `set_content_clip_box` equals that window's projected rect and the clip boxes tile the workarea exactly | |
