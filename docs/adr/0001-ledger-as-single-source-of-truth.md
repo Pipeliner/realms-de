@@ -38,17 +38,21 @@ stow list and optional fullscreen window. `TriptychParams` is an external
 projection input: M0 passes it to `layout::project` and the ledger does not own
 or persist it.
 
-1. Every user action — summon, banish, swap, focus, stow, fullscreen, move to
-   orbit, set layout — is a mutation of the ledger and of nothing else.
+1. Every desired user action — swap, focus, stow, fullscreen, move to orbit,
+   set layout — is a mutation of the ledger and of nothing else. Summon and
+   banish are observed backend lifecycle events, not undoable user actions.
 2. Geometry is produced by `layout::project(&Orbit, Workarea, TriptychParams)
    -> Vec<Placement>`, a pure function. No clock, no interior mutability, no
    I/O. The same inputs always produce byte-identical output.
 3. Undo is a stack of whole ledger snapshots (`HISTORY_DEPTH = 64`), not an
-   inverse-op log. `Ledger::checkpoint` runs before each mutation; no-op
-   mutations do not checkpoint, so `mod+1` while already on orbit 1 does not
-   burn an undo step. Undo history and the current `TriptychParams` are
-   session-local and are not restored across a new login; no accepted
-   requirement promises cross-session undo or persistent layout parameters.
+   inverse-op log. `Ledger::checkpoint` runs before each effective desired
+   mutation. No-op mutations do not checkpoint, so `mod+1` while already on
+   orbit 1 and focus movement with fewer than two windows do not burn an undo
+   step. Observed summon and banish events clear undo and redo history: a
+   window-lifecycle boundary must never let undo remove a live window or restore
+   a closed one. Undo history and the current `TriptychParams` are session-local
+   and are not restored across a new login; no accepted requirement promises
+   cross-session undo or persistent layout parameters.
 4. `focused` and `occluded` are flags on a `Placement`. They may change what is
    painted; they may never change a rectangle.
 
@@ -128,6 +132,8 @@ this ADR. Try that first.
 - `ledger::tests::undo_restores_the_exact_previous_ledger`,
   `ledger::tests::undo_history_is_bounded`,
   `ledger::tests::a_new_mutation_clears_the_redo_stack`,
-  `ledger::tests::no_op_mutations_do_not_consume_undo_depth`.
+  `ledger::tests::no_op_mutations_do_not_consume_undo_depth`,
+  `ledger::tests::singleton_focus_step_does_not_checkpoint`,
+  `ledger::tests::window_lifecycle_is_a_hard_undo_boundary`.
 - `state::tests::revision_alone_does_not_force_a_redraw` — fails if the
   no-change fast path stops working.
