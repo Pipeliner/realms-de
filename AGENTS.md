@@ -36,3 +36,7 @@ the same change whenever a contract changes.
   do not treat their local absence as a blocker; inspect the matching CI job.
 - Security checks and security-hardening review are post-MVP work. Do not make
   them MVP gates; track them for the post-MVP queue instead.
+- **Never let process become the product.** Keep specifications, reviews,
+  memory, orchestration, and verification proportional to the user-visible
+  risk. If meta-work becomes the MVP critical path without directly improving
+  launch usability, defer it and resume the highest user-visible blocker.

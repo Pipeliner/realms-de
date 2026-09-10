@@ -24,6 +24,8 @@ resulting state must then be checked with authoritative evidence.
 - [lesson] An unverified status restatement is not progress; evidence must change authoritative state or establish the next action.
 - [repository-policy] Native distro packages are built and verified in CI only; missing local packaging commands are not blockers and must not prompt local toolchain installation.
 - [mvp-policy] Security checks and security-hardening review are deferred until after MVP and must be tracked outside the MVP gate.
+- [repository-policy] Never let process become the product: keep specification, review, memory, orchestration, and verification proportional to user-visible risk.
+- [mvp-policy] If meta-work becomes the MVP critical path without directly improving launch usability, defer it and resume the highest user-visible blocker.
 
 ## Relations
 
