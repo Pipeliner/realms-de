@@ -16,6 +16,8 @@ the same change whenever a contract changes.
 ## Repository operations
 
 - Run `gh` outside the sandbox.
+- At every Symphony iteration, inspect and handle the complete open pull-request
+  queue, including automated dependency PRs, before selecting the next issue.
 - Commit and push completed repository work unless the user explicitly says
   otherwise.
 - **Never pass Markdown or other GitHub body content through a shell argument.**
