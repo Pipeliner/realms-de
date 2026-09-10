@@ -74,3 +74,4 @@ Sequential, never reused. A superseded spec keeps its number and gains a
 | [0022](0022-colour-template-literal-guard.md) | Colour-template literal guard | Accepted |
 | [0023](0023-m1-tool-source-intake.md) | M1 Yazi and Starship source intake | Accepted |
 | [0024](0024-m1-private-tool-bundle.md) | M1 private Yazi and Starship tool bundle | Accepted |
+| [0025](0025-realm-project-namespace.md) | Realm project namespace | Accepted |
