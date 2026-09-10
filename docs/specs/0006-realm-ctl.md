@@ -513,10 +513,9 @@ check.
   is broken", and it says so in its output.
   *Recommendation: keep the functional probe, since it tests what the user
   actually experiences, and revisit if a bus API appears.*
-- **Where `Capabilities` lives** now that it must be serialisable —
-  `realm_core::ipc` beside the other wire types, or its own module shared with
-  the `WmBackend` trait. This needs `realm-session`'s spec to agree rather than
-  being settled here.
+- **Resolved by SPEC 0003:** `Capabilities` lives in `realm_core::ipc` beside
+  the other wire types, with owned unsupported-capability names. The backend,
+  health response, and `doctor` share that one type.
 - **A subscribe surface.** `Request::Subscribe` exists and nothing in this
   command set uses it. A `realmctl watch` emitting NDJSON `RealmState` frames
   would make the socket scriptable from a shell loop without `socat`.

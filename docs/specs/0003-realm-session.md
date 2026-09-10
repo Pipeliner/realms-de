@@ -1,7 +1,8 @@
 # SPEC 0003 — realm-session
 
-- **Status:** Draft (2026-08-26) — see *Open questions* for what moves it to Accepted
+- **Status:** Accepted (2026-09-10)
 - **Milestone:** M2
+- **Issue:** [#36](https://github.com/Pipeliner/realms-de/issues/36)
 - **Decisions:** [ADR 0001](../adr/0001-ledger-as-single-source-of-truth.md),
   [ADR 0003](../adr/0003-session-daemon-owns-state.md),
   [ADR 0004](../adr/0004-ndjson-control-socket.md),
@@ -13,10 +14,9 @@
   [§4](../INTERFACES.md) (the socket's server half)
 - **Supersedes / Superseded by:** Theme apply/reload clauses are superseded by
   [SPEC 0011](0011-theme-activation-generations.md): the CLI publishes a
-  generation without a session request or notification. Candidate
+  generation without a session request or notification. Accepted
   [SPEC 0012](0012-activation-launch-lifecycle.md) governs activation ownership,
-  lifecycle reconciliation and the WM unit restart rule without accepting this
-  M2 draft or its river replay assumptions.
+  lifecycle reconciliation and the WM unit restart rule.
 
 > Written before the code, as S14 requires. The **Test** column below is
 > deliberately empty: those tests get written next, watched to fail, and only
@@ -24,8 +24,9 @@
 >
 > **On verification.** Every claim below about river's behaviour is marked
 > *(verified)* where it was read from the protocol XML at
-> `codeberg.org/river/river`, branch `main`, `protocol/*.xml`, or *(assumed)*
-> where it is an inference the XML does not state. ADR 0013 exists because a
+> `codeberg.org/river/river`, tag `v0.4.8` (commit
+> `c4b5f706314555f4846e25b8d3635631387b3fdd`), `protocol/*.xml` and the
+> implementation files named under *Resolved design questions*. ADR 0013 exists because a
 > plausible summary of this protocol was wrong in three places; four further
 > corrections are recorded in *Behaviour §2 and §3* below, and the ADR and
 > `INTERFACES.md` need amending for them.
@@ -60,7 +61,7 @@ lifecycle.
 | Template expansion, sealed generation publication, and generation-aware diff | `realm-theme` ([SPEC 0002](0002-theme-pipeline.md), [SPEC 0011](0011-theme-activation-generations.md)); `realmctl` calls it in-process and the session is not involved |
 | The ledger's mutation rules, the layout projection, colour maths, the wire types | `realm-core` ([SPEC 0001](0001-realm-core-contracts.md)) |
 | The environment handshake, systemd ordering, portals, cursor theme | the session entry contract ([ADR 0011](../adr/0011-session-integration-contract.md)) and `packaging/` |
-| The CLI surface | `realm-ctl`; it is a client of this socket and holds no privilege |
+| The CLI surface | `realmctl`; it is a client of this socket and holds no privilege |
 
 The boundary with `realm-core` is a rule, not a suggestion: `realm-session` must
 not reimplement or second-guess ledger policy. When a control-socket request
@@ -81,8 +82,8 @@ refuses to start without `WAYLAND_DISPLAY` (already enforced by the unit's
 
 1. **Bind the control socket first.** Bind the fixed endpoint through the
    Accepted resolver, filesystem, admission, and stale-reclaim contract in
-   [SPEC 0007](0007-control-socket-security.md). This Draft session
-   specification does not define another path, reclaim predicate, or transport
+   [SPEC 0007](0007-control-socket-security.md). This session specification
+   does not define another path, reclaim predicate, or transport
    API. Binding before touching Wayland means a client that races the session
    gets the bounded retry behaviour specified there rather than hanging on a
    socket nobody is listening to.
@@ -93,7 +94,9 @@ refuses to start without `WAYLAND_DISPLAY` (already enforced by the unit's
    | `river_window_manager_v1` | 5 | **4** | `river_window_v1::identifier` and `river_window_manager_v1::exit_session` are `since="4"`; `set_content_clip_box` is `since="3"` *(verified)* |
    | `river_xkb_bindings_v1` | 3 | **3** | `modifiers_watch` / `modifiers_update` are `since="3"` and carry the mode badge and chord echo; `get_seat`, `ensure_next_key_eaten` and `ate_unbound_key` are `since="2"` *(verified)* |
    | `river_layer_shell_v1` | 1 | **1** | Its only version *(verified)* |
-   | `river_input_manager_v1` | 2 | **1** | `set_repeat_info` is v1; the `done` event is `since="2"` *(verified)* |
+   | `river_input_manager_v1` | 2 | **2** | `set_repeat_info` is v1; the atomic device boundary `done` is `since="2"` *(verified)* |
+   | `river_xkb_config_v1` | 2 | **2** | The per-keyboard atomic `done` boundary is `since="2"` *(verified)* |
+   | `river_libinput_config_v1` | 2 | **2** | The per-device atomic `done` boundary is `since="2"` *(verified)* |
 
    Child objects (`river_window_v1`, `river_seat_v1`, `river_output_v1`,
    `river_node_v1`, …) carry the version their factory was bound at; none of
@@ -385,8 +388,9 @@ The mechanism, stated three times in the XML *(verified, verbatim)*: "The
 compositor should wait for the manage sequence to complete before processing
 further input events. … The window manager should of course respond as soon as
 possible as the capacity of the compositor to buffer incoming input events is
-finite." The enforcement is
-`river_window_manager_v1::error::unresponsive`.
+finite." River v0.4.8 does not impose a window-manager response timeout; its
+finite seat queue makes the consequence of a sustained stall dropped input
+rather than a protocol disconnect.
 
 So: **input stops while realm thinks.** A stall is not a slow frame, it is a dead
 session, and the frame budgets in
@@ -506,7 +510,7 @@ at all, which is one reason §1 refuses below 4.
 A dead `realm-session` leaves windows unplaced and keys dead — a sharper failure
 than a crashed bar, and one the user cannot work around. `realm-wm.service`
 uses SPEC 0012's `Restart=always`, `RestartSec=1` and a five-in-thirty-seconds
-start limit; this section specifies only the Draft M2 ledger state a restart
+start limit; this section specifies the accepted M2 ledger state a restart
 would restore.
 
 **`WinId` is not river's identifier.**
@@ -516,7 +520,8 @@ would restore.
 > `pub struct WinId(pub u64)`; `identifier` is "a string that contains up to 32
 > printable ASCII bytes" *(verified)*. They are different types. `realm-session`
 > therefore maintains a bijection and allocates `WinId`s from a monotonic
-> counter that is never reused within or across a session. The
+> counter whose next value is persisted and never reused within or across a
+> session. The
 > *non-reuse property* ADR 0013 relies on is real and does carry over — but it
 > comes from realm's counter, backed by river's guarantee that the identifier it
 > is keyed on never repeats *(verified: "The identifier must not be reused. This
@@ -527,9 +532,10 @@ would restore.
 state, not configuration, because a ledger from last week's boot is worse than
 none. Written by the worker thread, never the event loop, using the same
 temp-file-plus-`rename(2)` discipline as [SPEC 0002](0002-theme-pipeline.md). It
-contains the serialised `Ledger`, the `WinId → identifier` map, the active
-orbit, and `PROTOCOL_VERSION` as a schema guard. A snapshot whose version does
-not match is discarded, not migrated.
+contains the serialised `Ledger`, the `WinId → identifier` map, the next
+unallocated `WinId` watermark, the active orbit, and `PROTOCOL_VERSION` as a
+schema guard. A snapshot whose version does not match is discarded, not
+migrated.
 
 **Undo history does not survive a restart.** `Ledger`'s `history` and `redo`
 fields are `#[serde(skip)]` *(verified in `crates/realm-core/src/ledger.rs`)*, so
@@ -546,7 +552,7 @@ against what river reports:
 |---|---|
 | Snapshot identifier reappears | Restore the window to its recorded orbit, ledger index, stow state and `WinId` |
 | Snapshot identifier does not reappear | Drop it; the window closed while realm was dead |
-| River reports a window not in the snapshot | Allocate a fresh `WinId` above the highest restored one and `Ledger::summon` it into the active orbit, in river's report order |
+| River reports a window not in the snapshot | Allocate the persisted next `WinId`, advance the watermark, and `Ledger::summon` it into the active orbit, in river's report order |
 
 `Ledger::summon` inserts after the focused window, so the result is
 deterministic given a deterministic report order.
@@ -562,16 +568,11 @@ job.
 as their first frame (§7). A crashed bar has never been able to take the session
 with it (ADR 0003); this makes the reverse also survivable.
 
-*(assumed, and it matters)* This all rests on river replaying a
-`river_window_manager_v1::window` event for every already-existing window before
-the first `manage_start` of a newly connected manager. The XML documents the
-event only as "A new window has been created" and does not state the replay. A
-manager that connected to a running compositor could not otherwise manage
-anything, so the inference is strong — but it is an inference, and M2 must
-confirm it against river's source or by experiment before A18 below can be
-called passing. If river does *not* replay, restart recovery becomes impossible
-as specified and the answer changes to "restart is a fresh session", which is
-one of the open questions.
+River v0.4.8 replay is verified in source. Binding a new manager marks windowing
+dirty; the next manage sequence iterates every surviving window, creates a new
+protocol object for each object made inert by the previous manager's teardown,
+and sends each `window` event before `manage_start`. Section 6 therefore uses
+replay as a version-pinned runtime property, guarded by A18.
 
 ### 7. The control-socket server
 
@@ -595,7 +596,7 @@ be acknowledged only after that spec's admission and durable preparation
 boundary. The exact request DTO, request-id idempotency and reply spelling are
 not accepted here; SPEC 0006/#117 owns them. `Request::ReloadTheme` has no
 supported apply or notify meaning and is not sent by `realmctl theme apply`;
-this Draft does not promise compatibility for that retired message. Decoding and protocol-error outcomes are exactly
+this specification does not promise compatibility for that retired message. Decoding and protocol-error outcomes are exactly
 those in SPEC 0007's state/error table; they are not kept open by default merely
 because a decoder can return an error.
 
@@ -660,8 +661,8 @@ Each row is one happy path and becomes one test.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| A1 | Given a river advertising `river_window_manager_v1` v5, `river_xkb_bindings_v1` v3, `river_layer_shell_v1` v1, `river_input_manager_v1` v2, `river_xkb_config_v1`, and `river_libinput_config_v1`, when `realm-session` starts, then it binds all six, seeds six orbits with orbit 1 active, and reports `Capabilities` with `exact_geometry`, `server_side_borders`, `hide_show`, `explicit_ordering` and `fullscreen` all true and `unsupported` empty | |
-| A2 | Given a river advertising `river_xkb_bindings_v1` at version 2, when `realm-session` starts, then it exits non-zero with a message naming the interface, the version advertised and the version required, and makes no window-management request | |
+| A1 | Given a river advertising `river_window_manager_v1` v5, `river_xkb_bindings_v1` v3, `river_layer_shell_v1` v1, `river_input_manager_v1` v2, `river_xkb_config_v1` v2, and `river_libinput_config_v1` v2, when `realm-session` starts, then it binds all six, seeds six orbits with orbit 1 active, and reports `Capabilities` with `exact_geometry`, `server_side_borders`, `hide_show`, `explicit_ordering` and `fullscreen` all true and `unsupported` empty | |
+| A2 | Given any required river global missing or advertising below its refusal version in §1, when `realm-session` starts, then it exits non-zero with a message naming the interface, the version advertised or missing, and the version required, and makes no window-management request | |
 | A3 | Given a projection placing two windows, when `apply` runs, then every `propose_dimensions` is sent before `manage_finish`, every `set_position` is sent after `render_start` and before `render_finish`, and no `set_position` is sent inside the manage sequence | |
 | A4 | Given two tiled windows, when `Swap(Dir::Next)` is applied, then both windows' new positions are sent in a single render sequence terminated by exactly one `render_finish` | |
 | A5 | Given a projection already applied, when `apply` runs again with identical placements, then no `propose_dimensions`, no `set_position` and no `manage_dirty` request is made | |
@@ -682,7 +683,8 @@ Each row is one happy path and becomes one test.
 | A15 | Given an idle session, when the clock module's tick changes the clock text, then exactly one `Event::State` is broadcast and no `manage_dirty` and no other river request is made | |
 | A16 | Given a module that recomputes to the text it already had, when derivation runs, then `revision` does not increment and no `Event::State` is sent | |
 | A17 | Given a client that quantises its dimensions down to a multiple of a 9×18 cell, when a triptych of three such clients is applied, then after at most one corrective `propose_dimensions` per window each `set_content_clip_box` equals that window's projected rect and the clip boxes tile the workarea exactly | |
-| A18 | Given a session holding three windows across two orbits which is killed and restarted while all three windows survive, when the first manage sequence after restart completes, then each window is back in its recorded orbit and ledger position, focus is restored, and the broadcast `RealmState` equals the pre-crash one apart from `revision` | |
+| A18 | Given a successfully persisted ledger snapshot holding three windows across two orbits and a next-`WinId` watermark, when the session is killed, all three windows survive, and the first manage sequence after restart completes, then each window is back in its snapshotted orbit and ledger position, focus is restored, the broadcast `RealmState` equals the snapshot apart from `revision`, and a newly reported window receives the persisted next id rather than a reused id | |
+| A19 | Given a backend operation whose required capability is listed as unsupported, when the operation is invoked, then it returns `BackendError::Unsupported` carrying that exact capability name and produces no frame | |
 
 ## Budgets
 
@@ -700,10 +702,10 @@ From [ARCHITECTURE.md §4](../ARCHITECTURE.md); no number here is new.
 
 The **4 ms** bound does, unambiguously. river "should wait for the manage
 sequence to complete before processing further input events" and its input
-buffer "is finite" *(verified)*, with
-`river_window_manager_v1::error::unresponsive` as the enforcement. Exceeding it
-is not a slow desktop, it is dropped keystrokes and then a disconnected window
-manager. The measurement changes with it: the number to hold is a **worst case
+buffer "is finite" *(verified)*. In v0.4.8 the seat queue holds 1024 events and
+then drops new input; it does not disconnect an unresponsive manager. Exceeding
+the budget is therefore not merely a slow desktop: sustained stalls can lose
+keystrokes. The measurement changes with it: the number to hold is a **worst case
 under adversarial conditions** — a wedged subscriber, a theme apply in flight, a
 window opening — not a median on an idle machine. ADR 0013's planned M2 liveness
 test is exactly that scenario.
@@ -715,11 +717,10 @@ periodic `manage_dirty` would sit in front of the user's next keystroke.
 
 The other three keep their original character.
 
-**What the protocol does not tell us.** The XML declares the `unresponsive`
-error but names no threshold; that is river's implementation policy, not
-protocol *(verified — the string appears exactly once, in the error enum)*. So
-4 ms is realm's budget, not river's limit, and the relationship between them is
-unmeasured. See *Open questions*.
+**What the protocol and implementation establish.** The XML declares the
+`unresponsive` error but names no threshold. River v0.4.8 does not post that
+error anywhere; it uses the bounded input queue described above. The 4 ms value
+is Realm's product budget, not a River timeout.
 
 ## Failure modes
 
@@ -754,30 +755,38 @@ coordinates and hands the bar its scale), and "partially selectable theme
 generation" (SPEC 0011 owns sealing and selection; this component does not
 participate in apply or diff).
 
-## Open questions
+## Resolved design questions
 
-**1. Ledger persistence: per-mutation or periodic?**
+**1. Ledger persistence: per-mutation or periodic? — Resolved: coalesced
+per-mutation persistence.**
 Per-mutation is exact — a crash loses nothing — but puts a worker job behind
 every keystroke and writes to `$XDG_RUNTIME_DIR` at input rates. Periodic (say
 every 2 s, and always on a clean shutdown) is cheap but loses the last few
 mutations. A third option is per-mutation with coalescing: the event loop marks
 the ledger dirty and the worker writes at most once every 250 ms.
-*Recommendation: the third.* It is bounded work, it never blocks the event loop,
+Realm uses the third option. It is bounded work, it never blocks the event loop,
 and the worst case is a quarter-second of lost window moves after a crash —
 which is less than the user will lose noticing the restart.
 
-**2. What happens to windows that existed before a restart?**
-§6 specifies identifier-keyed reconciliation, and that is the right answer *if*
-river replays a `window` event per existing window to a newly connected manager.
-The XML does not say it does *(assumed, flagged in §6)*. The alternatives if it
-does not: (a) a restart is a fresh session — windows are summoned into the
-active orbit in whatever order river reports and the user reassembles their
-layout by hand; (b) realm keeps a `river_window_v1` object alive across the
-restart, which is impossible since the Wayland connection dies with the process.
-*Recommendation: confirm the replay against river's source before implementing
-§6; if it does not replay, ship (a) and say so plainly in the release notes.*
-This must be settled before A18 can be written honestly, which is one of the two
-reasons this spec is Draft.
+**2. What happens to windows that existed before a restart? — Resolved: river
+replays them.**
+River v0.4.8's `WindowManager.bind` installs the new manager and calls
+`dirtyWindowing`. The resulting `manageStart` iterates every tracked window,
+and `Window.manageStart` creates a fresh `river_window_v1` for every ready,
+initialized, or mapped window and sends it to the new manager. The source even
+guards foreign-toplevel handle creation with the comment that a handle may
+already exist when the window manager is restarted. Therefore §6's
+identifier-keyed reconciliation and A18 are required behaviour, not an
+assumption. Evidence:
+[WindowManager.zig](https://codeberg.org/river/river/src/commit/c4b5f706314555f4846e25b8d3635631387b3fdd/river/WindowManager.zig)
+and [Window.zig](https://codeberg.org/river/river/src/commit/c4b5f706314555f4846e25b8d3635631387b3fdd/river/Window.zig)
+at tag `v0.4.8`.
+
+The three input/configuration interfaces first expose all required v2 `done`
+boundaries in River v0.4.6. Source checks across every v0.4.0–v0.4.8 tag show
+that v0.4.0–v0.4.5 expose v1 and v0.4.6–v0.4.8 expose v2. The runtime refusal
+table therefore makes v0.4.6 the effective minimum; the release baseline and
+CI remain pinned to v0.4.8.
 
 **3. How much of `Capabilities` can river actually populate — and what does
 `exact_geometry` mean?**
@@ -788,12 +797,11 @@ Four of the five fields are unambiguous at v5: `server_side_borders`,
 an arbitrary rect" (true) or "the window will be that size" (false, always, on
 every compositor). With §5's clipping the *rendered* rectangle is exact while
 the client's own buffer is not.
-*Recommendation: define `exact_geometry` in `INTERFACES.md` as "the rendered
+Resolved as recommended: `INTERFACES.md` defines `exact_geometry` as "the rendered
 rectangle is exactly the projected rectangle", report it `true` when
 `river_window_v1` is at version ≥ 3 and `false` below, and push
 `"unclipped-dimension-quantisation"` into `unsupported` in the `false` case.*
-This is a documentation change to a committed interface, so it wants a second
-opinion rather than a unilateral edit.
+This definition is part of the accepted interface contract.
 
 **4. Should realm eagerly size windows in inactive orbits?**
 §2 specifies `apply(&[Placement])` as "the visible set", so a hidden window
@@ -804,31 +812,44 @@ window whenever the workarea changes, making every orbit switch exactly one
 frame. Projection is pure integer arithmetic over short lists, so six of them is
 not the cost; the cost is that `apply`'s slice would have to carry a hidden flag
 or the seam would need a second method.
-*Recommendation: ship the simple contract in M2 and measure. If the first switch
+Resolved for M2: ship the simple contract and measure. If the first switch
 into an orbit visibly lags after a resolution change, revisit — and revisit it
 in `INTERFACES.md`, not with a special case here.*
 
 **5. What is river's actual `unresponsive` threshold, and how does it relate to
-4 ms?** The protocol declares the error and names no number *(verified)*. realm's
-budget is 4 ms; river's tolerance might be 50 ms or 5 s, and realm's worst case
-under an adversarial subscriber is presently unmeasured. Until someone reads
-river's source or asks upstream, the M2 liveness test can assert realm's budget
-but cannot assert that realm never trips river's error.
-**`needs-human`** (standing order S3): someone must read `river`'s
-implementation or ask its maintainer, and then decide whether realm needs its own
-watchdog — a self-imposed deadline after which the session logs, abandons the
-in-flight work and finishes the sequence with whatever it has, rather than being
-disconnected. This is the second reason this spec is Draft: it changes what A12
-asserts.
+4 ms? — Resolved: v0.4.8 has no disconnect threshold.** The protocol declares
+the `unresponsive` error, but the v0.4.8 implementation never posts it. River
+instead queues at most 1024 seat events while a manage sequence is outstanding;
+on overflow it logs and drops the new event. This is verified in
+[Seat.zig](https://codeberg.org/river/river/src/commit/c4b5f706314555f4846e25b8d3635631387b3fdd/river/Seat.zig), and
+an exact source search finds no use of `postError(.unresponsive)` in v0.4.8.
+Realm's 4 ms bound remains a user-visible correctness budget and A12 remains the
+MVP guard. A self-watchdog is not an MVP requirement: abandoning a partially
+handled key action would invent recovery semantics and cannot make a blocked
+event loop responsive. Watchdog and overflow telemetry are post-MVP hardening.
 
-**6. `realm-wm.service` restart policy.** Resolved by candidate SPEC 0012:
+**6. `realm-wm.service` restart policy.** Resolved by Accepted SPEC 0012:
 `Restart=always`, with user logout expressed by compositor exit followed by
 admission freeze and target stop. This removes the clean-exit ambiguity without
 settling any river existing-window replay behaviour.
 
+**7. Where does `Capabilities` live? — Resolved: `realm_core::ipc`.** It is
+returned by `WmBackend::connect`, carried by the session health response, and
+printed by `realmctl doctor`, so it is one shared serialisable wire type rather
+than a session-private duplicate. Its `unsupported` field is `Vec<String>`;
+backend implementations construct owned capability names and clients can decode
+them without borrowing process-static data.
+
+**8. How are unsupported operations reported? — Resolved: a typed backend
+error.** Every fallible `WmBackend` method returns `BackendResult<T>`. An
+unsupported operation returns `BackendError::Unsupported { capability }`, with
+the same stable capability name used in `Capabilities::unsupported`; transport
+loss returns `Disconnected`, connection refusal returns `Unavailable`, and
+other transport failures return `Io`. The session may add user-facing context,
+but it must not turn an unsupported operation into a silent success.
+
 ---
 
-**To reach Accepted**, questions 2 and 5 need answers, because they change
-acceptance criteria rather than implementation detail. Questions 1, 3, 4 and 6
-have recommendations that are safe to build against and can be settled by the
-implementation.
+These resolutions make A1–A18 implementable without an unresolved product or
+protocol decision. Later measurements may refine persistence cadence, inactive
+orbit sizing, or liveness telemetry without changing the MVP behaviour above.

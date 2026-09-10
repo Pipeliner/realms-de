@@ -9,8 +9,8 @@
   [#168](https://github.com/Pipeliner/realms-de/issues/168),
   [#133](https://github.com/Pipeliner/realms-de/issues/133)
 - **Supersedes / Superseded by:** Supplies the M2 activation-ownership and
-  teardown clauses that Draft SPECs 0003 and 0005 previously left unresolved;
-  it does not accept either draft as a whole.
+  teardown clauses that SPEC 0003 incorporates and that Draft SPEC 0005 still
+  leaves unresolved; it does not accept SPEC 0005 as a whole.
 
 ## Purpose
 
@@ -35,8 +35,8 @@ lifecycle server restart.
 - Sealed-tree construction, selection, manifest validation, process-lease
   creation, and generation deletion remain [SPEC 0011](0011-theme-activation-generations.md).
 - River existing-window replay, ledger reconstruction, projection and readiness
-  remain Draft [SPEC 0003](0003-realm-session.md) M2. In particular this spec does
-  not answer its river replay open question.
+  remain [SPEC 0003](0003-realm-session.md) M2. This lifecycle specification
+  delegates those behaviours to SPEC 0003 rather than defining them twice.
 - Desktop-entry parsing and D-Bus ownership remain
   [#133](https://github.com/Pipeliner/realms-de/issues/133).  Session-wide
   environment publication/restoration remains ADR 0011/SPEC 0005/#117 work.

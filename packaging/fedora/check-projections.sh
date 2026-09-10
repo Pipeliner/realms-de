@@ -392,7 +392,7 @@ assert_fedora_build_evidence_boundary() {
             lower = tolower(paragraph)
             fedora = "(fedora[[:space:]]*(44|lane)|f44|fedora[-:]44)"
             runtime = "(clean[-[:space:]]*install|package[[:space:]]+installation|graphical|session|selinux)"
-            boundary = "(does[[:space:]]+not|do[[:space:]]+not|cannot|not[[:space:]]+(clean|install|graphical|session|selinux|evidence|support|working)|no[[:space:]]+(clean|package|graphical|session|selinux|architecture)|unverified|unsupported|neither|nor[[:space:]]|without|outside|blocked)"
+            boundary = "(does[[:space:]]+not|do[[:space:]]+not|cannot|not[[:space:]]+(clean|install|graphical|session|selinux|evidence|support|working)|no[[:space:]]+(clean|package|graphical|session|selinux|architecture)|no.*(clean|package|graphical|session|selinux).*evidence|unverified|unsupported|neither|nor[[:space:]]|without|outside|blocked)"
             if (lower ~ fedora && lower ~ runtime && lower !~ boundary) {
                 exit 1
             }
@@ -407,6 +407,18 @@ assert_fedora_build_evidence_boundary() {
 
         /^[[:space:]]*$/ {
             inspect_paragraph()
+            paragraph = ""
+            next
+        }
+
+        /^[[:space:]]*\|/ {
+            inspect_paragraph()
+            paragraph = ""
+            cell_count = split($0, cells, "|")
+            for (cell = 1; cell <= cell_count; cell++) {
+                paragraph = cells[cell]
+                inspect_paragraph()
+            }
             paragraph = ""
             next
         }

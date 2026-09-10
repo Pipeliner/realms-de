@@ -18,6 +18,20 @@ river's window manager; `NativeBackend` implements it in-process against
 `realm-compositor` in M5. Nothing above this line changes when we swap them.
 
 ```rust
+pub type BackendResult<T> = std::result::Result<T, BackendError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum BackendError {
+    #[error("backend cannot honour capability {capability}")]
+    Unsupported { capability: String },
+    #[error("backend disconnected")]
+    Disconnected,
+    #[error("backend unavailable: {message}")]
+    Unavailable { message: String },
+    #[error("backend I/O failed: {message}")]
+    Io { message: String },
+}
+
 /// A window manager realm can drive.
 ///
 /// Implementations translate realm's ledger operations into whatever the
@@ -29,29 +43,34 @@ pub trait WmBackend: Send {
     fn name(&self) -> &str;
 
     /// Connect, and report what the backend can actually honour.
-    fn connect(&mut self) -> Result<Capabilities>;
+    fn connect(&mut self) -> BackendResult<Capabilities>;
 
     /// Apply a projection. Called only when the projection has changed.
     ///
     /// Implementations must be idempotent: submitting the same placements
     /// twice must not produce a visible change or a second frame.
-    fn apply(&mut self, placements: &[Placement]) -> Result<()>;
+    fn apply(&mut self, placements: &[Placement]) -> BackendResult<()>;
 
     /// Give a window keyboard focus.
-    fn focus(&mut self, win: WinId) -> Result<()>;
+    fn focus(&mut self, win: WinId) -> BackendResult<()>;
 
     /// Ask a window to close politely; the compositor may refuse.
-    fn close(&mut self, win: WinId) -> Result<()>;
+    fn close(&mut self, win: WinId) -> BackendResult<()>;
 
     /// The workarea currently available for tiling.
     fn workarea(&self) -> Workarea;
 
+    /// The backend's readable descriptor for the session event loop's poll set.
+    fn event_fd(&self) -> std::os::fd::RawFd;
+
     /// Block until the next backend event, or until `deadline`.
-    fn next_event(&mut self, deadline: Option<Instant>) -> Result<Option<BackendEvent>>;
+    fn next_event(&mut self, deadline: Option<Instant>) -> BackendResult<Option<BackendEvent>>;
 }
 
 /// What a backend can and cannot do, so realm degrades honestly rather than
-/// pretending. `realmctl doctor` prints this.
+/// pretending. This serialisable wire type lives in `realm_core::ipc`, and
+/// `realmctl doctor` prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
     /// True when the *rendered* rectangle is exactly the projected one.
     ///
@@ -65,7 +84,7 @@ pub struct Capabilities {
     pub hide_show: bool,          // is stow expressible?
     pub explicit_ordering: bool,  // can we set stacking order directly?
     pub fullscreen: bool,
-    pub unsupported: Vec<&'static str>, // named realm behaviours this backend cannot honour
+    pub unsupported: Vec<String>, // named realm behaviours this backend cannot honour
 }
 
 /// Something the compositor did that the ledger needs to know about.
@@ -158,17 +177,19 @@ scoped accordingly.
 
 Two consequences worth stating plainly, because they cut both ways:
 
-1. **`apply()` maps onto one `manage` sequence.** river applies window-management
-   state atomically between `manage_start` and `manage_finish`, which is exactly
-   the guarantee the projection wants: a relayout is never observed half-done.
+1. **`apply()` maps onto one manage/render transaction.** River applies sizes
+   atomically between `manage_start` and `manage_finish`, then Realm applies
+   positions and visibility before `render_finish`. The resulting relayout is
+   never observed half-done.
 2. **`realm-session` is now on the compositor's input path, with a hard liveness
    requirement.** Under niri, a crashed session daemon left a working if
    unmanaged desktop. Under river it leaves windows unplaced and keys dead, and
-   the protocol has an `unresponsive` error: `modifiers_update` warns that the
-   compositor's input buffering is finite. **A stall is a session failure, not a
-   slow frame.** Nothing in `realm-session` may block — not a theme apply, not a
-   socket write to a wedged subscriber. This promotes the frame budgets in
-   ARCHITECTURE §4 from performance goals to correctness requirements. See
+   the protocol warns that the compositor's input buffering is finite. River
+   v0.4.8 queues 1024 seat events and then drops new input; it declares but does
+   not post its `unresponsive` protocol error. **A stall is a session failure,
+   not a slow frame.** Nothing in `realm-session` may block — not a theme apply,
+   not a socket write to a wedged subscriber. This promotes the frame budgets
+   in ARCHITECTURE §4 from performance goals to correctness requirements. See
    ADR 0013.
 
 On stability: `river-window-management-v1` is **declared stable** as of river
