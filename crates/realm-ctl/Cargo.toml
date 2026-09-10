@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 clap = { workspace = true }
 realm-core = { workspace = true }
+realm-control = { workspace = true }
 realm-theme = { path = "../realm-theme", version = "0.1.0" }
 serde_json = { workspace = true }
 

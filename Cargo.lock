@@ -291,6 +291,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "realm-control"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "tempfile",
+]
+
+[[package]]
 name = "realm-core"
 version = "0.1.0"
 dependencies = [
@@ -305,6 +313,7 @@ name = "realm-ctl"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "realm-control",
  "realm-core",
  "realm-theme",
  "serde_json",
@@ -315,6 +324,7 @@ dependencies = [
 name = "realm-session"
 version = "0.1.0"
 dependencies = [
+ "realm-control",
  "realm-core",
  "serde",
  "serde_json",

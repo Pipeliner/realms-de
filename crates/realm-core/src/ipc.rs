@@ -5,8 +5,6 @@
 //! human can drive the whole desktop with `socat`. Newline framing means a
 //! partially written frame can never be mistaken for a complete one.
 
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
 
 use crate::layout::Layout;
@@ -35,32 +33,6 @@ pub struct Capabilities {
     pub fullscreen: bool,
     /// Stable names of Realm behaviours this backend cannot honour.
     pub unsupported: Vec<String>,
-}
-
-/// Socket path: `$XDG_RUNTIME_DIR/realm/ctl.sock`, or a `/tmp` fallback.
-///
-/// The fallback is per-uid so two users on one machine never collide.
-pub fn socket_path() -> PathBuf {
-    if let Some(dir) = std::env::var_os("REALM_SOCKET") {
-        return PathBuf::from(dir);
-    }
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(format!("/tmp/realm-{}", uid())));
-    base.join("realm").join("ctl.sock")
-}
-
-fn uid() -> u32 {
-    // Avoid a libc dependency in a crate that is otherwise pure.
-    std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find_map(|l| l.strip_prefix("Uid:"))
-                .and_then(|l| l.split_whitespace().next().map(str::to_owned))
-        })
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1000)
 }
 
 /// A command sent to the session.
@@ -226,17 +198,6 @@ mod tests {
             }],
         }]);
         assert_eq!(decode::<Response>(&encode(&r).unwrap()).unwrap(), r);
-    }
-
-    #[test]
-    fn socket_path_honours_the_environment() {
-        let prev = std::env::var_os("REALM_SOCKET");
-        std::env::set_var("REALM_SOCKET", "/run/custom/realm.sock");
-        assert_eq!(socket_path(), PathBuf::from("/run/custom/realm.sock"));
-        match prev {
-            Some(v) => std::env::set_var("REALM_SOCKET", v),
-            None => std::env::remove_var("REALM_SOCKET"),
-        }
     }
 
     #[test]

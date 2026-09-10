@@ -9,6 +9,7 @@ members = [
     "crates/realm-agent-sdd",
     "crates/realm-ctl",
     "crates/realm-session",
+    "crates/realm-control",
 ]
 
 [workspace.package]
@@ -25,6 +26,7 @@ authors = ["realm contributors"]
 
 [workspace.dependencies]
 realm-core = { path = "crates/realm-core", version = "0.1.0" }
+realm-control = { path = "crates/realm-control", version = "0.1.0" }
 
 anyhow = "1"
 thiserror = "2"
@@ -34,7 +36,7 @@ toml = "1.1"
 clap = { version = "4", features = ["derive", "wrap_help"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rustix = { version = "1", features = ["fs", "process", "net"] }
+rustix = { version = "1", features = ["fs", "process", "net", "event"] }
 
 [profile.release]
 opt-level = 3
