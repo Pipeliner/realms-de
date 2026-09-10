@@ -428,15 +428,15 @@ mod tests {
     use std::os::fd::RawFd;
     use std::time::Instant;
 
-    use realm_core::ipc::Capabilities;
+    use realm_core::ipc::{Capabilities, PROTOCOL_VERSION};
     use realm_core::layout::{project, Layout, Placement, Rect, TriptychParams, Workarea};
     use realm_core::ledger::Dir;
     use realm_core::state::Module;
-    use realm_core::{OrbitId, WinId};
+    use realm_core::{Ledger, OrbitId, WinId};
 
     use crate::backend::{BackendError, BackendEvent, BackendResult, BackendWindowId, WmBackend};
 
-    use super::Session;
+    use super::{RecoveryPhase, Session, SessionEventError, SessionSnapshotV1, SnapshotBinding};
 
     struct FakeBackend {
         connect_calls: usize,
@@ -553,6 +553,227 @@ mod tests {
             app_id: "foot".to_owned(),
             title: title.to_owned(),
         }
+    }
+
+    fn recovery_snapshot() -> SessionSnapshotV1 {
+        let first = OrbitId::from_human(1).unwrap();
+        let second = OrbitId::from_human(2).unwrap();
+        let mut ledger = Ledger::new();
+        ledger.summon(WinId(7), first);
+        ledger.summon(WinId(9), first);
+        assert!(ledger.move_to_orbit(second));
+        SessionSnapshotV1::new(
+            ledger,
+            vec![
+                SnapshotBinding {
+                    win_id: WinId(7),
+                    backend_id: BackendWindowId("restored-7".to_owned()),
+                },
+                SnapshotBinding {
+                    win_id: WinId(9),
+                    backend_id: BackendWindowId("missing-9".to_owned()),
+                },
+            ],
+            10,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn snapshot_validation_is_closed_and_total() {
+        let snapshot = recovery_snapshot();
+        let encoded = snapshot.to_json().unwrap();
+        assert_eq!(SessionSnapshotV1::from_json(&encoded).unwrap(), snapshot);
+
+        let mut unknown: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        unknown["unexpected"] = serde_json::json!(true);
+        assert!(SessionSnapshotV1::from_json(&serde_json::to_vec(&unknown).unwrap()).is_err());
+
+        let mut wrong_schema: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        wrong_schema["schema_version"] = serde_json::json!(2);
+        assert!(
+            SessionSnapshotV1::from_json(&serde_json::to_vec(&wrong_schema).unwrap()).is_err()
+        );
+
+        let mut wrong_protocol: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        wrong_protocol["protocol_version"] = serde_json::json!(PROTOCOL_VERSION + 1);
+        assert!(
+            SessionSnapshotV1::from_json(&serde_json::to_vec(&wrong_protocol).unwrap()).is_err()
+        );
+
+        let mut mismatched_active: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        mismatched_active["active_orbit"] = serde_json::json!(1);
+        assert!(
+            SessionSnapshotV1::from_json(&serde_json::to_vec(&mismatched_active).unwrap()).is_err()
+        );
+
+        let mut incomplete: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        incomplete["bindings"].as_array_mut().unwrap().pop();
+        assert!(SessionSnapshotV1::from_json(&serde_json::to_vec(&incomplete).unwrap()).is_err());
+    }
+
+    #[test]
+    fn initial_replay_is_silent_and_rebinds_each_identity_once() {
+        let mut session =
+            Session::connect_with_snapshot(FakeBackend::new(), Some(recovery_snapshot())).unwrap();
+
+        assert_eq!(session.phase(), RecoveryPhase::InitialReplay);
+        assert!(session.snapshot().is_none());
+        for event in [
+            window_opened("restored-7", "old title"),
+            window_opened("restored-7", "latest title"),
+            window_opened("new-10", "new"),
+        ] {
+            let update = session.handle_backend_event(event).unwrap();
+            assert!(!update.projection_applied);
+            assert!(update.state.is_none());
+        }
+
+        assert!(session.backend.assignment_attempts.is_empty());
+        assert!(session.backend.apply_attempts.is_empty());
+        assert!(session.snapshot().is_none());
+    }
+
+    #[test]
+    fn replay_barrier_reconciles_then_publishes_once() {
+        let mut session =
+            Session::connect_with_snapshot(FakeBackend::new(), Some(recovery_snapshot())).unwrap();
+        session
+            .handle_backend_event(window_opened("new-10", "new"))
+            .unwrap();
+        session
+            .handle_backend_event(window_opened("restored-7", "restored"))
+            .unwrap();
+
+        let update = session
+            .handle_backend_event(BackendEvent::InitialReplayComplete)
+            .unwrap();
+
+        assert_eq!(session.phase(), RecoveryPhase::Live);
+        assert_eq!(session.ledger().active_orbit().windows, [WinId(7), WinId(10)]);
+        assert!(session
+            .ledger()
+            .orbit(OrbitId::from_human(2).unwrap())
+            .windows
+            .is_empty());
+        assert_eq!(session.ledger().undo_depth(), 0);
+        assert_eq!(session.backend.assignment_attempts.len(), 2);
+        assert_eq!(session.backend.apply_attempts.len(), 1);
+        assert_eq!(update.state.as_ref().unwrap().revision, 1);
+        assert_eq!(session.state().revision, 1);
+
+        let persisted = session.snapshot().unwrap();
+        assert_eq!(persisted.next_win_id(), 11);
+        assert_eq!(persisted.bindings()[0].win_id, WinId(7));
+        assert_eq!(persisted.bindings()[1].win_id, WinId(10));
+
+        let mut empty = Session::connect(FakeBackend::new()).unwrap();
+        let empty_update = empty
+            .handle_backend_event(BackendEvent::InitialReplayComplete)
+            .unwrap();
+        assert_eq!(empty.backend.apply_attempts, [Vec::<Placement>::new()]);
+        assert_eq!(empty_update.state.unwrap().revision, 1);
+    }
+
+    #[test]
+    fn backend_work_gets_one_retry_and_gates_event_reads() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        session
+            .handle_backend_event(window_opened("new-0", "new"))
+            .unwrap();
+        session.backend.fail_next_apply = Some(BackendError::Io {
+            message: "first apply failure".to_owned(),
+        });
+        session
+            .handle_backend_event(BackendEvent::InitialReplayComplete)
+            .unwrap_err();
+        assert!(session.has_pending_backend_work());
+        assert_eq!(session.phase(), RecoveryPhase::FinalizingReplay);
+        assert_eq!(session.backend.next_event_calls, 0);
+
+        let recovered = session.retry_pending_backend_work().unwrap();
+        assert!(!session.has_pending_backend_work());
+        assert_eq!(session.phase(), RecoveryPhase::Live);
+        assert_eq!(recovered.state.unwrap().revision, 1);
+
+        let mut exhausted_retry = Session::connect(FakeBackend::new()).unwrap();
+        exhausted_retry.backend.fail_next_apply = Some(BackendError::Io {
+            message: "first apply failure".to_owned(),
+        });
+        exhausted_retry
+            .handle_backend_event(BackendEvent::InitialReplayComplete)
+            .unwrap_err();
+        exhausted_retry.backend.fail_next_apply = Some(BackendError::Io {
+            message: "second apply failure".to_owned(),
+        });
+        let error = exhausted_retry.retry_pending_backend_work().unwrap_err();
+        assert!(matches!(error, SessionEventError::BackendRetryExhausted(_)));
+        assert!(!exhausted_retry.has_pending_backend_work());
+        assert_eq!(exhausted_retry.backend.apply_attempts.len(), 2);
+    }
+
+    #[test]
+    fn persistence_exposes_only_authoritative_live_state() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        assert!(session.snapshot().is_none());
+        session
+            .handle_backend_event(BackendEvent::InitialReplayComplete)
+            .unwrap();
+        session
+            .handle_backend_event(window_opened("one", "one"))
+            .unwrap();
+        session
+            .handle_backend_event(window_opened("two", "two"))
+            .unwrap();
+        let authoritative = session.snapshot().unwrap();
+
+        session.backend.fail_next_apply = Some(BackendError::Io {
+            message: "candidate rejected".to_owned(),
+        });
+        session.set_layout(Layout::Mono).unwrap_err();
+        assert_eq!(session.snapshot().unwrap(), authoritative);
+
+        session.retry_pending_backend_work().unwrap();
+        session.backend.fail_next_apply = Some(BackendError::Io {
+            message: "observed repair pending".to_owned(),
+        });
+        session
+            .handle_backend_event(BackendEvent::WindowClosed(WinId(1)))
+            .unwrap_err();
+        let observed = session.snapshot().unwrap();
+        assert_eq!(observed.bindings().len(), 1);
+        assert_eq!(observed.bindings()[0].win_id, WinId(0));
+    }
+
+    #[test]
+    fn exhausted_watermark_never_allocates_the_sentinel() {
+        let mut ledger = Ledger::new();
+        ledger.summon(WinId(u64::MAX - 1), OrbitId::default());
+        let snapshot = SessionSnapshotV1::new(
+            ledger.clone(),
+            vec![SnapshotBinding {
+                win_id: WinId(u64::MAX - 1),
+                backend_id: BackendWindowId("old".to_owned()),
+            }],
+            u64::MAX,
+        )
+        .unwrap();
+        let mut session =
+            Session::connect_with_snapshot(FakeBackend::new(), Some(snapshot)).unwrap();
+        session
+            .handle_backend_event(window_opened("new", "new"))
+            .unwrap();
+
+        let error = session
+            .handle_backend_event(BackendEvent::InitialReplayComplete)
+            .unwrap_err();
+
+        assert_eq!(error, SessionEventError::WindowIdExhausted);
+        assert_eq!(session.phase(), RecoveryPhase::InitialReplay);
+        assert_eq!(session.ledger(), &ledger);
+        assert!(session.backend.assignment_attempts.is_empty());
+        assert!(session.backend.apply_attempts.is_empty());
+        assert!(session.snapshot().is_none());
     }
 
     #[test]
