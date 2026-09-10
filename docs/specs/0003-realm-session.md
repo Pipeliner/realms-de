@@ -726,6 +726,38 @@ battery change alters no window-management and no rendering state, so it must
 not make `manage_dirty`. A session that took a compositor round trip once a
 second would multiply its own input latency for a clock.
 
+### 9. Typed desired-action reducer
+
+The compositor-independent session core exposes one typed operation for each
+ledger action needed by the M2 keymap and control surface:
+`focus_step(Dir)`, `swap(Dir)`, `move_focused_to_orbit(OrbitId)`,
+`toggle_stow()`, `toggle_fullscreen()`, `undo()`, `switch_orbit(OrbitId)`, and
+`set_layout(Layout)`. It does not expose a generic ledger closure or mutable
+ledger access. Mode changes and process-level actions such as spawn, launcher,
+grimoire, theme reload, and quit remain outside this reducer because they have
+different compositor or process-lifecycle contracts.
+
+Every typed ledger operation uses the same transaction boundary: clone the
+authoritative ledger, invoke exactly the corresponding `Ledger` method, derive
+one complete projection, submit it at most once, and commit the candidate
+ledger and newly derived visible state only after backend success. A backend
+error rejects the candidate, retains the prior ledger, visible state, and
+revision, and leaves projection state dirty so the next repair submits the
+complete authoritative projection. An operation whose externally visible
+ledger state is unchanged emits no state and does not submit an unchanged
+clean projection.
+
+`request_close_focused()` is intentionally not a ledger mutation. With no
+focused window it is a no-op. Otherwise it asks the backend to close exactly
+that `WinId` and leaves the ledger, projection, visible state, and revision
+unchanged whether the request succeeds or fails. Only the later observed
+`BackendEvent::WindowClosed` removes the window.
+
+`toggle_whichkey()` toggles only `RealmState::whichkey`, increments the
+revision once, and emits that state without a backend apply or a locally
+invented workarea. If the bar's exclusive zone changes, the resulting
+`BackendEvent::WorkareaChanged` is the sole trigger for re-projection.
+
 ## Acceptance criteria
 
 Each row is one happy path and becomes one test.
@@ -758,6 +790,12 @@ Each row is one happy path and becomes one test.
 | A19 | Given two observed and assigned windows, when a typed desired layout operation is staged and a backend that advertises the required capability as unsupported rejects its projection with `BackendError::Unsupported` carrying that name, then the staged ledger and projection are not committed and the visible state and revision remain unchanged | `session::tests::unsupported_apply_rolls_back_and_emits_no_state`; socket-frame coverage remains SPEC 0007 |
 | A20 | Given projection P1 succeeded, an attempted projection P2 may have partially applied before returning an error, and authoritative state later projects to P1 again, when projection is retried, then both the session and backend treat their caches as dirty and the backend issues the complete P1 projection rather than suppressing it by equality with the last-successful cache | `session::tests::failed_apply_marks_projection_dirty_until_a_complete_repair`; the River backend cache contract remains part of #40 |
 | A21 | Given a newly observed backend window identity and an error-atomic transient `assign_window` failure, when the event is handled and the outer loop retries before reading another backend event, then the ledger, metadata, stable mapping, and advanced non-reuse watermark survive the error, no state is published before binding succeeds, and retry binds the same `WinId` before applying and publishing it | `session::tests::failed_identity_binding_preserves_observed_window_for_retry` |
+| A22 | Given two tiled windows, when `focus_step(Dir::Prev)` succeeds, then the focused id and title change, the revision advances once, and exactly one complete candidate projection is submitted; if that submission fails, the candidate ledger and state are rejected and the next repair submits the complete prior authoritative projection | `session::tests::focus_step_commits_one_projection_and_one_visible_state`, `session::tests::failed_focus_step_rejects_the_candidate_and_repairs_authoritative_state` |
+| A23 | Given two tiled windows, when `swap(Dir::Prev)` succeeds, then their ledger order and focus change with exactly one projection submission; with fewer than two windows it submits no projection and emits no state | `session::tests::swap_changes_order_once_and_is_a_no_op_with_one_window` |
+| A24 | Given any typed ledger operation in §9, when its candidate projection fails, then no candidate ledger, visible state, or revision is committed, and retry repairs the complete prior authoritative projection; a failed `undo()` does not consume history | `session::tests::failed_undo_does_not_consume_history`; A19 and A22 exercise the shared transaction boundary through other typed operations |
+| A25 | Given a focused window, when `request_close_focused()` succeeds or fails, then it targets exactly that id and does not mutate the ledger, projection, visible state, or revision; the window is removed only when `WindowClosed` is observed | `session::tests::close_request_waits_for_the_observed_close_before_mutating_state` |
+| A26 | Given no focused window, when `request_close_focused()` runs, then it makes no backend request and returns no target | `session::tests::close_request_is_a_no_op_without_a_focused_window` |
+| A27 | Given a stable session, when `toggle_whichkey()` runs, then `whichkey` and the revision change once with no backend apply; only a later observed `WorkareaChanged` may re-project windows | `session::tests::whichkey_toggle_only_emits_state_until_workarea_is_observed` |
 
 ## Budgets
 
