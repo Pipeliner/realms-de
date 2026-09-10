@@ -1,6 +1,7 @@
 //! Transactional session state and projection coordination.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 
 use realm_core::ipc::Capabilities;
 use realm_core::ipc::PROTOCOL_VERSION;
@@ -662,6 +663,13 @@ impl<B: WmBackend> Session<B> {
     /// True when backend repair must run before another event is read.
     pub fn has_pending_backend_work(&self) -> bool {
         self.pending_backend_work
+    }
+
+    pub(crate) fn next_backend_event(
+        &mut self,
+        now: Instant,
+    ) -> BackendResult<Option<BackendEvent>> {
+        self.backend.next_event(Some(now))
     }
 
     /// A validated persistence snapshot, exposed only in authoritative live state.
