@@ -1,7 +1,7 @@
 # ADR 0007 — Reuse yazi, btop and zsh+starship rather than rewrite them
 
 - **Status:** Accepted (ratified 2026-08-28); see Reversal
-- **Deciders:** helm maintainers
+- **Deciders:** realm maintainers
 - **Supersedes / Superseded by:** —
 
 ## Context
@@ -28,13 +28,13 @@ specific assignments.
 
 ## Decision
 
-| helm name | Implementation | What we actually build | Milestone |
+| realm name | Implementation | What we actually build | Milestone |
 |---|---|---|---|
-| charon (files) | **yazi** | `configs/yazi/`: generated theme, helm keymap, preview and thumbnail settings | M1 |
+| charon (files) | **yazi** | `configs/yazi/`: generated theme, realm keymap, preview and thumbnail settings | M1 |
 | horus (monitor) | **btop** | `configs/btop/`: generated theme | M1 |
 | thoth (shell) | **zsh + starship** | `configs/zsh/`, `configs/starship/`: generated prompt and colours | M1 |
-| hecate (launcher) | **fuzzel**, as a stopgap | `configs/fuzzel/`: generated theme. Retired by `helm-hecate` | M1, retired M4 |
-| odin (agent harness) | **`helm-odin`, written from scratch** | A `ratatui` TUI. Nothing existing matches | M4 |
+| hecate (launcher) | **fuzzel**, as a stopgap | `configs/fuzzel/`: generated theme. Retired by `realm-hecate` | M1, retired M4 |
+| odin (agent harness) | **`realm-odin`, written from scratch** | A `ratatui` TUI. Nothing existing matches | M4 |
 | charon portal | **GTK FileChooser through `xdg-desktop-portal-gtk`** | `configs/portal/`. The toolkit chooser remains the supported portal FileChooser through M3; a terminal chooser is not substituted for it. Native charon dialog is considered at M4. | M3, reconsider M4 |
 
 The rule that makes this safe: **always behind a seam.** Every reused tool is
@@ -50,8 +50,8 @@ starship are not stopgaps. We currently expect them to be permanent.
 | Option | Why it was attractive | Why it lost |
 |---|---|---|
 | **Write `ratatui` equivalents now** | Total control over every pixel, so the design is matched exactly rather than approximated; one language, one build, one theme mechanism; no upstream to track | A file manager that is genuinely trustworthy with a user's files is a multi-year project, and the first two years of it are worse than yazi. The same is true of btop's sensor coverage, which spans a decade of hardware quirks we have no way to test against. This would consume the entire M0–M3 critical path and produce a worse desktop |
-| **Fork them and vendor the forks** | Exact control while keeping the existing feature set; no upstream to negotiate with; we could add a helm-native theming hook | Permanent maintenance. Every upstream fix has to be merged by us forever, and the divergence only grows. We would be taking on the cost of a rewrite without getting the benefit of owning a clean design |
-| **Reuse, but wrap each tool in a helm process that mediates it** | A uniform helm-shaped interface over heterogeneous tools; could unify theming and keybinding | A layer of indirection that buys nothing. The tools already read config files; generating those files *is* the integration. A wrapper would add latency and a second thing to debug |
+| **Fork them and vendor the forks** | Exact control while keeping the existing feature set; no upstream to negotiate with; we could add a realm-native theming hook | Permanent maintenance. Every upstream fix has to be merged by us forever, and the divergence only grows. We would be taking on the cost of a rewrite without getting the benefit of owning a clean design |
+| **Reuse, but wrap each tool in a realm process that mediates it** | A uniform realm-shaped interface over heterogeneous tools; could unify theming and keybinding | A layer of indirection that buys nothing. The tools already read config files; generating those files *is* the integration. A wrapper would add latency and a second thing to debug |
 | **Reuse different tools** (nnn or lf for files, htop or bottom for the monitor) | Some are lighter; `bottom` is Rust and themable | yazi's miller-column model is what the design specifies, and lf/nnn would need the columns building. `bottom` is a reasonable alternative to btop and worth revisiting, but btop's braille sparklines and meter style match the handoff's `▰▱` and `⡀⣤⣶` vocabulary more closely |
 
 ## Consequences
@@ -63,11 +63,11 @@ starship are not stopgaps. We currently expect them to be permanent.
 - Users get features we would never have got round to: yazi's archive preview,
   btop's per-core and GPU coverage, starship's language detection.
 - Each tool is independently useful and independently debuggable. A user can run
-  `yazi` outside helm and it still works.
+  `yazi` outside realm and it still works.
 - Bug reports about file operations go upstream, where people who understand
   file operations read them.
 - The reuse is visible in the repo layout (`configs/yazi/`, `configs/btop/`),
-  so nobody is misled about what helm wrote.
+  so nobody is misled about what realm wrote.
 
 ### Bad
 
@@ -98,14 +98,14 @@ Low per tool. Replacing a reused tool means writing the replacement — which is
 the expensive part and is unchanged by this decision — and then deleting a
 template and editing a keymap entry, which is an afternoon.
 
-We have already scheduled one reversal: fuzzel to `helm-hecate` at M4. A native
+We have already scheduled one reversal: fuzzel to `realm-hecate` at M4. A native
 charon dialog is considered only after the toolkit portal chooser has served
 through M3. Those changes will prove
 the seam works, or reveal that it does not, at a point where the cost of fixing
 it is still low.
 
 The signal to reconsider a *permanent* reuse would be an upstream that stops
-being maintained, or a theming limitation severe enough that helm looks like a
+being maintained, or a theming limitation severe enough that realm looks like a
 pile of programs rather than a desktop — which is the exact phrase `docs/MVP.md`
 uses for what the theme pipeline is meant to prevent.
 
@@ -116,7 +116,7 @@ uses for what the theme pipeline is meant to prevent.
   schema change fails CI rather than a user's session.
 - *Planned (M1):* a version-floor test asserting that the installed yazi, btop
   and starship are at least the versions whose theme keys our templates use.
-- *Planned (M3):* `helm ctl doctor` reports each reused tool's presence and
+- *Planned (M3):* `realm ctl doctor` reports each reused tool's presence and
   version, so a missing dependency is a diagnosis rather than a mystery.
 - *Planned (M2):* the seam guard — a CI grep asserting that the strings `yazi`,
   `btop`, `fuzzel` and `starship` appear only in `configs/`, `packaging/`,

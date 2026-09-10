@@ -16,7 +16,7 @@
 - No daemon, cloud service, hook, passive capture, embeddings, OpenSpec, Sphinx-Needs, Serena, or new CI workflow in this pilot.
 - GitHub issues remain the only Symphony work graph; do not mutate Beads or mirror issues.
 - Every tracked evidence record is metadata only: no raw output, environment values, credentials, arbitrary transcript, or customer data.
-- `helm-sdd` validates and reports; it never promotes product contracts or alters canonical status.
+- `realm-sdd` validates and reports; it never promotes product contracts or alters canonical status.
 
 ---
 
@@ -54,7 +54,7 @@
 
 **Files:**
 - Modify: root `Cargo.toml`.
-- Create: `crates/helm-agent-sdd/` with library, `helm-sdd` binary, and tests.
+- Create: `crates/realm-agent-sdd/` with library, `realm-sdd` binary, and tests.
 - Create: crate-local record templates materialized into temporary clean Git repositories by tests.
 
 - [ ] Write failing tests for duplicate and zero-only evidence IDs, invalid lifecycle transition, an initial regular-blob metadata-only record-carrier commit, stale/non-carrier/root/merge commit evidence, prohibited evidence fields, and exact report output.

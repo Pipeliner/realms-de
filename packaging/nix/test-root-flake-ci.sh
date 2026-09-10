@@ -12,7 +12,7 @@ if [ ! -x "$guard" ]; then
     exit 1
 fi
 
-tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/helm-root-flake-ci-test.XXXXXX")
+tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/realm-root-flake-ci-test.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 
 tests_run=0

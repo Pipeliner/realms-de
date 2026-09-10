@@ -4,7 +4,7 @@
 # start a graphical session, exercise SELinux, or establish architecture support.
 #
 # Today these jobs build and test the Rust workspace. The point is scaffolding:
-# when helm-session pulls in Wayland, D-Bus and systemd, the distro that
+# when realm-session pulls in Wayland, D-Bus and systemd, the distro that
 # disagrees will say so on the commit that broke it.
 name: distro
 
@@ -45,8 +45,8 @@ jobs:
       - name: Build retained-only Debian source kit with the archive toolchain
         run: |
           set -euo pipefail
-          packaging/tool-sources/build-native-source-kits.sh "$RUNNER_TEMP/helm-native-kits"
-          cd "$RUNNER_TEMP/helm-native-kits/helm-debian-0.1.0"
+          packaging/tool-sources/build-native-source-kits.sh "$RUNNER_TEMP/realm-native-kits"
+          cd "$RUNNER_TEMP/realm-native-kits/realm-debian-0.1.0"
           dpkg-buildpackage -us -uc -b -d
 
   # This lane builds the retained-source RPM only; it does not clean-install
@@ -62,13 +62,13 @@ jobs:
       - name: Build retained-only RPM Source0
         run: |
           set -euo pipefail
-          packaging/tool-sources/build-native-source-kits.sh "$RUNNER_TEMP/helm-native-kits"
+          packaging/tool-sources/build-native-source-kits.sh "$RUNNER_TEMP/realm-native-kits"
           mkdir -p "$RUNNER_TEMP/rpmbuild"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-          cp "$RUNNER_TEMP/helm-native-kits/helm-0.1.0.tar.gz" "$RUNNER_TEMP/rpmbuild/SOURCES/"
-          cp "$RUNNER_TEMP/helm-native-kits/helm.spec" "$RUNNER_TEMP/rpmbuild/SPECS/"
+          cp "$RUNNER_TEMP/realm-native-kits/realm-0.1.0.tar.gz" "$RUNNER_TEMP/rpmbuild/SOURCES/"
+          cp "$RUNNER_TEMP/realm-native-kits/realm.spec" "$RUNNER_TEMP/rpmbuild/SPECS/"
           rpmbuild -bb --nodeps \
             --define "_topdir $RUNNER_TEMP/rpmbuild" \
-            "$RUNNER_TEMP/rpmbuild/SPECS/helm.spec"
+            "$RUNNER_TEMP/rpmbuild/SPECS/realm.spec"
 
   fedora-baseline-contract:
     name: Fedora baseline contract
@@ -176,5 +176,5 @@ jobs:
               ".#checks.$system.shellcheck" \
               ".#checks.$system.package" \
               ".#checks.$system.packaged-binaries" \
-              ".#checks.$system.helm-sdd-git-runtime"
+              ".#checks.$system.realm-sdd-git-runtime"
           fi

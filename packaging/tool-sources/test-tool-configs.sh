@@ -1,5 +1,5 @@
 #!/bin/sh
-# B4 schema guard: Helm's Yazi template must target the selected v25.4.8 schema.
+# B4 schema guard: Realm's Yazi template must target the selected v25.4.8 schema.
 set -eu
 
 root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)

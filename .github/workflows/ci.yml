@@ -1,9 +1,9 @@
 # The trio gate from CLAUDE.md: fmt, clippy, test — plus the two guards that
-# only bite on a repo like this one. `docs` exists because helm-core is
+# only bite on a repo like this one. `docs` exists because realm-core is
 # #![warn(missing_docs)] and a warning nobody reads is not a contract; `msrv`
 # exists because the locked dependency graph sets the source-build MSRV, and a
 # floor that is never tested drifts upward silently. Ubuntu's glibc would be a
-# separate compatibility boundary if Helm later distributes prebuilt binaries.
+# separate compatibility boundary if Realm later distributes prebuilt binaries.
 name: ci
 
 on:
@@ -74,6 +74,8 @@ jobs:
         with:
           components: rustfmt
       # No cache: rustfmt never compiles the crate, so there is nothing to reuse.
+      - name: Require the Realm project namespace
+        run: scripts/check-project-namespace
       - run: cargo fmt --all --check
 
   clippy:
@@ -100,7 +102,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: test
-      # --all-features because palette.toml is include_str!-ed into helm-core's
+      # --all-features because palette.toml is include_str!-ed into realm-core's
       # tests: a bad palette edit has to fail here, not on a user's desktop.
       - run: cargo test --workspace --all-features
 
@@ -108,7 +110,7 @@ jobs:
     name: docs
     runs-on: ubuntu-24.04
     env:
-      # helm-core is the contract every other crate is written against, so an
+      # realm-core is the contract every other crate is written against, so an
       # undocumented public item is a broken contract, not a nit.
       RUSTDOCFLAGS: -D warnings
     steps:
@@ -140,7 +142,7 @@ jobs:
         id: native-temp
         run: |
           set -euo pipefail
-          native_temp=$(mktemp -d /tmp/helm-native-builds.XXXXXX)
+          native_temp=$(mktemp -d /tmp/realm-native-builds.XXXXXX)
           chmod 755 "$native_temp"
           sudo test -d "$native_temp"
           sudo test -w "$native_temp"
@@ -152,7 +154,7 @@ jobs:
           real_cargo=$(rustup which cargo)
           real_rustc=$(rustup which rustc)
           toolchain_root=$(dirname "$(dirname "$real_cargo")")
-          native_toolchain=$(mktemp -d /tmp/helm-native-rust.XXXXXX)
+          native_toolchain=$(mktemp -d /tmp/realm-native-rust.XXXXXX)
           cp -a "$toolchain_root/." "$native_toolchain/"
           chmod -R a+rX "$native_toolchain"
           sudo test -x "$native_toolchain/bin/cargo"
@@ -165,9 +167,9 @@ jobs:
       - name: Check network-isolated native package paths
         run: |
           sudo env \
-            HELM_NATIVE_TMPDIR="${{ steps.native-temp.outputs.path }}" \
-            HELM_REAL_CARGO="${{ steps.native-rust.outputs.path }}/bin/cargo" \
-            HELM_REAL_RUSTC="${{ steps.native-rust.outputs.path }}/bin/rustc" \
+            REALM_NATIVE_TMPDIR="${{ steps.native-temp.outputs.path }}" \
+            REALM_REAL_CARGO="${{ steps.native-rust.outputs.path }}/bin/cargo" \
+            REALM_REAL_RUSTC="${{ steps.native-rust.outputs.path }}/bin/rustc" \
             ./packaging/tool-sources/test-native-builds.sh
       - run: cargo doc --workspace --no-deps
 

@@ -1,6 +1,6 @@
-# helm — working agreement
+# realm — working agreement
 
-helm is a keyboard-first, gapless-tiling Wayland desktop environment. Rust-first,
+realm is a keyboard-first, gapless-tiling Wayland desktop environment. Rust-first,
 zero animations, one palette file.
 
 **Read first, always:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §1–§3 and

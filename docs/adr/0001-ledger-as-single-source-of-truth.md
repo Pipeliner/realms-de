@@ -1,18 +1,18 @@
 # ADR 0001 — The ledger is the single source of truth
 
 - **Status:** Accepted (ratified 2026-08-28); see Reversal
-- **Deciders:** helm maintainers
+- **Deciders:** realm maintainers
 - **Supersedes / Superseded by:** —
 
 ## Context
 
-The design handoff describes helm's window model in one sentence: "strict window
+The design handoff describes realm's window model in one sentence: "strict window
 ordering per orbit/workspace; layouts are pure projections of the ledger onto
 the workarea, never mutations. Undo = restore an earlier ledger."
 
 That is unusual. Most tiling window managers keep authoritative geometry: a
 window *has* an x, y, w, h, and a layout function mutates those numbers in
-place. It works, and it has three costs helm cannot afford:
+place. It works, and it has three costs realm cannot afford:
 
 - **Undo becomes an inverse-operation log.** Every mutation needs a matching
   un-mutation, and the pair must stay correct as new operations are added. In
@@ -26,13 +26,13 @@ place. It works, and it has three costs helm cannot afford:
   way to know that nothing moved, so the compositor resubmits configures it did
   not need to.
 
-helm's budget for "key press to new geometry submitted" is under 4 ms
+realm's budget for "key press to new geometry submitted" is under 4 ms
 (`docs/ARCHITECTURE.md` §4). That budget is only comfortable if relayout is
 integer arithmetic over a short list with no allocation-heavy bookkeeping.
 
 ## Decision
 
-`helm-core::ledger::Ledger` holds an ordered `Vec<WinId>` per orbit and nothing
+`realm-core::ledger::Ledger` holds an ordered `Vec<WinId>` per orbit and nothing
 else that describes position. Six orbits, each with its own layout, focus index,
 stow list and optional fullscreen window. `TriptychParams` is an external
 projection input: M0 passes it to `layout::project` and the ledger does not own
@@ -60,7 +60,7 @@ or persist it.
 | Scene graph as truth (a retained tree of nodes with computed layout, as toolkits do) | Natural fit for a Smithay compositor later; incremental invalidation comes free; handles nesting well | The tree becomes the state that must be serialised, undone and broadcast over IPC, and it is far larger than a `Vec<WinId>`. It also makes the *interesting* logic untestable without a compositor, which would have blocked M0 entirely |
 | Ledger as truth, but cache the last projection as authoritative | Would let us mutate a rect for a drag-resize without a ledger change | Two sources of truth is the failure mode this ADR exists to prevent. Resize instead adjusts `TriptychParams`, which is an input to the projection |
 
-The scene-graph option is not dead. It is what `helm-compositor` (M5) will build
+The scene-graph option is not dead. It is what `realm-compositor` (M5) will build
 *downstream* of the ledger, fed by the projection, rather than in place of it.
 
 ## Consequences
@@ -75,14 +75,14 @@ The scene-graph option is not dead. It is what `helm-compositor` (M5) will build
   `TriptychParams`, and workarea. The ledger snapshots contain only ledger
   state; a future requirement to undo parameter changes must first extend the
   accepted ledger specification and its tests.
-- The whole model is testable without a Wayland socket. `helm-core` has no I/O
+- The whole model is testable without a Wayland socket. `realm-core` has no I/O
   dependencies at all, which is why M0 landed before any compositor work.
-- The IPC state broadcast is small: `HelmState` is a handful of strings and six
+- The IPC state broadcast is small: `RealmState` is a handful of strings and six
   orbit cells, not a geometry tree.
 
 ### Bad
 
-- Floating windows do not fit. They are not in the ledger's shape and helm has
+- Floating windows do not fit. They are not in the ledger's shape and realm has
   no story for them beyond fullscreen and stow. Dialogs that expect to float
   will be tiled, which some applications handle badly.
 - Mouse-driven arbitrary resize does not fit either. Resize must be expressed as
@@ -104,8 +104,8 @@ The scene-graph option is not dead. It is what `helm-compositor` (M5) will build
 
 ## Reversal
 
-Structural. The ledger shape is assumed by `helm-core::layout`,
-`helm-core::state`, `helm-core::ipc`, every `WmBackend` implementation, the bar's
+Structural. The ledger shape is assumed by `realm-core::layout`,
+`realm-core::state`, `realm-core::ipc`, every `WmBackend` implementation, the bar's
 redraw logic and the undo command. Reversing means rewriting the core crate and
 every consumer of it: weeks, not days, and the result would be a different
 desktop environment.

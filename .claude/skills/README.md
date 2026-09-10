@@ -1,4 +1,4 @@
-# helm skills
+# realm skills
 
 Project-local Claude Code skills for building a Wayland desktop environment.
 Loaded automatically when a task matches a skill's `description`; `CLAUDE.md`
@@ -14,7 +14,7 @@ public catalogues are dense with document conversion, web scaffolding and API
 wrappers, and thin to empty on desktop internals.
 
 S4 says that absence is a signal to *write* the skill. These seven are the
-result. They encode the parts of helm that are expensive to rediscover: the
+result. They encode the parts of realm that are expensive to rediscover: the
 invariants that fail silently, the ordering contract that breaks portals, and
 the design rules the mockups state once and everything downstream depends on.
 
@@ -22,16 +22,16 @@ the design rules the mockups state once and everything downstream depends on.
 
 | Skill | Triggers when | What it prevents |
 |---|---|---|
-| [`helm-spec-first`](helm-spec-first/) | About to implement anything non-trivial; writing a spec or ADR; "should I write a test first" | Code landing ahead of a written contract; a spec that has silently diverged from its implementation; edge-case test matrices where a happy path was asked for |
-| [`helm-layout`](helm-layout/) | Editing `layout.rs` or `ledger.rs`; adding a layout; touching `project()` or `partition()` | Hairline cracks between tiles, overlapping or escaped rectangles, windows that twitch when focus moves, a second source of truth for geometry |
-| [`helm-theming`](helm-theming/) | Editing `palette.toml`; adding a template; theming an app; any question about a colour | A colour written down twice and drifting; a contrast *filter* returning and rotating accent hues; a half-applied, two-toned desktop |
+| [`realm-spec-first`](realm-spec-first/) | About to implement anything non-trivial; writing a spec or ADR; "should I write a test first" | Code landing ahead of a written contract; a spec that has silently diverged from its implementation; edge-case test matrices where a happy path was asked for |
+| [`realm-layout`](realm-layout/) | Editing `layout.rs` or `ledger.rs`; adding a layout; touching `project()` or `partition()` | Hairline cracks between tiles, overlapping or escaped rectangles, windows that twitch when focus moves, a second source of truth for geometry |
+| [`realm-theming`](realm-theming/) | Editing `palette.toml`; adding a template; theming an app; any question about a colour | A colour written down twice and drifting; a contrast *filter* returning and rotating accent hues; a half-applied, two-toned desktop |
 | [`wayland-session-integration`](wayland-session-integration/) | Session startup, systemd user units, portals, D-Bus activation, cursor, XWayland; file dialogs that hang; screen share that silently fails | The classic minimal-Wayland failure: `WAYLAND_DISPLAY` and `XDG_CURRENT_DESKTOP` never reaching the systemd and D-Bus activation environments |
-| [`helm-ui-fidelity`](helm-ui-fidelity/) | Building the bar, which-key strip, window headers, launcher or charon; reading the `.dc.html` prototypes | Drifting from the mockups; hardcoded sizes and colours; a rounded corner or an animation sneaking in; tofu glyphs on a machine without Nerd Fonts |
-| [`helm-perf-budget`](helm-perf-budget/) | Adding a timer, poll loop, animation or redraw path; anything hot; "is this fast enough" | Idle CPU that never reaches zero; redundant redraws; banned effects arriving as "just a small one"; performance claimed rather than measured |
-| [`helm-issue-flow`](helm-issue-flow/) | Picking up work, opening or closing an issue, running the agentic loop | Work that is not an issue; guessing at an ambiguous contract; a silent guess where a `needs-human` label belonged; a red build pushed |
-| [`helm-agent-sdd-bootstrap`](helm-agent-sdd-bootstrap/) | Beginning or recovering a local agent-SDD pilot investigation for one GitHub issue | A stale checkpoint treated as current truth; pilot records created without the normal issue/spec-first flow |
-| [`helm-agent-sdd-checkpoint`](helm-agent-sdd-checkpoint/) | Capturing a fresh issue-numbered pilot handoff or assessing a supported report-only edge | A record combined with ordinary work, stale Git provenance, or a dry-run assessment treated as promotion |
-| [`helm-agent-sdd-evidence-capture`](helm-agent-sdd-evidence-capture/) | Recording one fresh local pilot command, file observation or decision | Tool output, secrets, source snapshots or stale observations entering durable records |
+| [`realm-ui-fidelity`](realm-ui-fidelity/) | Building the bar, which-key strip, window headers, launcher or charon; reading the `.dc.html` prototypes | Drifting from the mockups; hardcoded sizes and colours; a rounded corner or an animation sneaking in; tofu glyphs on a machine without Nerd Fonts |
+| [`realm-perf-budget`](realm-perf-budget/) | Adding a timer, poll loop, animation or redraw path; anything hot; "is this fast enough" | Idle CPU that never reaches zero; redundant redraws; banned effects arriving as "just a small one"; performance claimed rather than measured |
+| [`realm-issue-flow`](realm-issue-flow/) | Picking up work, opening or closing an issue, running the agentic loop | Work that is not an issue; guessing at an ambiguous contract; a silent guess where a `needs-human` label belonged; a red build pushed |
+| [`realm-agent-sdd-bootstrap`](realm-agent-sdd-bootstrap/) | Beginning or recovering a local agent-SDD pilot investigation for one GitHub issue | A stale checkpoint treated as current truth; pilot records created without the normal issue/spec-first flow |
+| [`realm-agent-sdd-checkpoint`](realm-agent-sdd-checkpoint/) | Capturing a fresh issue-numbered pilot handoff or assessing a supported report-only edge | A record combined with ordinary work, stale Git provenance, or a dry-run assessment treated as promotion |
+| [`realm-agent-sdd-evidence-capture`](realm-agent-sdd-evidence-capture/) | Recording one fresh local pilot command, file observation or decision | Tool output, secrets, source snapshots or stale observations entering durable records |
 
 ## Adding an eighth
 
@@ -45,8 +45,8 @@ the design rules the mockups state once and everything downstream depends on.
    fires at all. Start with when to use it, stay in the third person, and name
    the concrete nouns someone would actually type — file paths, type names,
    commands, and the symptoms they would describe in their own words. Compare:
-   - poor: "Helps with helm's theming system."
-   - good: "Use when anything about helm's colour or generated theme files is in
+   - poor: "Helps with realm's theming system."
+   - good: "Use when anything about realm's colour or generated theme files is in
      play — editing `palette.toml`, adding a template, theming a new app…"
 4. **Apply progressive disclosure — this is a hard requirement** (S5, the same
    rule that keeps `CLAUDE.md` at forty lines). `SKILL.md` holds the decision

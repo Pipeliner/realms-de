@@ -4,7 +4,7 @@
 
 **Goal:** Replace mutable theme publication with validated sealed generations.
 
-**Architecture:** `helm-theme` gains a generation module which owns descriptor-relative tree construction, canonical manifest validation, the single advisory lock, pointer commit/recovery, leases and conservative GC. Existing direct-target reload fan-out is removed from the generation path.
+**Architecture:** `realm-theme` gains a generation module which owns descriptor-relative tree construction, canonical manifest validation, the single advisory lock, pointer commit/recovery, leases and conservative GC. Existing direct-target reload fan-out is removed from the generation path.
 
 **Tech Stack:** Rust 1.85, `rustix`, SHA-256 crate already selected after dependency review, tempfile unit fixtures.
 
@@ -12,19 +12,19 @@
 
 ## Global Constraints
 
-- All generated content stays below Helm's 0700 owned subtree.
+- All generated content stays below Realm's 0700 owned subtree.
 - No symlink-following; descriptor-relative operations only.
 - `current` changes only after a sealed fsynced tree; corrupt state fails closed.
 - Existing processes are never signalled/reloaded by a generation pointer switch.
 
 ### Task 1: Generation record and manifest validation
 
-**Files:** create `crates/helm-theme/src/generation.rs`; modify `lib.rs`; test `generation.rs`.
+**Files:** create `crates/realm-theme/src/generation.rs`; modify `lib.rs`; test `generation.rs`.
 
 - [ ] Write tests rejecting traversal, duplicate paths, symlinks, special files, malformed canonical manifests, and mismatched output digests.
-- [ ] Run `cargo test -p helm-theme generation::tests` and observe the missing-module failure.
+- [ ] Run `cargo test -p realm-theme generation::tests` and observe the missing-module failure.
 - [ ] Implement `GenerationId`, canonical `Manifest`, descriptor-relative validation, and SHA-256 verification.
-- [ ] Re-run `cargo test -p helm-theme generation::tests` until green; commit `feat: validate sealed theme generations`.
+- [ ] Re-run `cargo test -p realm-theme generation::tests` until green; commit `feat: validate sealed theme generations`.
 
 ### Task 2: Locked publication and recovery
 
@@ -33,7 +33,7 @@
 - [ ] Write G2/G3/G4/G8/G9 tests using injected commit checkpoints and two writers.
 - [ ] Run the focused tests and observe failure.
 - [ ] Implement one persistent no-follow lock inode, operation-scoped root control validation, staging/fsync/seal/publication-order/pointer ordering, and fail-closed recovery.
-- [ ] Run `cargo test -p helm-theme generation::tests`; commit `feat: publish theme generations atomically`.
+- [ ] Run `cargo test -p realm-theme generation::tests`; commit `feat: publish theme generations atomically`.
 
 ### Task 3: Pointer selection, leases and GC
 
@@ -42,7 +42,7 @@
 - [ ] Write G1/G5/G6/G7 tests for old-generation selection, invalid pointer refusal, stale PID/boot/start-time leases, explicit publication-sequence retention independent of IDs/mtimes, malformed or missing publication order, protected retention and rollback.
 - [ ] Run focused tests and observe failure.
 - [ ] Implement shared selection independent of publication-order validity, fsynced leases-before-exec, rollback and conservative GC retaining active plus the two greatest publication-sequence unleased generations, with stale-lease cleanup but zero generation deletion when order is unsafe, missing or malformed.
-- [ ] Run `cargo test -p helm-theme generation::tests`; commit `feat: manage theme generation leases`.
+- [ ] Run `cargo test -p realm-theme generation::tests`; commit `feat: manage theme generation leases`.
 
 ### Task 4: Integrate and prove no legacy reload leakage
 
@@ -50,7 +50,7 @@
 
 - [ ] Write a test proving a generation pointer switch emits no `Reloader` call and direct mutable target publication is unavailable on the generation path.
 - [ ] Run it red, integrate `apply_with_inner` with generation publication, then run it green.
-- [ ] Run `cargo test -p helm-theme`, `cargo test --workspace --all-features --locked`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and `cargo fmt --check`; commit `feat: activate themes by sealed generation`.
+- [ ] Run `cargo test -p realm-theme`, `cargo test --workspace --all-features --locked`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and `cargo fmt --check`; commit `feat: activate themes by sealed generation`.
 
 ## Self-review
 

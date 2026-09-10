@@ -14,7 +14,7 @@
 
 - Fedora 44 is the only pre-alpha baseline; no implicit future-release support.
 - `unsupported` admits no current Fedora support claim or required Fedora lane.
-- Fedora's RPM dependency is exactly `river >= 0.4.0`; do not invent a `< 0.5` ceiling or retain a `helm-river` alternative.
+- Fedora's RPM dependency is exactly `river >= 0.4.0`; do not invent a `< 0.5` ceiling or retain a `realm-river` alternative.
 - Current-document discovery may not be bypassed by adding an unlisted file; historical exceptions must be exact path-and-line allowlist entries.
 - The checks remain local/offline and POSIX-shell compatible; no KVM, self-hosted runner, scheduled network canary, package publication, or Fedora 41 fixture.
 

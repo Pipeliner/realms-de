@@ -14,20 +14,20 @@ automation service.
 
 ## Behaviour
 
-1. `helm-agent-sdd-bootstrap` orients an agent to one GitHub issue, the live
+1. `realm-agent-sdd-bootstrap` orients an agent to one GitHub issue, the live
    repository state, SPEC 0008 and the existing issue/spec-first procedures. It
    never creates a record or invents a status. The project skill index and loop
    memory make the three pilot procedures discoverable and state how to measure
    their two real iterations.
-2. `helm-agent-sdd-checkpoint` describes how a maintainer manually captures a
+2. `realm-agent-sdd-checkpoint` describes how a maintainer manually captures a
    fresh, clean, issue-numbered record in exactly the two files permitted by
    SPEC 0008, commits it as a separate record-carrier commit, and runs only the
    existing read-only gate or dry-run promotion assessment.
-3. `helm-agent-sdd-evidence-capture` describes manual, minimal evidence
+3. `realm-agent-sdd-evidence-capture` describes manual, minimal evidence
    capture from a just-rerun command or just-read file. It excludes command
    output, secrets, environment values, absolute paths, shell history and
    source snapshots.
-4. The procedures state that `helm-sdd` currently exposes only `gate` and
+4. The procedures state that `realm-sdd` currently exposes only `gate` and
    `promote --dry-run`; a successful report is not a maturity promotion.
 5. The procedures introduce no CI job, hook, daemon, scheduler, external
    service, embedding search, database or third-party integration.
@@ -45,7 +45,7 @@ automation service.
 
 The procedures prevent stale or sensitive operational records from being
 mistaken for current repository truth. The authoritative validation and
-failure reports remain those in SPEC 0008 and `helm-sdd`.
+failure reports remain those in SPEC 0008 and `realm-sdd`.
 
 ## Open questions
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse hard-coded colour values in Helm's shipped template sources."""
+"""Refuse hard-coded colour values in Realm's shipped template sources."""
 
 from __future__ import annotations
 
@@ -51,20 +51,20 @@ class Checker:
                 f"expected {sorted(EXPECTED)!r}, got {sorted(actual)!r}"
             )
 
-        catalogue = self.root / "crates/helm-theme/src/template.rs"
+        catalogue = self.root / "crates/realm-theme/src/template.rs"
         try:
             source = catalogue.read_text(encoding="utf-8")
         except OSError as exc:
-            self.errors.append(f"crates/helm-theme/src/template.rs: cannot read catalogue: {exc}")
+            self.errors.append(f"crates/realm-theme/src/template.rs: cannot read catalogue: {exc}")
             return
         operands = self.catalogue_operands(source)
         if operands is None:
-            self.errors.append("crates/helm-theme/src/template.rs: malformed templates() catalogue")
+            self.errors.append("crates/realm-theme/src/template.rs: malformed templates() catalogue")
             return
         expected_operands = {f"../../../configs/templates/{name}" for name in EXPECTED}
         if len(operands) != len(EXPECTED) or set(operands) != expected_operands:
             self.errors.append(
-                "crates/helm-theme/src/template.rs: embedded template inventory differs from SPEC 0022: "
+                "crates/realm-theme/src/template.rs: embedded template inventory differs from SPEC 0022: "
                 f"expected {sorted(expected_operands)!r}, got {operands!r}"
             )
 

@@ -14,7 +14,7 @@ not a mutable output directory.
 
 ## Behaviour
 
-`generation-id` is a collision-resistant opaque 128-bit lowercase-hex identifier. Helm creates
+`generation-id` is a collision-resistant opaque 128-bit lowercase-hex identifier. Realm creates
 its owned generated root with mode 0700. A valid tree contains only normalized
 relative output paths and a versioned canonical manifest with lexicographically
 sorted paths, exact palette/catalogue/templates/rendering/launch-profile/output
@@ -29,10 +29,10 @@ never stolen or replaced by deleting its pathname. The launcher then passes the 
 to target dependency evaluation.
 
 Two canonical lease kinds exist. A process lease uses the existing
-`helm-generation-lease-v1` grammar and generic GC may unlink it only after
+`realm-generation-lease-v1` grammar and generic GC may unlink it only after
 proving its PID, boot ID, or start time stale. Before exec, a process lease may
 be atomically replaced at the same opaque lease name with the
-`helm-generation-lifecycle-lease-v1` grammar from [SPEC 0012](0012-activation-launch-lifecycle.md).
+`realm-generation-lifecycle-lease-v1` grammar from [SPEC 0012](0012-activation-launch-lifecycle.md).
 GC parses the discriminator before assessing liveness. It never PID-reclaims a
 valid lifecycle lease: it validates its launch reference against the lifecycle
 registry and retains its generation until the lifecycle reconciler has durably
@@ -70,7 +70,7 @@ from an identically encoded object quarantined after a final-gap race would
 require additional durable transaction provenance; that stronger identity
 preservation is deferred beyond M2.
 
-The M2 retirement authority assumes conforming Helm writers obey the global
+The M2 retirement authority assumes conforming Realm writers obey the global
 `lifecycle.lock` then generation-lock order and never mutate reserved
 `.lease-retire-*` names while those locks are held. Pre-retirement and
 at-retirement pathname replacement remain in scope and fail closed by the
@@ -104,7 +104,7 @@ the uniqueness invariant because filesystem recovery may encounter records not
 created by the current process.
 
 Lifecycle reconciliation never derives or reopens the generated root from an
-activation-registry pathname. At process bootstrap Helm first opens and
+activation-registry pathname. At process bootstrap Realm first opens and
 revalidates the existing generated root as a `GenerationStore`, then derives a
 private lease capability by cloning that store's validated `leases/` and
 `activation.lock` descriptors and sharing its original in-process mutex. The
@@ -193,11 +193,11 @@ original process lease without creating an unbounded or permanently blocking
 producer artifact, while a committed exchange is tied to the checked inodes.
 
 No read or write follows symlinks; all operations are descriptor-relative below
-Helm's owned generated subtree. `current` cannot name absent, staging, malformed
+Realm's owned generated subtree. `current` cannot name absent, staging, malformed
 or digest-mismatched content. An apply that cannot finish before pointer commit
 leaves `current` unchanged. A successful pointer commit is the only event that
 may make a generation active for future launches. It must not signal or reload
-an existing process. A direct launch outside a verified Helm profile is not
+an existing process. A direct launch outside a verified Realm profile is not
 generation-selected.
 
 Pointer recovery recognizes only these producer-reachable journal inventories,
@@ -279,7 +279,7 @@ recreated after such generations, their missing mappings remain fail-closed.
 ends in one LF; CR, blank lines, comments and extra records are forbidden:
 
 ```text
-helm-generation-publication-order-v1\n
+realm-generation-publication-order-v1\n
 next-sequence <positive-decimal-publication-sequence>\n
 generation <generation-id> <positive-decimal-publication-sequence>\n
 ... zero or more generation records, strictly sorted by generation-id
@@ -318,7 +318,7 @@ special, staging, or symlink directory/file is valid.
 LF; no CR, blank line, comment, duplicate field, or extra record is allowed):
 
 ```text
-helm-generation-manifest-v1\n
+realm-generation-manifest-v1\n
 generation <generation-id>\n
 palette-sha256 <lowercase-64-hex>\n
 catalogue-sha256 <lowercase-64-hex>\n
@@ -348,7 +348,7 @@ the unsigned lexicographic order of their UTF-8 template-id bytes, each record
 being `<decimal-byte-length>:<id-bytes><decimal-byte-length>:<target-bytes><decimal-byte-length>:<reload-kind-bytes>\n`;
 `templates` is the same sorted record sequence but each record is
 `<decimal-byte-length>:<id-bytes><decimal-byte-length>:<template-body-bytes>\n`;
-`renderer` is UTF-8 `helm-theme-renderer-v1\n` followed by records for every
+`renderer` is UTF-8 `realm-theme-renderer-v1\n` followed by records for every
 render option sorted by the unsigned lexicographic order of its UTF-8 name
 bytes, each
 `<decimal-byte-length>:<name-bytes><decimal-byte-length>:<value-bytes>\n`;
@@ -362,7 +362,7 @@ Template bodies, option values, palette and launch-profile inputs use their
 exact raw bytes.
 
 `receipt` is UTF-8 with this byte-exact grammar: header
-`helm-generation-receipt-v1\n`, then `generation <generation-id>\n`, then the
+`realm-generation-receipt-v1\n`, then `generation <generation-id>\n`, then the
 five input-digest records in the same order and spelling as `manifest`. It has
 no other record or byte. Its generation identifier and five digest values must
 equal those in `manifest`; `receipt-sha256` is the SHA-256 of its complete byte
@@ -379,7 +379,7 @@ selected.
 The generation root and each directory/file component are opened
 descriptor-relatively with `O_NOFOLLOW`; opening a final file also requires a
 regular file descriptor. Validation retains the opened root/parents while it
-reads each listed output. This protects Helm from pathname races and symlink
+reads each listed output. This protects Realm from pathname races and symlink
 redirection, but does not expand ADR 0017's same-UID threat model.
 
 ## Theme-apply integration (L4 refinement)
@@ -405,13 +405,13 @@ including safe escaping of the diagnostic cause. This result mapping neither
 adds a live-upgrade mechanism nor preserves a control-socket wire contract.
 
 Before publication, the apply boundary holds only safe input locators and opens
-the configuration root.  It creates or opens `helm/generated` only
+the configuration root.  It creates or opens `realm/generated` only
 descriptor-relatively: each existing component is opened with `O_NOFOLLOW`,
-the final generated root is current-UID mode 0700, and an absent `helm` or
+the final generated root is current-UID mode 0700, and an absent `realm` or
 `generated` component is created with `mkdirat` mode 0700 then reopened and
 validated before use.  Every successful revalidation—whether this process
 created the component, received `EEXIST`, or first observed it as
-existing—fsyncs the configuration root after `helm` and the opened `helm`
+existing—fsyncs the configuration root after `realm` and the opened `realm`
 directory after `generated`.  A symlink, special file, foreign owner, unsafe
 final root mode, or failed revalidation refuses before any output write.
 Path-based recursive creation is forbidden.
@@ -430,13 +430,13 @@ capture through pointer durability, and every receipt describes one whole input
 set.
 
 The current built-in profile has no external launch-profile file.  Its selected
-raw bytes are exactly `helm-theme-launch-profile-v1\nnone\n`; any later
+raw bytes are exactly `realm-theme-launch-profile-v1\nnone\n`; any later
 profile selection supplies its own raw bytes instead.  The current renderer
 option map is empty, so its renderer preimage is exactly
-`helm-theme-renderer-v1\n`.  Empty is a value, not an omitted preimage.
+`realm-theme-renderer-v1\n`.  Empty is a value, not an omitted preimage.
 
 For the catalogue preimage, `reload-kind-bytes` use this canonical UTF-8
-encoding with no trailing newline: `none`; `helm-clients`; or
+encoding with no trailing newline: `none`; `realm-clients`; or
 `signal:<decimal-process-byte-length>:<process-bytes><decimal-signal>`.  A
 command uses `command:<decimal-argument-count>:` followed by one
 `<decimal-byte-length>:<argument-bytes>` record for each argument in argument
@@ -464,7 +464,7 @@ normalized output paths, containing only `added`, `removed`, and
 both list the path and their exact bytes differ. Manifest, receipt, seal, and
 other generation-control files are not outputs and never appear in the diff.
 
-Diff does not create or initialize `helm/generated`, `activation.lock`,
+Diff does not create or initialize `realm/generated`, `activation.lock`,
 `publication-order`, `generations/`, `leases/`, or any journal. It does not take
 the exclusive writer lock, run recovery or GC, create a lease, stage or publish
 a generation, replace `current`, write an output, or signal/notify a process.
@@ -488,12 +488,12 @@ candidate with a partially validated or mixed generation.
 | G8 | Given a corrupt pointer, missing tree, or digest mismatch, when recovery or launch runs, then it fails closed and never selects an arbitrary/newest generation. |
 | G9 | Given concurrent applies, when both are accepted, then they serialize from input capture through pointer durability and each receipt identifies its committed generation. |
 | G10 | Given a valid current generation and a candidate whose normalized output set differs, when `theme diff` runs, then it reports only lexicographically sorted `added`, `removed`, and `byte-different` output paths after fully validating current, and performs no control initialization, recovery, lease, GC, publication, output write, pointer switch, or reload. |
-| G11 | Given a successful apply or rollback pointer commit, when existing processes continue running, then Helm sends no signal, command, or notification and only later launches may select the newly current generation. |
-| G12 | Given `Committed`, `CommittedWithCleanupPending`, or `OutcomeAmbiguous`, when `helm ctl theme apply` reports the result, then the first two exit 0 and name the selected future-launch generation (with a cleanup warning for the second), while the ambiguous result exits 6, claims no activation, safely reports its candidate/cause, and performs no automatic recovery or retry. |
+| G11 | Given a successful apply or rollback pointer commit, when existing processes continue running, then Realm sends no signal, command, or notification and only later launches may select the newly current generation. |
+| G12 | Given `Committed`, `CommittedWithCleanupPending`, or `OutcomeAmbiguous`, when `realm ctl theme apply` reports the result, then the first two exit 0 and name the selected future-launch generation (with a cleanup warning for the second), while the ambiguous result exits 6, claims no activation, safely reports its candidate/cause, and performs no automatic recovery or retry. |
 
 ## Boundaries
 
-This specification does not make arbitrary user configuration Helm-owned and
+This specification does not make arbitrary user configuration Realm-owned and
 does not settle systemd/no-systemd teardown, scope adoption, D-Bus ownership,
 or target package sources. [SPEC 0012](0012-activation-launch-lifecycle.md) is
 the M2 lifecycle owner for #132/#168: it consumes a process selection into a

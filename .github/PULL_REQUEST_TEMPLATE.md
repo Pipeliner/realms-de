@@ -48,7 +48,7 @@ Closes #
 
 **Docs**
 
-- [ ] If this uncovered a new way for helm to break, [docs/PITFALLS.md](../docs/PITFALLS.md) has a new row: what the user sees, what helm does about it, and the **guard** that would fail if the mitigation regressed.
+- [ ] If this uncovered a new way for realm to break, [docs/PITFALLS.md](../docs/PITFALLS.md) has a new row: what the user sees, what realm does about it, and the **guard** that would fail if the mitigation regressed.
 - [ ] Anything a newcomer would now find stale — README, ARCHITECTURE, INTERFACES, ROADMAP — has been updated.
 
 **Judgement**

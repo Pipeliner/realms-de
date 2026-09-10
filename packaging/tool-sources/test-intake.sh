@@ -2,7 +2,7 @@
 set -eu
 root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 checker=$root/packaging/tool-sources/check-intake.py
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/helm-source-intake.XXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/realm-source-intake.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 cp -R "$root/packaging/tool-sources" "$tmp/sources"
 

@@ -8,7 +8,7 @@ TOOL_SOURCE_ENTRIES = {
     "bundles",
     "check-bundle-linkage.py",
     "check-native-source-kit.py",
-    "stage-helm-workspace.py",
+    "stage-realm-workspace.py",
 }
 FORBIDDEN_WORKSPACE_FILES = {"Cargo.toml"}
 FORBIDDEN_WORKSPACE_DIRECTORIES = {".cargo", "crates", "vendor"}
@@ -61,11 +61,11 @@ def main() -> None:
     )
     require_inventory(
         root / "packaging" / "tool-sources" / "bundles",
-        {"helm-workspace"},
+        {"realm-workspace"},
         f"{kind.upper()} source kit bundle inventory differs from policy",
     )
     canonical_bundle = (
-        root / "packaging" / "tool-sources" / "bundles" / "helm-workspace"
+        root / "packaging" / "tool-sources" / "bundles" / "realm-workspace"
     )
     allowed_named_files = {
         canonical_bundle / "Cargo.lock",

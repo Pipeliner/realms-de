@@ -1,7 +1,7 @@
 # The failure register
 
 Desktop environments fail in a small number of well-known ways. This file lists
-them, what helm does about each, and where the guard lives. A new entry is added
+them, what realm does about each, and where the guard lives. A new entry is added
 whenever we find a new way to break — a bug we fixed but did not write down is a
 bug we will ship again.
 
@@ -11,30 +11,30 @@ Legend: **Guard** = the thing that would fail loudly if the mitigation regressed
 
 ## Rendering and layout
 
-| Pitfall | What users see | helm's answer | Guard |
+| Pitfall | What users see | realm's answer | Guard |
 |---|---|---|---|
 | Rounding loss in tile maths | 1px cracks showing the void between windows, at some resolutions only | Largest-remainder integer partition; rectangles must sum to the workarea exactly | `layout::tests::every_layout_tiles_exactly_for_every_plausible_size` |
 | Off-by-one on odd resolutions | The rightmost window is 1px narrow | Same partition; tested at 1281×801 on purpose | same |
 | Fractional scaling blur | Everything is soft on a 150% display | Integer geometry; buffers allocated at the output's real scale | *planned:* M2 scale test |
 | Focus causes relayout | Windows twitch as you move focus | Focus is a flag on a `Placement`, not an input to geometry | `layout::tests::projection_is_pure_and_focus_only_moves_the_flag` |
-| Redraw on a timer | Idle CPU never reaches zero; laptop fans | The bar owns no timer; `HelmState::renders_same_as` drops no-op frames. The one sampler that must exist lives in `helm-session`, off the input path, and its output still goes through the same equality gate | `state::tests::revision_alone_does_not_force_a_redraw` |
-| A laptop with no tap-to-click | The touchpad taps do nothing and there is no setting anywhere to fix it | Under river 0.4 there is no input config file: helm must serve `river-libinput-config-v1` and `river-xkb-config-v1` | *planned:* M2 |
+| Redraw on a timer | Idle CPU never reaches zero; laptop fans | The bar owns no timer; `RealmState::renders_same_as` drops no-op frames. The one sampler that must exist lives in `realm-session`, off the input path, and its output still goes through the same equality gate | `state::tests::revision_alone_does_not_force_a_redraw` |
+| A laptop with no tap-to-click | The touchpad taps do nothing and there is no setting anywhere to fix it | Under river 0.4 there is no input config file: realm must serve `river-libinput-config-v1` and `river-xkb-config-v1` | *planned:* M2 |
 
 ## Being the window manager (river)
 
-| Pitfall | What users see | helm's answer | Guard |
+| Pitfall | What users see | realm's answer | Guard |
 |---|---|---|---|
 | A client quantises its proposed size | 4px cracks between tiles that the layout tests cannot see, because the projection was correct and the *client* rounded | Propose at or above the tile and clip with `set_content_clip_box`, so the visible rectangle is exact regardless of what the client does | *planned:* M2 pixel-diff test against a deliberately quantising client |
-| `helm-session` stalls | Keys stop responding; river raises `unresponsive`; the session is effectively dead | Nothing on the input path may block — no theme apply, no write to a wedged subscriber. §4 budgets are correctness bounds here | *planned:* M2 watchdog asserting no handler exceeds its budget |
-| `helm-session` dies | Windows unplaced, keybindings gone — a sharper failure than a crashed bar | Supervised restart with ledger recovery from the last snapshot | *planned:* M2 |
-| Layer-shell not served | **The bar never appears**, and it looks like the bar is broken rather than the WM | helm implements `river-layer-shell-v1`; `doctor` checks it is being served | *planned:* M2 |
+| `realm-session` stalls | Keys stop responding; river raises `unresponsive`; the session is effectively dead | Nothing on the input path may block — no theme apply, no write to a wedged subscriber. §4 budgets are correctness bounds here | *planned:* M2 watchdog asserting no handler exceeds its budget |
+| `realm-session` dies | Windows unplaced, keybindings gone — a sharper failure than a crashed bar | Supervised restart with ledger recovery from the last snapshot | *planned:* M2 |
+| Layer-shell not served | **The bar never appears**, and it looks like the bar is broken rather than the WM | realm implements `river-layer-shell-v1`; `doctor` checks it is being served | *planned:* M2 |
 | Position computed before the client's real size is known | Tiles are placed against sizes the clients never took, so the layout is subtly wrong rather than obviously broken | `propose_dimensions` is manage-only and its `dimensions` events arrive before `render_start`; positions are computed in the render phase, after the real sizes are in | *planned:* M2 test driving a client that refuses its proposed size |
-| A stale window manager holds river's global | The supervised `helm-wm` never starts, and a naive restart policy loops forever, burying the message | river answers `unavailable` to a second window-management client; exit 69 plus `RestartPreventExitStatus` stops the loop, and `doctor` names the process holding it | *planned:* M3 |
+| A stale window manager holds river's global | The supervised `realm-wm` never starts, and a naive restart policy loops forever, burying the message | river answers `unavailable` to a second window-management client; exit 69 plus `RestartPreventExitStatus` stops the loop, and `doctor` names the process holding it | *planned:* M3 |
 | Protocol version drift after a river bump | Session fails to start after a routine upgrade | Pin a tested river; version-check at connect and refuse with a clear message rather than misbehaving | *planned:* M2 |
 
 ## Fonts and glyphs
 
-| Pitfall | What users see | helm's answer | Guard |
+| Pitfall | What users see | realm's answer | Guard |
 |---|---|---|---|
 | Missing Nerd Font | Tofu boxes in the bar on first boot | Glyph inventory + startup probe + documented ASCII fallback for every glyph | `glyphs::tests::a_bare_ascii_font_degrades_instead_of_drawing_tofu` |
 | Exotic glyph assumed present | `𓂃` renders as a box in the prompt | Explicit `prompt_sigil_fallback = "~"` in `palette.toml` | same |
@@ -42,7 +42,7 @@ Legend: **Guard** = the thing that would fail loudly if the mitigation regressed
 
 ## Colour and theming
 
-| Pitfall | What users see | helm's answer | Guard |
+| Pitfall | What users see | realm's answer | Guard |
 |---|---|---|---|
 | Contrast implemented as a filter | Fullscreen GPU pass every frame; accent hues rotate | Contrast derived per-colour in OKLab, capped at the sRGB gamut boundary | `color::tests::contrast_stops_at_the_gamut_boundary_instead_of_desaturating` |
 | Unreadable palette after a tweak | Grey-on-grey body text | `Palette::lint` enforces WCAG floors and ≥25° accent separation | `palette::tests::shipped_palette_survives_the_whole_contrast_range` |
@@ -51,11 +51,11 @@ Legend: **Guard** = the thing that would fail loudly if the mitigation regressed
 
 ## Session integration — the classic killers
 
-| Pitfall | What users see | helm's answer | Guard |
+| Pitfall | What users see | realm's answer | Guard |
 |---|---|---|---|
 | `WAYLAND_DISPLAY` never reaches D-Bus | File dialogs hang for 25 s, then fail | Session entry imports the environment into systemd *and* D-Bus before starting anything | *planned:* M3 `doctor` check |
-| `XDG_CURRENT_DESKTOP` unset | Portals pick the wrong backend, screen share silently fails | Set explicitly to `helm` and exported both ways | *planned:* M3 |
-| Inhibit portal reports success without inhibiting | The screen blanks mid video call, while Firefox believes it asked not to | xdg-desktop-portal-gtk's Inhibit provider tries `org.gnome.SessionManager`, then `org.freedesktop.ScreenSaver`, and when both are absent it logs a warning and **returns success**. Neither exists under helm, and Firefox tries D-Bus before Wayland. Routing `org.freedesktop.impl.portal.Inhibit=none` makes it fall through to `zwp_idle_inhibit_manager_v1`, which river provides | *planned:* M3 `doctor` check |
+| `XDG_CURRENT_DESKTOP` unset | Portals pick the wrong backend, screen share silently fails | Set explicitly to `realm` and exported both ways | *planned:* M3 |
+| Inhibit portal reports success without inhibiting | The screen blanks mid video call, while Firefox believes it asked not to | xdg-desktop-portal-gtk's Inhibit provider tries `org.gnome.SessionManager`, then `org.freedesktop.ScreenSaver`, and when both are absent it logs a warning and **returns success**. Neither exists under realm, and Firefox tries D-Bus before Wayland. Routing `org.freedesktop.impl.portal.Inhibit=none` makes it fall through to `zwp_idle_inhibit_manager_v1`, which river provides | *planned:* M3 `doctor` check |
 | Settings portal absent | Every GTK4, libadwaita and Flatpak app renders light on a `#05060c` desktop, and the generated `gtk.css` cannot fix it | Ship the Settings portal and set `gsettings color-scheme prefer-dark`; the portal is how sandboxed apps learn the preference at all | *planned:* M3 |
 | No portal backend installed | "Open File" does nothing in Firefox | Packages depend on a backend; `doctor` verifies one answers on D-Bus | *planned:* M3 |
 | A unit is *skipped* rather than failed | Nothing starts, and `systemctl start` still exits 0 with nothing in `--failed` | An unmet `ConditionEnvironment=` leaves a unit `inactive (dead)` with `ConditionResult=no`. The session entry and `doctor` check each unit's `ActiveState` instead of trusting the exit code | *planned:* M3 |
@@ -67,7 +67,7 @@ Legend: **Guard** = the thing that would fail loudly if the mitigation regressed
 
 ## Packaging
 
-| Pitfall | What users see | helm's answer | Guard |
+| Pitfall | What users see | realm's answer | Guard |
 |---|---|---|---|
 | Works on the author's distro only | Install fails on Ubuntu | Three distro jobs in CI, plus a NixOS VM boot test | *planned:* M3 |
 | Flatpak apps ignore the theme | One app is bright white | Documented as a *limit*, with the per-app config grant to fix it | ADR 0005 |

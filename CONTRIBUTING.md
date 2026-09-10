@@ -1,6 +1,6 @@
-# Contributing to helm
+# Contributing to realm
 
-helm is a desktop environment, which means most of its bugs are other people's
+realm is a desktop environment, which means most of its bugs are other people's
 bad afternoons: a file dialog that hangs, a tile with a hairline crack down it,
 a theme that half-applies. The rules below exist so that those failures are
 caught by a test rather than by a user, and so that a change made a year from
@@ -134,7 +134,7 @@ class that reaches users as cracks between tiles and washed-out accents.
 ## When you find a new way to break
 
 Add a row to [`docs/PITFALLS.md`](docs/PITFALLS.md): what the user sees, what
-helm does about it, and — the important column — the **guard**, the named test
+realm does about it, and — the important column — the **guard**, the named test
 that would fail loudly if the mitigation regressed. A bug we fixed but did not
 write down is a bug we will ship again.
 
@@ -173,11 +173,11 @@ reconstruct from the diff. Wrap at 72 columns.
 Closes #42
 ```
 
-`<scope>` is the crate (`helm-core`, `helm-theme`), or `docs`, `ci`,
+`<scope>` is the crate (`realm-core`, `realm-theme`), or `docs`, `ci`,
 `packaging`, `configs`, `design`. Recent history is the reference:
 
 ```
-helm-core: ledger, layout projection, palette and IPC contracts
+realm-core: ledger, layout projection, palette and IPC contracts
 docs: architecture, MVP cut line, failure register and operational memory
 ```
 

@@ -120,7 +120,7 @@ done <"$manifest"
 [ "$eol_seen" = true ] || fail "missing eol field"
 [ "$image_seen" = true ] || fail "missing image field"
 
-[ "$schema" = "helm-fedora-baseline/v1" ] || fail "unsupported schema: $schema"
+[ "$schema" = "realm-fedora-baseline/v1" ] || fail "unsupported schema: $schema"
 case "$status" in
     pre-alpha | unsupported) ;;
     *) fail "unsupported status: $status" ;;

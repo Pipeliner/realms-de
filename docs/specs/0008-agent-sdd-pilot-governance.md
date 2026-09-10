@@ -8,7 +8,7 @@
 ## Purpose and authority
 
 This specification defines a narrow local pilot for resumable agent work. It
-defines records that `helm-sdd` reads and reports on; it creates no product
+defines records that `realm-sdd` reads and reports on; it creates no product
 feature or runtime behaviour.
 
 | Domain | Authority | Pilot role |
@@ -94,7 +94,7 @@ value, path, line or field name. It is a deterministic best-effort guard,
 sensitive or customer material must never be recorded.
 
 ```toml
-schema = "helm-agent-sdd/checkpoint/v1"
+schema = "realm-agent-sdd/checkpoint/v1"
 issue = 119
 reason = "handoff"
 created_at = "2026-08-29T12:00:00Z"
@@ -144,7 +144,7 @@ optional; no other field or table is permitted.
 
 | Location | Type and exact constraint |
 |---|---|
-| root `schema` | string exactly `helm-agent-sdd/checkpoint/v1` |
+| root `schema` | string exactly `realm-agent-sdd/checkpoint/v1` |
 | root `issue` | integer `1..=2_147_483_647`, equal to the directory number |
 | root `reason`, `question`, `success_condition` | prose |
 | root `created_at` | timestamp |
@@ -185,8 +185,8 @@ timestamps/Git IDs use the checkpoint forms; kind is exactly `command`,
 `file-observation` or `decision`.
 
 ```json
-{"id":"ev-001","ts":"2026-08-29T12:00:00Z","kind":"command","summary":"Ran the focused IPC test","command":"cargo test -p helm-core ipc::tests::frame_round_trip","exit_code":0,"git_head":"0123456789abcdef0123456789abcdef01234567","purpose":"reproduce framing behaviour"}
-{"id":"ev-002","ts":"2026-08-29T12:03:00Z","kind":"file-observation","path":"crates/helm-core/src/ipc.rs","lines":"81-103","git_head":"0123456789abcdef0123456789abcdef01234567","claim":"Frames end in LF."}
+{"id":"ev-001","ts":"2026-08-29T12:00:00Z","kind":"command","summary":"Ran the focused IPC test","command":"cargo test -p realm-core ipc::tests::frame_round_trip","exit_code":0,"git_head":"0123456789abcdef0123456789abcdef01234567","purpose":"reproduce framing behaviour"}
+{"id":"ev-002","ts":"2026-08-29T12:03:00Z","kind":"file-observation","path":"crates/realm-core/src/ipc.rs","lines":"81-103","git_head":"0123456789abcdef0123456789abcdef01234567","claim":"Frames end in LF."}
 {"id":"ev-003","ts":"2026-08-29T12:05:00Z","kind":"decision","git_head":"0123456789abcdef0123456789abcdef01234567","claim":"Do not use sleep-based synchronisation.","reason":"It is nondeterministic under load.","derived_from":["ev-001"]}
 ```
 
@@ -239,8 +239,8 @@ rerun before that record supplies evidence.
 The #120 commands select one record by `--issue <positive-decimal>`:
 
 ```text
-helm-sdd gate --issue <n> --from <maturity> --to <maturity>
-helm-sdd promote --dry-run --issue <n> --from <maturity> --to <maturity>
+realm-sdd gate --issue <n> --from <maturity> --to <maturity>
+realm-sdd promote --dry-run --issue <n> --from <maturity> --to <maturity>
 ```
 
 `promote` is only a named dry-run assessment alias; neither command writes.

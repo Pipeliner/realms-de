@@ -1,4 +1,4 @@
-schema = "helm-agent-sdd/checkpoint/v1"
+schema = "realm-agent-sdd/checkpoint/v1"
 issue = 168
 reason = "handoff"
 created_at = "2026-08-30T09:08:00Z"

@@ -1,4 +1,4 @@
-# Handoff: helm — a minimal, feature-rich Linux DE
+# Handoff: realm — a minimal, feature-rich Linux DE
 
 > **Historical input notice:** This handoff preserves the original product
 > direction. Its theme hot-reload mechanics are superseded by ADR 0017 and SPEC
@@ -6,7 +6,7 @@
 > never reloads on a `current` pointer switch.
 
 ## Overview
-"helm" is a keyboard-centric, gapless-tiling desktop environment with a space + magic aesthetic (subtle — starfield bar, rune workspaces, arcane violet focus, gold accents). Tools are named after gods and lightly styled to their pantheons. No wasted space, power-user first. **Rust-first. Snappy: zero animations in v1** (a minimal-motion pass may come later — design for instant state changes now).
+"realm" is a keyboard-centric, gapless-tiling desktop environment with a space + magic aesthetic (subtle — starfield bar, rune workspaces, arcane violet focus, gold accents). Tools are named after gods and lightly styled to their pantheons. No wasted space, power-user first. **Rust-first. Snappy: zero animations in v1** (a minimal-motion pass may come later — design for instant state changes now).
 
 ## About the Design Files
 The bundled `.dc.html` files are **design references created in HTML** — hi-fi prototypes showing intended look and behavior, NOT production code. Recreate them in the real stack below. Open them in a browser to inspect; all styling is inline on each element.
@@ -24,7 +24,7 @@ Phase 1 — assemble (daily-drivable in weeks):
 - **Monitor (horus)**: `btop` custom theme (stopgap) or Rust TUI via `ratatui` + `sysinfo`.
 - **Shell (thoth)**: zsh + starship, themed prompt `nav@caldera :: 𓂃%`.
 - **Agent harness (odin)**: custom `ratatui` TUI wrapping your agent runner. Nothing off-the-shelf matches.
-- **Theming pipeline**: `helm-theme` crate: reads `palette.toml`, renders templates (gtk.css, Kvantum SVG, ANSI scheme, yazi/btop/rofi/helix themes), `helm ctl theme apply` hot-reloads (gsettings + SIGUSR1s).
+- **Theming pipeline**: `realm-theme` crate: reads `palette.toml`, renders templates (gtk.css, Kvantum SVG, ANSI scheme, yazi/btop/rofi/helix themes), `realm ctl theme apply` hot-reloads (gsettings + SIGUSR1s).
 
 Performance rules: no compositor-side animations, no blur, no rounded corners, no shadows except the 1px borders + inset glow on focus (a static box-shadow, cheap). Damage-tracked rendering; bar updates event-driven (not polled) where possible.
 
@@ -32,7 +32,7 @@ Performance rules: no compositor-side animations, no blur, no rounded corners, n
 
 ### 1. Desktop (Desktop v3.dc.html — canonical)
 1920×1080 reference. Structure top→bottom:
-- **Top bar, 32px**, bg vertical gradient `#0a0c15→#080911` with 4 faint 1px starfield dots (static radial gradients), bottom border `rgba(166,146,236,.4)`. Segments left→right: logo `✦ helm` (violet #a692ec, 1px right border); 6 workspace runes `ᚠᚢᚦᚨᚱᚲ` each 28px wide — active: text #f2f5fb, 2px bottom border #a692ec, bg rgba(166,146,236,.14), text-shadow glow; occupied: #93a1ba; empty: #4a5670; layout indicator `⌗ triptych` + mode badge `⌨ NAV` (bg rgba(163,191,242,.14), text #a3bff2, 11px, 1px 8px padding); centered focused-window title + chord echo `mod+ ▸ awaiting chord…` (#4a5670, 11px); right modules gap 16px: net, cpu (starlight #a3bff2), mem, gpu, vol, battery (gold #d9b06a), datetime (bright #f2f5fb) `26·08·2026 ☾ 14:32`.
+- **Top bar, 32px**, bg vertical gradient `#0a0c15→#080911` with 4 faint 1px starfield dots (static radial gradients), bottom border `rgba(166,146,236,.4)`. Segments left→right: logo `✦ realm` (violet #a692ec, 1px right border); 6 workspace runes `ᚠᚢᚦᚨᚱᚲ` each 28px wide — active: text #f2f5fb, 2px bottom border #a692ec, bg rgba(166,146,236,.14), text-shadow glow; occupied: #93a1ba; empty: #4a5670; layout indicator `⌗ triptych` + mode badge `⌨ NAV` (bg rgba(163,191,242,.14), text #a3bff2, 11px, 1px 8px padding); centered focused-window title + chord echo `mod+ ▸ awaiting chord…` (#4a5670, 11px); right modules gap 16px: net, cpu (starlight #a3bff2), mem, gpu, vol, battery (gold #d9b06a), datetime (bright #f2f5fb) `26·08·2026 ☾ 14:32`.
 - **Tile area**: CSS-grid equivalent, columns 640px / flex / 580px, rows 580px / flex, **1px seams** colored rgba(166,146,236,.30) (in the compositor: 1px border, unfocused rgba borders as below). Focused window: 1px border rgba(166,146,236,.6) + faint inset glow. Unfocused: 1px rgba(102,116,142,.3)-ish.
 - **Window headers, 26px**: glyph + god name + role epithet (10.5px, #4a5670), right-aligned `◈ ─ ✕` glyph buttons (letter-spacing 2px). Header accent border-bottom uses the pane's pantheon color at ~.3 alpha.
 - **Panes**: odin harness (violet, spans left column: familiar table + timestamped log + status footer with `⌨ mod+a attach` hint), thoth shell (teal), hermes browser (cyan, url bar + reader page), horus monitor (gold header; starlight bars, braille sparklines for net/disk, process table, footer `⌨ mod+x expand`), urania orrery (starlight; three conic-gradient ring gauges 92px, planetary-glyph readout grid, almanac transits, wards footer).
@@ -41,16 +41,16 @@ Performance rules: no compositor-side animations, no blur, no rounded corners, n
 - **Adjustable contrast**: user setting, implemented in prototype as backdrop-filter contrast(0.85–1.4, default 1.08). In production: derive palette variants from `palette.toml` instead of a filter.
 
 ### 2. File manager — charon (Files & Theming.dc.html, section 1a)
-1400×900 reference; yazi theme/keymap target. Header 26px: `☍ charon — ferryman · ~/src/helm`, right: `hidden: off · preview: on (mod+p) · thumbnails: never`. Grid 240px parents / flex current / 460px preview. Current column: 11px column headers (name/size/mode/modified), rows 2px 14px padding; marked rows teal `✓` (#7fd4c1), flagged gold `⚑`; git status suffixes `±M`; cursor row bg rgba(166,146,236,.14) + 2px left border violet; footer: `41 items · 3 marked · 30.4K · sort: mtime ▾ · git: main +2 ~2`. Preview pane: syntax-lite code preview + stat/xattr block (11px #4a5670). Bottom `:` shell line (gold `:` prompt, bright text, block cursor) then which-key row (nowrap). No thumbnails, ever; previews are text/stat only and toggleable.
+1400×900 reference; yazi theme/keymap target. Header 26px: `☍ charon — ferryman · ~/src/realm`, right: `hidden: off · preview: on (mod+p) · thumbnails: never`. Grid 240px parents / flex current / 460px preview. Current column: 11px column headers (name/size/mode/modified), rows 2px 14px padding; marked rows teal `✓` (#7fd4c1), flagged gold `⚑`; git status suffixes `±M`; cursor row bg rgba(166,146,236,.14) + 2px left border violet; footer: `41 items · 3 marked · 30.4K · sort: mtime ▾ · git: main +2 ~2`. Preview pane: syntax-lite code preview + stat/xattr block (11px #4a5670). Bottom `:` shell line (gold `:` prompt, bright text, block cursor) then which-key row (nowrap). No thumbnails, ever; previews are text/stat only and toggleable.
 
 ### 3. Open dialog — charon portal (section 1b)
 720px modal over dimmed requesting app (scrim rgba(4,5,10,.45)). Header: `☍ CHARON · OPEN` + typed path with fuzzy segment, note `fuzzy · fd-backed`. Left rail 180px: HARBORS (pinned ⚓) + RECENT. Results: fuzzy-matched substring highlighted violet, right-aligned dir + size (11px); selected row same treatment as charon. Footer keys: `↵ open · ⇥ complete · mod+h hidden · mod+s shell here · esc dismiss`. Status: `preview off (mod+p) · 4 of 218 · scope: ~/src (mod+↑ widen)`.
 
 ### 4. Theming existing apps (section 1c)
-Reference of a GTK4 app under the helm theme + annotated reach/limits. Implement as the `helm-theme` crate:
+Reference of a GTK4 app under the realm theme + annotated reach/limits. Implement as the `realm-theme` crate:
 - Reaches: gtk3/4 via generated gtk.css (colors, square corners, flat headerbars, IBM Plex Mono); qt5/6 via qt6ct + Kvantum SVG from same palette; libadwaita named colors; terminal 16-color ANSI; electron force-dark; mono-line icon + cursor set.
 - Limits (do not fight): hardcoded app colors; libadwaita geometry (colors yes, shapes no); CSD headerbars only recolored + 1px border; flatpak needs per-app config grant.
-- Mechanism: `~/.config/helm/palette.toml` → templates → `helm ctl theme apply` hot-reload.
+- Mechanism: `~/.config/realm/palette.toml` → templates → `realm ctl theme apply` hot-reload.
 
 ## Interactions & Behavior
 - Everything keyboard-first; chords under one `mod`. Mode badge in bar reflects state (NAV / RESIZE / …); chord echo shows pending prefix. `?` opens a full keybind sheet ("grimoire").
@@ -87,14 +87,14 @@ None — no images. All iconography is Unicode glyphs (runes U+16A0 block, plane
 
 ## Suggested repo layout
 ```
-helm/
+realm/
 ├─ crates/
-│  ├─ helm-compositor/   # Smithay; ledger + orbits + layouts (phase 3)
-│  ├─ helm-bar/          # layer-shell bar + which-key + mode/chord echo
-│  ├─ helm-hecate/       # layer-shell fuzzy launcher (nucleo)
-│  ├─ helm-odin/         # ratatui agent-harness TUI
-│  ├─ helm-theme/        # palette.toml -> gtk.css/kvantum/ansi/yazi/btop templates
-│  └─ helm-ctl/          # CLI: orbit/ledger/theme/run commands
+│  ├─ realm-compositor/   # Smithay; ledger + orbits + layouts (phase 3)
+│  ├─ realm-bar/          # layer-shell bar + which-key + mode/chord echo
+│  ├─ realm-hecate/       # layer-shell fuzzy launcher (nucleo)
+│  ├─ realm-odin/         # ratatui agent-harness TUI
+│  ├─ realm-theme/        # palette.toml -> gtk.css/kvantum/ansi/yazi/btop templates
+│  └─ realm-ctl/          # CLI: orbit/ledger/theme/run commands
 ├─ configs/              # yazi keymap+theme, portal config, zsh/starship, btop theme
 └─ palette.toml
 ```

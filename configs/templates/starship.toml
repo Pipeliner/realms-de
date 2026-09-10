@@ -1,4 +1,4 @@
-# helm — generated from palette.toml. Do not edit; `helm ctl theme apply`
+# realm — generated from palette.toml. Do not edit; `realm ctl theme apply`
 # overwrites this file. starship (thoth, the prompt) re-reads its config for
 # every prompt, so a new shell — or the next Enter — is the reload.
 #

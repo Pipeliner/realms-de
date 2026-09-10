@@ -24,7 +24,7 @@ for candidate in "$prefix"/usr/lib/rust-1.[89][0-9]/bin; do
 done
 
 if [ -z "$selected" ]; then
-  printf '%s\n' "helm: missing Ubuntu versioned Rust toolchain directory: $expected" >&2
+  printf '%s\n' "realm: missing Ubuntu versioned Rust toolchain directory: $expected" >&2
   exit 1
 fi
 

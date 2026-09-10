@@ -1,7 +1,7 @@
 # ADR 0010 — The Nix flake is the reference build; native deb and rpm packaging is tracked
 
 - **Status:** Accepted (ratified 2026-08-28); see Reversal
-- **Deciders:** helm maintainers
+- **Deciders:** realm maintainers
 - **Supersedes / Superseded by:** Fedora 41-or-later baseline clauses and the
   Fedora part of Decision 7 are superseded by
   [ADR 0015](0015-fedora-44-pre-alpha-baseline.md); all other clauses remain active
@@ -34,11 +34,11 @@ tell you whether a session starts. Only booting one does.
    maintainer runs to reproduce a user's report. Lock updates are deliberate
    reviewed dependency changes, not incidental evaluation side effects.
 2. **The NixOS VM test is the acceptance test for the session.** It boots a
-   VM, logs into helm, and asserts the bar appears and `helm ctl doctor` passes.
+   VM, logs into realm, and asserts the bar appears and `realm ctl doctor` passes.
    This is the only test that exercises the session contract (ADR 0011) end to
    end, and it is why NixOS is the reference rather than merely a target.
 3. **Native distro packaging is tracked explicitly.** Debian uses
-   `packaging/debian/`; Fedora uses `packaging/fedora/helm.spec`; shared session
+   `packaging/debian/`; Fedora uses `packaging/fedora/realm.spec`; shared session
    assets live under `packaging/session/` and `packaging/systemd/`. The optional
    `cargo-deb` fragment is not installed into `Cargo.toml`, and no generated
    metadata source of truth exists today. Dependency lists, binary paths, units,
@@ -46,11 +46,11 @@ tell you whether a session starts. Only booting one does.
    false claim of generation.
 4. **CI builds and installs all three once each package path is buildable.** A
    job per distro installs its native package into a clean container and runs
-   `helmctl doctor`.
+   `realmctl doctor`.
 5. **The MSRV is pinned by the locked dependency graph.** `rust-version` in the
    workspace manifest is currently 1.85 because its dependencies require the
    Rust 2024-edition parser floor; it moves only with a stated dependency
-   reason. If Helm distributes prebuilt binaries, the oldest supported glibc
+   reason. If Realm distributes prebuilt binaries, the oldest supported glibc
    will constrain their compatibility; it does not set this source-build floor.
 6. **Nothing distro-specific may live outside `packaging/`.** No `#[cfg]` on a
    distro, no path that assumes a filesystem layout.
@@ -59,7 +59,7 @@ tell you whether a session starts. Only booting one does.
    0.3.x or river-classic, neither of which speaks
    `river-window-management-v1`. Nix constrains river through its locked
    `nixpkgs` input; Debian and Fedora record alternative/runtime
-   requirements but do not yet build or bundle a verified `helm-river` package.
+   requirements but do not yet build or bundle a verified `realm-river` package.
    Treat that as an unsatisfied packaging obligation, not as a shared pin. It
    must be resolved and tested before a distributable session is claimed.
 
@@ -68,7 +68,7 @@ tell you whether a session starts. Only booting one does.
 | Option | Why it was attractive | Why it lost |
 |---|---|---|
 | **Use unreviewed, ad-hoc distro packaging** | It avoids maintaining packaging definitions in the repository | It leaves package contents and dependencies unverifiable until a user fails to start a session. Tracked native definitions plus a consistency check make drift visible without pretending a generator exists |
-| **Ship only a tarball or an AppImage** | One artifact, no distro work at all, works everywhere in principle | A desktop environment is not a single application. It must install a session desktop entry where the display manager will find it, install systemd user units, and declare a dependency on a portal backend and on a compositor. None of that is expressible in a tarball, and AppImage's sandbox assumptions are wrong for something that *is* the session. It would also make `helm ctl doctor` the only line of defence against a broken install |
+| **Ship only a tarball or an AppImage** | One artifact, no distro work at all, works everywhere in principle | A desktop environment is not a single application. It must install a session desktop entry where the display manager will find it, install systemd user units, and declare a dependency on a portal backend and on a compositor. None of that is expressible in a tarball, and AppImage's sandbox assumptions are wrong for something that *is* the session. It would also make `realm ctl doctor` the only line of defence against a broken install |
 | **Make a traditional distro the reference and treat Nix as a port** | Larger user base; more contributors already know `debhelper`; the reference build would match what most users run | We would lose the VM test, which is the single most valuable test in the project. Reproducing a user's exact environment would also stop being a one-line operation. Native package definitions remain supported targets, but do not replace the reference session test |
 | **Distribute via Flatpak** | Handles dependencies and works across distros | Flatpak is for applications. It cannot install a session, cannot own systemd user units, and its sandbox is on the wrong side of the boundary for a compositor and a session daemon. It is also, per ADR 0005, one of the theming pipeline's documented limits |
 | **Nix flake plus a distro-agnostic install script** | Simple; no packaging tooling to learn | An install script is an unversioned, unremovable package manager. Upgrades and uninstalls become the user's problem |
@@ -77,7 +77,7 @@ tell you whether a session starts. Only booting one does.
 
 ### Good
 
-- One reviewable Nix definition of what helm *should* be, including runtime
+- One reviewable Nix definition of what realm *should* be, including runtime
   dependencies, with a committed lock pinning its inputs.
 - The VM test catches the session contract failures (portals, environment
   import, unit ordering) before a user does. Nothing else can.
@@ -98,7 +98,7 @@ tell you whether a session starts. Only booting one does.
 - Nix expertise becomes load-bearing for the project. A contributor who cannot
   read the flake cannot fully review a packaging change.
 - Vendoring river (point 7) means a pinned Zig toolchain in the deb and rpm
-  builds, and it makes helm responsible for shipping compositor security fixes
+  builds, and it makes realm responsible for shipping compositor security fixes
   promptly. This is a cost ADR 0013 accepted knowingly.
 - The VM test is slow and needs KVM on the runner, which constrains CI choices.
 - Fedora's SELinux policy is asserted to need no custom labels
@@ -124,15 +124,15 @@ that proves generated output matches each supported package format. It is not
 the current model.
 
 The signal to reconsider is concrete: a distro maintainer willing to package
-helm properly. At that point idiomatic packaging becomes worth its cost, because
+realm properly. At that point idiomatic packaging becomes worth its cost, because
 someone else is paying it.
 
 ## Guard
 
 - *Planned (M3):* the NixOS VM test — boots the session, asserts the bar
-  surface appears and `helm ctl doctor` exits zero.
+  surface appears and `realm ctl doctor` exits zero.
 - *Planned (M3):* three container jobs, one per distro, building and installing
-  its tracked native package into a clean image and running `helm ctl doctor`.
+  its tracked native package into a clean image and running `realm ctl doctor`.
 - *Planned (M3):* a metadata consistency test asserting that the dependency
   lists, binary paths, session assets, and portal policy in the root flake,
   Debian control files, and Fedora spec agree where the targets overlap. This
@@ -158,7 +158,7 @@ in CI is not distribution. The options:
    PPA-shaped repo layout", so this is the assumed direction, but it has not
    been decided.
 3. **Submit to the official Debian and Fedora repositories.** Best outcome for
-   users, and the only one that gets helm into a default `apt install`. Requires
+   users, and the only one that gets realm into a default `apt install`. Requires
    idiomatic packaging (see Consequences) and a sponsor, and it is months of
    work by someone with standing in those communities.
 

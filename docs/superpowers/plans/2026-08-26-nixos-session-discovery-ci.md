@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the NixOS VM test validate Helm's native display-manager session-discovery contract and verify the result on remote CI.
+**Goal:** Make the NixOS VM test validate Realm's native display-manager session-discovery contract and verify the result on remote CI.
 
-**Architecture:** `programs.helm` continues to publish its rewritten session package through `services.displayManager.sessionPackages`. The VM becomes a consumer of that NixOS interface by enabling the lightweight Ly display manager and asserting the desktop file in `config.services.displayManager.sessionData.desktops`, rather than asserting an unpromised system-profile path. The existing GitHub workflow remains the execution authority: KVM runs the full VM and no-KVM runners build the independent checks.
+**Architecture:** `programs.realm` continues to publish its rewritten session package through `services.displayManager.sessionPackages`. The VM becomes a consumer of that NixOS interface by enabling the lightweight Ly display manager and asserting the desktop file in `config.services.displayManager.sessionData.desktops`, rather than asserting an unpromised system-profile path. The existing GitHub workflow remains the execution authority: KVM runs the full VM and no-KVM runners build the independent checks.
 
 **Tech Stack:** Nix flakes, NixOS module test (`pkgs.testers.nixosTest`), GitHub Actions, ShellCheck.
 
@@ -12,8 +12,8 @@
 
 ## Global Constraints
 
-- Helm supplies a NixOS session through `services.displayManager.sessionPackages`; it must not select or enable a display manager for users.
-- `/run/current-system/sw/share/wayland-sessions/helm.desktop` is not a Helm contract.
+- Realm supplies a NixOS session through `services.displayManager.sessionPackages`; it must not select or enable a display manager for users.
+- `/run/current-system/sw/share/wayland-sessions/realm.desktop` is not a Realm contract.
 - The test fixture may enable Ly only as a concrete consumer of the interface.
 - Retain the existing GitHub Actions KVM full-check path and non-KVM evaluation plus ShellCheck/package-build path.
 - Do not add CI providers, GitHub Projects, daemons, cron jobs, or orchestration infrastructure.
@@ -35,7 +35,7 @@
 
   The baseline red evidence already exists in GitHub Actions run `33010932793`:
   the VM booted and failed only at the unpromised
-  `/run/current-system/sw/share/wayland-sessions/helm.desktop` assertion.
+  `/run/current-system/sw/share/wayland-sessions/realm.desktop` assertion.
   Keep that run URL in the issue record. Do not manufacture a second failure
   by changing package code: this task corrects the test's contract.
 
@@ -47,7 +47,7 @@
     { config, ... }:
     {
       imports = [ nixosModule ];
-      programs.helm.enable = true;
+      programs.realm.enable = true;
       services.displayManager.ly.enable = true;
       virtualisation.memorySize = 2048;
     };
@@ -58,12 +58,12 @@
     in
     ''
       # existing boot assertion
-      machine.succeed("test -f ${desktops}/share/wayland-sessions/helm.desktop")
+      machine.succeed("test -f ${desktops}/share/wayland-sessions/realm.desktop")
     '';
   ```
 
   Replace the current first desktop-file assertion, which uses
-  `/run/current-system/sw/share/wayland-sessions/helm.desktop`, with the
+  `/run/current-system/sw/share/wayland-sessions/realm.desktop`, with the
   interpolated `desktops` path. Keep the assertion immediately after
   `machine.wait_for_unit("multi-user.target")`.
 
@@ -86,16 +86,16 @@
 
   ```nix
   machine.succeed(
-    "grep -q '^DesktopNames=helm$' ${desktops}/share/wayland-sessions/helm.desktop"
+    "grep -q '^DesktopNames=realm$' ${desktops}/share/wayland-sessions/realm.desktop"
   )
   machine.succeed(
-    "grep -q '^Exec=/nix/store/.*/helm-session-launch$' "
-    + "${desktops}/share/wayland-sessions/helm.desktop"
+    "grep -q '^Exec=/nix/store/.*/realm-session-launch$' "
+    + "${desktops}/share/wayland-sessions/realm.desktop"
   )
   ```
 
   The `Exec` check intentionally accepts Nix's content-addressed store prefix
-  but requires the module-generated `helm-session-launch`, proving the
+  but requires the module-generated `realm-session-launch`, proving the
   desktop file was rewritten by `sessionPackage` rather than copied directly
   from the package output.
 
@@ -152,14 +152,14 @@
   Run the repository's shell syntax checks that do not require Nix:
 
   ```bash
-  bash -n packaging/session/helm-session
+  bash -n packaging/session/realm-session
   git diff --check
   ```
 
   If a compatible ShellCheck binary becomes available, also run:
 
   ```bash
-  shellcheck --shell=bash packaging/session/helm-session
+  shellcheck --shell=bash packaging/session/realm-session
   ```
 
   The host currently lacks an installable ShellCheck and cannot evaluate the
@@ -202,7 +202,7 @@
   - PR #10: retain its narrow Dependabot diff; rerun/review it only after the
     shared #112 gate is green.
   - PR #11: request/recreate the Dependabot branch rebased on current `main`,
-    then require fresh green checks; do not attribute old helm-theme failures
+    then require fresh green checks; do not attribute old realm-theme failures
     to toml 1.1.4.
 
 - [ ] **Step 3: Commit**

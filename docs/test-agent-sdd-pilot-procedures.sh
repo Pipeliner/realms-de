@@ -60,9 +60,9 @@ require_command_surface() {
     file=$1
     skill=$2
     if ! sed -n 's/^[[:space:]]*//p' "$file" | awk '
-        /helm-sdd / {
-            if ($0 != "helm-sdd gate --issue <issue> --from <maturity> --to <maturity>" &&
-                $0 != "helm-sdd promote --dry-run --issue <issue> --from <maturity> --to <maturity>") {
+        /realm-sdd / {
+            if ($0 != "realm-sdd gate --issue <issue> --from <maturity> --to <maturity>" &&
+                $0 != "realm-sdd promote --dry-run --issue <issue> --from <maturity> --to <maturity>") {
                 invalid = 1
             }
             count += 1
@@ -74,7 +74,7 @@ require_command_surface() {
     fi
 }
 
-for skill in helm-agent-sdd-bootstrap helm-agent-sdd-checkpoint helm-agent-sdd-evidence-capture; do
+for skill in realm-agent-sdd-bootstrap realm-agent-sdd-checkpoint realm-agent-sdd-evidence-capture; do
     file=$skills/$skill/SKILL.md
     [ -f "$file" ] || {
         echo "FAIL: missing $skill" >&2
@@ -83,14 +83,14 @@ for skill in helm-agent-sdd-bootstrap helm-agent-sdd-checkpoint helm-agent-sdd-e
     require_front_matter "$file" "$skill"
     require_text "$file" 'SPEC 0008' "$skill governance reference"
     require_text "$file" '## Do not use when' "$skill negative trigger guidance"
-    require_text "$file" 'helm-sdd gate' "$skill read only gate"
+    require_text "$file" 'realm-sdd gate' "$skill read only gate"
     require_text "$file" 'promote --dry-run' "$skill dry run assessment"
     require_command_surface "$file" "$skill"
     require_text "$file" 'Pilot exclusions: no hook, daemon, scheduler, CI job, service, external database, embedding search or third-party integration.' "$skill excluded automation"
 done
 
-checkpoint=$skills/helm-agent-sdd-checkpoint/SKILL.md
-evidence=$skills/helm-agent-sdd-evidence-capture/SKILL.md
+checkpoint=$skills/realm-agent-sdd-checkpoint/SKILL.md
+evidence=$skills/realm-agent-sdd-evidence-capture/SKILL.md
 require_text "$checkpoint" '.agent/work/<issue>/checkpoint.toml' 'checkpoint file contract'
 require_text "$checkpoint" '.agent/work/<issue>/evidence.jsonl' 'evidence file contract'
 require_text "$checkpoint" 'record-carrier commit' 'fresh record carrier contract'
@@ -100,9 +100,9 @@ require_text "$evidence" 'secrets' 'secret exclusion'
 require_text "$evidence" 'absolute paths' 'absolute path exclusion'
 require_text "$evidence" 'source snapshots' 'source snapshot exclusion'
 
-require_text "$skills/README.md" '[`helm-agent-sdd-bootstrap`](helm-agent-sdd-bootstrap/)' 'bootstrap skill index'
-require_text "$skills/README.md" '[`helm-agent-sdd-checkpoint`](helm-agent-sdd-checkpoint/)' 'checkpoint skill index'
-require_text "$skills/README.md" '[`helm-agent-sdd-evidence-capture`](helm-agent-sdd-evidence-capture/)' 'evidence skill index'
+require_text "$skills/README.md" '[`realm-agent-sdd-bootstrap`](realm-agent-sdd-bootstrap/)' 'bootstrap skill index'
+require_text "$skills/README.md" '[`realm-agent-sdd-checkpoint`](realm-agent-sdd-checkpoint/)' 'checkpoint skill index'
+require_text "$skills/README.md" '[`realm-agent-sdd-evidence-capture`](realm-agent-sdd-evidence-capture/)' 'evidence skill index'
 require_text "$root/.claude/memory/40-loop.md" 'Pilot procedure measurement' 'pilot measurement loop guidance'
 
 echo 'PASS: agent SDD pilot procedures'

@@ -28,7 +28,7 @@ scripts is defense in depth, not a second documentation gate.
 
 ### 1. First screen and rules
 
-Before the first README divider, helm is identified as a keyboard-first,
+Before the first README divider, realm is identified as a keyboard-first,
 gapless-tiling, Rust-first Wayland desktop environment with zero animations and
 one palette file. The `What makes it different` section uses these exact rule
 headings and links their governing ADRs:
@@ -37,26 +37,26 @@ headings and links their governing ADRs:
 2. `No colour outside palette.toml.` — ADR 0005.
 3. `Snappy is a number.` — ADR 0009.
 
-The river explanation remains explicit that helm is river’s window manager, not
+The river explanation remains explicit that realm is river’s window manager, not
 a client of a compositor.
 
 ### 2. Status, delivery and map truth
 
 The README states that the roadmap marks M0 **in progress** and that M3 is the
 MVP. It distinguishes present pre-alpha artifacts from a usable desktop:
-`helm-core` and `helm-theme` have source and tests; tracked session entry,
+`realm-core` and `realm-theme` have source and tests; tracked session entry,
 wrapper, systemd-unit, portal-configuration, Nix-module and native-package
-assets exist; none provides a working log-in session because `helm-wm` is not
+assets exist; none provides a working log-in session because `realm-wm` is not
 implemented. The missing bar also prevents a usable desktop, but it is not the
 session wrapper’s abort condition.
 
-For this pre-alpha snapshot, absence of the `crates/helm-session` and
-`crates/helm-bar` implementation manifests (and of an implicit
-`src/bin/helm-wm.rs`) is the checked repository evidence for that `helm-wm`
-claim. `helm-theme` source/test evidence consists of its manifest, `src/lib.rs`
+For this pre-alpha snapshot, absence of the `crates/realm-session` and
+`crates/realm-bar` implementation manifests (and of an implicit
+`src/bin/realm-wm.rs`) is the checked repository evidence for that `realm-wm`
+claim. `realm-theme` source/test evidence consists of its manifest, `src/lib.rs`
 and `src/theme.rs` containing Rust test evidence. The Nix module is
 `packaging/nix/nixos-module.nix`; native package-definition evidence is
-`packaging/debian/control` and `packaging/fedora/helm.spec`.
+`packaging/debian/control` and `packaging/fedora/realm.spec`.
 
 The README must not describe those tracked assets as “Planned. Not started” or
 say that no session entry exists. Its tree representation resolves to each of
@@ -94,7 +94,7 @@ to be live.
 | # | Given / When / Then | Test |
 |---|---|---|
 | A1 | Given the README before its first divider, when a visitor reads it, then it contains the five-part identity; given the rule section, it contains the three exact headings with ADR 0001/0005/0009 links. | `docs/test-readme-truth-snapshot.sh` — `intro-and-rules` |
-| A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, present pre-alpha assets, absent `helm-wm`, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
+| A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, present pre-alpha assets, absent `realm-wm`, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
 | A3 | Given the `2026-08-30T06:18:36Z` snapshot, when each `Needs a human` table row is checked, then it binds one exact issue number, URL and title to a nonempty factual blocker; exactly the 13 accepted rows exist and #34 does not. | `docs/test-readme-truth-snapshot.sh` — `needs-human-snapshot` |
 | A4 | Given the documentation CI job, when it runs on a pull request or push, then uncommented fixture and production-check commands run in the `docs` job without a network call. | `docs/test-readme-truth-snapshot.sh` — `workflow-invocation` |
 

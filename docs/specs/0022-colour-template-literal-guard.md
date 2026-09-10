@@ -8,15 +8,15 @@
 
 ## Purpose
 
-`palette.toml` is the sole source of Helm's themed colour values. Generated
+`palette.toml` is the sole source of Realm's themed colour values. Generated
 output necessarily contains target-format colour tokens, so this contract
 guards the **shipped template sources** before rendering. It refuses a
 hard-coded colour literal while allowing the target-format framing around a
-Helm placeholder.
+Realm placeholder.
 
 ## Scope
 
-**In:** the eight source files currently embedded by `helm_theme::templates()`:
+**In:** the eight source files currently embedded by `realm_theme::templates()`:
 `gtk3.css`, `gtk4.css`, `foot.ini`, `yazi-theme.toml`, `btop.theme`,
 `starship.toml`, `fuzzel.ini`, and `qt6ct-colors.conf`; exact diagnostics;
 hostile fixtures; and the palette CI workflow.
@@ -36,7 +36,7 @@ allowlists.
    template inventory, and exits nonzero on a violation. The inventory is
    exactly the eight paths named above and must equal the set of literal
    `::core::include_str!("../../../configs/templates/<path>")` operands in
-   `crates/helm-theme/src/template.rs`. A missing expected file, duplicate or
+   `crates/realm-theme/src/template.rs`. A missing expected file, duplicate or
    additional template operand, additional file under `configs/templates/`, or
    a template without a declared target grammar is a refusal. Adding or
    removing a shipped template requires an accepted amendment and fixture
@@ -45,7 +45,7 @@ allowlists.
    expression containing only the eight direct `Template` records. Nested
    functions, conditionally disabled records, helper-return indirection, and
    records outside that direct vector are not catalogue evidence and cause a
-   refusal. The source guard is lexical only: a compiled `helm_theme` unit
+   refusal. The source guard is lexical only: a compiled `realm_theme` unit
    test separately proves the actual `templates()` id-to-source-byte mapping
    against the eight qualified built-in includes, so macro expansion cannot
    substitute different compiled sources while preserving lexical text.
@@ -53,7 +53,7 @@ allowlists.
    the complete offending token or value. The palette workflow invokes this
    checker, and the fixture test invokes the same entry point.
 3. In GTK CSS templates, the checker scans all source bytes outside complete
-   Helm `{{ ... }}` placeholders, including comments and quoted strings. A
+   Realm `{{ ... }}` placeholders, including comments and quoted strings. A
    `#` followed by one or more contiguous ASCII hexadecimal digits is one
    candidate: exactly 3, 4, 6, or 8 digits is a literal-colour failure; every
    other digit count is a malformed-colour failure. A candidate followed by an
@@ -71,11 +71,11 @@ allowlists.
 4. In `foot.ini`, only colour-key values in the `[colors]` section are colour
    positions. The one non-colour setting is exactly `alpha=1.0`; another key or
    alpha spelling fails. Each colour-key value is either one or two
-   whitespace-separated complete Helm placeholder expressions ending in
+   whitespace-separated complete Realm placeholder expressions ending in
    `.bare`, or it fails. A raw contiguous six- or eight-ASCII-hex-digit
    candidate, a placeholder without `.bare`, and extra non-whitespace bytes
    fail. Other Foot sections and numeric settings are not colour positions.
-5. In `fuzzel.ini`, every value in `[colors]` is exactly one complete Helm
+5. In `fuzzel.ini`, every value in `[colors]` is exactly one complete Realm
    placeholder expression ending in `.bare`, immediately followed by lowercase
    ASCII `ff`, with optional surrounding whitespace only. A raw `RRGGBBAA`, a
    raw `RRGGBB` plus `ff`, another alpha prefix/suffix, a placeholder without
@@ -85,15 +85,15 @@ allowlists.
    `active_colors`, `disabled_colors`, and `inactive_colors`; another key ending
    in `_colors` fails as unclassified. Each comma-separated field is nonempty,
    has no empty/trailing entry, and each value is exactly `#ff` followed by one
-   complete Helm placeholder expression ending in `.bare`, with optional edge
+   complete Realm placeholder expression ending in `.bare`, with optional edge
    whitespace only. A raw `#AARRGGBB`, changed alpha prefix, incomplete
    placeholder, or extra non-whitespace byte fails.
 7. In `btop.theme`, each `theme[NAME]` value must be exactly one quoted complete
-   Helm placeholder expression with no literal bytes inside the quotes. In
+   Realm placeholder expression with no literal bytes inside the quotes. In
    `yazi-theme.toml`, each inline-table `fg` or `bg` value must be exactly one
-   quoted complete Helm placeholder expression, except the existing literal
+   quoted complete Realm placeholder expression, except the existing literal
    `"reset"`. In `starship.toml`, each `fg:` segment in a quoted style value
-   must be immediately followed by exactly one complete Helm placeholder
+   must be immediately followed by exactly one complete Realm placeholder
    expression. In all three formats, any raw `#` hexadecimal candidate or
    target-position extra bytes fail; candidates use the same complete-span and
    malformed-length rule as CSS.

@@ -11,7 +11,7 @@ if [ ! -x "$guard" ]; then
     exit 1
 fi
 
-tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/helm-font-policy-test.XXXXXX")
+tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/realm-font-policy-test.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 
 inputs='
@@ -19,7 +19,7 @@ docs/adr/0012-font-fallback-is-a-contract.md
 docs/INSTALL.md
 packaging/debian/cargo-deb.toml.fragment
 packaging/debian/control
-packaging/fedora/helm.spec
+packaging/fedora/realm.spec
 packaging/nix/nixos-module.nix'
 
 make_fixture() {
@@ -70,7 +70,7 @@ replace_once "$tmp_dir/debian-hard-symbol/packaging/debian/control" \
 expect_fail "$tmp_dir/debian-hard-symbol"
 
 cp -R "$tmp_dir/canonical" "$tmp_dir/fedora-hard-symbol"
-replace_once "$tmp_dir/fedora-hard-symbol/packaging/fedora/helm.spec" \
+replace_once "$tmp_dir/fedora-hard-symbol/packaging/fedora/realm.spec" \
     'Recommends:     google-noto-sans-symbols2-fonts' 'Requires:       google-noto-sans-symbols2-fonts'
 expect_fail "$tmp_dir/fedora-hard-symbol"
 
@@ -100,7 +100,7 @@ replace_once "$tmp_dir/cargo-missing-plex/packaging/debian/cargo-deb.toml.fragme
 expect_fail "$tmp_dir/cargo-missing-plex"
 
 cp -R "$tmp_dir/canonical" "$tmp_dir/rpm-qualified-font"
-replace_once "$tmp_dir/rpm-qualified-font/packaging/fedora/helm.spec" \
+replace_once "$tmp_dir/rpm-qualified-font/packaging/fedora/realm.spec" \
     'BuildRequires:  rust >= 1.85' 'Requires(pre):  ibm-plex-mono-fonts\nBuildRequires:  rust >= 1.85'
 expect_fail "$tmp_dir/rpm-qualified-font"
 

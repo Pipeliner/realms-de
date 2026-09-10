@@ -27,5 +27,5 @@ That keeps the always-on context small while leaving the detail one hop away.
 3. **Append, don't rewrite.** When a fact goes stale, strike it and date the
    replacement, so the reasoning trail survives.
 4. **If it belongs to the product, it goes in `docs/`.** Memory is about
-   working, not about helm.
+   working, not about realm.
 5. **Update at the moment of learning,** not at the end of the session.

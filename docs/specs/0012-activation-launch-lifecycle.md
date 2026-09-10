@@ -35,7 +35,7 @@ lifecycle server restart.
 - Sealed-tree construction, selection, manifest validation, process-lease
   creation, and generation deletion remain [SPEC 0011](0011-theme-activation-generations.md).
 - River existing-window replay, ledger reconstruction, projection and readiness
-  remain Draft [SPEC 0003](0003-helm-session.md) M2. In particular this spec does
+  remain Draft [SPEC 0003](0003-realm-session.md) M2. In particular this spec does
   not answer its river replay open question.
 - Desktop-entry parsing and D-Bus ownership remain
   [#133](https://github.com/Pipeliner/realms-de/issues/133).  Session-wide
@@ -61,20 +61,20 @@ lifecycle server restart.
 
 ### 1. Ownership vocabulary and invariants
 
-A **session helper** is session infrastructure such as `helm-wm` or `helm-bar`.
-On the systemd path it is a member of `helm-session.target` and stops with that
+A **session helper** is session infrastructure such as `realm-wm` or `realm-bar`.
+On the systemd path it is a member of `realm-session.target` and stops with that
 target. On the no-systemd path the entry owns an identity-recorded bounded
 supervisor for the equivalent helper. A **launcher helper** is any fixed session
 UI that requests a profile launch; it is session infrastructure and must use the
 same ownership mode. A **profile launch** is the separately owned user
 application resulting from that request. It is never a member, wanted unit, or
-`PartOf=` dependent of `helm-session.target`.
+`PartOf=` dependent of `realm-session.target`.
 
 Every admitted profile launch has exactly one **lifetime owner**. The owner is
-a small Helm supervisor created before selection, kept behind an exec gate, and
+a small Realm supervisor created before selection, kept behind an exec gate, and
 placed in the launch's scope or process group. After durable authorization it
 starts at most one fresh, ownership-compatible profile application and remains
-alive while any process Helm can attribute to that launch may dereference
+alive while any process Realm can attribute to that launch may dereference
 generation content. The application process is not itself the lifetime owner:
 it may fork, replace itself, or exit while another owned member remains.
 
@@ -103,12 +103,12 @@ Anything a profile launch may need after logout is either inside its validated
 sealed generation, in persistent state defined here, or already held through an
 inherited descriptor. It may not depend on the control socket, entry/WM PID
 files, ledger snapshot, an exec gate, or any other path below
-`$XDG_RUNTIME_DIR/helm` after it begins running.
+`$XDG_RUNTIME_DIR/realm` after it begins running.
 
 ### 2. Persistent state and serialization
 
-The activation root is `$XDG_STATE_HOME/helm/activation`. If
-`XDG_STATE_HOME` is unset or empty, Helm uses `$HOME/.local/state/helm/activation`.
+The activation root is `$XDG_STATE_HOME/realm/activation`. If
+`XDG_STATE_HOME` is unset or empty, Realm uses `$HOME/.local/state/realm/activation`.
 The selected base must be absolute; absent/non-absolute required inputs fail
 before a session claim or launch. The layout is:
 
@@ -124,7 +124,7 @@ activation/
     .launch-update-<launch-id>-<sequence>-<nonce>
 ```
 
-`session` is absent when no Helm session claim exists. `session-id` and
+`session` is absent when no Realm session claim exists. `session-id` and
 `launch-id` are independently generated opaque 128-bit lowercase hexadecimal
 values matching `[a-f0-9]{32}`. A generation lease reference has the same
 grammar and names its existing record below SPEC 0011's `leases/` directory; it
@@ -139,7 +139,7 @@ configured generated root first and passes only that sealed capability into
 registry open. A launch record's generation or lease text cannot select a
 different filesystem root.
 
-Helm creates each owned directory descriptor-relatively at mode 0700 and the
+Realm creates each owned directory descriptor-relatively at mode 0700 and the
 persistent `lifecycle.lock` once at mode 0600. Every existing component must be
 owned by the current UID and have exactly that type and mode. All traversal and
 mutation is descriptor-relative with `O_NOFOLLOW`; symlinks, special files,
@@ -149,7 +149,7 @@ deleted or replaced for recovery. Kernel lock release is writer recovery.
 State-root initialization is itself a crash-recoverable inventory and finishes
 before any record or lifecycle mutation. With a process umask that preserves
 owner mode bits, an initializer opens the selected state base without following
-links, then creates the owned `helm` and `activation` components one at a time
+links, then creates the owned `realm` and `activation` components one at a time
 with `mkdirat` at exact mode 0700. After each successful creation it opens and
 verifies the new directory. `EEXIST` is accepted only after the same no-follow
 owner/type/mode verification. Whether newly created or found by verified
@@ -257,7 +257,7 @@ changes nothing. If both locks are needed, the only permitted order is
 The session record has this byte order:
 
 ```text
-helm-activation-session-v1
+realm-activation-session-v1
 session <session-id>
 sequence <positive-u64>
 state <claimed|preparing|active|admission-frozen|helpers-stopped|cleanup-delegated|closed>
@@ -291,7 +291,7 @@ stale.
 Each `launches/<launch-id>` record has this byte order:
 
 ```text
-helm-activation-launch-v1
+realm-activation-launch-v1
 launch <launch-id>
 session <session-id>
 sequence <positive-u64>
@@ -306,7 +306,7 @@ lease-kind <process|lifecycle>
 owner-pid <positive-u32>
 owner-start-time <positive-u64>
 owner-kind <systemd-scope|process-group>
-unit <none|helm-launch-<launch-id>.scope>
+unit <none|realm-launch-<launch-id>.scope>
 unit-invocation <none|lowercase-32-hex>
 process-group <u32>
 cgroup <none|normalized-relative-cgroup-path>
@@ -370,7 +370,7 @@ Therefore a `claimed` record with absent compositor/helper identities proves
 that no global environment or helper mutation was authorized by this session.
 
 The systemd path invokes ADR 0011/SPEC 0005's session environment-publication
-boundary, starts `helm-session.target`, and verifies the required units active.
+boundary, starts `realm-session.target`, and verifies the required units active.
 The remaining publication/restoration integration belongs to #117 rather than
 this fresh-Exec slice; an M2 lifecycle fixture may supply a no-op/fake boundary
 and may not claim D-Bus behaviour.  #133 creates no additional global mutation
@@ -385,7 +385,7 @@ boundary in no-manager mode.  Its publication/restoration integration remains
 An M2 lifecycle fixture may use the same no-op/fake boundary and may not claim
 D-Bus behaviour. Boundary absence remains SPEC 0005's named degradation and
 does not prevent the direct lifecycle from reaching `active`. It creates one bounded supervisor/process group for
-`helm-wm` and then `helm-bar`, records each PID/start-time/group before opening
+`realm-wm` and then `realm-bar`, records each PID/start-time/group before opening
 that helper's gate, and applies SPEC 0005's one-second delay and five-in-thirty
 restart limits. The WM restarts after every unrequested clean or failed exit
 while the session is active (the direct equivalent of `Restart=always`), except
@@ -404,7 +404,7 @@ owner; if it dies during `preparing` or `active`, reconciliation freezes
 admission and tears down every recorded helper identity rather than recreating
 one or advancing the session to `active`.
 
-There is at most one non-closed Helm session claim per UID while the externally
+There is at most one non-closed Realm session claim per UID while the externally
 owned environment-publication boundary may have changed per-UID state. A second
 login fails before compositor start, environment-boundary invocation, target
 start or profile launch. It may remove a
@@ -479,7 +479,7 @@ It replaces the original lease at the same opaque filename with this byte
 order, using SPEC 0011's no-follow atomic-replace and directory-fsync rules:
 
 ```text
-helm-generation-lifecycle-lease-v1
+realm-generation-lifecycle-lease-v1
 generation <generation-id>
 launch <launch-id>
 pid <positive-u32>
@@ -487,7 +487,7 @@ start-time <positive-u64>
 boot-id <canonical-uuid>
 owner-uid <u32>
 owner-kind <systemd-scope|process-group>
-unit <none|helm-launch-<launch-id>.scope>
+unit <none|realm-launch-<launch-id>.scope>
 unit-invocation <none|lowercase-32-hex>
 process-group <u32>
 cgroup <none|normalized-relative-cgroup-path>
@@ -586,7 +586,7 @@ failure before replacement, after replacement, after directory fsync and before
 disarm, proving both that a pre-transfer matching process lease is released and
 that no post-transfer lifecycle lease is unlinked.
 
-Selection cleanup shares the cooperative Helm-writer unlink threat boundary
+Selection cleanup shares the cooperative Realm-writer unlink threat boundary
 stated below for retirement: conforming writers hold the generation lock and
 do not mutate the selected lease name between final proof and unlink. A swap
 before or at final proof is retained. Hostile same-UID post-proof mutation is
@@ -606,9 +606,9 @@ terminal record, lease removal and record collection.
 #### systemd ownership
 
 The systemd path creates exactly
-`helm-launch-<launch-id>.scope` in `app.slice`, passing the inert owner PID for
+`realm-launch-<launch-id>.scope` in `app.slice`, passing the inert owner PID for
 adoption. It has no `Wants=`, `Requires=`, `BindsTo=` or `PartOf=` relationship
-to `helm-session.target`. Before lease transfer Helm reads the unit's
+to `realm-session.target`. Before lease transfer Realm reads the unit's
 `InvocationID` and `ControlGroup`, verifies the unit name and current invocation
 match the reply, and verifies the exact owner PID's `/proc` cgroup membership.
 It opens the normalized cgroup below `/sys/fs/cgroup` without following
@@ -626,7 +626,7 @@ unloaded, stale owner identity plus descriptor-
 relative `ENOENT` for the recorded cgroup while no same-name unit exists is
 emptiness proof. If the path still names the recorded device/inode, an empty
 root `cgroup.procs` is **not** proof because descendants may occupy nested
-cgroups. Helm instead opens `cgroup.events` descriptor-relatively with
+cgroups. Realm instead opens `cgroup.events` descriptor-relatively with
 `O_NOFOLLOW`, revalidates the cgroup path/device/inode before and after reading,
 and requires cgroup v2's recursive `populated 0`.
 
@@ -637,13 +637,13 @@ kernel keys with canonical unsigned-decimal values are permitted. Only
 `populated 0` proves the complete recorded subtree empty. `populated 1`, a
 missing/unsupported v2 events file, malformed/changed content, identity race,
 changed inode, manager unavailability, unreadable hierarchy, or same-name unit
-with a different invocation is live/collision/uncertainty: Helm does not
+with a different invocation is live/collision/uncertainty: Realm does not
 signal, adopt, stop, release or delete either object.
 
 #### no-systemd ownership
 
 When no usable user manager exists, the inert owner becomes the leader and
-subreaper for a fresh process group whose id equals its PID. Helm verifies that
+subreaper for a fresh process group whose id equals its PID. Realm verifies that
 identity before lease transfer. The owner starts one direct child, tracks all
 reparented descendants, and declares normal completion only after every
 attributed descendant other than itself is gone. It then writes/fsyncs the
@@ -687,7 +687,7 @@ initial `preparing` record.  The selected mode is known before that record: a
 direct `preparing` record has `owner-kind process-group`, `process-group` equal
 to the exact owner PID, and all unit/cgroup fields `none`/`0`; a systemd
 `preparing` record has `owner-kind systemd-scope`, the exact future
-`helm-launch-<launch-id>.scope` unit name, `process-group 0`, and
+`realm-launch-<launch-id>.scope` unit name, `process-group 0`, and
 invocation/cgroup fields `none`/`0`.  `preparing -> adopted` fills the verified
 systemd invocation/cgroup incarnation exactly once; direct ownership fields are
 already complete.  Those fields are immutable after `adopted`.  The only other
@@ -743,7 +743,7 @@ indistinguishable without additional durable transaction provenance. M2 defers
 that stronger protocol and requires same-pass retention plus fresh-proof
 semantic equivalence instead.
 
-The retirement unlink threat model is cooperative among Helm writers: every
+The retirement unlink threat model is cooperative among Realm writers: every
 conforming writer holds `lifecycle.lock` then the shared generation lock and
 does not mutate reserved retirement names. Pre-/at-retirement replacement is
 tested and fails closed. Hostile same-UID mutation of the retirement name after
@@ -751,7 +751,7 @@ post-move proof is outside M2's account-compromise boundary because Linux does
 not provide ordinary unlink-by-descriptor. No stronger hostile-same-UID unlink
 defense is claimed.
 
-Reconciliation runs at activation-root open, before a restarted `helm-wm`
+Reconciliation runs at activation-root open, before a restarted `realm-wm`
 accepts a launch, and after user-manager reconnect. It opens the referenced
 lease without following links and dispatches on durable record state plus the
 lease's actual parsed format; `lease-kind` is an expected value whose mismatch
@@ -851,7 +851,7 @@ runtime ledger snapshot. It does not restart a profile application. Whether
 river replays existing windows and how SPEC 0003 rebuilds rectangles remain its
 unresolved M2 question; neither outcome changes the ownership record.
 
-After user-manager reexec/restart, Helm re-queries unit properties rather than
+After user-manager reexec/restart, Realm re-queries unit properties rather than
 trusting cached object paths. It may restore target-owned session helpers only
 while the same session claim, entry and compositor are live and `active`. It
 never recreates a profile application to make a missing scope look healthy and
@@ -875,11 +875,11 @@ id.
 
 ### 6. Unit graph and teardown
 
-Every Helm session helper wanted by `helm-session.target` also declares
-`PartOf=helm-session.target` so stopping the target really propagates a stop.
+Every Realm session helper wanted by `realm-session.target` also declares
+`PartOf=realm-session.target` so stopping the target really propagates a stop.
 It retains any required relationship to `graphical-session.target`.
-`helm-bar.service` is ordered `After=helm-wm.service`, so inverse stop ordering
-stops the bar first. `helm-wm.service` uses `Restart=always`: while the same
+`realm-bar.service` is ordered `After=realm-wm.service`, so inverse stop ordering
+stops the bar first. `realm-wm.service` uses `Restart=always`: while the same
 compositor and active session target exist, an unsolicited clean exit is not a
 logout and must not leave river unmanaged. User-requested logout exits river;
 the entry freezes admission and stops the target, which prevents the WM restart.
@@ -897,8 +897,8 @@ Teardown is idempotent and ordered:
 1. Durably transition the matching session to `admission-frozen`; reject all
    later launch requests for it.
 2. Stop helpers according to the recorded mode. For `systemd`, stop
-   `helm-session.target` and verify every target-owned helper inactive; do not
-   stop, kill or attach any `helm-launch-*.scope` profile launch. For `direct`,
+   `realm-session.target` and verify every target-owned helper inactive; do not
+   stop, kill or attach any `realm-launch-*.scope` profile launch. For `direct`,
    disable both restart loops, send bounded TERM then KILL to the revalidated
    bar supervisor/group before the WM supervisor/group, reap them, and verify
    both recorded groups empty. For `none`, there was no helper start and the
@@ -919,7 +919,7 @@ Teardown is idempotent and ordered:
    reconciliation collects only after proving death.
 4. Record `cleanup-delegated`, then perform SPEC 0005's environment,
    compositor and runtime-tree cleanup subject to ADR 0011/SPEC 0005/#117's
-   session environment-publication contract. Removing `$XDG_RUNTIME_DIR/helm` cannot
+   session environment-publication contract. Removing `$XDG_RUNTIME_DIR/realm` cannot
    remove any asset promised to a surviving profile launch.
 5. Record `closed`; remove the session record only after its close is durable
    and the caller still owns the same session id and sequence.
@@ -1002,15 +1002,15 @@ corresponding implementation.
 | A1 | Given a launch selected on generation N, when N+1 becomes current and generation GC races launch or teardown, then the process reads only N and N is retained until the exact transferred lifetime ownership is proven empty. In particular, if the supervisor PID is stale while an attributed scoped descendant survives, GC retains both lifecycle lease and generation. | |
 | A2 | Given a fault at every owner-create, process-lease, preparing-record, scope/group adoption, lease-transfer-before-adopted-record, adopted-record, durable-exec-authorization, gate-send-before-running-record, running record, complete pre-replacement returned-`fexecve` terminal-failure record, short/malformed/partial-frame or EOF-without-witness terminal-lost record with matching or absent lifecycle lease, terminal-record-before-lease-release, lease-release and record-collection boundary, when recovery runs, then the record-state/actual-lease table yields either no executed profile and eventual collection, exactly one reconciled owned launch, or retained lifecycle evidence where a terminal-lost or nonterminal transfer crash lacks the required proof; there is never an unleased live profile, duplicate exec, or repeated-fault quota leak. | |
 | A3 | Given a child or scope that exits, ignores TERM, leaves uncertain membership, or outlives a dead direct supervisor, when teardown reconciles it, then every permitted terminal record is fsynced before cleanup, lease release follows the applicable proven emptiness rule, waits are bounded, and uncertainty preserves the record and lease. A direct lifecycle lease is releasable only after its still-live owner recorded `direct-drained yes`; a forced logout without that witness retains the nonterminal record and lease, and later reconciliation never invents the witness. | |
-| A4 | Given a live profile launch when `helm-wm` crashes and restarts, when activation reconciliation and a client reconnect complete, then the same PID/scope and generation are reported, no application is restarted, and the first status frame is a fresh current snapshot with no old-incarnation delta. | |
+| A4 | Given a live profile launch when `realm-wm` crashes and restarts, when activation reconciliation and a client reconnect complete, then the same PID/scope and generation are reported, no application is restarted, and the first status frame is a fresh current snapshot with no old-incarnation delta. | |
 | A5 | Given user-manager reexec/restart with a live scope, an unloaded old scope whose recorded cgroup path is absent, the same recorded cgroup inode reporting recursive `populated 0` or `1`, an empty root `cgroup.procs` with a populated nested child cgroup, a reused cgroup path/inode, or a same-name/different-invocation scope, when reconciliation runs, then only matching invocation plus durable cgroup identity is adopted once, only stale-owner plus absent old cgroup or verified `cgroup.events` `populated 0` permits collection, nested/live/inconsistent/reused evidence causes no duplicate launch or lease release, and only target-owned helpers may restart while the same session claim remains active. | |
-| A6 | Given a running target and independent profile scope, when logout stops `helm-session.target`, then an executable unit-graph fixture proves the bar stops before the WM and every helper stops before environment cleanup while the profile scope remains untouched. | |
+| A6 | Given a running target and independent profile scope, when logout stops `realm-session.target`, then an executable unit-graph fixture proves the bar stops before the WM and every helper stops before environment cleanup while the profile scope remains untouched. | |
 | A7 | Given equivalent live launches with lingering off and on, when logout and later reconciliation run, then off permits logind cleanup followed only by proven-stale record/lease collection, while on preserves the live scope, record and lease until real exit. | |
 | A8 | Given faults after temporary creation, during/after temporary write/fsync, before/after no-replace rename and parent fsync for session claim, launch create and record update, plus an early same-boot entry crash and concurrent same-UID claimants, when recovery holds the lifecycle lock, then discardability is decided only from exact basename grammar, current-UID no-follow exact-0600 regular-file metadata, the 4096-byte size bound and the applicable inventory's final-record condition; every artifact satisfying those conditions is discarded and fsynced without payload decoding or replay even when empty, partial, non-UTF-8 or noncanonical, every malformed final or malformed-reserved name/metadata fails closed, no partial final appears, natural crash temporaries cannot permanently block claim/GC or exhaust quota, exactly one healthy session claim wins before compositor/global-environment/helper/profile mutation, and a stale id/sequence cannot clear it. | |
 | A9 | Given no usable systemd user manager, when the entry claims, records its compositor, invokes the externally owned environment-publication boundary in no-manager mode, starts/records/verifies bounded direct WM and bar supervisors, admits a profile, and then the profile exits, detaches, or receives logout, then the direct session reaches `active` without a target, an M2 fake boundary makes no D-Bus-behaviour claim, helper/profile teardown uses the recorded groups in bar-before-WM bounded order, the launch honors lease-before-exec, normal direct collection requires the owner-written drain witness plus proven emptiness, forced logout without that witness retains evidence, detachment is degraded/uncertain, and no systemd-equivalent survival is claimed. | |
 | A10 | Given wrong owner/mode/type, a symlink, malformed/reserved entry, stale boot/PID/start-time, reused PID, stale unit name with a new invocation, or a conflicting sequence, when reconciliation or GC runs, then it refuses signal/adoption/deletion for that evidence and leaves valid unrelated state intact. | |
 | A11 | Given teardown work still live or uncertain at 15 seconds, when the entry deadline expires, then the entry may return but the durable state does not advance falsely, every affected record and generation lease remains, and runtime removal has deleted no promised application asset. | |
-| A12 | Given the shipped source units and a live user-manager fixture, when restart, target stop and abort paths are exercised, then both views agree on `Restart=always`, `PartOf=helm-session.target`, inverse bar-before-WM stop order, profile-scope independence and exactly one abort execution after start-limit exhaustion. | |
+| A12 | Given the shipped source units and a live user-manager fixture, when restart, target stop and abort paths are exercised, then both views agree on `Restart=always`, `PartOf=realm-session.target`, inverse bar-before-WM stop order, profile-scope independence and exactly one abort execution after start-limit exhaustion. | |
 | A13 | Given a desktop entry whose `DBusActivatable=true`, including a tempting valid, malformed, or absent `Exec` and any bus/owner state, when accepted SPEC 0013/#133 admission evaluates it, then it refuses before creating a lifetime owner, opening/selecting a generation, creating a process/lifecycle lease or record, creating a systemd scope/group, mutating launch environment, or making any application-directed D-Bus operation.  Plain `Exec` has no existing-owner probe or refusal and may create concurrent fresh launches. | |
 | A14 | Given each safe crash point before/after owned-directory creation, child fsync, parent fsync, first `lifecycle.lock` exclusive creation, lock fsync, activation-root fsync and `launches/` creation, plus concurrent same-UID initializers and separate unsafe-existing-object fixtures, when initialization retries, then every safe inventory converges from absence to verified current-UID exact-0700 directories and one persistent current-UID zero-length exact-0600 lock inode, all contenders revalidate and acquire that same inode before lifecycle mutation, each created component's child and parent durability precedes dependent mutation, and every unsafe collision fails closed without unlinking, replacing or repairing it. | |
 | A15 | Given valid independent records together with a malformed final record, malformed reserved entry, unsafe record metadata or an exceeded inventory bound, and separate byte-canonical launch-record fixtures whose actual referenced lease is absent, malformed, cross-kind or identity-mismatched or whose actual ownership evidence is inconsistent/unreadable, when a lifecycle client handshakes and subscribes, then under `lifecycle.lock` followed by SPEC 0011's `activation.lock` the server cross-validates every launch through section 5, emits neither an affected record as healthy nor any partial full snapshot or delta for that subscription, reports fatal/uncertain snapshot failure without silently omitting the evidence, leaves permitted internal read-only reconciliation distinct from public full/current truth, and emits a full snapshot only for a fresh subscription after a complete valid bounded record/lease/ownership scan. | |
@@ -1035,7 +1035,7 @@ systemd, filesystem or process operations.
 | Failure | Guard |
 |---|---|
 | Generation GC wins the handoff race | Shared generation lock through durable process lease, pre-exec transfer to a non-PID-reclaimable lifecycle lease, and A1/A2 |
-| Target stop leaves helpers running | Explicit `PartOf=helm-session.target`, inactive verification and executable A6/A12 |
+| Target stop leaves helpers running | Explicit `PartOf=realm-session.target`, inactive verification and executable A6/A12 |
 | Launcher/WM/manager crash duplicates an application | One closed gate, monotonic record, incarnation validation and A2/A4/A5 |
 | Logout kills a profile or drops its generation | Scope independence, freeze-before-stop, proof-before-release and A3/A6/A7/A11 |
 | PID or unit name reuse targets an unrelated process | Boot/UID/start-time/invocation/cgroup revalidation and A10 |

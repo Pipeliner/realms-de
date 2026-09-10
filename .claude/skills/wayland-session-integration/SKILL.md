@@ -1,6 +1,6 @@
 ---
 name: wayland-session-integration
-description: Use when working on how a helm session starts or talks to the rest of the desktop stack - the session entry script or wrapper, .desktop session files, systemd user units and graphical-session.target, XDG_CURRENT_DESKTOP / XDG_SESSION_TYPE / WAYLAND_DISPLAY, systemctl --user import-environment, dbus-update-activation-environment, xdg-desktop-portal and portal backends, D-Bus activation, cursor theme or size, XWayland, `helm ctl doctor`, or packaging in packaging/ and configs/portal/. Also use when diagnosing symptoms like a GTK file dialog that hangs for 25 seconds, screen sharing that silently fails in Firefox or Chromium, an invisible or default-black cursor, or a DBusActivatable app that will not launch.
+description: Use when working on how a realm session starts or talks to the rest of the desktop stack - the session entry script or wrapper, .desktop session files, systemd user units and graphical-session.target, XDG_CURRENT_DESKTOP / XDG_SESSION_TYPE / WAYLAND_DISPLAY, systemctl --user import-environment, dbus-update-activation-environment, xdg-desktop-portal and portal backends, D-Bus activation, cursor theme or size, XWayland, `realm ctl doctor`, or packaging in packaging/ and configs/portal/. Also use when diagnosing symptoms like a GTK file dialog that hangs for 25 seconds, screen sharing that silently fails in Firefox or Chromium, an invisible or default-black cursor, or a DBusActivatable app that will not launch.
 ---
 
 # Wayland session integration
@@ -11,7 +11,7 @@ and then the first file dialog hangs for 25 seconds. The cause is almost always
 that the session's environment never reached the two places that launch things
 on the user's behalf — systemd's user manager and the D-Bus session bus.
 
-**Status:** helm's session entry, `configs/portal/` and the `doctor` checks are
+**Status:** realm's session entry, `configs/portal/` and the `doctor` checks are
 **M3** work and do not exist yet. This skill is the contract they must satisfy,
 recorded so it is not rediscovered by debugging. `docs/PITFALLS.md` § "Session
 integration — the classic killers" is the failure register; ADR 0011 in
@@ -24,9 +24,9 @@ must be imported before anything that could be D-Bus- or systemd-activated
 starts. Deviating from this order is what produces every symptom below.
 
 ```
-1. export XDG_CURRENT_DESKTOP=helm
+1. export XDG_CURRENT_DESKTOP=realm
    export XDG_SESSION_TYPE=wayland
-   export XDG_SESSION_DESKTOP=helm
+   export XDG_SESSION_DESKTOP=realm
    (plus XCURSOR_THEME and XCURSOR_SIZE)
         │  set BEFORE the compositor starts: portal backend selection and
         │  cursor loading both read them at client start-up
@@ -47,7 +47,7 @@ starts. Deviating from this order is what produces every symptom below.
         │  BOTH. systemd-activated units and D-Bus-activated services are two
         │  different launchers with two different environments.
         ▼
-5. systemctl --user start helm-session.target
+5. systemctl --user start realm-session.target
    (bar, portals, idle/lock, everything else)
 ```
 
@@ -81,7 +81,7 @@ The full table with verification commands is in `reference.md`. The short form:
    `PartOf=graphical-session.target` and `After=graphical-session.target`, and
    is started by a target rather than by the entry script directly. That is what
    makes a crashed bar restartable without taking the session with it.
-3. Add a matching check to `helm ctl doctor`. Every item in this skill should be
+3. Add a matching check to `realm ctl doctor`. Every item in this skill should be
    something `doctor` can confirm, because the user hits it before we do.
 4. Add or update the row in `docs/PITFALLS.md`, naming the guard.
 5. **This cannot be tested in the agent container** — there is no Wayland
@@ -93,5 +93,5 @@ The full table with verification commands is in `reference.md`. The short form:
 
 `reference.md` has the full symptom table with the exact verification command
 for each, the systemd unit relationships, the portal configuration shape, and
-the checks `helm ctl doctor` owes the user. Open it when diagnosing a specific
+the checks `realm ctl doctor` owes the user. Open it when diagnosing a specific
 symptom or writing the units.

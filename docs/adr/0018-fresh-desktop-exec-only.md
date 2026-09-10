@@ -1,7 +1,7 @@
 # ADR 0018 — Desktop launch is fresh-process Exec only
 
 - **Status:** Accepted (2026-08-30)
-- **Deciders:** helm maintainers, repository owner
+- **Deciders:** realm maintainers, repository owner
 - **Issue:** [#133](https://github.com/Pipeliner/realms-de/issues/133)
 - **Depends on:** [ADR 0017](0017-immutable-theme-activation-generations.md),
   accepted [SPEC 0012](../specs/0012-activation-launch-lifecycle.md)
@@ -11,13 +11,13 @@
 
 ## Context
 
-A selected Helm generation is private, immutable launch input.  A normal
+A selected Realm generation is private, immutable launch input.  A normal
 desktop `Exec` entry can start a new child with that input.  A
 `DBusActivatable=true` entry instead asks a session-bus owner to activate; that
 owner may predate the request and cannot be shown to have inherited one
 request's private generation binding.  The D-Bus activation environment is
 per-UID global state and has no public readback/compare-and-swap protocol from
-which Helm could prove prior-value restoration.
+which Realm could prove prior-value restoration.
 
 The accepted M2 lifecycle contract already owns the only authoritative owner,
 lease transfer, execution gate, durable state, and reconciliation protocol.
@@ -32,16 +32,16 @@ are neither safe nor race-free substitutes.
 
 ## Decision
 
-1. Helm admits only the main group of a supported `Type=Application` desktop
+1. Realm admits only the main group of a supported `Type=Application` desktop
    file whose `DBusActivatable` value is absent or exactly `false`, whose
    `Terminal` value is absent or exactly `false`, and whose `Exec` value parses
    into a supported tokenized argv.  Each admitted request starts at most one
    new child through the M2 lifecycle facade.
 2. `DBusActivatable=true` is an unconditional, read-only preflight refusal.
-   Helm does not inspect `Exec` as a fallback, derive/query a bus name, call an
+   Realm does not inspect `Exec` as a fallback, derive/query a bus name, call an
    application D-Bus method, create an owner, select a generation, create a
    lease/record/scope/group, mutate environment, or execute target code.
-3. Plain `Exec` has no owner probe.  Helm does not deduplicate, find, retheme,
+3. Plain `Exec` has no owner probe.  Realm does not deduplicate, find, retheme,
    signal, restart, replace, attach to, or make singleton claims about an
    already-running application.  Concurrent admitted requests may start
    independent fresh processes.
@@ -51,7 +51,7 @@ are neither safe nor race-free substitutes.
    never publishes that overlay to the launcher process, systemd user manager,
    D-Bus activation environment, or global `XDG_CONFIG_HOME`.  Exact target
    overlays and evidence remain [#135](https://github.com/Pipeliner/realms-de/issues/135).
-5. A picker may provide an entry identity only.  Helm resolves, admits, and
+5. A picker may provide an entry identity only.  Realm resolves, admits, and
    launches it itself.  Direct fuzzel application mode and raw `Spawn(argv)`
    remain unverified fire-and-forget requests, not themed/generation-selected
    launches.

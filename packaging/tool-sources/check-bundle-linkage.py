@@ -283,7 +283,7 @@ def license_rows(report: Path, vendor: Path) -> set[tuple[str, str]]:
     return covered
 
 
-def materialize_helm_stage(source: Path, vendor: Path, config: Path, destination: Path) -> Path:
+def materialize_realm_stage(source: Path, vendor: Path, config: Path, destination: Path) -> Path:
     destination = Path(os.path.abspath(destination))
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
@@ -321,12 +321,12 @@ def validate_bundle(root: Path, destination: Path | None = None) -> Path | None:
     basic_fields = required | vendor_fields
     basic_archive_fields = required | archive_fields
     bound_archive_fields = basic_archive_fields | bound_fields
-    helm_fields = bound_archive_fields | {
+    realm_fields = bound_archive_fields | {
         "source_archive_format", "source_provenance", "source_provenance_sha256",
     }
-    helm_bundle = record.get("name") == "helm-workspace"
-    if helm_bundle:
-        valid_fields = frozenset(record) == frozenset(helm_fields)
+    realm_bundle = record.get("name") == "realm-workspace"
+    if realm_bundle:
+        valid_fields = frozenset(record) == frozenset(realm_fields)
     else:
         valid_fields = frozenset(record) in {
             frozenset(basic_fields), frozenset(basic_archive_fields), frozenset(bound_archive_fields),
@@ -335,7 +335,7 @@ def validate_bundle(root: Path, destination: Path | None = None) -> Path | None:
         raise SystemExit("bundle manifest fields differ from policy")
 
     paths = {key: under_root(root, key, record[key]) for key in required - {"name"}}
-    if helm_bundle:
+    if realm_bundle:
         paths["source_provenance"] = under_root(
             root, "source_provenance", record["source_provenance"])
     elif "source" in record:
@@ -350,9 +350,9 @@ def validate_bundle(root: Path, destination: Path | None = None) -> Path | None:
 
     source_temporary = None
     source = None
-    if helm_bundle:
+    if realm_bundle:
         if record["source"] != "source.tar.gz":
-            raise SystemExit("Helm source archive path is not source.tar.gz")
+            raise SystemExit("Realm source archive path is not source.tar.gz")
         if record["source_archive_format"] != "tar.gz":
             raise SystemExit("source archive format is not tar.gz")
         source_temporary = tempfile.TemporaryDirectory()
@@ -412,8 +412,8 @@ def validate_bundle(root: Path, destination: Path | None = None) -> Path | None:
 
     if destination is not None:
         if source is None:
-            raise SystemExit("only the Helm workspace bundle can be staged")
-        return materialize_helm_stage(source, vendor, paths["cargo_config"], destination)
+            raise SystemExit("only the Realm workspace bundle can be staged")
+        return materialize_realm_stage(source, vendor, paths["cargo_config"], destination)
     return None
 
 

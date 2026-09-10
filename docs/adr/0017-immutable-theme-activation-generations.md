@@ -1,7 +1,7 @@
 # ADR 0017 — Theme activation uses sealed immutable generations
 
 - **Status:** Accepted (2026-08-29)
-- **Deciders:** helm maintainers, repo owner
+- **Deciders:** realm maintainers, repo owner
 - **Supersedes / Superseded by:** Supplements ADR 0005; accepted
   [SPEC 0012](../specs/0012-activation-launch-lifecycle.md) owns #132/#168's
   session/scope lifecycle. Supersedes ADR 0005's mutable target publication, no-op result,
@@ -12,13 +12,13 @@
 
 ADR 0005/SPEC 0002 protect individual generated files, but deliberately do not
 make a set of files a transaction. That is insufficient once target launch
-configuration needs a stable identity: a mutable `helm/generated` directory
+configuration needs a stable identity: a mutable `realm/generated` directory
 cannot prove which palette, target catalogue, or output bytes a process used.
 
 ## Decision
 
-1. Helm creates its generated root with mode 0700. An apply first materializes a new **sealed generation** at
-   `$XDG_CONFIG_HOME/helm/generated/generations/<generation-id>/`. Its manifest
+1. Realm creates its generated root with mode 0700. An apply first materializes a new **sealed generation** at
+   `$XDG_CONFIG_HOME/realm/generated/generations/<generation-id>/`. Its manifest
    names every normalized output path and SHA-256 digest, and binds the
    canonical palette digest, exact catalogue/templates/rendering inputs, and
    launch-profile inputs. The manifest has a
@@ -33,7 +33,7 @@ cannot prove which palette, target catalogue, or output bytes a process used.
    already launched remains pinned to that selection; a later apply changes only
    future launches.
 3. All participants open the same descriptor-relative, no-follow `activation.lock`
-   under Helm's generated root and use advisory shared/exclusive locks on that
+   under Realm's generated root and use advisory shared/exclusive locks on that
    inode. Kernel release on process death is stale-writer recovery; no process
    steals a lock from a live owner. Writers take the exclusive lock. They render and fsync the complete staged
    tree, fsync its manifest, rename the staged directory to its final immutable
@@ -75,7 +75,7 @@ cannot prove which palette, target catalogue, or output bytes a process used.
 - A crash cannot make `current` name an unsealed or mismatched tree; it can leave
   harmless staging or a valid unpointed orphan. A missing/corrupt pointer,
   missing tree, or digest mismatch fails closed; recovery never guesses newest.
-- “Sealed” means Helm never mutates a published generation and consumers verify
+- “Sealed” means Realm never mutates a published generation and consumers verify
   before use; it does not claim protection from another same-UID actor.
 - The contract does not promise atomic live upgrade across clients, automatic
   session/scope cleanup, or a cross-file transaction outside the generation

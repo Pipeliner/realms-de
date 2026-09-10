@@ -1,8 +1,8 @@
-# helm — generated from palette.toml. Do not edit; `helm ctl theme apply`
+# realm — generated from palette.toml. Do not edit; `realm ctl theme apply`
 # overwrites this file. btop (horus, the monitor) reads its theme at start and
 # has no reload signal, so a running instance keeps the old colours.
 #
-# Select it with `color_theme = "helm"` in btop.conf.
+# Select it with `color_theme = "realm"` in btop.conf.
 #
 # The three-stop gradients run cool to warn — starlight, then teal, then gold —
 # so a meter's colour says how loaded it is without a legend. Gold is the

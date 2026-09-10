@@ -28,7 +28,7 @@ comparison uses `openat(..., RDONLY | NOFOLLOW)`, staging uses
 directory. A staged record owns the parent `OwnedFd` plus temporary and final
 basenames until commit or cleanup.
 
-Temporary files use `.<final>.helm-tmp.<pid>.<monotonic-sequence>`. A bounded
+Temporary files use `.<final>.realm-tmp.<pid>.<monotonic-sequence>`. A bounded
 retry on `AlreadyExists` makes a stale predictable temporary name harmless
 instead of an availability denial. No cleanup reconstructs an absolute path.
 

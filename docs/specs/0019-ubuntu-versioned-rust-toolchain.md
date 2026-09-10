@@ -8,7 +8,7 @@
 
 ## Purpose
 
-Ubuntu 24.04's default Rust toolchain is below helm's MSRV. Debian packaging
+Ubuntu 24.04's default Rust toolchain is below realm's MSRV. Debian packaging
 therefore must select a verified versioned toolchain before it invokes Cargo;
 it must never silently fall back to an unrelated `cargo` on `PATH`.
 
@@ -34,7 +34,7 @@ dependencies, or solving the separate River/wlroots packaging decision.
 4. Distro CI installs the Ubuntu 24.04 versioned toolchain and Debian build
    prerequisites, constructs the retained-only Debian source kit governed by
    SPEC 0024, and builds the `.deb` from that kit. The kit contains packaging
-   metadata and the canonical retained Helm authority, not a second workspace
+   metadata and the canonical retained Realm authority, not a second workspace
    tree. This job is the integration evidence for the real archive layout.
 
 ## Acceptance criteria

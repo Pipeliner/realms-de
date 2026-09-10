@@ -1,4 +1,4 @@
-# helm — the reference build (ADR 0010).
+# realm — the reference build (ADR 0010).
 #
 # This flake lives at the repository root because a flake cannot reference
 # sources above its own directory: rooted at packaging/nix/ it could never see
@@ -7,8 +7,8 @@
 #
 #   packaging/nix/support.nix              toolchain + river pins, shared tool lists
 #   packaging/nix/package.nix              the derivation
-#   packaging/nix/nixos-module.nix         programs.helm for NixOS
-#   packaging/nix/home-manager-module.nix  programs.helm for home-manager
+#   packaging/nix/nixos-module.nix         programs.realm for NixOS
+#   packaging/nix/home-manager-module.nix  programs.realm for home-manager
 #   packaging/nix/checks.nix               shellcheck + the NixOS VM test
 #
 # ─────────────────────────────────────────────────────────────────────────────
@@ -20,18 +20,18 @@
 #
 # COMPOSITOR: river 0.4.x, not niri (ADR 0013 supersedes ADR 0002). river 0.4
 # removed window management from the compositor and exposes it over
-# `river-window-management-v1`; helm-session is the window manager that drives
-# it. river is pinned and carried in helm's runtime closure — see
+# `river-window-management-v1`; realm-session is the window manager that drives
+# it. river is pinned and carried in realm's runtime closure — see
 # packaging/nix/support.nix for the version guard and the pinning decision.
 #
 # PRE-ALPHA (0.1.0). Desktop binaries remain pending, but the Cargo workspace
-# already installs the metadata-only local validator as helm-sdd. The package's
+# already installs the metadata-only local validator as realm-sdd. The package's
 # real, testable contents today are that validator, the session wrapper, the
-# wayland-session entry, the systemd user units and the palette. helm-bar,
-# helm-wm and helm land in M1–M2 and will appear in $out/bin without any
+# wayland-session entry, the systemd user units and the palette. realm-bar,
+# realm-wm and realm land in M1–M2 and will appear in $out/bin without any
 # change to this file.
 {
-  description = "helm — a keyboard-first, gapless-tiling Wayland desktop environment";
+  description = "realm — a keyboard-first, gapless-tiling Wayland desktop environment";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -49,7 +49,7 @@
     let
       inherit (nixpkgs) lib;
 
-      # helm is a Wayland desktop: Linux only. Darwin would evaluate and could
+      # realm is a Wayland desktop: Linux only. Darwin would evaluate and could
       # never run, and a package that cannot run should not be offered.
       systems = [
         "x86_64-linux"
@@ -62,7 +62,7 @@
         src = self;
       };
 
-      helmPackage =
+      realmPackage =
         pkgs:
         import ./packaging/nix/package.nix {
           inherit pkgs lib support;
@@ -81,21 +81,21 @@
     in
     {
       packages = forAllSystems (pkgs: rec {
-        helm = helmPackage pkgs;
-        default = helm;
+        realm = realmPackage pkgs;
+        default = realm;
       });
 
       apps = forAllSystems (pkgs: rec {
-        helm-session = {
+        realm-session = {
           type = "app";
-          program = "${helmPackage pkgs}/bin/helm-session";
+          program = "${realmPackage pkgs}/bin/realm-session";
         };
-        default = helm-session;
+        default = realm-session;
       });
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
-          name = "helm-dev";
+          name = "realm-dev";
 
           packages =
             (with pkgs; [
@@ -107,14 +107,14 @@
               rust-analyzer
 
               # Packaging and validation, so the checks CI runs are runnable
-              # locally: `shellcheck packaging/session/helm-session`,
-              # `rpmspec -P packaging/fedora/helm.spec`, `dpkg-parsechangelog`.
+              # locally: `shellcheck packaging/session/realm-session`,
+              # `rpmspec -P packaging/fedora/realm.spec`, `dpkg-parsechangelog`.
               shellcheck
               rpm
               dpkg
               cargo-deb
               # cargo-generate-rpm is not in nixpkgs (checked against
-              # nixos-unstable, 2026-08). packaging/fedora/helm.spec is the
+              # nixos-unstable, 2026-08). packaging/fedora/realm.spec is the
               # supported rpm path; `cargo install cargo-generate-rpm` if you
               # want the metadata-driven one.
             ])
@@ -131,26 +131,26 @@
             ++ support.wrapperRuntime pkgs;
 
           shellHook = ''
-            echo "helm ${support.version} dev shell — pre-alpha: helm-core is the only crate that builds."
+            echo "realm ${support.version} dev shell — pre-alpha: realm-core is the only crate that builds."
             echo "  cargo fmt --all && cargo clippy --all-targets -- -D warnings && cargo test"
-            echo "  ./packaging/session/helm-session --check   # session contract preflight"
+            echo "  ./packaging/session/realm-session --check   # session contract preflight"
           '';
         };
       });
 
       nixosModules = {
-        helm = nixosModule;
+        realm = nixosModule;
         default = nixosModule;
       };
 
       homeManagerModules = {
-        helm = homeManagerModule;
+        realm = homeManagerModule;
         default = homeManagerModule;
       };
 
       # `checks.session-boots` is a NixOS VM test and needs a KVM-capable
       # builder; `shellcheck`, `package`, `packaged-binaries`, and
-      # `helm-sdd-git-runtime` build
+      # `realm-sdd-git-runtime` build
       # anywhere. CI (distro.yml) falls back to `nix flake check --no-build`
       # plus those four when /dev/kvm is absent, so keep them independently
       # buildable.
@@ -159,7 +159,7 @@
         import ./packaging/nix/checks.nix {
           inherit pkgs lib nixosModule;
           src = self;
-          helm = helmPackage pkgs;
+          realm = realmPackage pkgs;
           desktopAdmissionVmTest = desktopAdmissionVmTest pkgs;
         }
       );

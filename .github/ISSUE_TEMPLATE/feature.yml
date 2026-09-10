@@ -1,5 +1,5 @@
 name: Feature or change request
-description: Something helm should do that it does not
+description: Something realm should do that it does not
 title: "<component>: <what it should do>"
 labels: ["enhancement", "needs-triage"]
 body:
@@ -8,7 +8,7 @@ body:
       value: |
         The cut line is
         [MVP.md](https://github.com/Pipeliner/realms-de/blob/main/docs/MVP.md):
-        *one person can log into helm and use it as their only desktop for a
+        *one person can log into realm and use it as their only desktop for a
         week without reaching for another DE.* Anything that does not serve
         that waits — however good it would look in a screenshot. Saying which
         milestone your request belongs to is not a formality; it is most of the
@@ -25,7 +25,7 @@ body:
   - type: textarea
     id: proposal
     attributes:
-      label: What you would like helm to do
+      label: What you would like realm to do
       description: Be concrete. If it has a visible surface, describe what appears on screen and which keys reach it.
     validations:
       required: true
@@ -34,11 +34,11 @@ body:
     id: milestone
     attributes:
       label: Which milestone does this belong to
-      description: See docs/ROADMAP.md. "M3 or earlier" means you believe helm is not daily-drivable without it.
+      description: See docs/ROADMAP.md. "M3 or earlier" means you believe realm is not daily-drivable without it.
       options:
         - M3 or earlier — the MVP is incomplete without this
         - M4 — a native client, replacing a stopgap
-        - M5 — needs the helm compositor
+        - M5 — needs the realm compositor
         - M6 — polish
         - I do not know
     validations:
@@ -48,7 +48,7 @@ body:
     id: alternatives
     attributes:
       label: What else would solve the problem
-      description: Including doing nothing, or solving it outside helm with an existing tool. If a proven tool already does this, say so — helm prefers reusing one behind a seam to writing another.
+      description: Including doing nothing, or solving it outside realm with an existing tool. If a proven tool already does this, say so — realm prefers reusing one behind a seam to writing another.
 
   - type: checkboxes
     id: houserules

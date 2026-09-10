@@ -17,9 +17,9 @@ work — it is simply not allowed to jump the queue.
 | [M0](#m0--foundations) | Foundations | Agree the shape and write the contracts down. | `cargo test` green in CI; architecture reviewed | **in progress** |
 | [M1](#m1--theming-pipeline) | Theming pipeline | One palette file retints the whole desktop. | One palette edit visibly retints GTK, terminal, yazi and btop | planned |
 | [M2](#m2--session-and-bar) | Session and bar | The ledger drives real pixels, and the bar shows it. | Bar reflects live orbit/focus/mode changes, and the reference triptych geometry is pixel-exact on river | planned |
-| [M3](#m3--daily-drivable) | **Daily-drivable — the MVP** | Someone can use helm as their only desktop for a week. | A fresh NixOS/Ubuntu/Fedora box logs into helm and passes `doctor` | planned |
+| [M3](#m3--daily-drivable) | **Daily-drivable — the MVP** | Someone can use realm as their only desktop for a week. | A fresh NixOS/Ubuntu/Fedora box logs into realm and passes `doctor` | planned |
 | [M4](#m4--native-clients) | Native clients | Retire the stopgaps. | fuzzel, the toolkit file dialog and the terminal-run agent runner are gone | planned |
-| [M5](#m5--the-helm-compositor) | helm compositor | The ledger runs the screen directly. | `NativeBackend` passes the same session tests as `RiverBackend`, including the exact-tiling sweep that river's `propose_dimensions` can only approximate | planned |
+| [M5](#m5--the-realm-compositor) | realm compositor | The ledger runs the screen directly. | `NativeBackend` passes the same session tests as `RiverBackend`, including the exact-tiling sweep that river's `propose_dimensions` can only approximate | planned |
 | [M6](#m6--polish) | Polish | Hold the budgets on modest hardware; finish the edges. | Frame budgets held on a 2015-era laptop | planned |
 
 ---
@@ -31,7 +31,7 @@ depend on, and make the repository something a stranger can understand.
 
 **Workstreams**
 
-- `helm-core`: the ledger and its undo history; the layout projection and its
+- `realm-core`: the ledger and its undo history; the layout projection and its
   exact-integer partition; OKLab colour derivation and `Palette::lint`; the
   keymap and mode model; the glyph inventory and its ASCII fallbacks; the NDJSON
   IPC types and `PROTOCOL_VERSION`.
@@ -45,7 +45,7 @@ depend on, and make the repository something a stranger can understand.
 **Exit criterion.** `cargo test` is green in CI and the architecture has been
 read and argued with rather than merely written.
 
-**Unblocks.** Everything. `helm-core` is the only crate every other crate
+**Unblocks.** Everything. `realm-core` is the only crate every other crate
 depends on, and its types are what stop two components being invented in
 parallel with incompatible ideas of the same thing.
 
@@ -58,18 +58,18 @@ one edit publish a coherent sealed theme generation for future launches.
 
 **Workstreams**
 
-- `helm-theme`: template engine, the template set in `configs/templates/`, and
+- `realm-theme`: template engine, the template set in `configs/templates/`, and
   validated immutable generation publication with a future-launch-only
   `current` pointer; no pointer-switch reload.
 - Templates for the surfaces the MVP needs: `gtk.css` for GTK 3 and 4,
   libadwaita named colours, `qt6ct` colour scheme, the terminal's 16-colour ANSI
   scheme, `yazi`, `btop`, `starship`, `fuzzel`.
-- `helm ctl theme apply` and `helm ctl theme lint` — the first two subcommands
+- `realm ctl theme apply` and `realm ctl theme lint` — the first two subcommands
   of the CLI, and its argument surface.
 - A CI check that no colour literal exists outside `palette.toml`.
 
 **Exit criterion.** Change one accent in `palette.toml`, run
-`helm ctl theme apply`, and select in under 150 ms one sealed generation whose
+`realm ctl theme apply`, and select in under 150 ms one sealed generation whose
 normalized outputs all carry that change. Existing processes stay pinned and
 future launches select the new generation.
 
@@ -81,12 +81,12 @@ or mismatched selectable generation, and colour written down twice.
 
 ## M2 — Session and bar
 
-**Goal.** Put helm's state under one owner, and put that state on screen.
+**Goal.** Put realm's state under one owner, and put that state on screen.
 
 **Workstreams**
 
-- `helm-session`: owns `HelmState`, serves the control socket at
-  `$XDG_RUNTIME_DIR/helm/ctl.sock`, broadcasts state to subscribers, and owns
+- `realm-session`: owns `RealmState`, serves the control socket at
+  `$XDG_RUNTIME_DIR/realm/ctl.sock`, broadcasts state to subscribers, and owns
   the lifecycle of its clients so a crashed bar does not take the session with
   it.
 - The `WmBackend` trait — sketched with real signatures in
@@ -94,14 +94,14 @@ or mismatched selectable generation, and colour written down twice.
   implementation. river 0.4 removed window management from the compositor and
   defers it to an external process over `river-window-management-v1`, which
   offers exact positions and dimensions, explicit node ordering, hide/show,
-  focus control and compositor-drawn borders. helm *is* that process. The
+  focus control and compositor-drawn borders. realm *is* that process. The
   ledger's rectangles become real ones, not an approximation of them.
   ([ADR 0013](adr/0013-river-window-management-backend.md), superseding
   [0002](adr/0002-borrow-a-compositor-first.md))
-- `helm-bar`: layer-shell bar at 32 px — orbit runes, layout indicator, mode
+- `realm-bar`: layer-shell bar at 32 px — orbit runes, layout indicator, mode
   badge, chord echo, focused title, the right-hand modules and the clock — plus
   the which-key strip and the `?` grimoire sheet.
-- `helm ctl orbit` and `helm ctl ledger`: the scriptable surface over the
+- `realm ctl orbit` and `realm ctl ledger`: the scriptable surface over the
   socket.
 - The rendering stack decided in
   [ADR 0008](adr/0008-layer-shell-rendering-stack.md), including real font
@@ -120,7 +120,7 @@ already runs. Also the first honest measurement against the frame budgets in
 
 ## M3 — Daily-drivable
 
-> **This is the MVP.** The whole test: *one person can log into helm and use it
+> **This is the MVP.** The whole test: *one person can log into realm and use it
 > as their only desktop for a week without reaching for another DE.*
 
 **Goal.** Turn a session daemon and a bar into something a person can log into
@@ -133,20 +133,20 @@ on a machine that is not the author's.
   [ADR 0011](adr/0011-session-integration-contract.md). This is the single most
   common way minimal Wayland desktops break for users.
 - Portals: `xdg-desktop-portal` wiring, a backend dependency that is actually
-  installed, `XDG_CURRENT_DESKTOP=helm` exported both ways, file dialogs and
+  installed, `XDG_CURRENT_DESKTOP=realm` exported both ways, file dialogs and
   screen share verified in a browser and an Electron app.
 - The reused tools, themed and rekeyed: charon (yazi), horus (btop), thoth (zsh
   and starship), a terminal on the generated ANSI theme, and fuzzel dressed as
   hecate.
-- Packaging: the Nix flake as the reference build with `nixosModules.helm` and
-  `homeManagerModules.helm`, plus tracked native Debian and Fedora definitions
+- Packaging: the Nix flake as the reference build with `nixosModules.realm` and
+  `homeManagerModules.realm`, plus tracked native Debian and Fedora definitions
   with planned consistency checks for overlapping metadata. A NixOS VM test
   that boots the session and asserts the bar appears.
 - River `>= 0.4.0` from target-specific packaging. Fedora 44's official native
-  package is the Fedora candidate, but no Helm session has tested that pairing.
+  package is the Fedora candidate, but no Realm session has tested that pairing.
   Ubuntu and Nix retain their independent source and pinning obligations under
   ADR 0010/0013; Fedora package availability does not settle those choices.
-- `helm ctl doctor`: checks the environment handshake, the portal backend, the
+- `realm ctl doctor`: checks the environment handshake, the portal backend, the
   cursor theme, the font stack and the socket, and says what is wrong in plain
   words before the user has to file a bug.
 - Idle and lock handling — **blocked on an open
@@ -154,8 +154,8 @@ on a machine that is not the author's.
   ships. A laptop that does not lock on lid-close is not daily-drivable.
 - Install documentation for all three distributions.
 
-**Exit criterion.** A fresh NixOS, Ubuntu and Fedora box each log into helm and
-pass `helm ctl doctor` clean, with no manual steps beyond installing the
+**Exit criterion.** A fresh NixOS, Ubuntu and Fedora box each log into realm and
+pass `realm ctl doctor` clean, with no manual steps beyond installing the
 package.
 
 **Unblocks.** Everything after this point is improvement rather than arrival.
@@ -170,9 +170,9 @@ replace parts of.
 
 **Workstreams**
 
-- `helm-hecate`: layer-shell fuzzy launcher on `nucleo`, over `PATH`, desktop
-  entries, user "spells" and helm commands. Replaces themed fuzzel.
-- `helm-odin`: the `ratatui` agent-harness TUI — familiar table, timestamped
+- `realm-hecate`: layer-shell fuzzy launcher on `nucleo`, over `PATH`, desktop
+  entries, user "spells" and realm commands. Replaces themed fuzzel.
+- `realm-odin`: the `ratatui` agent-harness TUI — familiar table, timestamped
   log, status footer. Nothing off the shelf matches it.
 - charon *portal*: the open dialog, via
   `xdg-desktop-portal-termfilechooser` pointed at yazi in a centred floating
@@ -189,14 +189,14 @@ between the shipped desktop and the design.
 
 ---
 
-## M5 — The helm compositor
+## M5 — The realm compositor
 
-**Goal.** Stop projecting helm's window model onto someone else's, and let the
+**Goal.** Stop projecting realm's window model onto someone else's, and let the
 ledger drive the screen directly.
 
 **Workstreams**
 
-- `helm-compositor` on Smithay: scene graph, input, output management,
+- `realm-compositor` on Smithay: scene graph, input, output management,
   XWayland.
 - `NativeBackend`: the second implementation of the same `WmBackend` trait
   `RiverBackend` implements, in-process rather than over a Wayland protocol. The
@@ -205,14 +205,14 @@ prize is the one row river cannot give us exactly: owning the compositor means
 - Retiring the vendored river and the dependency on an unstable protocol.
   `river-window-management-v1` is a good bargain, not a permanent one; owning
   the compositor ends both the vendoring burden and the protocol-bump watch.
-- Screen capture and clipboard, now that helm owns the surfaces.
+- Screen capture and clipboard, now that realm owns the surfaces.
 
 **Exit criterion.** `NativeBackend` passes the same session-level tests as
 `RiverBackend`, and the ledger's projection reaches the screen in-process, with
 no protocol between the projection and the pixels.
 
 **Unblocks.** The exact-tiling guarantees hold end to end rather than up to the
-protocol boundary, and helm stops shipping someone else's compositor in its own
+protocol boundary, and realm stops shipping someone else's compositor in its own
 packages.
 
 ---
@@ -250,11 +250,11 @@ author's machine.
 The sequencing rules in [MVP.md](MVP.md#sequencing-rules) are what keep this
 order from being a suggestion:
 
-1. **Contracts before implementations** — `helm-core` types land before the
+1. **Contracts before implementations** — `realm-core` types land before the
    crate that consumes them.
 2. **Stopgaps must be swappable** — every stopgap sits behind a config or a
    trait, never a hardcoded call. The name `river` may not appear outside
-   `crates/helm-session/src/backend/`, `packaging/` and `docs/`. This
+   `crates/realm-session/src/backend/`, `packaging/` and `docs/`. This
    confinement is the only reason M4 and M5 are affordable.
 3. **Nothing merges without a test** — layout maths gets unit tests, live
    sockets get integration tests, anything touching a distribution gets a CI job

@@ -21,7 +21,7 @@
 ### Task 1: Lock the race contract in tests
 
 **Files:**
-- Modify: `crates/helm-theme/src/theme.rs`
+- Modify: `crates/realm-theme/src/theme.rs`
 - Modify: `docs/specs/0002-theme-pipeline.md`
 
 **Interfaces:**
@@ -30,7 +30,7 @@
 
 - [ ] **Step 1: Write failing unique-staging test**
 
-Plant `target.helm-tmp` as a symlink to a victim, call `apply_with`, and assert
+Plant `target.realm-tmp` as a symlink to a victim, call `apply_with`, and assert
 the victim remains unchanged while the target receives rendered bytes. Rename
 the current test to `a_symlinked_staging_file_is_not_touched`.
 
@@ -42,14 +42,14 @@ replace `root/live` with a symlink to `victim`, then stage and commit
 
 - [ ] **Step 3: Observe the red tests**
 
-Run `cargo test -p helm-theme symlinked_staging_file` and
-`cargo test -p helm-theme replaced_output_parent`. Both fail because the
+Run `cargo test -p realm-theme symlinked_staging_file` and
+`cargo test -p realm-theme replaced_output_parent`. Both fail because the
 existing writer uses a fixed temporary pathname and `std::fs` paths.
 
 ### Task 2: Implement descriptor-owned staging and commit
 
 **Files:**
-- Modify: `crates/helm-theme/src/theme.rs`
+- Modify: `crates/realm-theme/src/theme.rs`
 
 **Interfaces:**
 - Consumes: `rustix::fs::{openat, mkdirat, renameat, unlinkat, fsync, AtFlags, Mode, OFlags, CWD}` and `std::os::fd::OwnedFd`.
@@ -68,7 +68,7 @@ OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())`; on `NotFound`, call
 
 Read a final file only with `openat(&parent_fd, final_name, OFlags::RDONLY |
 OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())`. Build temporary basenames
-as `.<final>.helm-tmp.<pid>.<sequence>` from a process-local `AtomicU64`; retry
+as `.<final>.realm-tmp.<pid>.<sequence>` from a process-local `AtomicU64`; retry
 `CREATE | EXCL | NOFOLLOW | CLOEXEC` on `AlreadyExists`. Write bytes and call
 `fsync` on the opened file.
 
@@ -88,7 +88,7 @@ Run the two commands from Task 1. Expected: PASS and no victim mutation.
 ### Task 3: Verify and publish the increment
 
 **Files:**
-- Modify: `crates/helm-theme/src/theme.rs`
+- Modify: `crates/realm-theme/src/theme.rs`
 - Modify: `docs/specs/0002-theme-pipeline.md`
 
 **Interfaces:**
@@ -97,7 +97,7 @@ Run the two commands from Task 1. Expected: PASS and no victim mutation.
 
 - [ ] **Step 1: Run crate verification**
 
-Run `cargo fmt --check` and `cargo test -p helm-theme`. Expected: clean
+Run `cargo fmt --check` and `cargo test -p realm-theme`. Expected: clean
 formatting and every theme test passes.
 
 - [ ] **Step 2: Run workspace verification**
@@ -107,7 +107,7 @@ Expected: all tests pass with no warnings.
 
 - [ ] **Step 3: Commit and push**
 
-Stage `crates/helm-theme/src/theme.rs` and `docs/specs/0002-theme-pipeline.md`,
+Stage `crates/realm-theme/src/theme.rs` and `docs/specs/0002-theme-pipeline.md`,
 commit with message `Use descriptor-relative theme writes`, push, and comment
 on #110 with the exact tests and the remaining #22 boundary.
 

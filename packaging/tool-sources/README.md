@@ -11,7 +11,7 @@ claimed as supported.
 source-acquisition commands in the current native package definitions. It is
 not evidence for the complete A2 offline-build requirement.
 
-`bundles/helm-workspace/` is the immutable source authority for the Helm
+`bundles/realm-workspace/` is the immutable source authority for the Realm
 workspace's own Cargo invocations.  Its `source.tar.gz`, lockfile, Cargo
 source-replacement configuration, compressed vendor tree, license report, and
 provenance record are all digest-bound in `bundle.toml`.  The source archive is

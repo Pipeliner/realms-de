@@ -1,11 +1,11 @@
 # Design handoff
 
-The source material helm is built from. **None of this is production code, and
+The source material realm is built from. **None of this is production code, and
 none of it is a screenshot of running software.**
 
 These artefacts were produced by Claude Design (the `.dc` in `.dc.html` is its
 design-canvas format), directed and reviewed by a human. They are the design
-authority for helm's appearance, but they are not a human designer's originals —
+authority for realm's appearance, but they are not a human designer's originals —
 worth knowing when weighing how much a given detail was deliberate versus
 incidental. Where a detail looks arbitrary, it may well be; check the ADRs before
 preserving it at cost.
@@ -30,5 +30,5 @@ single source of truth for colour, and the prototypes predate it.
 
 Where a prototype and an ADR disagree, the ADR wins and should say why. The
 clearest case is contrast: the prototype implements it as a
-`backdrop-filter: contrast()`, and helm derives it per-colour in OKLab instead
+`backdrop-filter: contrast()`, and realm derives it per-colour in OKLab instead
 (see [ADR 0006](../docs/adr/0006-oklab-contrast-not-filters.md)).

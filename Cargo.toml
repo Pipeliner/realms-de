@@ -4,10 +4,10 @@ resolver = "2"
 # fresh clone always builds. The full planned set and the order it lands in
 # lives in docs/ARCHITECTURE.md and is tracked by the GitHub milestones.
 members = [
-    "crates/helm-core",
-    "crates/helm-theme",
-    "crates/helm-agent-sdd",
-    "crates/helm-ctl",
+    "crates/realm-core",
+    "crates/realm-theme",
+    "crates/realm-agent-sdd",
+    "crates/realm-ctl",
 ]
 
 [workspace.package]
@@ -20,10 +20,10 @@ rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/pipeliner/realms-de"
 homepage = "https://github.com/pipeliner/realms-de"
-authors = ["helm contributors"]
+authors = ["realm contributors"]
 
 [workspace.dependencies]
-helm-core = { path = "crates/helm-core", version = "0.1.0" }
+realm-core = { path = "crates/realm-core", version = "0.1.0" }
 
 anyhow = "1"
 thiserror = "2"

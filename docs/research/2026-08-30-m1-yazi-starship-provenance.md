@@ -15,11 +15,11 @@ authorize package publication.
 | Starship | Starship's [official guide](https://starship.rs/guide/) documents generic release installation and `cargo install starship --locked`; its [releases](https://github.com/starship/starship/releases) publish architecture-specific assets with SHA-256 data. | Starship can be pinned from upstream source or release assets, but neither is a Noble archive dependency and the project would own update, rollback and support policy. |
 | Fedora | Yazi's official installation guide documents an **unofficial** COPR path; Starship's official guide documents COPR for Fedora. | Treating either COPR as a required supported source needs an explicit third-party trust decision. |
 | NixOS | Both upstream guides document Nix/nixpkgs installation paths; the repository's locked Nix build already uses those packages. | NixOS can retain its existing locked package path independently of a Debian/Fedora decision. |
-| Yazi capabilities | Yazi's installation guide requires `file` and lists additional preview/search tools as optional extensions. | A source policy must distinguish the Yazi executable from the dependencies required for the promised Helm experience. |
+| Yazi capabilities | Yazi's installation guide requires `file` and lists additional preview/search tools as optional extensions. | A source policy must distinguish the Yazi executable from the dependencies required for the promised Realm experience. |
 | Redistribution licenses | Yazi's [license](https://github.com/sxyazi/yazi/blob/main/LICENSE) is MIT; the [Starship repository](https://github.com/starship/starship) declares ISC. | Both licenses permit redistribution, subject to preserving their required notices; package review must still inspect the selected release's bundled notices and dependencies. |
 | Release verification | Starship's [v1.26.0 release](https://github.com/starship/starship/releases/tag/v1.26.0) shows a GitHub-verified signed tag and architecture-specific SHA-256 release assets. Yazi's [v26.5.6 release](https://github.com/sxyazi/yazi/releases/tag/v26.5.6) publishes Linux package/binary assets with SHA-256 data. | A pinned digest gives byte reproducibility after review. It does not itself authenticate maintainer identity, prove that an asset will remain available, or replace an independent signature/key policy. |
-| Debian build policy | [Debian Policy §4.9](https://www.debian.org/doc/debian-policy/ch-source.html) says required `debian/rules` targets must not attempt network access to other hosts, except for the specified non-free / non-autobuild exception and loopback services started by the build. | A Debian-archive-compatible Helm package build cannot fetch Yazi or Starship from a live upstream URL. Its reviewed source or artifact must be available before the build begins. |
-| Fedora source handling | Fedora's [packaging guidelines](https://docs.fedoraproject.org/en-US/packaging-guidelines/) state that source code must not be downloaded from external sources during a build, only from the Fedora lookaside cache and/or Fedora Git. Its [source-control policy](https://fedoraproject.org/wiki/Package_Source_Control) describes the lookaside cache as retained, hash-addressed upstream archives. | A Fedora-guideline-compatible Helm package build likewise needs a prior, hash-verified source-intake and retention path; a live release download in the spec build is not sufficient. |
+| Debian build policy | [Debian Policy §4.9](https://www.debian.org/doc/debian-policy/ch-source.html) says required `debian/rules` targets must not attempt network access to other hosts, except for the specified non-free / non-autobuild exception and loopback services started by the build. | A Debian-archive-compatible Realm package build cannot fetch Yazi or Starship from a live upstream URL. Its reviewed source or artifact must be available before the build begins. |
+| Fedora source handling | Fedora's [packaging guidelines](https://docs.fedoraproject.org/en-US/packaging-guidelines/) state that source code must not be downloaded from external sources during a build, only from the Fedora lookaside cache and/or Fedora Git. Its [source-control policy](https://fedoraproject.org/wiki/Package_Source_Control) describes the lookaside cache as retained, hash-addressed upstream archives. | A Fedora-guideline-compatible Realm package build likewise needs a prior, hash-verified source-intake and retention path; a live release download in the spec build is not sufficient. |
 
 ## 2026-08-31 compatibility spike
 
@@ -29,10 +29,10 @@ outputs were kept outside the repository.
 
 | Subject | Evidence | Consequence |
 |---|---|---|
-| Starship v1.23.0 | Its [tagged manifest](https://raw.githubusercontent.com/starship/starship/v1.23.0/Cargo.toml) declares `rust-version = "1.85"` and the `starship` binary. The Helm Starship template's modules and fields were checked against that tagged source. | v1.23.0 is an evidence-backed Rust-1.85 candidate for a future source route; its intake, dependency closure, license review, and package integration remain unimplemented. |
+| Starship v1.23.0 | Its [tagged manifest](https://raw.githubusercontent.com/starship/starship/v1.23.0/Cargo.toml) declares `rust-version = "1.85"` and the `starship` binary. The Realm Starship template's modules and fields were checked against that tagged source. | v1.23.0 is an evidence-backed Rust-1.85 candidate for a future source route; its intake, dependency closure, license review, and package integration remain unimplemented. |
 | Newer Starship candidate | The [v1.24.2 manifest](https://raw.githubusercontent.com/starship/starship/v1.24.2/Cargo.toml) declares Rust 1.90. | Do not select v1.24.2 or newer merely by copying the current intake record into a Rust-1.85 route. |
 | Yazi v25.4.8 compiler feasibility | `cargo +1.85.0 check --locked --package yazi-fm --package yazi-cli` completed successfully in 6m49s against the official v25.4.8 source. The source-build output warned that its `vergen` metadata fell back outside a Git worktree. | v25.4.8 is a compiler-feasible candidate only; a retained-build design must specify deterministic VCS/version metadata. |
-| Yazi v25.4.8 theme schema | Its [theme struct](https://raw.githubusercontent.com/sxyazi/yazi/v25.4.8/yazi-config/src/theme/theme.rs) and [shipped dark preset](https://raw.githubusercontent.com/sxyazi/yazi/v25.4.8/yazi-config/preset/theme-dark.toml) use `manager`, `normal_main`/`normal_alt`, and `perm_type`/`perm_read`/`perm_write`/`perm_exec`. Helm's current template uses different section/key names. | A Rust-1.85-compatible Yazi selection requires a jointly reviewed template rewrite and parser/render compatibility test. Pinning v25.4.8 alone would not make the emitted Helm configuration supported. |
+| Yazi v25.4.8 theme schema | Its [theme struct](https://raw.githubusercontent.com/sxyazi/yazi/v25.4.8/yazi-config/src/theme/theme.rs) and [shipped dark preset](https://raw.githubusercontent.com/sxyazi/yazi/v25.4.8/yazi-config/preset/theme-dark.toml) use `manager`, `normal_main`/`normal_alt`, and `perm_type`/`perm_read`/`perm_write`/`perm_exec`. Realm's current template uses different section/key names. | A Rust-1.85-compatible Yazi selection requires a jointly reviewed template rewrite and parser/render compatibility test. Pinning v25.4.8 alone would not make the emitted Realm configuration supported. |
 | Yazi v25.5.31 | Cargo reports `yazi-shared@25.5.31 requires rustc 1.86.0` under Rust 1.85. | The newer candidate is outside the existing native-package compiler floor. |
 
 ## Decision boundary
@@ -41,7 +41,7 @@ The remaining choices are normative product/distribution commitments, not facts
 an agent may infer:
 
 1. support upstream-managed repositories/assets for the two tools;
-2. build and redistribute locked upstream sources as part of Helm packaging;
+2. build and redistribute locked upstream sources as part of Realm packaging;
 3. narrow the M1 distribution guarantee until target archives provide the
    tools; or
 4. choose another explicitly governed source per target.
@@ -57,7 +57,7 @@ chain policy. The policy must state which release/tag identity is reviewed,
 how a signing key or provenance attestation is independently trusted, what
 happens if an upstream asset disappears or is replaced, and where required
 license notices are preserved. GitHub's [immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
-are an opt-in repository feature, not a property Helm may assume for either
+are an opt-in repository feature, not a property Realm may assume for either
 upstream project.
 
 The policy must also distinguish **intake** from **build**: a reviewed actor
@@ -65,16 +65,16 @@ may acquire an upstream source or artifact at a defined intake point, verify
 its identity and digest, preserve the required notices, and retain the exact
 input in a governed store. The package build then consumes that fixed input
 without contacting upstream. Choosing the store, its retention owner, and
-whether Helm may operate it is a product/infrastructure decision still outside
+whether Realm may operate it is a product/infrastructure decision still outside
 this research record. The no-public-infrastructure standing constraint rules
-out silently creating a Helm-hosted service as an implementation shortcut.
+out silently creating a Realm-hosted service as an implementation shortcut.
 
 **Scope of these constraints.** Debian Policy constrains required
 `debian/rules` targets, with its stated non-free/non-autobuild exception;
 Fedora's rule constrains packages in the Fedora build system. They do not
 prohibit a separately governed intake step before package construction, nor do
 they automatically govern arbitrary third-party `.deb`/RPM builds. For any
-supported policy-compatible package path, however, Helm should make upstream
+supported policy-compatible package path, however, Realm should make upstream
 acquisition a reviewed, hash-verified intake operation and have the later
 package build consume retained fixed inputs without a live upstream fetch.
 
@@ -82,15 +82,15 @@ package build consume retained fixed inputs without a live upstream fetch.
 
 - [fact] Yazi documents an official Debian/Ubuntu APT repository configured with a downloaded keyring and `signed-by` #m1 #packaging
 - [fact] Starship documents Ubuntu archive installation only from Ubuntu 25.04 onward #m1 #packaging
-- [risk] Upstream repositories and release artifacts move package-provenance and update obligations into the Helm support contract #security #packaging
+- [risk] Upstream repositories and release artifacts move package-provenance and update obligations into the Realm support contract #security #packaging
 - [risk] A release checksum detects a changed artifact but does not independently establish publisher identity or retention #security #provenance
 - [constraint] Debian-archive and Fedora-guideline-compatible package builds need fixed source inputs and cannot make a live upstream fetch their source of truth #packaging #provenance
 - [decision-required] The package source policy must define reviewed intake, fixed-input retention, and ownership separately from package builds #m1 #packaging
 - [decision-required] A supported cross-target Yazi and Starship claim needs an accepted source and lifecycle policy #mvp
-- [fact] Starship v1.23.0 declares Rust 1.85 and matches the current Helm Starship template's checked modules and fields #m1 #packaging
-- [fact] Yazi v25.4.8 passes the selected Rust 1.85 Cargo check, but its theme schema differs from the current Helm Yazi template #m1 #compatibility
+- [fact] Starship v1.23.0 declares Rust 1.85 and matches the current Realm Starship template's checked modules and fields #m1 #packaging
+- [fact] Yazi v25.4.8 passes the selected Rust 1.85 Cargo check, but its theme schema differs from the current Realm Yazi template #m1 #compatibility
 - [risk] Source-only Yazi builds fall back for VCS metadata outside a Git worktree unless the retained-build policy supplies deterministic metadata #reproducibility #packaging
-- [decision-required] Select Yazi version and compatible Helm template together, backed by an actual parser/render test #m1 #specification
+- [decision-required] Select Yazi version and compatible Realm template together, backed by an actual parser/render test #m1 #specification
 
 ## Relations
 

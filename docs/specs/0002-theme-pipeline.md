@@ -19,7 +19,7 @@
 ## Purpose
 
 One palette file must render a coherent theme for GTK apps, Qt apps, the
-terminal, yazi, btop, the shell prompt and Helm's own clients, then publish that
+terminal, yazi, btop, the shell prompt and Realm's own clients, then publish that
 complete result for future launches as one immutable generation.
 
 This is the difference between a desktop environment and a collection of
@@ -31,11 +31,11 @@ is why generation atomicity is a hard requirement rather than a nicety.
 
 **In:** reading `palette.toml`; deriving the contrast variant; rendering every
 template; linting; publishing an immutable generation for future launches; and
-the generation-aware `helm ctl theme apply|lint|diff` surface.
+the generation-aware `realm ctl theme apply|lint|diff` surface.
 
-**Out:** the palette *format* and its validation (SPEC 0001, `helm-core`);
+**Out:** the palette *format* and its validation (SPEC 0001, `realm-core`);
 deciding which colour goes where (that is `palette.toml` itself); anything that
-draws (`helm-bar`); live upgrade of an existing process; no-op apply
+draws (`realm-bar`); live upgrade of an existing process; no-op apply
 optimization; and compatibility with the retired mutable apply result or a
 control-socket wire message.
 
@@ -43,8 +43,8 @@ control-socket wire message.
 
 ### Inputs
 
-`~/.config/helm/palette.toml`, falling back to the shipped `palette.toml`.
-Parsed and validated by `helm_core::Palette`. A palette with any **fatal** lint
+`~/.config/realm/palette.toml`, falling back to the shipped `palette.toml`.
+Parsed and validated by `realm_core::Palette`. A palette with any **fatal** lint
 finding is refused: no generation is published, `current` stays unchanged, and
 the findings are printed. Non-fatal findings are printed and may be published.
 
@@ -100,7 +100,7 @@ descriptor-relative and no-follow as specified by SPEC 0011.
 
 Palette lookup and first-run initialization retain the established lexical root
 handling: a symlinked configuration root must be refused under trailing-
-separator and terminal-`.` spellings, and the root's `helm` directory and
+separator and terminal-`.` spellings, and the root's `realm` directory and
 `palette.toml` must be real children rather than symlinks before a copy or read
 occurs. The former direct-target staging, rename, cleanup, comparison, and
 reload rules are retained only as historical implementation provenance; they
@@ -121,7 +121,7 @@ launches, and is not a commitment to preserve the current wire protocol.
 ### First-run
 
 If no user palette exists, `apply` copies the shipped one to
-`~/.config/helm/palette.toml` first, so a user's first edit is to their own file.
+`~/.config/realm/palette.toml` first, so a user's first edit is to their own file.
 
 ## Acceptance criteria
 
@@ -140,15 +140,15 @@ tests with similar names are historical evidence, not a second apply contract.
 | A6 | Given a palette with a fatal lint finding, when `apply` runs, then it refuses, prints the findings, and leaves `current` unchanged | lint behavior retained; publication: SPEC 0011 |
 | A7 | Given a successful apply or rollback, when its pointer commit completes, then it invokes no reload mechanism and existing processes remain pinned to their selected generation | SPEC 0011 G11 |
 | A8 | Given no user palette, when `apply` runs, then the shipped palette is copied to the user config path first | `theme::tests::first_run_copies_the_shipped_palette_to_the_user_config` |
-| A9 | Given the shipped palette, when `helmctl theme lint` runs, then it exits 0 and prints the accent hue separations | `theme_cli::lint_shipped_palette_is_session_independent_and_prints_hue_separations` |
-| A10 | Given a fully validated current generation and a modified candidate, when `helmctl theme diff` runs, then it reports only sorted `added`, `removed`, and `byte-different` normalized outputs and performs no control initialization, recovery, lease, publication, pointer change, output write, or reload | `theme_cli::diff_after_palette_edit_is_sorted_and_does_not_mutate_generation_tree`; `theme_cli::diff_refusal_for_missing_current_does_not_mutate_generation_tree` |
-| A11 | Given an empty, escaping, duplicate, symlinked, or prefix-colliding output path, or an unsafe configuration/generated root, when `apply` runs, then it refuses before publishing a generation or touching anything outside Helm's owned subtree | SPEC 0011 |
+| A9 | Given the shipped palette, when `realmctl theme lint` runs, then it exits 0 and prints the accent hue separations | `theme_cli::lint_shipped_palette_is_session_independent_and_prints_hue_separations` |
+| A10 | Given a fully validated current generation and a modified candidate, when `realmctl theme diff` runs, then it reports only sorted `added`, `removed`, and `byte-different` normalized outputs and performs no control initialization, recovery, lease, publication, pointer change, output write, or reload | `theme_cli::diff_after_palette_edit_is_sorted_and_does_not_mutate_generation_tree`; `theme_cli::diff_refusal_for_missing_current_does_not_mutate_generation_tree` |
+| A11 | Given an empty, escaping, duplicate, symlinked, or prefix-colliding output path, or an unsafe configuration/generated root, when `apply` runs, then it refuses before publishing a generation or touching anything outside Realm's owned subtree | SPEC 0011 |
 | A12 | Given an attacker-controlled staging or generation entry, when `apply` runs, then descriptor-relative no-follow validation refuses it without modifying its destination | SPEC 0011 |
-| A13 | Given a symlinked configuration root spelled directly, with trailing separators, with terminal `.` components, or both, or a symlinked `helm` palette directory or `palette.toml`, when palette loading or first-run initialization runs, then it refuses without reading or writing the link destination | `theme::tests::a_symlinked_palette_path_is_refused_without_touching_its_destination`, `theme::tests::a_symlinked_palette_root_with_a_trailing_separator_is_refused_without_initializing_its_destination`, `theme::tests::a_symlinked_palette_root_with_terminal_dot_is_refused_without_reading_its_destination` |
+| A13 | Given a symlinked configuration root spelled directly, with trailing separators, with terminal `.` components, or both, or a symlinked `realm` palette directory or `palette.toml`, when palette loading or first-run initialization runs, then it refuses without reading or writing the link destination | `theme::tests::a_symlinked_palette_path_is_refused_without_touching_its_destination`, `theme::tests::a_symlinked_palette_root_with_a_trailing_separator_is_refused_without_initializing_its_destination`, `theme::tests::a_symlinked_palette_root_with_terminal_dot_is_refused_without_reading_its_destination` |
 | A14 | Given a generation output parent is replaced after its directory descriptor is acquired, when staging, validation, cleanup, or commit proceeds, then no operation follows the replacement outside the held generation tree | SPEC 0011 |
 | A15 | Given the shipped palette, when the Starship template renders, then it contains dynamic user and host modules, the literal separator, an ASCII `~% ` character with a trailing command separator, thoth teal for the normal prompt, palette accents for Git/error states, and no exotic prompt sigil | `render::tests::starship_prompt_is_complete_and_ascii_safe_by_default` |
 
-A9 and A10 are exercised through the `helmctl` integration tests. A10 requires
+A9 and A10 are exercised through the `realmctl` integration tests. A10 requires
 the generation-aware read-only boundary from SPEC 0011; the legacy
 mutable-output diff test does not satisfy it.
 
@@ -171,14 +171,14 @@ theme", which is documented as a limit rather than fought.
 
 ## Generated-file ownership and activation
 
-Helm owns **only** `$XDG_CONFIG_HOME/helm/generated/**`. Every generated file
+Realm owns **only** `$XDG_CONFIG_HOME/realm/generated/**`. Every generated file
 that `theme apply` publishes or `theme diff` compares is a manifest-listed
 output below one generation in that subtree. Apply never writes a program's
 ordinary configuration or a mutable compatibility target.
 
 Any import, wrapper, or launch-profile integration which points a program at
 its selected generation is provisioning outside theme apply. It must not grant
-Helm ownership of an existing user configuration. `helmctl doctor` may report
+Realm ownership of an existing user configuration. `realmctl doctor` may report
 missing integration, but apply does not repair it as a side effect.
 
 ## Open questions

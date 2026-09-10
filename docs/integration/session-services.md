@@ -2,7 +2,7 @@
 
 > **Status: research, not a decision.** This file inventories the OS-level
 > session and desktop services a desktop environment is expected to provide or
-> integrate with, assesses candidate implementations against helm's stated
+> integrate with, assesses candidate implementations against realm's stated
 > vision, and proposes a priority for each. Nothing here supersedes an ADR.
 > Where a finding contradicts something already written down — and two do — the
 > contradiction is called out in [§20](#20-corrections-to-things-already-written-down)
@@ -27,11 +27,11 @@
 Before the component list, four facts that do more work in the assessments
 below than any individual project's merits.
 
-### 0.1 What river already gives helm, verified against the source
+### 0.1 What river already gives realm, verified against the source
 
-helm is river's window manager ([ADR 0013](../adr/0013-river-window-management-backend.md)),
+realm is river's window manager ([ADR 0013](../adr/0013-river-window-management-backend.md)),
 so a large part of this surface is *already provided by the compositor* and
-helm's job is only to not break it. Reading
+realm's job is only to not break it. Reading
 [`river/Server.zig`](https://codeberg.org/river/river/raw/branch/main/river/Server.zig),
 [`river/LockManager.zig`](https://codeberg.org/river/river/raw/branch/main/river/LockManager.zig)
 and [`river/IdleInhibitManager.zig`](https://codeberg.org/river/river/raw/branch/main/river/IdleInhibitManager.zig)
@@ -39,7 +39,7 @@ on `main` gives the following inventory. This is the single most useful table in
 this document, because it converts about half the "must provide" questions into
 "must not break".
 
-| Protocol / global | Present in river 0.4 | What it unlocks for helm |
+| Protocol / global | Present in river 0.4 | What it unlocks for realm |
 |---|---|---|
 | `ext-session-lock-v1` (`SessionLockManagerV1`) | yes, in `LockManager.zig` | Any of the three lock screens, with crash-safe locking |
 | `zwp_idle_inhibit_manager_v1` (`IdleInhibitManagerV1`) | yes, in `IdleInhibitManager.zig` | Firefox/mpv keeping the screen awake **without D-Bus** |
@@ -51,25 +51,25 @@ this document, because it converts about half the "must provide" questions into
 | `xdg-activation-v1` | created | "Open link" raising the browser instead of doing nothing |
 | `wlr-gamma-control`, `wlr-output-power-management`, `wlr-output-management` | created (via the output manager) | Night light, DPMS blanking, output config |
 | `wp_security_context_v1` | created | Flatpak/sandbox identification for portals |
-| `wlr-layer-shell-v1` | **only if helm serves `river-layer-shell-v1`** | The bar, the launcher, **and every notification daemon, lock screen and OSD on this page** |
+| `wlr-layer-shell-v1` | **only if realm serves `river-layer-shell-v1`** | The bar, the launcher, **and every notification daemon, lock screen and OSD on this page** |
 
 The last row is the load-bearing one and it is easy to miss. Under river 0.4,
 `wlr-layer-shell` is the window manager's responsibility, so until
-`helm-session` implements the manager half of `river-layer-shell-v1` (scheduled
+`realm-session` implements the manager half of `river-layer-shell-v1` (scheduled
 M2, [ADR 0013](../adr/0013-river-window-management-backend.md) §3), *no*
-layer-shell client works — not `helm-bar`, and not `mako`, `fnott`, `swaylock`,
+layer-shell client works — not `realm-bar`, and not `mako`, `fnott`, `swaylock`,
 `waylock` or `wlogout` either. Every "reuse this" recommendation below is
 implicitly gated on M2 landing that protocol.
 
-### 0.2 `XDG_CURRENT_DESKTOP=helm` means nothing recognises helm
+### 0.2 `XDG_CURRENT_DESKTOP=realm` means nothing recognises realm
 
 [ADR 0011](../adr/0011-session-integration-contract.md) step 1 sets
-`XDG_CURRENT_DESKTOP=helm`. That is correct and necessary for portal backend
-selection, and it has a consequence worth stating: helm is not in anybody's
-`OnlyShowIn`/`NotShowIn` list, no upstream has a helm code path, and any tool
+`XDG_CURRENT_DESKTOP=realm`. That is correct and necessary for portal backend
+selection, and it has a consequence worth stating: realm is not in anybody's
+`OnlyShowIn`/`NotShowIn` list, no upstream has a realm code path, and any tool
 that branches on desktop identity will take its generic branch. This is mostly
 good — generic branches are the honest ones — but it means autostart files with
-`OnlyShowIn=GNOME;KDE;` silently do not run, and it means helm inherits nothing
+`OnlyShowIn=GNOME;KDE;` silently do not run, and it means realm inherits nothing
 for free.
 
 ### 0.3 The themability test is stricter than it looks
@@ -127,10 +127,10 @@ in the stack will. There is no fallback.
 | [`swaync`](https://github.com/ErikReider/SwayNotificationCenter) | Vala | **GTK4 + libadwaita** | active | GTK CSS + JSON |
 | [`wired-notify`](https://github.com/Toqozz/wired-notify), [`nwg-notifications`](https://docs.rs/crate/nwg-notifications), [`rustyfications`](https://github.com/bzglve/rustyfications), [`Lucent`](https://github.com/CPT-Dawn/Lucent) | Rust | varies; Lucent and nwg-notifications are GTK4 + gtk4-layer-shell | small projects, single-maintainer | varies |
 
-**Fit against helm's vision.**
+**Fit against realm's vision.**
 
 - **`fnott` — 5/5.** It is the closest thing on this page to a component written
-  for helm. Keyboard-driven by design (`fnottctl dismiss`/`pause` bound to
+  for realm. Keyboard-driven by design (`fnottctl dismiss`/`pause` bound to
   chords, which is exactly the which-key model). No toolkit. It uses `fcft` and
   `fontconfig`, the same font path as `foot`, so
   [ADR 0012](../adr/0012-font-fallback-is-a-contract.md)'s fallback chain
@@ -143,14 +143,14 @@ in the stack will. There is no fallback.
   The one cost: **not packaged in Fedora** as far as I could find (it *is* in
   Debian trixie at 1.7.1 and sid/forky at 1.8.0, and in nixpkgs). Fedora 44 is
   the sole pre-alpha Fedora packaging target; this is a dated package search,
-  not evidence that a Helm Fedora session works.
+  not evidence that a Realm Fedora session works.
 - **`mako` — 4/5.** Same shape, wider reach: packaged in Fedora, Debian, Ubuntu
   and nixpkgs. Costs pango and cairo, and `gdk-pixbuf` if icons are on — turn
   icons off and the dependency is optional. Pango font descriptions are a second
   font-selection mechanism that the glyph probe does not cover. Config is at
   least as templatable as fnott's.
 - **`dunst` — 3/5.** Works, well maintained, but carries an X11 heritage and a
-  larger surface than helm needs, and its Wayland support is a port rather than
+  larger surface than realm needs, and its Wayland support is a port rather than
   its native model.
 - **`swaync` — 1/5.** GTK4 and libadwaita, a notification *centre* panel that
   the design does not have, animations, icons. It is a good project and a bad
@@ -171,16 +171,16 @@ a day.
 fails the week test on the second day.
 
 **Recommendation.** `fnott` if the Fedora packaging gap can be closed by
-building it in helm's own RPM (it is a small meson C project); Fedora's native
+building it in realm's own RPM (it is a small meson C project); Fedora's native
 River candidate removes the earlier compositor-vendoring comparison, so this
 remains its own maintenance choice. Use `mako` otherwise. Put the choice behind
 the template name so it is a one-file swap, per
 [ADR 0007](../adr/0007-reuse-yazi-btop-starship.md)'s seam rule.
 
 **Two things neither daemon gives us**, worth recording now: notifications never
-appear in `helm-bar` (there is no notification indicator in
+appear in `realm-bar` (there is no notification indicator in
 `Desktop v3.dc.html` — see §9), and there is no history/notification-centre.
-Both are M4-or-later questions for `helm-bar`, not reasons to reject a daemon.
+Both are M4-or-later questions for `realm-bar`, not reasons to reject a daemon.
 
 ---
 
@@ -211,7 +211,7 @@ session by default rather than documenting it —
 |---|---|---|---|---|
 | [`waylock`](https://codeberg.org/ifreund/waylock) | Zig | `ext-session-lock-v1` | 1.7.0-dev; last commit 2026-05-21; **by river's own author** | `-init-color` / `-input-color` / `-fail-color` CLI flags |
 | [`swaylock`](https://github.com/swaywm/swaylock) | C | `ext-session-lock-v1` since 1.7 | 1.8.6 latest release; low but non-zero activity | ~40 colour options in `~/.config/swaylock/config` |
-| [`gtklock`](https://github.com/jovanlanik/gtklock) | C + **GTK3** | `ext-session-lock-v1` | v4.0.0; last commit 4 Feb 2026 | GTK CSS — the same `gtk.css` helm already generates |
+| [`gtklock`](https://github.com/jovanlanik/gtklock) | C + **GTK3** | `ext-session-lock-v1` | v4.0.0; last commit 4 Feb 2026 | GTK CSS — the same `gtk.css` realm already generates |
 | [`hyprlock`](https://github.com/hyprwm/hyprlock) | C++ | `ext-session-lock-v1` | active | own config; animations are its selling point |
 
 **Candidates — idle.**
@@ -233,7 +233,7 @@ session by default rather than documenting it —
   A Zig toolchain cost therefore has to be evaluated per target rather than
   assumed universal. waylock is by Isaac Freund, the same
   maintainer as river, so it is the locker most likely to keep working against
-  the compositor helm ships. It has three colours, settable on the command line,
+  the compositor realm ships. It has three colours, settable on the command line,
   which is the cheapest possible template. It draws no widgets, has no font
   dependency, no animation, and the smallest attack surface of the four.
 - **`swaylock` — 4/5.** Correct on the property that matters (its README states
@@ -242,10 +242,10 @@ session by default rather than documenting it —
   themeable from a plain config file. Larger than waylock, and its release
   cadence has slowed.
 - **`gtklock` — 3/5.** ADR 0011's current recommendation. It is a real
-  `ext-session-lock-v1` client and it is themeable from the `gtk.css` helm
+  `ext-session-lock-v1` client and it is themeable from the `gtk.css` realm
   already generates, which is a genuine advantage. Against it: GTK3 in the lock
   path is a lot of code between the user and their session, its release cadence
-  is slow (v4.0.0, with translation commits since), and helm would be theming
+  is slow (v4.0.0, with translation commits since), and realm would be theming
   the lock screen through a stylesheet designed for application windows.
 - **`hyprlock` — 1/5.** Animation is its differentiator. Rejected on
   [ADR 0009](../adr/0009-no-animation-budget.md).
@@ -284,7 +284,7 @@ NetworkManager's system-wide connections cannot be edited (per-user Wi-Fi still
 works). The failure text is usually a bare "Not authorized", which reads as a
 permissions bug in the application.
 
-Mitigating factor specific to helm: the target user is keyboard-first and lives
+Mitigating factor specific to realm: the target user is keyboard-first and lives
 in a terminal, where `sudo` covers most of this. The failure that survives that
 mitigation is USB media, and it happens on day one for a lot of people.
 
@@ -295,7 +295,7 @@ there is no fallback.
 
 | Project | Language | Toolkit | Maintenance | Config |
 |---|---|---|---|---|
-| [`soteria`](https://github.com/ImVaskel/soteria) | **Rust** (relm4) | **GTK4** | active; MSRV 1.85 — the same edition-2024 floor helm uses | `~/.config/soteria/config.toml` (helper paths only) |
+| [`soteria`](https://github.com/ImVaskel/soteria) | **Rust** (relm4) | **GTK4** | active; MSRV 1.85 — the same edition-2024 floor realm uses | `~/.config/soteria/config.toml` (helper paths only) |
 | [`hyprpolkitagent`](https://github.com/hyprwm/hyprpolkitagent) | C++ | **Qt/QML**, latterly hyprtoolkit | active | minimal |
 | [`lxqt-policykit`](https://github.com/lxqt/lxqt-policykit) | C++ | **Qt** | active, part of LXQt | LXQt theming |
 | `polkit-gnome` | C | **GTK3** | effectively unmaintained upstream; still packaged | none |
@@ -306,9 +306,9 @@ there is no fallback.
 polkit agent draws a modal dialog with a toolkit.** There is no toolkit-free,
 layer-shell, keyboard-first, `palette.toml`-themeable polkit agent in 2026.
 
-- **`soteria` — 3/5.** The least-bad. It is Rust, so it is at least in helm's
-  language, and its MSRV matches helm's. But it is GTK4/libadwaita-shaped, which
-  means helm can recolour it via the generated `gtk.css` and libadwaita named
+- **`soteria` — 3/5.** The least-bad. It is Rust, so it is at least in realm's
+  language, and its MSRV matches realm's. But it is GTK4/libadwaita-shaped, which
+  means realm can recolour it via the generated `gtk.css` and libadwaita named
   colours ([HANDOFF](../../design/HANDOFF.md) §1c: "colours yes, shapes no") and
   cannot make it square-cornered or make it look like anything in
   `Desktop v3.dc.html`. Keyboard usability is unstated in its documentation and
@@ -317,7 +317,7 @@ layer-shell, keyboard-first, `palette.toml`-themeable polkit agent in 2026.
   into a desktop that has committed to theming GTK properly and Qt only through
   `qt6ct` colours until M6 ([MVP.md](../MVP.md), deferred list). Using a Qt
   agent at M3 means the one privileged dialog a user sees is the one surface
-  helm has explicitly deferred theming for.
+  realm has explicitly deferred theming for.
 - **`polkit-gnome` — 2/5.** Ubiquitous and dead. Its only argument is that it is
   in every distribution.
 
@@ -342,7 +342,7 @@ Three separate problems that get treated as one.
 
 Provided by `wl_data_device_manager`, created by river (§0.1). Primary selection
 (middle-click paste) is provided by `PrimarySelectionDeviceManagerV1`, also
-created by river. **helm must not break either.** The only way helm *could*
+created by river. **realm must not break either.** The only way realm *could*
 break them is by mishandling keyboard focus during a data transfer, which is a
 window-management concern. Cost: nothing. Verify in the M3 session test.
 
@@ -383,16 +383,16 @@ feature after a tray.
 **Fit.** `wl-clipboard-rs` is the standout and the reason is architectural, not
 tribal: it is the only candidate that speaks **`ext-data-control-v1`**, which is
 the protocol that replaced `wlr-data-control` in wayland-protocols 1.39 and
-which river creates *first*. Choosing the C `wl-clipboard` binds helm's
+which river creates *first*. Choosing the C `wl-clipboard` binds realm's
 clipboard to a deprecated protocol whose replacement is already shipping.
 `clipvault` sits on top and is also Rust, with sensitive-content filtering that
 matters (a clipboard history that silently records your password manager's
 output is a security bug).
 
 **The picker is the interesting part.** Every history manager in this space
-delegates recall to `dmenu`/`rofi`/`fuzzel`. helm already has a fuzzy picker in
+delegates recall to `dmenu`/`rofi`/`fuzzel`. realm already has a fuzzy picker in
 the MVP (`fuzzel` as hecate, [ADR 0007](../adr/0007-reuse-yazi-btop-starship.md))
-and a native one at M4 (`helm-hecate` on `nucleo`). So the correct shape is:
+and a native one at M4 (`realm-hecate` on `nucleo`). So the correct shape is:
 reuse the *store*, build the *picker* into hecate as a source alongside PATH,
 desktop entries and spells. That costs nothing extra at M4 and gives one
 consistent, themed, keyboard-driven surface instead of two.
@@ -415,7 +415,7 @@ or a chat message without installing something. `Print` does nothing. For a
 developer's work week this is a daily action, not an occasional one.
 
 **Provide, integrate, or not break.** **Integrate.** river provides the capture
-protocols (both generations, §0.1); helm provides keybindings, a save path, and
+protocols (both generations, §0.1); realm provides keybindings, a save path, and
 a themed region selector.
 
 **Candidates.**
@@ -429,12 +429,12 @@ a themed region selector.
 | [`wl-screenrec`](https://github.com/russelltg/wl-screenrec) | **Rust** | screencopy + VA-API | Much lower CPU where VA-API exists |
 | [`satty`](https://github.com/gabm/Satty), [`swappy`](https://github.com/jtheoof/swappy) | Rust / C+GTK | — | Annotation. Satty is Rust but GTK4 |
 
-**Fit.** `grim` + `slurp` is a 5/5 for helm and it is slightly surprising:
+**Fit.** `grim` + `slurp` is a 5/5 for realm and it is slightly surprising:
 `slurp`'s selection rectangle is configured entirely by command-line colour
 arguments, which means the region selector — the one *visible* part — can be
 driven straight from `palette.toml` with no theme file at all. Both are
 single-purpose, non-resident, zero-idle-CPU, no-toolkit tools invoked from a
-keybinding. That is exactly the composition model helm is built on. `wayshot` is
+keybinding. That is exactly the composition model realm is built on. `wayshot` is
 the Rust alternative and is worth keeping in view, but `grim`'s packaging reach
 across all three target distributions decides M3.
 
@@ -467,7 +467,7 @@ selected by `XDG_CURRENT_DESKTOP` via `portals.conf`.
 | `FileChooser` | **Firefox cannot upload a file.** Ctrl+O does nothing, or hangs for 25 s. Flatpak apps cannot open or save anything |
 | `ScreenCast` | Screen sharing in Zoom, Teams-in-a-browser, Discord and OBS offers no sources and fails silently |
 | `Screenshot` | Flatpak screenshot tools return nothing |
-| `Settings` | **GTK4 and libadwaita applications render in light mode on helm's black desktop**, because `color-scheme` reads as `no-preference`. Electron apps ignore dark mode |
+| `Settings` | **GTK4 and libadwaita applications render in light mode on realm's black desktop**, because `color-scheme` reads as `no-preference`. Electron apps ignore dark mode |
 | `Inhibit` | See below — the failure is *worse* when a backend is present than when it is absent |
 | `OpenURI` | Clicking a link inside a Flatpak app opens nothing |
 | `GlobalShortcuts` | Push-to-talk in Discord/Element does not work |
@@ -494,10 +494,10 @@ installed, declared and reachable. Already MVP capability 11.
    `org.freedesktop.ScreenSaver`, and — per
    [xdg-desktop-portal-gtk#465](https://github.com/flatpak/xdg-desktop-portal-gtk/issues/465)
    — if both fail it *logs a warning, does nothing, and reports success*. Under
-   helm neither service will exist. Firefox tries the D-Bus route before the
+   realm neither service will exist. Firefox tries the D-Bus route before the
    Wayland one, so it will be told "inhibited", stop trying, and **the screen
    will blank in the middle of a video call**. The fix is one line in
-   `configs/portal/helm-portals.conf`:
+   `configs/portal/realm-portals.conf`:
    `org.freedesktop.impl.portal.Inhibit=none`, which makes the portal refuse and
    Firefox fall through to `zwp_idle_inhibit_manager_v1`, which river provides
    (§0.1). This should be in the shipped config and checked by `doctor`.
@@ -514,17 +514,17 @@ installed, declared and reachable. Already MVP capability 11.
    ([`darkman`](https://gitlab.com/WhyNotHugo/darkman) is a lighter Settings-only
    backend if the GTK dependency is ever dropped.)
 3. **`xdg-desktop-portal-wlr` has no RemoteDesktop**, so "give control" in a
-   screen share will never work under helm on the M3 backend set. Worth
+   screen share will never work under realm on the M3 backend set. Worth
    documenting as a known limit rather than discovering in a meeting.
 
-The rest of the fit assessment is unremarkable: helm has no choice but GTK for
+The rest of the fit assessment is unremarkable: realm has no choice but GTK for
 `FileChooser` at M3 (`termfilechooser` is already scheduled as the M3→M4 charon
 stopgap in ADR 0007, and it is a fork-of-a-fork whose upstream story is
 genuinely muddled), and `xdpw` for ScreenCast. `xdg-desktop-portal-luminous` is
-the Rust alternative and is the one to revisit at M5 when `helm-compositor`
+the Rust alternative and is the one to revisit at M5 when `realm-compositor`
 owns capture directly.
 
-**Integration cost.** `config` — `helm-portals.conf` plus package dependencies
+**Integration cost.** `config` — `realm-portals.conf` plus package dependencies
 plus the two lines above. Already scoped in ADR 0011 step 5; this section adds
 `Inhibit=none`, `Settings`, and the RemoteDesktop caveat.
 
@@ -559,15 +559,15 @@ a security regression.
 | `kwalletmanager` + `kwallet-secretservice` | C++/Qt | Drags Qt and KDE Frameworks |
 | [KeePassXC](https://keepassxc.org/) with Secret Service integration | C++/Qt | Excellent, but a user choice, not a DE default — it requires an already-open database |
 
-**Fit.** `oo7` is what helm would build if helm built one: Rust, cross-desktop,
+**Fit.** `oo7` is what realm would build if realm built one: Rust, cross-desktop,
 no session-manager assumptions, a PAM module, and a portal backend for
 `org.freedesktop.portal.Secret` so Flatpaks work. It is also, at the time of
 writing, a component whose GitHub releases page shows a sparse and old-looking
 tag history while its actual adoption (GNOME OS default) says the opposite. That
 mismatch is exactly the kind of thing that should not be resolved by guessing.
 
-`gnome-keyring` fits helm's aesthetic badly in one specific way — its unlock
-prompt is a GTK dialog helm cannot restyle beyond colours — and fits helm's
+`gnome-keyring` fits realm's aesthetic badly in one specific way — its unlock
+prompt is a GTK dialog realm cannot restyle beyond colours — and fits realm's
 *risk posture* very well.
 
 Neither is user-visible except at unlock, so the theming argument is weak on
@@ -612,7 +612,7 @@ silently absent.
 
 **Provide, integrate, or not break.**
 - Desktop entries and MIME: **integrate** — read them, do not reinvent them.
-- `xdg-open`: **must ensure one works.** With `XDG_CURRENT_DESKTOP=helm`,
+- `xdg-open`: **must ensure one works.** With `XDG_CURRENT_DESKTOP=realm`,
   `xdg-utils`' `xdg-open` falls to its generic path, which tries `gio open` then
   a list of browsers. It usually works. "Usually" is not a contract.
 - Autostart: **must provide** a runner. Nothing runs `autostart/` by itself.
@@ -624,9 +624,9 @@ silently absent.
 | `xdg-open` replacement | [`handlr`](https://github.com/chmln/handlr) / [`handlr-regex`](https://github.com/Anomalocaridid/handlr-regex) | **Rust** | Drop-in `xdg-open`/`xdg-mime`; content- and extension-based detection; wildcard `text/*`; prunes invalid `mimeapps.list` entries. `handlr-regex` is the maintained fork |
 | `xdg-open` baseline | `xdg-utils` | shell | Ubiquitous; a large, fragile shell script |
 | Autostart | `systemd-xdg-autostart-generator` + `xdg-desktop-autostart.target` | — | Already present wherever systemd is; opt-in by starting the target. Handles `OnlyShowIn`/`NotShowIn` correctly |
-| Autostart | [`dex`](https://github.com/jceb/dex) | Python | Standalone; `dex -a -e helm` |
+| Autostart | [`dex`](https://github.com/jceb/dex) | Python | Standalone; `dex -a -e realm` |
 | Whole session | [`uwsm`](https://github.com/Vladimir-csp/uwsm) | Python | See below |
-| Desktop-entry parsing (for hecate) | [`freedesktop-desktop-entry`](https://crates.io/crates/freedesktop-desktop-entry) | **Rust** | Used by COSMIC; the obvious dependency for `helm-hecate` |
+| Desktop-entry parsing (for hecate) | [`freedesktop-desktop-entry`](https://crates.io/crates/freedesktop-desktop-entry) | **Rust** | Used by COSMIC; the obvious dependency for `realm-hecate` |
 | User directories | `xdg-user-dirs` | C | Creates and records `$XDG_DOWNLOAD_DIR` etc. Portals, browsers and yazi all assume these exist |
 
 **A finding worth raising: `uwsm`.**
@@ -638,14 +638,14 @@ D-Bus activation environment, XDG autostart into a slice that is stopped before
 the compositor, bi-directional binding to `graphical-session.target`, and
 variable cleanup on exit — and it is a maintained project with compositor
 plugins. Two things argue against adopting it for M3: it is Python, in a session
-critical path helm wants to be able to reason about completely; and its plugin
+critical path realm wants to be able to reason about completely; and its plugin
 list covers sway, wayfire, labwc, hyprland, niri and mango but **not river**,
-so helm would be writing the plugin anyway. The right use of this finding is not
+so realm would be writing the plugin anyway. The right use of this finding is not
 "adopt uwsm" but "read uwsm's environment handling before finalising the session
 entry script, because it has already found the edge cases".
 
 **Fit.** `handlr-regex` is 4/5 — Rust, fast, single-binary, and it makes
-`helm ctl` able to *set* defaults declaratively, which suits a config-file
+`realm ctl` able to *set* defaults declaratively, which suits a config-file
 desktop. Against it: replacing `xdg-open` system-wide is a slightly aggressive
 move for M3, and if it misbehaves the symptom is "links do nothing", which is
 the exact failure class ADR 0011 exists to prevent. `systemd-xdg-autostart-
@@ -681,8 +681,8 @@ context menu — and forwards activation.
 - `nm-applet`, `blueman-applet`, `udiskie --tray` and most battery/VPN applets
   are tray-only by construction.
 
-**Provide, integrate, or not break.** If helm ships a tray, **helm must provide
-the host** — it is a bar feature, not a separate process. If helm does not, this
+**Provide, integrate, or not break.** If realm ships a tray, **realm must provide
+the host** — it is a bar feature, not a separate process. If realm does not, this
 is a documented limitation, not a bug.
 
 **Candidates.**
@@ -691,10 +691,10 @@ is a documented limitation, not a bug.
 |---|---|---|
 | [`system-tray`](https://github.com/JakeStanger/system-tray) | **Rust** | Async SNI + DBusMenu client, built for bars; used by `ironbar`. Requires tokio |
 | [`stray`](https://github.com/jgarvin/stray) | Rust | Older, smaller |
-| `waybar`'s tray module | C++ | Would mean abandoning `helm-bar` |
+| `waybar`'s tray module | C++ | Would mean abandoning `realm-bar` |
 | [`snixembed`](https://git.sr.ht/~steef/snixembed) | C++ | The *reverse* bridge (SNI → XEmbed); irrelevant here. An XEmbed → SNI bridge is what would be needed for legacy X11/Wine icons |
 
-**Fit — and this is where helm's design and the ecosystem genuinely disagree.**
+**Fit — and this is where realm's design and the ecosystem genuinely disagree.**
 
 I extracted the text of `design/Desktop v3.dc.html` to check rather than
 assuming. The bar's right-hand segment is, in order:
@@ -716,8 +716,8 @@ D-Bus. Both contradict:
 - and the DBusMenu context menu, which is a mouse-driven popup in a desktop
   where "mouse works but is never required".
 
-So: **2/5 at best, and the score is a property of helm, not of the projects.**
-`system-tray` is a good crate. It would be a good crate to build a thing helm
+So: **2/5 at best, and the score is a property of realm, not of the projects.**
+`system-tray` is a good crate. It would be a good crate to build a thing realm
 has decided not to have.
 
 There is a middle path worth naming: a **text-only tray segment** — render each
@@ -725,7 +725,7 @@ registered item as its `Title`/`Id` in `text.mid`, with `mod+t` cycling items an
 `Enter` sending `Activate`, and the DBusMenu rendered as a which-key-style list
 rather than a popup menu. That is keyboard-first, glyph-free, themeable, and
 recovers the actual lost capability (getting Slack back) without the icon
-machinery. It is also real work in `helm-bar` and a visible departure from the
+machinery. It is also real work in `realm-bar` and a visible departure from the
 mockup, so it is not a decision this document can take.
 
 **Integration cost.** `real work` — an SNI host, a DBusMenu client, a new bar
@@ -735,7 +735,7 @@ crate with a hard frame budget.
 **Priority: STRATEGIC. Milestone: M4.** Not MVP, and this is the most
 uncomfortable MVP exclusion on the page. Justification for holding the line: the
 week test is one person, and a person who knows their desktop has no tray
-configures Slack not to close to tray and uses `helm ctl run` to bring windows
+configures Slack not to close to tray and uses `realm ctl run` to bring windows
 back. A person who does not know will lose an application on day one. That is a
 documentation problem at M3 and a product problem by M4.
 
@@ -767,21 +767,21 @@ and is the sibling register's concern; what belongs here is the surface.
 | [`wlogout`](https://github.com/ArtsyMacaw/wlogout) | C | **GTK3** | A grid of large SVG-icon buttons. 1/5 |
 | [`wleave`](https://github.com/AMNatty/wleave) | Rust | **GTK4 + libadwaita** | Same shape, newer toolkit, wlogout-compatible config. 2/5 |
 | `loginctl` / `systemctl` directly | — | none | 5/5 mechanically, 0/5 discoverably |
-| **Build it into `helm-ctl` + which-key** | Rust | none | see below |
+| **Build it into `realm-ctl` + which-key** | Rust | none | see below |
 
 **Fit.** Every packaged logout menu is a full-screen grid of icon buttons — the
-opposite of a keyboard-first desktop with a which-key strip. helm already has
+opposite of a keyboard-first desktop with a which-key strip. realm already has
 the correct UI for this and it is not a new surface: a `mod+q`-style leader
 opening a which-key row reading
 `l logout · r reboot · p poweroff · s suspend · L lock`, with the actions being
 `zbus` calls to `org.freedesktop.login1`. That is perhaps 150 lines in
-`helm-ctl` plus a keymap table entry, and it is themed, glyph-based and
+`realm-ctl` plus a keymap table entry, and it is themed, glyph-based and
 animation-free for free because the which-key strip already is.
 
-**Integration cost.** `small Rust shim` — `helm ctl session {logout,reboot,
+**Integration cost.** `small Rust shim` — `realm ctl session {logout,reboot,
 poweroff,suspend,lock}` over `zbus`, plus keymap entries.
 
-**Priority: MVP. Milestone: M3.** See [§19](#19-what-helm-should-build-itself).
+**Priority: MVP. Milestone: M3.** See [§19](#19-what-realm-should-build-itself).
 
 ---
 
@@ -797,7 +797,7 @@ upload target, or an image from Firefox into an editor, does nothing. Between
 XWayland and Wayland clients, DnD stops at the boundary.
 
 **Provide, integrate, or not break.** **Must not break.** river creates every
-one of these globals (§0.1) and implements the DnD grab itself. helm's only
+one of these globals (§0.1) and implements the DnD grab itself. realm's only
 exposure is that, as window manager, it owns keyboard focus and window
 stacking — a DnD grab that outlives a focus change, or a window raised
 mid-drag, could plausibly disrupt a transfer.
@@ -814,7 +814,7 @@ it speaks `ext-data-control-v1` directly.
 One genuine risk to record: `ext-data-control-v1` is a *privileged* protocol,
 and river creates it unconditionally alongside `wp_security_context_v1`. Any
 client can read the clipboard continuously. That is a property of the platform
-helm ships, worth one sentence in the security documentation rather than a
+realm ships, worth one sentence in the security documentation rather than a
 change of behaviour.
 
 ---
@@ -827,7 +827,7 @@ Spotlight do).
 
 **What the user loses without it.** Application search: nothing — hecate is MVP
 capability 5. Content search: there is no "search my documents" surface. The
-user runs `rg` and `fd` in a terminal, which for helm's stated audience is
+user runs `rg` and `fd` in a terminal, which for realm's stated audience is
 arguably the preferred outcome.
 
 **Provide, integrate, or not break.** **Not break**, and deliberately do not
@@ -837,10 +837,10 @@ provide.
 infrastructure, and walks `$HOME` at login), `recoll` (Qt + Python + Xapian;
 powerful and unlovely), `fsearch` (C + GTK3; filename-only), `plocate` (a system
 `updatedb` cron; filename-only but essentially free), and the composition
-helm actually wants: `fd` + `ripgrep` + `fzf`/`nucleo` behind a hecate source.
+realm actually wants: `fd` + `ripgrep` + `fzf`/`nucleo` behind a hecate source.
 
-**Fit.** Every packaged desktop-search product is 1–2/5 for helm. Each is a
-resident indexer with a GUI in a toolkit helm does not use, and a background
+**Fit.** Every packaged desktop-search product is 1–2/5 for realm. Each is a
+resident indexer with a GUI in a toolkit realm does not use, and a background
 `$HOME` walk is precisely what the 900 ms cold-start budget and the ~0% idle
 target rule out. Conversely `fd`/`ripgrep` are 5/5, already installed on any
 developer machine, and compose into hecate at M4 as another source alongside
@@ -850,7 +850,7 @@ PATH, desktop entries, spells and clipboard history.
 (a hecate `find:` source).
 
 **Priority: LATER. Milestone: M6**, and possibly never as a product. This is a
-case where the honest answer is "helm does not have desktop search, it has
+case where the honest answer is "realm does not have desktop search, it has
 `fd`", and saying so is better than shipping something nobody would open twice.
 
 ---
@@ -870,7 +870,7 @@ in any file chooser. `gio trash --list` errors. There is no way to recover a
 file deleted five minutes ago — for a *first* week on a new desktop, that is a
 trust problem out of proportion to its frequency.
 
-**Provide, integrate, or not break.** **Integrate.** helm should not implement
+**Provide, integrate, or not break.** **Integrate.** realm should not implement
 the trash spec; it should ensure the tools it ships honour it and that recovery
 is reachable.
 
@@ -882,7 +882,7 @@ is reachable.
 | Restore / empty / list | [`trashy`](https://github.com/oberblastmeister/trashy) | **Rust** | `trash list/restore/empty`; faster and richer than trash-cli |
 | Restore / empty / list | [`trash-cli`](https://github.com/andreafrancia/trash-cli) | Python | The reference implementation; what most yazi trash plugins wrap |
 | Restore inside charon | [`restore.yazi`](https://github.com/boydaihungst/restore.yazi), [`recycle-bin.yazi`](https://github.com/uhs-robert/recycle-bin.yazi) | Lua plugins | `recycle-bin.yazi` wraps trash-cli and gives browse/restore/empty-by-age inside yazi |
-| GTK apps' trash and mounts | `gvfs` | C | A runtime dependency, not a helm component. Without it `gio trash` is degraded and MTP/SMB do not appear |
+| GTK apps' trash and mounts | `gvfs` | C | A runtime dependency, not a realm component. Without it `gio trash` is degraded and MTP/SMB do not appear |
 
 **Fit.** 5/5 and mostly already done: charon *is* yazi and yazi already
 implements the spec. What is missing is a *restore* path, which is a yazi plugin
@@ -914,7 +914,7 @@ The brightness keys do nothing. On a laptop this is noticed within about ninety
 seconds of first login and it reads as "this desktop is unfinished" more
 strongly than almost anything else on this page.
 
-**Provide, integrate, or not break.** **Must provide.** helm owns the keymap
+**Provide, integrate, or not break.** **Must provide.** realm owns the keymap
 under `river-xkb-bindings-v1` ([ADR 0013](../adr/0013-river-window-management-backend.md)),
 so nothing else *can* bind these keys.
 
@@ -926,14 +926,14 @@ standard) or `light`.
 **Candidates for the feedback.** [`swayosd`](https://github.com/ErikReider/SwayOSD)
 (Rust but **GTK4**, animated), [`wob`](https://github.com/francma/wob) (C, a
 layer-shell bar, no toolkit), [`avizo`](https://github.com/misterdanb/avizo)
-(Vala + GTK) — **or the bar helm already designed**. The mockup's right-hand
+(Vala + GTK) — **or the bar realm already designed**. The mockup's right-hand
 segment already contains `♪ 64%`, so the feedback surface exists and is already
 themed. An OSD would be a second layer-shell surface, a second theme target, and
 a strong temptation towards a fade-out animation
 ([ADR 0009](../adr/0009-no-animation-budget.md)).
 
 **Fit.** `wpctl`/`brightnessctl` are 5/5 — non-resident, no toolkit, one line
-each. Every OSD daemon is 2/5 or worse for helm and none of them is needed.
+each. Every OSD daemon is 2/5 or worse for realm and none of them is needed.
 
 **Integration cost.** `config` for the bindings; `shim` for the bar module to
 subscribe to volume changes event-driven rather than polling — which
@@ -957,7 +957,7 @@ the wrong thing. There is no "what is playing" anywhere.
 
 **Candidates.** [`playerctl`](https://github.com/altdesktop/playerctl) (C
 library + CLI; the standard; `playerctl play-pause` is the whole integration) or
-the [`mpris`](https://crates.io/crates/mpris) Rust crate if `helm-bar` ever
+the [`mpris`](https://crates.io/crates/mpris) Rust crate if `realm-bar` ever
 wants metadata natively.
 
 **Fit.** `playerctl` is 5/5 as a *binding target* — a one-line invocation from a
@@ -979,7 +979,7 @@ a session or desktop service users notice immediately.
 
 | # | Component | What is lost without it | Verdict | Priority / Milestone |
 |---|---|---|---|---|
-| 15.1 | **Idle inhibition** | Video calls and full-screen video blank the screen mid-use. Two mechanisms: Wayland `zwp_idle_inhibit_manager_v1` (river provides) and D-Bus `org.freedesktop.ScreenSaver` (nothing provides). The **failure mode is a silent false success** — see §6 finding 1 | **Must not break**, via `Inhibit=none` in `helm-portals.conf` plus a `doctor` check | **MVP / M3** |
+| 15.1 | **Idle inhibition** | Video calls and full-screen video blank the screen mid-use. Two mechanisms: Wayland `zwp_idle_inhibit_manager_v1` (river provides) and D-Bus `org.freedesktop.ScreenSaver` (nothing provides). The **failure mode is a silent false success** — see §6 finding 1 | **Must not break**, via `Inhibit=none` in `realm-portals.conf` plus a `doctor` check | **MVP / M3** |
 | 15.2 | **`org.freedesktop.portal.Settings` `color-scheme`** | Every GTK4/libadwaita and Flatpak app renders light on a black desktop. `gtk.css` cannot fix it | **Must provide** (route Settings to a backend **and** set the gsettings key) | **MVP / M3** |
 | 15.3 | **`xdg-user-dirs`** | `$XDG_DOWNLOAD_DIR` and `$XDG_PICTURES_DIR` do not exist, so Firefox downloads to `$HOME`, screenshots have nowhere to go, and portal file dialogs open in the wrong place | **Integrate** — depend on it, call `xdg-user-dirs-update` in the session entry | **MVP / M3** |
 | 15.4 | **`xdg-activation-v1` handling** | Clicking a link when Firefox is already open on another orbit does nothing visible; the window never raises and no urgency is signalled. river creates the global; the **window manager** must act on the token | **Must provide** (in `RiverBackend`) — overlaps the window-management register | **MVP / M2–M3** |
@@ -988,7 +988,7 @@ a session or desktop service users notice immediately.
 | 15.7 | **Night light / colour temperature** | Nothing at sunset; the design's urania pane literally says "20:14 ☉ sunset · night palette engages", so the *design promises this*. river provides `wlr-gamma-control`; [`wlsunset`](https://sr.ht/~kennylevinsen/wlsunset/) (C) or [`gammastep`](https://gitlab.com/chinstrap/gammastep) are the tools | **Integrate** | **LATER / M6** |
 | 15.8 | **`GlobalShortcuts` portal** | Push-to-talk in Discord/Element/Teams does not work; global media shortcuts from sandboxed apps do not register. No wlroots backend implements it | **Not break**; document as a limit | **LATER / M6** |
 | 15.9 | **Notification sounds / sound theme** | Silent everything. `canberra`/`sound-theme-freedesktop` if wanted; arguably correct to omit | **Not provide** | **LATER** |
-| 15.10 | **Accessibility (AT-SPI, `orca`)** | A screen reader sees nothing: `tiny-skia` + `cosmic-text` surfaces expose no accessibility tree at all. Already named in M6, but the honest statement is that helm is currently unusable with a screen reader | **Must eventually provide**; be honest now | **LATER / M6** |
+| 15.10 | **Accessibility (AT-SPI, `orca`)** | A screen reader sees nothing: `tiny-skia` + `cosmic-text` surfaces expose no accessibility tree at all. Already named in M6, but the honest statement is that realm is currently unusable with a screen reader | **Must eventually provide**; be honest now | **LATER / M6** |
 | 15.11 | **Thumbnails** | Deliberately refused — HANDOFF: "No thumbnails, ever". Recorded so it is a decision, not an omission | **Will not provide** | — |
 | 15.12 | **PipeWire + WirePlumber** | `ScreenCast` cannot work without PipeWire — it is how the portal delivers frames. Mostly the sibling register's, but the portal dependency belongs here | **Integrate** (hard dependency of §6) | **MVP / M3** |
 
@@ -1020,7 +1020,7 @@ engineering.
 | 8 | Autostart | **provide** | `xdg-desktop-autostart.target` | 5 | config | **MVP** | M3 |
 | 8 | `xdg-user-dirs` | integrate | `xdg-user-dirs` | 5 | config | **MVP** | M3 |
 | 9 | Tray (SNI) | provide *if at all* | none at M3; text-only segment at M4 | 2 | work | STRATEGIC | M4 |
-| 10 | Logout / power | **provide** | **build** `helm ctl session` + which-key | 5 | shim | **MVP** | M3 |
+| 10 | Logout / power | **provide** | **build** `realm ctl session` + which-key | 5 | shim | **MVP** | M3 |
 | 11 | DnD / data-control | not break | river | — | none (test) | **MVP** | M3 |
 | 12 | Desktop search | not provide | `fd` + `rg` via hecate | 5 | config → shim | LATER | M6 |
 | 13 | Trash | integrate | yazi (already) + `trashy` + a restore plugin | 5 | config | STRATEGIC | M4 |
@@ -1055,13 +1055,13 @@ added here — that file belongs to whoever is editing it.
 | No notification daemon owns the name | Slack, Element and calendar reminders are silent; some clients hang on the D-Bus call | Ship one as a session unit | `doctor` checks `org.freedesktop.Notifications` has an owner |
 | No polkit agent registered | "Not authorized" when mounting a USB stick | Ship an agent as a session unit | `doctor` checks an agent is registered |
 | `xdg-user-dirs` absent | Downloads land in `$HOME`; screenshots have nowhere to go | Depend on it; run `xdg-user-dirs-update` before clients | `doctor` checks `$XDG_DOWNLOAD_DIR` resolves |
-| Layer-shell clients silently absent | Notifications and the lock screen never appear, and it looks like they crashed | Same root cause as the existing "layer-shell not served" row — `river-layer-shell-v1` gates **every** layer-shell client, not just `helm-bar` | extend the M2 layer-shell guard to a third-party client |
+| Layer-shell clients silently absent | Notifications and the lock screen never appear, and it looks like they crashed | Same root cause as the existing "layer-shell not served" row — `river-layer-shell-v1` gates **every** layer-shell client, not just `realm-bar` | extend the M2 layer-shell guard to a third-party client |
 
 ---
 
 ## 18. The uncomfortable list
 
-Components where the best available option fits helm's vision **badly** and
+Components where the best available option fits realm's vision **badly** and
 there is no good answer. Stated plainly. These are `needs-human` candidates.
 
 1. **The system tray.** The design has no tray region and no icons at all; SNI
@@ -1069,16 +1069,16 @@ there is no good answer. Stated plainly. These are `needs-human` candidates.
    an icon-theme lookup that the 900 ms cold-start budget explicitly forbids.
    But Slack, Element, Steam, Nextcloud and KeePassXC all use it, and "close to
    tray" without a tray means the application vanishes while still running. Both
-   positions are right. There is no version of this where helm both keeps the
+   positions are right. There is no version of this where realm both keeps the
    design and does not lose applications.
 
 2. **The polkit agent.** Every maintained agent — `soteria`, `hyprpolkitagent`,
    `lxqt-policykit`, `polkit-gnome`, `mate-polkit` — is a toolkit modal dialog.
    None is layer-shell, none is keyboard-first by design, none is themeable from
    `palette.toml`. The best available is `soteria`, whose merit is that it is
-   Rust and that GTK4 is a toolkit helm already recolours. The privileged
+   Rust and that GTK4 is a toolkit realm already recolours. The privileged
    password prompt — the one dialog where the user most needs to trust that they
-   are looking at their own desktop — will be the least helm-looking surface in
+   are looking at their own desktop — will be the least realm-looking surface in
    the session.
 
 3. **The file chooser.** `xdg-desktop-portal-gtk` is a GTK3 dialog with icons,
@@ -1092,7 +1092,7 @@ there is no good answer. Stated plainly. These are `needs-human` candidates.
 4. **The screencast backend.** `xdg-desktop-portal-wlr` is the only realistic
    choice, its last tagged release is 0.8.4 while its master branch is actively
    moving (commits dated 13 August 2026), its output-picker is a `slurp` popup
-   rather than a helm surface, and it implements no `RemoteDesktop`, so "give
+   rather than a realm surface, and it implements no `RemoteDesktop`, so "give
    control" in a screen share will simply not exist. `xdg-desktop-portal-luminous`
    is Rust and interesting and much less proven.
 
@@ -1111,44 +1111,44 @@ there is no good answer. Stated plainly. These are `needs-human` candidates.
    inconsistency.
 
 7. **Accessibility.** `tiny-skia` + `cosmic-text` surfaces expose no
-   accessibility tree. helm is not usable with a screen reader today and will
+   accessibility tree. realm is not usable with a screen reader today and will
    not be at M3. M6 lists it, but no candidate library was found that would
    retrofit AT-SPI onto a custom-drawn layer-shell surface without significant
    work.
 
 8. **Desktop search.** There is no good option, and the recommendation is to
-   ship none. That is defensible for helm's audience and it *is* a missing
+   ship none. That is defensible for realm's audience and it *is* a missing
    desktop feature, and users migrating from GNOME or KDE will notice.
 
 ---
 
-## 19. What helm should build itself
+## 19. What realm should build itself
 
 [ADR 0007](../adr/0007-reuse-yazi-btop-starship.md) demands a written reason for
 any rewrite. Three items qualify; everything else on this page should be reused.
 
-### 19.1 Session control — `helm ctl session {logout,reboot,poweroff,suspend,lock}`
+### 19.1 Session control — `realm ctl session {logout,reboot,poweroff,suspend,lock}`
 
 **Reason.** The reusable options (`wlogout`, `wleave`) are full-screen grids of
 large icon buttons in GTK3 and GTK4 respectively. They contradict four separate
 commitments at once: no icons ([HANDOFF](../../design/HANDOFF.md) — "All
 iconography is Unicode glyphs"), keyboard-first, no toolkit beyond what theming
 already requires, and no additional layer-shell surface with its own theme file.
-Meanwhile helm *already has* the correct interface: the which-key strip. The
+Meanwhile realm *already has* the correct interface: the which-key strip. The
 implementation is a `zbus` client for `org.freedesktop.login1` — five methods —
 plus one keymap table entry, and it inherits the theme, the glyph contract and
 the animation-free rendering for free because the which-key strip already has
 them. Building is cheaper than integrating, which is rare enough to be worth
 saying out loud. **Cost: ~150 lines. Milestone: M3.**
 
-### 19.2 Volume, brightness and media feedback in `helm-bar`
+### 19.2 Volume, brightness and media feedback in `realm-bar`
 
 **Reason.** Every OSD daemon (`swayosd`, `avizo`, `wob`) is a second
 layer-shell surface that appears, waits, and fades — and the fade is the point
 of them. [ADR 0009](../adr/0009-no-animation-budget.md) forbids it. The design
 already places the feedback where it belongs: the bar's `♪ 64%` and `⚡ 87%`
 segments exist in `Desktop v3.dc.html`. Making the existing `vol` module
-event-driven on WirePlumber is work `helm-bar` owes
+event-driven on WirePlumber is work `realm-bar` owes
 [ARCHITECTURE §4](../ARCHITECTURE.md#4-what-robust-and-snappy-mean-here) anyway.
 Adopting an OSD would add a surface, a theme target, a dependency and an
 animation to deliver information the bar is already showing.
@@ -1159,7 +1159,7 @@ animation to deliver information the bar is already showing.
 **Reason.** The *store* should absolutely be reused (`clipvault` /
 `wl-clipboard-rs`); the *picker* should not. Every clipboard manager in this
 space delegates recall to `dmenu`/`rofi`/`fuzzel` precisely because a picker is
-not their job. helm is already building `helm-hecate` on `nucleo` at M4, with
+not their job. realm is already building `realm-hecate` on `nucleo` at M4, with
 sources for PATH, desktop entries, spells and commands. Clipboard history is
 another source. Adopting a second picker means a second fuzzy-match
 implementation, a second theme template, a second keybinding vocabulary and a
@@ -1172,13 +1172,13 @@ source. Milestone: M4.**
   replacement ids, urgency, icon data, capabilities negotiation), the reusable
   options are small C programs with no toolkit that theme cleanly, and getting
   it subtly wrong means an application's notifications silently do not appear.
-  Revisit only if `helm-bar` gains a notification centre, which is not designed.
+  Revisit only if `realm-bar` gains a notification centre, which is not designed.
 - **A lock screen.** ADR 0011 already says it: "getting a lock screen wrong is
   the worst class of bug in a desktop." `waylock` is ~1000 lines by the
-  maintainer of the compositor helm ships. There is no argument for `helm-ward`
+  maintainer of the compositor realm ships. There is no argument for `realm-ward`
   before M6, if ever.
 - **A secrets daemon.** Same reasoning, more so.
-- **A portal backend.** Until `helm-compositor` exists (M5), helm has no
+- **A portal backend.** Until `realm-compositor` exists (M5), realm has no
   privileged access the existing backends lack. After M5, revisit.
 
 ---
@@ -1220,7 +1220,7 @@ the answer.
 | Option | For | Against |
 |---|---|---|
 | **`waylock`** | `ext-session-lock-v1`; smallest attack surface; three colours settable on the command line, so the cheapest possible template; **same maintainer as river**; actively developed (last commit 2026-05-21) | Zig must be accounted for per target; Fedora's native River candidate does not supply that toolchain. Version is `1.7.0-dev`, i.e. no recent tag |
-| `gtklock` | ADR 0011's current pick; themeable from the `gtk.css` helm already generates | GTK3 in the lock path; slow cadence (v4.0.0, translation commits since) |
+| `gtklock` | ADR 0011's current pick; themeable from the `gtk.css` realm already generates | GTK3 in the lock path; slow cadence (v4.0.0, translation commits since) |
 | `swaylock` | Packaged on all three target distributions; richest config; `ext-session-lock-v1` since 1.7 | Larger; cadence has slowed (1.8.6) |
 
 **Research preference: `waylock`**, changed from ADR 0011's `gtklock`, because
@@ -1234,12 +1234,12 @@ blank: dim at 5 min, blank at 10 min, lock at 10 min, lock unconditionally on
 lid close and on `before-sleep`. These are security defaults and should be
 decided, not inherited from this paragraph.
 
-### 21.2 Does helm ship a system tray?
+### 21.2 Does realm ship a system tray?
 
 | Option | Consequence |
 |---|---|
 | (a) No tray, ever | Faithful to the design. Slack, Element, Steam, Nextcloud and KeePassXC lose their "close to tray" recovery path. Must be documented prominently, not discovered |
-| (b) Text-only SNI segment in `helm-bar` at M4 | Keeps glyph-only rendering and keyboard-first activation; recovers the real capability; departs visibly from `Desktop v3.dc.html`; real work in the crate with the tightest frame budget |
+| (b) Text-only SNI segment in `realm-bar` at M4 | Keeps glyph-only rendering and keyboard-first activation; recovers the real capability; departs visibly from `Desktop v3.dc.html`; real work in the crate with the tightest frame budget |
 | (c) Full icon tray | Recovers everything, breaks the design language, and breaks the "no icon-cache scan" cold-start budget |
 
 **Recommendation: (a) for M3 with a prominent note in the install
@@ -1271,7 +1271,7 @@ search is not Fedora runtime evidence.
 | Option | Consequence |
 |---|---|
 | (a) `mako` everywhere | One daemon, packaged everywhere, slightly worse fit (pango/cairo, a second font-selection path) |
-| (b) `fnott` everywhere, building it in helm's own RPM | Best fit; adds one small meson C package to Fedora packaging as an independent maintenance burden |
+| (b) `fnott` everywhere, building it in realm's own RPM | Best fit; adds one small meson C package to Fedora packaging as an independent maintenance burden |
 | (c) `fnott` where packaged, `mako` on Fedora | Two theme templates and two behaviours to support; rejected |
 
 **Recommendation: (b)** on technical fit, while recognizing it as a new Fedora
@@ -1372,7 +1372,7 @@ not verify'".
   (a "July 2024" reading against Debian's "0.8.0 accepted November 2025,
   0.8.1 January 2026"). Master's activity is verified; the tag date is not.
 - **Whether `mako`, `fnott`, `swaylock`, `waylock` etc. actually run under river
-  0.4 with helm as the window manager.** This is an *inference* from §0.1: they
+  0.4 with realm as the window manager.** This is an *inference* from §0.1: they
   are ordinary `wlr-layer-shell` clients and river exposes layer-shell when the
   window manager serves `river-layer-shell-v1`. Nobody has run it, and
   [the README says so](../../README.md#how-this-repository-was-built):

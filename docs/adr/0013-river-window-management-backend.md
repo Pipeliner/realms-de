@@ -1,7 +1,7 @@
-# ADR 0013 — helm is the window manager, on river's window-management protocol
+# ADR 0013 — realm is the window manager, on river's window-management protocol
 
 - **Status:** Accepted (ratified 2026-08-28); see Reversal
-- **Deciders:** helm maintainers, repo owner
+- **Deciders:** realm maintainers, repo owner
 - **Supersedes / Superseded by:** **Supersedes [ADR 0002](0002-borrow-a-compositor-first.md)**;
   Decision 4 is superseded only for Fedora by
   [ADR 0015](0015-fedora-44-pre-alpha-baseline.md)
@@ -22,35 +22,35 @@ different and far larger protocol than the layout protocol 0002 assessed. The
 compositor keeps rendering, input and the low-level plumbing; layout, focus,
 ordering, stacking, borders and keybindings all move out.
 
-The shapes match. helm mutates an ordered ledger, projects it to exact integer
+The shapes match. realm mutates an ordered ledger, projects it to exact integer
 rectangles, and wants those applied atomically with no intermediate frame
 (ADR 0001). The protocol is globally double-buffered around a two-phase
 `manage` → `render` sequence whose stated purpose is "frame perfect state
 changes involving multiple windows". A ledger swap becomes two `set_position`
 requests in one render sequence, applied in one frame.
 
-The consequence is a change of identity, not just of backend. `helm-session`
+The consequence is a change of identity, not just of backend. `realm-session`
 does not talk to a window manager any more. It **is** the window manager. The
 Zig objection from 0002 dissolves with it: river becomes a package we depend
 on, not code in our workspace.
 
 ## Decision
 
-1. Phase 1 targets `river-window-management-v1`. `helm-session` implements the
+1. Phase 1 targets `river-window-management-v1`. `realm-session` implements the
    window manager side of it directly, behind the existing `WmBackend` seam.
-2. `NiriBackend` is dropped. `NativeBackend` against `helm-compositor` (M5) is
+2. `NiriBackend` is dropped. `NativeBackend` against `realm-compositor` (M5) is
    unchanged as the long-term destination.
 3. **Five companion protocols are obligations, not options.** Verification
-   against river's `protocol/` directory found that a usable helm needs all of:
+   against river's `protocol/` directory found that a usable realm needs all of:
 
-   | Protocol | Why helm cannot ship without it |
+   | Protocol | Why realm cannot ship without it |
    |---|---|
    | `river-window-management-v1` (ifaces at v5) | Layout, focus, ordering, borders, fullscreen |
-   | `river-layer-shell-v1` (v1) | **The bar does not work at all otherwise.** river supports `wlr-layer-shell` only if the window manager implements this. `helm-bar` and `helm-hecate` stay ordinary `wlr-layer-shell` clients (ADR 0008 is unaffected); `helm-session` must serve the manager half |
+   | `river-layer-shell-v1` (v1) | **The bar does not work at all otherwise.** river supports `wlr-layer-shell` only if the window manager implements this. `realm-bar` and `realm-hecate` stay ordinary `wlr-layer-shell` clients (ADR 0008 is unaffected); `realm-session` must serve the manager half |
    | `river-xkb-bindings-v1` (v3) | The entire keymap, and the chord model specifically |
    | `river-input-management-v1` (v2) | Seat creation, keyboard repeat rate |
-   | `river-xkb-config-v1` | Keyboard layouts; without it helm freezes the layout river started with |
-   | `river-libinput-config-v1` | Input-device policy such as tap-to-click; without it helm cannot provide laptop input configuration |
+   | `river-xkb-config-v1` | Keyboard layouts; without it realm freezes the layout river started with |
+   | `river-libinput-config-v1` | Input-device policy such as tap-to-click; without it realm cannot provide laptop input configuration |
 
 4. Packaging vendors a pinned river 0.4.x. Ubuntu 24.04 and Fedora 41 ship
    0.3.x or river-classic, neither of which speaks the protocol. *(Distro
@@ -58,18 +58,18 @@ on, not code in our workspace.
    the packaging CI to confirm, not as a verified fact.)* The flake pins the
    same input, consistent with [ADR 0010](0010-nix-flake-as-reference-build.md).
 
-## Mapping: helm onto `river-window-management-v1`
+## Mapping: realm onto `river-window-management-v1`
 
 This table replaces the niri mapping table in ADR 0002. Every row was checked
 against the protocol XML rather than against a summary; three rows below correct
-the description helm was working from.
+the description realm was working from.
 
-| helm concept | river mechanism | Fidelity |
+| realm concept | river mechanism | Fidelity |
 |---|---|---|
-| Orbit (6, fixed, runes ᚠᚢᚦᚨᚱᚲ) | None. helm holds all six ledgers in process and renders one; windows in inactive orbits are `hide`-den | **Faithful.** Better than niri, where orbits had to be bent onto dynamic workspaces we did not control |
-| Ledger order | helm projects it itself and expresses the result as `river_node_v1::set_position` plus `river_window_v1::propose_dimensions` per window | **Faithful** — but see the correction below: the ledger is *not* the render list |
+| Orbit (6, fixed, runes ᚠᚢᚦᚨᚱᚲ) | None. realm holds all six ledgers in process and renders one; windows in inactive orbits are `hide`-den | **Faithful.** Better than niri, where orbits had to be bent onto dynamic workspaces we did not control |
+| Ledger order | realm projects it itself and expresses the result as `river_node_v1::set_position` plus `river_window_v1::propose_dimensions` per window | **Faithful** — but see the correction below: the ledger is *not* the render list |
 | Render/stacking order | `place_top`, `place_bottom`, `place_above(other)`, `place_below(other)` | **Faithful.** Used for mono occlusion and overlay stacking, not for tiling order |
-| `focus_step(Next/Prev)` | `river_seat_v1::focus_window`; wrapping is helm's own logic | **Faithful.** No end-of-strip special case, unlike niri |
+| `focus_step(Next/Prev)` | `river_seat_v1::focus_window`; wrapping is realm's own logic | **Faithful.** No end-of-strip special case, unlike niri |
 | `swap(Dir)` | Ledger swap, re-project, two `set_position` calls in one render sequence | **Faithful and frame-perfect** — one frame, no intermediate state |
 | Triptych, Even | `set_position` + `propose_dimensions` in absolute logical coordinates | **Faithful**, subject to the quantisation caveat below |
 | Mono | Every tile the same rect; `place_top` on the focused window | **Faithful.** `Placement::occluded` becomes a real compositor property |
@@ -81,8 +81,8 @@ the description helm was working from.
 | Chords (`mod` prefix, submaps) | `ensure_next_key_eaten` + `ate_unbound_key` | **Faithful, and purpose-built.** The protocol's own rationale names chorded bindings and submap exit as the reason this request exists |
 | Mode badge, chord echo | `modifiers_watch` + `modifiers_update(old, new)` | **Faithful** |
 | Keymap | `river_xkb_bindings_v1::get_xkb_binding(seat, keysym, modifiers)`, `enable`/`disable` per binding | **Faithful.** Per-mode keymaps are enable/disable sets |
-| `WinId` | `river_window_v1::identifier` — up to 32 printable ASCII bytes | **Not a direct mapping.** `WinId(pub u64)` and an ASCII string are different types; `helm-session` holds a bijection, allocating `WinId`s from a monotonic counter keyed on river's identifier. Never-reuse survives, but as a property of helm's counter, not by inheriting river's |
-| Launcher focus | `river_layer_shell_seat_v1::focus_exclusive` / `focus_non_exclusive` / `focus_none` — **events, not requests** | **Faithful, but inverted.** helm is *told* that a layer surface has taken exclusive focus; it does not grant it. While exclusive focus is held, all window-manager focus requests are ignored, so `helm-session` must suspend its own focus logic until `focus_non_exclusive` or `focus_none` arrives |
+| `WinId` | `river_window_v1::identifier` — up to 32 printable ASCII bytes | **Not a direct mapping.** `WinId(pub u64)` and an ASCII string are different types; `realm-session` holds a bijection, allocating `WinId`s from a monotonic counter keyed on river's identifier. Never-reuse survives, but as a property of realm's counter, not by inheriting river's |
+| Launcher focus | `river_layer_shell_seat_v1::focus_exclusive` / `focus_non_exclusive` / `focus_none` — **events, not requests** | **Faithful, but inverted.** realm is *told* that a layer surface has taken exclusive focus; it does not grant it. While exclusive focus is held, all window-manager focus requests are ignored, so `realm-session` must suspend its own focus logic until `focus_non_exclusive` or `focus_none` arrives |
 | **Exact tiling** | `propose_dimensions` is a *proposal*. A window may take different dimensions and reports them back via `dimensions` | **Approximate — the one real gap that remains.** See below |
 
 ### Corrections to earlier readings of this protocol
@@ -92,7 +92,7 @@ a future reader will otherwise repeat them. All were checked against the XML on
 branch `main` — note that `master` 404s, the repository's default branch changed.
 
 1. **`place_*` orders the render list, not the ledger.** The ledger's order is
-   *layout* order, which helm computes and expresses through positions and
+   *layout* order, which realm computes and expresses through positions and
    dimensions. For gapless tiling, where nothing overlaps, render order is
    nearly irrelevant; it matters for mono and for overlays. Treating the render
    list as the ledger would be a category error.
@@ -105,10 +105,10 @@ branch `main` — note that `master` 404s, the repository's default branch chang
    its whole surface is `get_output`, `get_seat`, `set_default`, plus the
    `non_exclusive_area` and focus events. The fullscreen description's promise
    that "all `river_shell_surface_v1` objects above the top fullscreen window
-   will continue to be rendered" is about `river_shell_surface_v1`, which helm
-   creates itself and which *does* have `get_node`. helm's bar is a separate
+   will continue to be rendered" is about `river_shell_surface_v1`, which realm
+   creates itself and which *does* have `get_node`. realm's bar is a separate
    `wlr-layer-shell` client (ADR 0008), so it is not a `river_shell_surface_v1`
-   and helm cannot order it. **The only lever over bar-versus-fullscreen is the
+   and realm cannot order it. **The only lever over bar-versus-fullscreen is the
    layer the bar itself requests.**
 6. **`WinId` is not river's identifier.** Corrected in the table above.
 
@@ -123,7 +123,7 @@ proposed, positions cannot be finalised until those events have arrived.
 So the sequence is: mutate the ledger, project, send `propose_dimensions` in the
 manage phase, `manage_finish`, read the `dimensions` events, then finalise
 `set_position`, `place_*`, `set_borders`, `hide`/`show` in the render phase and
-`render_finish`. helm keeps all positioning in the render phase.
+`render_finish`. realm keeps all positioning in the render phase.
 
 **A caveat worth writing down, because the protocol contradicts itself here.**
 The `river_window_manager_v1` description — the only place that states the error
@@ -134,7 +134,7 @@ a render sequence", and that it is "a protocol error to modify rendering state
 render sequence, see the `river_window_manager_v1` description", deferring to
 the looser rule by explicit cross-reference. On the plain reading of the
 normative sentence, `set_position` during a manage sequence is **permitted**,
-not a `sequence_order` error. helm keeps positions in the render phase anyway,
+not a `sequence_order` error. realm keeps positions in the render phase anyway,
 which is correct under either reading — but the reason `apply()` straddles both
 phases is the data dependency above, not a prohibition.
 
@@ -142,8 +142,8 @@ phases is the data dependency above, not a prohibition.
 
 `river_xkb_binding_v1` sends `pressed`, `released` and `stop_repeat`. The
 existence of `stop_repeat` establishes that if a bound key should repeat an
-action, **helm** repeats it; river does not. That is a second timer in
-`helm-session` and a real exception to ADR 0009's no-timers rule, so it is
+action, **realm** repeats it; river does not. That is a second timer in
+`realm-session` and a real exception to ADR 0009's no-timers rule, so it is
 scoped as narrowly as it can be:
 
 - Armed only on `pressed`, for bindings explicitly marked repeatable.
@@ -160,7 +160,7 @@ modifier state would therefore run forever.
 
 `propose_dimensions` explicitly says the window "may not take the exact
 dimensions proposed", giving a terminal quantising to its cell size as the
-example. helm's central invariant is that projected rectangles cover the
+example. realm's central invariant is that projected rectangles cover the
 workarea exactly, with no cracks
 (`layout::tests::every_layout_tiles_exactly_for_every_plausible_size`). A
 terminal that rounds down leaves the void showing, which is the first pitfall in
@@ -168,7 +168,7 @@ terminal that rounds down leaves the void showing, which is the first pitfall in
 
 This is not a river problem; it is true of every compositor, and niri had it
 too. river gives us a tool niri did not: `set_content_clip_box` clips content to
-a box, with borders drawn around the intersection. So helm can propose at or
+a box, with borders drawn around the intersection. So realm can propose at or
 above the tile and clip to the exact projected rect, keeping the seams where the
 projection put them. Whether a terminal with a clipped last row reads acceptably
 is an empirical question for M2.
@@ -178,8 +178,8 @@ is an empirical question for M2.
 | Option | Why it was attractive | Why it lost |
 |---|---|---|
 | **Stay on niri** (ADR 0002's decision) | Maturity and packaging, and both are real. niri is a settled, widely used compositor, packaged in the distros we target, with a stable release history; river 0.4.0 is days-old by comparison. Staying costs nothing new, keeps `NiriBackend` work already scoped, and avoids vendoring a compositor. The niri approximation may also have been good enough: most of what a user touches in a week is orbits, focus and fullscreen, all of which mapped well | It cannot express the product. Triptych is the reference desktop; on niri it is not achievable, and stow and undo were lossy. ADR 0002 had to open two `needs-human` questions about which compromise to ship. river makes all of them disappear rather than choosing between them. The owner weighed maturity against fidelity explicitly and chose fidelity |
-| **Both backends behind `WmBackend`** | The seam already exists precisely for this; users on Ubuntu and Fedora could run helm on packaged niri today with no vendoring, while river users get the faithful desktop; it hedges the bet on a very new release | Two window models to keep correct, and they are not the same shape: one is a full window manager implementation, the other a projection onto someone else's model with known gaps. Every layout change would need testing twice, and the niri path would permanently produce a different desktop. It also doubles the surface at the point in the project with the least capacity to test it. The owner rejected this explicitly |
-| **Pull `helm-compositor` (Smithay) forward** | No external dependency, no vendoring, no protocol to track, and it is the stated destination anyway. If we are writing a window manager regardless, writing the compositor around it is a smaller step than it was | Still twelve months of plumbing that river already provides: DRM, input, XWayland, session lock, screencopy, fractional scaling. river's split means we get to write the *interesting* half now and defer the rest. Rejected explicitly for the same reason as in ADR 0002: it violates the MVP cut line |
+| **Both backends behind `WmBackend`** | The seam already exists precisely for this; users on Ubuntu and Fedora could run realm on packaged niri today with no vendoring, while river users get the faithful desktop; it hedges the bet on a very new release | Two window models to keep correct, and they are not the same shape: one is a full window manager implementation, the other a projection onto someone else's model with known gaps. Every layout change would need testing twice, and the niri path would permanently produce a different desktop. It also doubles the surface at the point in the project with the least capacity to test it. The owner rejected this explicitly |
+| **Pull `realm-compositor` (Smithay) forward** | No external dependency, no vendoring, no protocol to track, and it is the stated destination anyway. If we are writing a window manager regardless, writing the compositor around it is a smaller step than it was | Still twelve months of plumbing that river already provides: DRM, input, XWayland, session lock, screencopy, fractional scaling. river's split means we get to write the *interesting* half now and defer the rest. Rejected explicitly for the same reason as in ADR 0002: it violates the MVP cut line |
 
 ## Consequences
 
@@ -191,7 +191,7 @@ is an empirical question for M2.
 - Compositor-drawn borders mean the 1px seams are real rather than approximated
   inside each window.
 - The chord model has protocol support built for it. `ensure_next_key_eaten`
-  and `ate_unbound_key` are the submap mechanism helm would otherwise have had
+  and `ate_unbound_key` are the submap mechanism realm would otherwise have had
   to fake.
 - Writing a real window manager against a documented protocol is directly
   transferable work: it is most of what `NativeBackend` will need at M5.
@@ -200,12 +200,12 @@ is an empirical question for M2.
 
 - **A stall is now a session failure, not a slow frame.** The protocol has an
   `unresponsive` error, and `modifiers_update` warns that "the capacity of the
-  compositor to buffer incoming input events is finite". `helm-session` sits on
+  compositor to buffer incoming input events is finite". `realm-session` sits on
   the compositor's input path with a hard liveness requirement. Nothing in it
   may block: not a theme apply, not a socket write to a wedged subscriber, not a
-  slow `helm ctl` client. This sharpens ADR 0003's single-point-of-failure and
+  slow `realm ctl` client. This sharpens ADR 0003's single-point-of-failure and
   ADR 0009's budgets from performance goals into correctness requirements.
-- If `helm-session` dies, river has **no** window management at all. Under niri
+- If `realm-session` dies, river has **no** window management at all. Under niri
   a dead session left a usable compositor; here it leaves windows unmanaged.
   Restart policy stops being hygiene and becomes essential.
 - Vendoring a compositor is a real packaging burden: a pinned Zig build in the
@@ -222,7 +222,7 @@ is an empirical question for M2.
 ### Neutral
 
 - `session_locked` / `session_unlocked` events arrive on the window manager,
-  which gives helm a hook to restrict bindings while locked. This is useful to
+  which gives realm a hook to restrict bindings while locked. This is useful to
   ADR 0011's lock-screen question but does not settle it.
 - Only one window-management client may connect; river sends `unavailable`
   otherwise. Fine for a session that owns the machine.
@@ -231,7 +231,7 @@ is an empirical question for M2.
 
 ## Reversal
 
-**Back to niri:** medium, and it gets more expensive over time. `helm-session`
+**Back to niri:** medium, and it gets more expensive over time. `realm-session`
 would revert from being a window manager to being a client of one, which is a
 different architecture rather than a different module. ADR 0002's mapping table
 is preserved precisely so that this path stays documented. Estimated two to
@@ -239,7 +239,7 @@ three weeks, and the result is the lossy desktop 0002 described.
 
 **Forward to Smithay:** unchanged, and cheaper than before. The window
 management logic written against river is the logic `NativeBackend` needs; what
-`helm-compositor` adds is the plumbing river currently provides. Writing a
+`realm-compositor` adds is the plumbing river currently provides. Writing a
 window manager first is a strictly better position than ADR 0002 left us in.
 
 Signals to reconsider: river breaking the protocol despite the pledge below;
@@ -251,17 +251,17 @@ gapless tiling.
 
 - *Planned (M2):* the seam guard, updated from ADR 0002 — a CI grep asserting
   that `river` appears nowhere in the workspace outside
-  `crates/helm-session/src/backend/`, `packaging/` and `docs/`. `niri` must now
+  `crates/realm-session/src/backend/`, `packaging/` and `docs/`. `niri` must now
   appear nowhere outside `docs/`.
 - *Planned (M2):* a headless-river integration test driving a scripted sequence
   of ledger mutations and asserting the resulting positions and dimensions
   equal `layout::project`'s output exactly. This makes
   `layout::tests::triptych_matches_the_reference_desktop` an end-to-end
   assertion rather than a unit one.
-- *Planned (M2):* a protocol-version test asserting the interface versions helm
+- *Planned (M2):* a protocol-version test asserting the interface versions realm
   binds against are those of the pinned river, so a vendored bump that moves
   them fails the build rather than the session.
-- *Planned (M2):* a liveness test asserting `helm-session` completes a
+- *Planned (M2):* a liveness test asserting `realm-session` completes a
   `manage`/`render` round trip within budget while a subscriber is deliberately
   wedged, guarding the `unresponsive` failure above.
 - *Planned (M2):* a quantisation test tiling a cell-quantising terminal and
@@ -276,7 +276,7 @@ gapless tiling.
 ## Needs a human
 
 **The protocol's stability classification — and the brief was wrong about it.**
-helm was asked to record `river-window-management-v1` as "registry-classified
+realm was asked to record `river-window-management-v1` as "registry-classified
 unstable, against which the maintainer pledges not to break window managers",
 and to cite both without picking. Checking the sources, those are not two live
 positions:
@@ -304,7 +304,7 @@ reputational trust in a single maintainer, not a formal instability marker.
 2. **Pin and fork on break.** Same, but commit in advance to forking river at
    the last good version if the protocol moves under us. Expensive insurance
    in a language we do not otherwise use.
-3. **Accelerate `helm-compositor`.** Treat river as explicitly temporary and
+3. **Accelerate `realm-compositor`.** Treat river as explicitly temporary and
    fund M5 sooner, so a break is an inconvenience rather than a crisis.
 
 **Recommendation: option 1, with option 3 as the standing mitigation.** The
