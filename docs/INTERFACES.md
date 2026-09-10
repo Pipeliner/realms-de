@@ -63,8 +63,13 @@ pub trait WmBackend: Send {
 
     /// Apply a complete projection when it changed or a prior apply failed.
     ///
-    /// Implementations must be idempotent: submitting the same placements
-    /// twice must not produce a visible change or a second frame.
+    /// While no error intervenes, implementations must be idempotent:
+    /// submitting the same placements twice does not produce a visible change
+    /// or a second frame. Before returning an error, an implementation
+    /// invalidates every projection, diff, per-window and request cache. The
+    /// next call must issue the complete requested projection even when it
+    /// equals the last successful projection. Only success restores cache
+    /// validity.
     fn apply(&mut self, placements: &[Placement]) -> BackendResult<()>;
 
     /// Give a window keyboard focus.
