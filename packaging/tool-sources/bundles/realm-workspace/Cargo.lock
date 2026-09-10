@@ -205,49 +205,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
-name = "helm-agent-sdd"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "tempfile",
- "toml",
-]
-
-[[package]]
-name = "helm-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror",
- "toml",
-]
-
-[[package]]
-name = "helm-ctl"
-version = "0.1.0"
-dependencies = [
- "clap",
- "helm-core",
- "helm-theme",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "helm-theme"
-version = "0.1.0"
-dependencies = [
- "getrandom",
- "helm-core",
- "rustix",
- "sha2",
- "tempfile",
- "thiserror",
-]
-
-[[package]]
 name = "indexmap"
 version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -322,6 +279,49 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "realm-agent-sdd"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "realm-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
+name = "realm-ctl"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "realm-core",
+ "realm-theme",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "realm-theme"
+version = "0.1.0"
+dependencies = [
+ "getrandom",
+ "realm-core",
+ "rustix",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
 
 [[package]]
 name = "rustix"

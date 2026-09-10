@@ -6,10 +6,12 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 
 RETIRED = bytes((104, 101, 108, 109))
+WORKSPACE_ARCHIVE = Path("packaging/tool-sources/bundles/realm-workspace/source.tar.gz")
 
 
 def tracked_paths() -> list[bytes]:
@@ -27,6 +29,20 @@ def content(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def archive_failures(archive: Path) -> list[str]:
+    failures: list[str] = []
+    with tarfile.open(archive, mode="r:gz") as contents:
+        for member in contents.getmembers():
+            if RETIRED in os.fsencode(member.name).lower():
+                failures.append(f"retired namespace in archive path: {member.name}")
+            if not member.isfile():
+                continue
+            source = contents.extractfile(member)
+            if source is not None and RETIRED in source.read().lower():
+                failures.append(f"retired namespace in archive content: {member.name}")
+    return failures
+
+
 def main() -> int:
     failures: list[str] = []
     for raw_path in tracked_paths():
@@ -35,6 +51,9 @@ def main() -> int:
             failures.append(f"retired namespace in path: {path}")
         if RETIRED in content(path).lower():
             failures.append(f"retired namespace in content: {path}")
+
+    if WORKSPACE_ARCHIVE in [Path(os.fsdecode(path)) for path in tracked_paths()]:
+        failures.extend(archive_failures(WORKSPACE_ARCHIVE))
 
     if failures:
         print("project namespace check failed", file=sys.stderr)

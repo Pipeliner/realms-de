@@ -1,26 +1,25 @@
-# Helm workspace source and closure provenance
+# Realm workspace source and closure provenance
 
-This retained bundle is the source authority for Helm workspace Cargo builds
+This retained bundle is the source authority for Realm workspace Cargo builds
 required by SPEC 0024.  It was created by controlled intake, not by a native
 package recipe.
 
 ## Bound source
 
 - Repository: `https://github.com/pipeliner/realms-de`
-- Commit: `368af1e7bc0e61b5c04d14d9233f1690afcf564d`
-- Commit timestamp: `2026-09-09T19:30:56Z` (`1788982256`)
+- Commit: `e9ccdb200e051c44dc525c046aa29c7615441215`
+- Commit timestamp: `2026-09-10T16:16:44Z` (`1789057004`)
 - Workspace version: `0.1.0`
 - Canonical archive: `source.tar.gz`
 - Canonical archive SHA-256:
-  `b3abfd5c38aecb1ea7254a5552f3c289759c12affe2ffad9782e63dfbb32db47`
+  `184f927b0d60f61c42d768b8ac8fbf0b6b525a889b4492cef9f7364aa0fa94c6`
 
-The intake cloned a clean checkout, detached it at the bound commit, confirmed
-that `HEAD` equalled that commit and that the checkout had no status output,
-then ran one `git archive --format=tar.gz --prefix=helm-workspace/` command at
-that commit, excluding `packaging/tool-sources/bundles/` so the authority
-cannot recursively contain any independent retained source or dependency
-closure. The resulting archive is retained as the canonical source input; the
-working checkout is neither an input nor a substitute for the archive.
+The archive was generated directly from the exact bound Git commit with
+`git archive --format=tar.gz --prefix=realm-workspace/`, excluding
+`packaging/tool-sources/bundles/` so the authority cannot recursively contain
+an independent retained source or dependency closure. Git supplied every
+archived byte from that immutable commit object; working-tree bytes were not an
+input. The resulting archive is retained as the canonical source input.
 
 ## Dependency closure
 
