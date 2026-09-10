@@ -459,6 +459,28 @@ session derives `RealmState`, encodes it, or writes a byte to any subscriber.
 This is the single rule that makes a wedged `realmctl` unable to wedge the
 desktop.
 
+**Transactional desired state.** The session stages user-requested ledger and
+window-metadata changes, projects the staged ledger, and commits them only after
+a required `WmBackend::apply` succeeds. An application error leaves the
+authoritative ledger, last-successful-projection cache, visible `RealmState`,
+and revision unchanged. Externally observed lifecycle and workarea facts are
+different: they have already happened in the compositor, so an application
+error must not roll them back. They remain recorded, leave the projection dirty
+for retry or restart recovery, and the error is returned to the outer loop.
+SPEC 0007's socket loop separately guarantees that a rejected desired operation
+does not produce a state frame.
+
+`BackendEvent::GeometryDrifted` is advisory and does not itself bypass
+projection deduplication. The ledger and last-successful-projection cache remain
+unchanged; the next genuine ledger or workarea projection supersedes the drift.
+The backend that reports drift must therefore invalidate its own per-window
+request cache so that applying that next changed projection restores every
+affected field.
+
+Until the companion layer-shell focus policy is attached, the generic reducer
+returns focus events as deferred work. A valid focus event is never converted
+into a backend failure and never mutates the ledger speculatively.
+
 ### 5. The dimension-proposal problem
 
 `propose_dimensions` is a proposal: "The window may not take the exact
@@ -693,11 +715,11 @@ Each row is one happy path and becomes one test.
 | A14c | Given every accepted connection state and frame error class, when input is read, then the response, drain deadline, and close/continue result match SPEC 0007's total table without affecting another peer | `control_socket::tests::protocol_state_machine_is_total` |
 | A14d | Given a matching Hello followed by `Subscribe`, when the session accepts it, then it sends an immediate `Event::State`; later input and all queue/write limits follow SPEC 0007 | `control_socket::tests::subscribe_requires_matching_hello_and_emits_snapshot` |
 | A14e | Given 64 admitted peers, a 65th peer, oversized/unterminated input, excess pipeline, a stalled subscriber, or a stalled ordinary client, when a limit/deadline is reached, then only the affected peer is closed and the event loop remains live | `control_socket::tests::connection_and_queue_limits_preserve_admitted_peers`, `control_socket::tests::all_write_classes_have_bounded_nonblocking_drain`, `control_socket::tests::stalled_peer_preserves_key_path` |
-| A15 | Given an idle session, when the clock module's tick changes the clock text, then exactly one `Event::State` is broadcast and no `manage_dirty` and no other river request is made | |
-| A16 | Given a module that recomputes to the text it already had, when derivation runs, then `revision` does not increment and no `Event::State` is sent | |
+| A15 | Given an idle session, when the clock module's tick changes the clock text, then exactly one `Event::State` is broadcast and no `manage_dirty` and no other river request is made | `session::tests::module_change_emits_once_without_backend_apply` covers the in-process state effect; socket coverage remains SPEC 0007 |
+| A16 | Given a module that recomputes to the text it already had, when derivation runs, then `revision` does not increment and no `Event::State` is sent | `session::tests::module_change_emits_once_without_backend_apply` |
 | A17 | Given a client that quantises its dimensions down to a multiple of a 9×18 cell, when a triptych of three such clients is applied, then after at most one corrective `propose_dimensions` per window each `set_content_clip_box` equals that window's projected rect and the clip boxes tile the workarea exactly | |
 | A18 | Given a successfully persisted ledger snapshot holding three windows across two orbits, their `BackendWindowId` mappings, and a next-`WinId` watermark, when the session is killed, all three identities replay, and the first manage sequence after restart completes, then each window is back in its snapshotted orbit and ledger position, focus is restored, a newly reported identity receives the persisted next id rather than a reused id, immediate Undo is a no-op, and the first full `RealmState` has the ledger-derived fields from the snapshot, revision 1, `Mode::Nav`, empty chord/module state, and the default which-key state | |
-| A19 | Given a backend operation whose required capability is listed as unsupported, when the operation is invoked, then it returns `BackendError::Unsupported` carrying that exact capability name and produces no frame | |
+| A19 | Given a backend advertises a capability name as unsupported and rejects a staged desired ledger projection with `BackendError::Unsupported` carrying that name, when the update is attempted, then the staged ledger and projection are not committed and the visible state and revision remain unchanged | `session::tests::unsupported_apply_rolls_back_and_emits_no_state`; socket-frame coverage remains SPEC 0007 |
 
 ## Budgets
 
