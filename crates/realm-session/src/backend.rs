@@ -91,11 +91,14 @@ pub trait WmBackend: Send {
 
     /// Bind a stable backend identity to Realm's allocated window id.
     ///
-    /// The session calls this once for each [`BackendEvent::WindowOpened`]
-    /// before the window appears in another backend operation.
+    /// This operation is idempotent and error-atomic. Repeating the same pair
+    /// after success is a no-op; an error leaves no binding installed, so the
+    /// session can retry it before reading another backend event. A conflicting
+    /// pair is an error. The binding must succeed before the window appears in
+    /// another backend operation.
     fn assign_window(&mut self, backend_id: &BackendWindowId, win: WinId) -> BackendResult<()>;
 
-    /// Apply the complete visible projection.
+    /// Apply the complete visible projection when it changed or a prior apply failed.
     ///
     /// Implementations are idempotent: submitting identical placements twice
     /// produces no visible change and no second frame.
