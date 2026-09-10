@@ -653,11 +653,16 @@ connection states, malformed frames, queues, replies, deadlines, and test
 seams. This section adds only the integration rule below; it must not be read
 as a second transport state machine.
 
-**Requests.** A mutating `Request` is applied to the `Ledger` by calling the
-corresponding `realm-core` method, after which the session makes `manage_dirty`
-and answers `Response::Ok` **immediately** — `Ok` means "the ledger changed",
-not "the frame is on screen". Coupling the reply to the compositor round trip
-would put a `realmctl` client on the input path, which §4 forbids.
+**Requests.** A mutating `Request` is validated and staged as one typed desired
+operation, after which the session makes `manage_dirty`. The connection retains
+that single decoded request and reads no second request, as required by SPEC
+0007. When the compositor grants the manage/render sequence, the session runs
+§9's transaction. Only backend success commits the ledger and queues
+`Response::Ok`; a backend error rejects the candidate and queues
+`Response::Error`. `Ok` therefore means "the ledger changed", not merely "the
+request was accepted". Waiting to queue this nonblocking response does not put
+the client on the input path: the event loop continues serving backend and key
+events, and no socket write precedes `manage_finish`.
 `Request::ShowLedger` answers `Response::Ledger(Vec<OrbitLedger>)` built from
 the ledger plus the per-window `app_id` and `title` last reported by river (both
 nullable in the protocol *(verified)*, rendered as empty strings).
@@ -728,14 +733,19 @@ second would multiply its own input latency for a clock.
 
 ### 9. Typed desired-action reducer
 
-The compositor-independent session core exposes one typed operation for each
-ledger action needed by the M2 keymap and control surface:
+The compositor-independent session core exposes one typed execution operation
+for each ledger action needed by the M2 keymap and staged control requests:
 `focus_step(Dir)`, `swap(Dir)`, `move_focused_to_orbit(OrbitId)`,
 `toggle_stow()`, `toggle_fullscreen()`, `undo()`, `switch_orbit(OrbitId)`, and
 `set_layout(Layout)`. It does not expose a generic ledger closure or mutable
 ledger access. Mode changes and process-level actions such as spawn, launcher,
 grimoire, theme reload, and quit remain outside this reducer because they have
 different compositor or process-lifecycle contracts.
+
+These operations are the compositor-sequence execution boundary, not the
+socket-decoding or acknowledgement boundary. Section 7 stages at most the one
+request already admitted by SPEC 0007 and invokes the corresponding operation
+only when the backend can complete its transaction.
 
 Every typed ledger operation uses the same transaction boundary: clone the
 authoritative ledger, invoke exactly the corresponding `Ledger` method, derive
@@ -752,6 +762,12 @@ focused window it is a no-op. Otherwise it asks the backend to close exactly
 that `WinId` and leaves the ledger, projection, visible state, and revision
 unchanged whether the request succeeds or fails. Only the later observed
 `BackendEvent::WindowClosed` removes the window.
+
+An observed `WindowOpened` or `WindowClosed` is a hard undo-history boundary
+under SPEC 0001. Clearing history on a window-set change is required before
+`undo()` can be exposed: Undo may alter desired ordering, focus, stow, layout,
+fullscreen, or active orbit, but it may never remove a currently observed
+window or restore a closed one.
 
 `toggle_whichkey()` toggles only `RealmState::whichkey`, increments the
 revision once, and emits that state without a backend apply or a locally
@@ -792,10 +808,11 @@ Each row is one happy path and becomes one test.
 | A21 | Given a newly observed backend window identity and an error-atomic transient `assign_window` failure, when the event is handled and the outer loop retries before reading another backend event, then the ledger, metadata, stable mapping, and advanced non-reuse watermark survive the error, no state is published before binding succeeds, and retry binds the same `WinId` before applying and publishing it | `session::tests::failed_identity_binding_preserves_observed_window_for_retry` |
 | A22 | Given two tiled windows, when `focus_step(Dir::Prev)` succeeds, then the focused id and title change, the revision advances once, and exactly one complete candidate projection is submitted; if that submission fails, the candidate ledger and state are rejected and the next repair submits the complete prior authoritative projection | `session::tests::focus_step_commits_one_projection_and_one_visible_state`, `session::tests::failed_focus_step_rejects_the_candidate_and_repairs_authoritative_state` |
 | A23 | Given two tiled windows, when `swap(Dir::Prev)` succeeds, then their ledger order and focus change with exactly one projection submission; with fewer than two windows it submits no projection and emits no state | `session::tests::swap_changes_order_once_and_is_a_no_op_with_one_window` |
-| A24 | Given any typed ledger operation in §9, when its candidate projection fails, then no candidate ledger, visible state, or revision is committed, and retry repairs the complete prior authoritative projection; a failed `undo()` does not consume history | `session::tests::failed_undo_does_not_consume_history`; A19 and A22 exercise the shared transaction boundary through other typed operations |
+| A24 | Given any typed ledger operation in §9, when its candidate projection fails, then no candidate ledger, visible state, or revision is committed, and retry repairs the complete prior authoritative projection; a failed `undo()` does not consume history, and observed window lifecycle prevents Undo from changing the live window set | `session::tests::failed_undo_does_not_consume_history`, `session::tests::undo_never_removes_an_open_window_or_restores_a_closed_window`; A19 and A22 exercise the shared transaction boundary through other typed operations |
 | A25 | Given a focused window, when `request_close_focused()` succeeds or fails, then it targets exactly that id and does not mutate the ledger, projection, visible state, or revision; the window is removed only when `WindowClosed` is observed | `session::tests::close_request_waits_for_the_observed_close_before_mutating_state` |
 | A26 | Given no focused window, when `request_close_focused()` runs, then it makes no backend request and returns no target | `session::tests::close_request_is_a_no_op_without_a_focused_window` |
 | A27 | Given a stable session, when `toggle_whichkey()` runs, then `whichkey` and the revision change once with no backend apply; only a later observed `WorkareaChanged` may re-project windows | `session::tests::whichkey_toggle_only_emits_state_until_workarea_is_observed` |
+| A28 | Given a staged mutating socket request, when its backend transaction has not completed, then no ordinary reply is queued and the connection reads no second request; backend success commits and queues `Response::Ok`, while backend failure rejects the candidate and queues `Response::Error`, without blocking the event loop or writing before `manage_finish` | Socket adapter coverage belongs to #41 |
 
 ## Budgets
 

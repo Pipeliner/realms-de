@@ -969,6 +969,13 @@ mod tests {
         }
         let revision = session.state().revision;
         let attempts = session.backend.apply_attempts.len();
+        let mut candidate = session.ledger().clone();
+        candidate.focus_step(Dir::Prev);
+        let expected = project(
+            candidate.active_orbit(),
+            Workarea::new(1920, 1080, 32, 26),
+            TriptychParams::default(),
+        );
 
         let update = session.focus_step(Dir::Prev).unwrap();
 
@@ -978,6 +985,7 @@ mod tests {
         assert!(update.projection_applied);
         assert_eq!(update.state.unwrap().focused_title, "one");
         assert_eq!(session.backend.apply_attempts.len(), attempts + 1);
+        assert_eq!(session.backend.apply_attempts.last().unwrap(), &expected);
     }
 
     #[test]
@@ -992,6 +1000,13 @@ mod tests {
         let state = session.state().clone();
         let authoritative = session.last_projection().to_vec();
         let attempts = session.backend.apply_attempts.len();
+        let mut candidate = session.ledger().clone();
+        candidate.focus_step(Dir::Prev);
+        let expected_candidate = project(
+            candidate.active_orbit(),
+            Workarea::new(1920, 1080, 32, 26),
+            TriptychParams::default(),
+        );
         session.backend.fail_next_apply = Some(BackendError::Io {
             message: "partial focus apply".to_owned(),
         });
@@ -1001,6 +1016,7 @@ mod tests {
         assert_eq!(session.ledger(), &ledger);
         assert_eq!(session.state(), &state);
         assert_eq!(session.last_projection(), authoritative);
+        assert_eq!(session.backend.apply_attempts[attempts], expected_candidate);
         let repair = session.retry_pending_projection().unwrap();
         assert!(repair.projection_applied);
         assert!(repair.state.is_none());
@@ -1021,6 +1037,13 @@ mod tests {
         }
         let revision = session.state().revision;
         let attempts = session.backend.apply_attempts.len();
+        let mut candidate = session.ledger().clone();
+        candidate.swap(Dir::Prev);
+        let expected = project(
+            candidate.active_orbit(),
+            Workarea::new(1920, 1080, 32, 26),
+            TriptychParams::default(),
+        );
 
         let update = session.swap(Dir::Prev).unwrap();
 
@@ -1033,6 +1056,7 @@ mod tests {
         assert!(update.state.is_none());
         assert_eq!(session.state().revision, revision);
         assert_eq!(session.backend.apply_attempts.len(), attempts + 1);
+        assert_eq!(session.backend.apply_attempts.last().unwrap(), &expected);
 
         let mut singleton = Session::connect(FakeBackend::new()).unwrap();
         singleton
@@ -1115,6 +1139,44 @@ mod tests {
         let retry = session.undo().unwrap();
         assert!(retry.projection_applied);
         assert_eq!(session.ledger().active_orbit().layout, Layout::Triptych);
+    }
+
+    #[test]
+    fn undo_never_removes_an_open_window_or_restores_a_closed_window() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        for (id, title) in [("r1", "one"), ("r2", "two")] {
+            session
+                .handle_backend_event(window_opened(id, title))
+                .unwrap();
+        }
+        session.swap(Dir::Prev).unwrap();
+        session
+            .handle_backend_event(window_opened("r3", "three"))
+            .unwrap();
+        let attempts_after_open = session.backend.apply_attempts.len();
+
+        let after_open_undo = session.undo().unwrap();
+
+        assert!(!after_open_undo.projection_applied);
+        assert!(after_open_undo.state.is_none());
+        assert_eq!(session.ledger().len(), 3);
+        assert!(session.window_metadata(WinId(2)).is_some());
+        assert_eq!(session.backend.apply_attempts.len(), attempts_after_open);
+
+        session.swap(Dir::Next).unwrap();
+        session
+            .handle_backend_event(BackendEvent::WindowClosed(WinId(1)))
+            .unwrap();
+        let attempts_after_close = session.backend.apply_attempts.len();
+
+        let after_close_undo = session.undo().unwrap();
+
+        assert!(!after_close_undo.projection_applied);
+        assert!(after_close_undo.state.is_none());
+        assert_eq!(session.ledger().orbit_of(WinId(1)), None);
+        assert!(session.window_metadata(WinId(1)).is_none());
+        assert_eq!(session.window_id(&BackendWindowId("r2".to_owned())), None);
+        assert_eq!(session.backend.apply_attempts.len(), attempts_after_close);
     }
 
     #[test]

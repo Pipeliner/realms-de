@@ -226,8 +226,9 @@ impl Ledger {
 
     // ---- mutations -------------------------------------------------------
     //
-    // Every mutation checkpoints first, so `undo()` restores the state as it
-    // was before the *last* user-visible change.
+    // Desired mutations checkpoint first, so `undo()` restores the state as
+    // it was before the last user action. Observed window lifecycle instead
+    // clears history because old snapshots contain the wrong window set.
 
     fn checkpoint(&mut self) {
         self.history.push(Snapshot {
@@ -248,7 +249,7 @@ impl Ledger {
         if self.orbit_of(win).is_some() {
             return;
         }
-        self.checkpoint();
+        self.discard_undo_history();
         let o = &mut self.orbits[orbit.index()];
         let at = o.focus.map(|i| i + 1).unwrap_or(0).min(o.windows.len());
         o.windows.insert(at, win);
@@ -260,7 +261,7 @@ impl Ledger {
         let Some(orbit) = self.orbit_of(win) else {
             return false;
         };
-        self.checkpoint();
+        self.discard_undo_history();
         let o = &mut self.orbits[orbit.index()];
         let Some(at) = o.windows.iter().position(|w| *w == win) else {
             return false;
@@ -291,7 +292,7 @@ impl Ledger {
     pub fn focus_step(&mut self, dir: Dir) {
         let o = &mut self.orbits[self.active.index()];
         let n = o.windows.len();
-        if n == 0 {
+        if n < 2 {
             return;
         }
         self.checkpoint();
@@ -425,6 +426,12 @@ impl Ledger {
         true
     }
 
+    /// Drop undo and redo snapshots after an observed window-set change.
+    pub fn discard_undo_history(&mut self) {
+        self.history.clear();
+        self.redo.clear();
+    }
+
     /// How many undo steps are available.
     pub fn undo_depth(&self) -> usize {
         self.history.len()
@@ -550,9 +557,9 @@ mod tests {
 
     #[test]
     fn undo_history_is_bounded() {
-        let mut l = Ledger::new();
-        for i in 0..(HISTORY_DEPTH as u64 * 3) {
-            l.summon(WinId(i), OrbitId::default());
+        let mut l = ledger_with(2);
+        for _ in 0..(HISTORY_DEPTH * 3) {
+            l.focus_step(Dir::Next);
         }
         assert_eq!(l.undo_depth(), HISTORY_DEPTH);
     }
@@ -573,5 +580,39 @@ mod tests {
         l.switch_orbit(l.active());
         l.set_layout(l.active_orbit().layout);
         assert_eq!(l.undo_depth(), depth);
+    }
+
+    #[test]
+    fn window_lifecycle_is_a_hard_undo_boundary() {
+        let mut l = ledger_with(2);
+        assert!(l.swap(Dir::Prev));
+        assert_eq!(l.undo_depth(), 1);
+
+        l.summon(WinId(2), OrbitId::default());
+
+        assert_eq!(l.undo_depth(), 0);
+        assert!(!l.undo());
+        assert_eq!(l.len(), 3);
+        assert_eq!(l.orbit_of(WinId(2)), Some(OrbitId::default()));
+
+        assert!(l.swap(Dir::Next));
+        assert!(l.undo());
+        assert!(l.banish(WinId(0)));
+
+        assert_eq!(l.undo_depth(), 0);
+        assert!(!l.undo());
+        assert!(!l.redo());
+        assert_eq!(l.orbit_of(WinId(0)), None);
+    }
+
+    #[test]
+    fn singleton_focus_step_does_not_checkpoint() {
+        let mut l = ledger_with(1);
+
+        l.focus_step(Dir::Next);
+
+        assert_eq!(l.focused(), Some(WinId(0)));
+        assert_eq!(l.undo_depth(), 0);
+        assert!(!l.undo());
     }
 }
