@@ -41,6 +41,17 @@ done
 
 helper_gh_count=$(grep -c -E '^[[:space:]]*(exec[[:space:]]+)?gh[[:space:]]' "$helper" || true)
 [ "$helper_gh_count" -eq 5 ] || fail 'helper has an unapproved GitHub CLI invocation'
+helper_gh_token_count=$(awk '
+    {
+        line = $0
+        while (match(line, /(^|[^[:alnum:]_])gh([^[:alnum:]_]|$)/)) {
+            count++
+            line = substr(line, RSTART + RLENGTH)
+        }
+    }
+    END { print count + 0 }
+' "$helper")
+[ "$helper_gh_token_count" -eq 5 ] || fail 'helper has a non-allowlisted GitHub CLI token'
 if grep -n -E '(^|[[:space:];])eval[[:space:]]|<<' "$helper" >/dev/null ||
     awk '{ if (sub(/\\$/, "")) { printf "%s", $0 } else { printf "%s ", $0 } }' "$helper" |
         grep -q -E '\$\([^(]' ||

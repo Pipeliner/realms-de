@@ -44,6 +44,24 @@ printf '%s%s\n' 'g' 'h api repos/{owner}/{repo}' >>"$bare_gh_fixture/scripts/gh-
 git -C "$bare_gh_fixture" add scripts/gh-body-file
 expect_fail "$bare_gh_fixture"
 
+conditional_gh_fixture=$tmp/conditional-gh-repository
+make_fixture "$conditional_gh_fixture"
+printf '%s%s\n' 'if g' 'h api repos/{owner}/{repo}; then :; fi' >>"$conditional_gh_fixture/scripts/gh-body-file"
+git -C "$conditional_gh_fixture" add scripts/gh-body-file
+expect_fail "$conditional_gh_fixture"
+
+command_gh_fixture=$tmp/command-gh-repository
+make_fixture "$command_gh_fixture"
+printf '%s%s\n' 'command g' 'h api repos/{owner}/{repo}' >>"$command_gh_fixture/scripts/gh-body-file"
+git -C "$command_gh_fixture" add scripts/gh-body-file
+expect_fail "$command_gh_fixture"
+
+env_gh_fixture=$tmp/env-gh-repository
+make_fixture "$env_gh_fixture"
+printf '%s%s\n' 'env g' 'h api repos/{owner}/{repo}' >>"$env_gh_fixture/scripts/gh-body-file"
+git -C "$env_gh_fixture" add scripts/gh-body-file
+expect_fail "$env_gh_fixture"
+
 printf '%s\n' 'unsafe=$''(id)' >>"$fixture/scripts/gh-body-file"
 git -C "$fixture" add scripts/gh-body-file
 expect_fail "$fixture"
