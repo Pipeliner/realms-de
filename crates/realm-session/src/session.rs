@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use realm_core::ipc::Capabilities;
 use realm_core::layout::{project, Layout, Placement, TriptychParams, Workarea};
+use realm_core::ledger::Dir;
 use realm_core::state::{Module, OrbitCell, OrbitDisplay, RealmState};
 use realm_core::{Ledger, OrbitId, WinId};
 
@@ -131,6 +132,68 @@ impl<B: WmBackend> Session<B> {
     /// Change the active orbit's layout transactionally.
     pub fn set_layout(&mut self, layout: Layout) -> BackendResult<SessionUpdate> {
         self.stage_ledger_update(|ledger| ledger.set_layout(layout))
+    }
+
+    /// Move focus by one ledger position transactionally.
+    pub fn focus_step(&mut self, direction: Dir) -> BackendResult<SessionUpdate> {
+        self.stage_ledger_update(|ledger| ledger.focus_step(direction))
+    }
+
+    /// Swap the focused window with its neighbour transactionally.
+    pub fn swap(&mut self, direction: Dir) -> BackendResult<SessionUpdate> {
+        self.stage_ledger_update(|ledger| {
+            ledger.swap(direction);
+        })
+    }
+
+    /// Move the focused window to another orbit transactionally.
+    pub fn move_focused_to_orbit(&mut self, orbit: OrbitId) -> BackendResult<SessionUpdate> {
+        self.stage_ledger_update(|ledger| {
+            ledger.move_to_orbit(orbit);
+        })
+    }
+
+    /// Toggle the focused window's stowed state transactionally.
+    pub fn toggle_stow(&mut self) -> BackendResult<SessionUpdate> {
+        self.stage_ledger_update(|ledger| {
+            ledger.toggle_stow();
+        })
+    }
+
+    /// Toggle fullscreen for the focused window transactionally.
+    pub fn toggle_fullscreen(&mut self) -> BackendResult<SessionUpdate> {
+        self.stage_ledger_update(|ledger| {
+            ledger.toggle_fullscreen();
+        })
+    }
+
+    /// Restore the previous ledger state transactionally.
+    pub fn undo(&mut self) -> BackendResult<SessionUpdate> {
+        self.stage_ledger_update(|ledger| {
+            ledger.undo();
+        })
+    }
+
+    /// Ask the focused window to close without changing authoritative state.
+    pub fn request_close_focused(&mut self) -> BackendResult<Option<WinId>> {
+        let Some(win) = self.ledger.focused() else {
+            return Ok(None);
+        };
+        self.backend.close(win)?;
+        Ok(Some(win))
+    }
+
+    /// Toggle the visible which-key strip without applying a projection.
+    pub fn toggle_whichkey(&mut self) -> SessionUpdate {
+        let mut changed = self.state.clone();
+        changed.revision = changed.revision.saturating_add(1);
+        changed.whichkey = !changed.whichkey;
+        self.state = changed.clone();
+        SessionUpdate {
+            projection_applied: false,
+            state: Some(changed),
+            deferred: None,
+        }
     }
 
     fn stage_ledger_update(
@@ -367,6 +430,7 @@ mod tests {
 
     use realm_core::ipc::Capabilities;
     use realm_core::layout::{project, Layout, Placement, Rect, TriptychParams, Workarea};
+    use realm_core::ledger::Dir;
     use realm_core::state::Module;
     use realm_core::{OrbitId, WinId};
 
@@ -385,7 +449,8 @@ mod tests {
         assignment_attempts: Vec<(BackendWindowId, WinId)>,
         bound_windows: BTreeMap<BackendWindowId, WinId>,
         focus_calls: usize,
-        close_calls: usize,
+        close_attempts: Vec<WinId>,
+        fail_next_close: Option<BackendError>,
         next_event_calls: usize,
     }
 
@@ -409,7 +474,8 @@ mod tests {
                 assignment_attempts: Vec::new(),
                 bound_windows: BTreeMap::new(),
                 focus_calls: 0,
-                close_calls: 0,
+                close_attempts: Vec::new(),
+                fail_next_close: None,
                 next_event_calls: 0,
             }
         }
@@ -456,8 +522,11 @@ mod tests {
             Ok(())
         }
 
-        fn close(&mut self, _win: WinId) -> BackendResult<()> {
-            self.close_calls += 1;
+        fn close(&mut self, win: WinId) -> BackendResult<()> {
+            self.close_attempts.push(win);
+            if let Some(error) = self.fail_next_close.take() {
+                return Err(error);
+            }
             Ok(())
         }
 
@@ -655,7 +724,7 @@ mod tests {
         assert_eq!(session.state().revision, 1);
         assert!(session.backend.apply_attempts.is_empty());
         assert_eq!(session.backend.focus_calls, 0);
-        assert_eq!(session.backend.close_calls, 0);
+        assert!(session.backend.close_attempts.is_empty());
         assert_eq!(session.backend.next_event_calls, 0);
     }
 
@@ -888,5 +957,293 @@ mod tests {
             assert!(!update.projection_applied);
             assert!(update.state.is_none());
         }
+    }
+
+    #[test]
+    fn focus_step_commits_one_projection_and_one_visible_state() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        for (id, title) in [("r1", "one"), ("r2", "two")] {
+            session
+                .handle_backend_event(window_opened(id, title))
+                .unwrap();
+        }
+        let revision = session.state().revision;
+        let attempts = session.backend.apply_attempts.len();
+        let mut candidate = session.ledger().clone();
+        candidate.focus_step(Dir::Prev);
+        let expected = project(
+            candidate.active_orbit(),
+            Workarea::new(1920, 1080, 32, 26),
+            TriptychParams::default(),
+        );
+
+        let update = session.focus_step(Dir::Prev).unwrap();
+
+        assert_eq!(session.ledger().focused(), Some(WinId(0)));
+        assert_eq!(session.state().focused_title, "one");
+        assert_eq!(session.state().revision, revision + 1);
+        assert!(update.projection_applied);
+        assert_eq!(update.state.unwrap().focused_title, "one");
+        assert_eq!(session.backend.apply_attempts.len(), attempts + 1);
+        assert_eq!(session.backend.apply_attempts.last().unwrap(), &expected);
+    }
+
+    #[test]
+    fn failed_focus_step_rejects_the_candidate_and_repairs_authoritative_state() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        for (id, title) in [("r1", "one"), ("r2", "two")] {
+            session
+                .handle_backend_event(window_opened(id, title))
+                .unwrap();
+        }
+        let ledger = session.ledger().clone();
+        let state = session.state().clone();
+        let authoritative = session.last_projection().to_vec();
+        let attempts = session.backend.apply_attempts.len();
+        let mut candidate = session.ledger().clone();
+        candidate.focus_step(Dir::Prev);
+        let expected_candidate = project(
+            candidate.active_orbit(),
+            Workarea::new(1920, 1080, 32, 26),
+            TriptychParams::default(),
+        );
+        session.backend.fail_next_apply = Some(BackendError::Io {
+            message: "partial focus apply".to_owned(),
+        });
+
+        session.focus_step(Dir::Prev).unwrap_err();
+
+        assert_eq!(session.ledger(), &ledger);
+        assert_eq!(session.state(), &state);
+        assert_eq!(session.last_projection(), authoritative);
+        assert_eq!(session.backend.apply_attempts[attempts], expected_candidate);
+        let repair = session.retry_pending_projection().unwrap();
+        assert!(repair.projection_applied);
+        assert!(repair.state.is_none());
+        assert_eq!(session.backend.apply_attempts.len(), attempts + 2);
+        assert_eq!(
+            session.backend.apply_attempts.last().unwrap(),
+            &authoritative
+        );
+    }
+
+    #[test]
+    fn swap_changes_order_once_and_is_a_no_op_with_one_window() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        for (id, title) in [("r1", "one"), ("r2", "two")] {
+            session
+                .handle_backend_event(window_opened(id, title))
+                .unwrap();
+        }
+        let revision = session.state().revision;
+        let attempts = session.backend.apply_attempts.len();
+        let mut candidate = session.ledger().clone();
+        candidate.swap(Dir::Prev);
+        let expected = project(
+            candidate.active_orbit(),
+            Workarea::new(1920, 1080, 32, 26),
+            TriptychParams::default(),
+        );
+
+        let update = session.swap(Dir::Prev).unwrap();
+
+        assert_eq!(
+            session.ledger().active_orbit().windows,
+            [WinId(1), WinId(0)]
+        );
+        assert_eq!(session.ledger().focused(), Some(WinId(1)));
+        assert!(update.projection_applied);
+        assert!(update.state.is_none());
+        assert_eq!(session.state().revision, revision);
+        assert_eq!(session.backend.apply_attempts.len(), attempts + 1);
+        assert_eq!(session.backend.apply_attempts.last().unwrap(), &expected);
+
+        let mut singleton = Session::connect(FakeBackend::new()).unwrap();
+        singleton
+            .handle_backend_event(window_opened("r1", "one"))
+            .unwrap();
+        let attempts = singleton.backend.apply_attempts.len();
+        let revision = singleton.state().revision;
+
+        let unchanged = singleton.swap(Dir::Next).unwrap();
+
+        assert!(!unchanged.projection_applied);
+        assert!(unchanged.state.is_none());
+        assert_eq!(singleton.backend.apply_attempts.len(), attempts);
+        assert_eq!(singleton.state().revision, revision);
+    }
+
+    #[test]
+    fn typed_ledger_actions_delegate_to_the_ledger_contract() {
+        let second = OrbitId::from_human(2).unwrap();
+
+        let mut moved = Session::connect(FakeBackend::new()).unwrap();
+        moved
+            .handle_backend_event(window_opened("r1", "one"))
+            .unwrap();
+        moved.move_focused_to_orbit(second).unwrap();
+        assert!(moved.ledger().active_orbit().windows.is_empty());
+        assert_eq!(moved.ledger().orbit(second).windows, [WinId(0)]);
+
+        let mut stowed = Session::connect(FakeBackend::new()).unwrap();
+        stowed
+            .handle_backend_event(window_opened("r1", "one"))
+            .unwrap();
+        stowed.toggle_stow().unwrap();
+        assert_eq!(stowed.ledger().active_orbit().stowed, [WinId(0)]);
+        assert!(stowed.last_projection().is_empty());
+
+        let mut fullscreen = Session::connect(FakeBackend::new()).unwrap();
+        fullscreen
+            .handle_backend_event(window_opened("r1", "one"))
+            .unwrap();
+        fullscreen.toggle_fullscreen().unwrap();
+        assert_eq!(
+            fullscreen.ledger().active_orbit().fullscreen,
+            Some(WinId(0))
+        );
+        assert_eq!(
+            fullscreen.last_projection()[0].rect,
+            Workarea::new(1920, 1080, 32, 26).output
+        );
+
+        let mut switched = Session::connect(FakeBackend::new()).unwrap();
+        switched.switch_orbit(second).unwrap();
+        assert_eq!(switched.ledger().active(), second);
+
+        let mut laid_out = Session::connect(FakeBackend::new()).unwrap();
+        laid_out.set_layout(Layout::Mono).unwrap();
+        assert_eq!(laid_out.ledger().active_orbit().layout, Layout::Mono);
+    }
+
+    #[test]
+    fn failed_undo_does_not_consume_history() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        session
+            .handle_backend_event(window_opened("r1", "one"))
+            .unwrap();
+        session
+            .handle_backend_event(window_opened("r2", "two"))
+            .unwrap();
+        session.set_layout(Layout::Mono).unwrap();
+        let ledger = session.ledger().clone();
+        let state = session.state().clone();
+        session.backend.fail_next_apply = Some(BackendError::Io {
+            message: "partial undo apply".to_owned(),
+        });
+
+        session.undo().unwrap_err();
+
+        assert_eq!(session.ledger(), &ledger);
+        assert_eq!(session.state(), &state);
+        let retry = session.undo().unwrap();
+        assert!(retry.projection_applied);
+        assert_eq!(session.ledger().active_orbit().layout, Layout::Triptych);
+    }
+
+    #[test]
+    fn undo_never_removes_an_open_window_or_restores_a_closed_window() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        for (id, title) in [("r1", "one"), ("r2", "two")] {
+            session
+                .handle_backend_event(window_opened(id, title))
+                .unwrap();
+        }
+        session.swap(Dir::Prev).unwrap();
+        session
+            .handle_backend_event(window_opened("r3", "three"))
+            .unwrap();
+        let attempts_after_open = session.backend.apply_attempts.len();
+
+        let after_open_undo = session.undo().unwrap();
+
+        assert!(!after_open_undo.projection_applied);
+        assert!(after_open_undo.state.is_none());
+        assert_eq!(session.ledger().len(), 3);
+        assert!(session.window_metadata(WinId(2)).is_some());
+        assert_eq!(session.backend.apply_attempts.len(), attempts_after_open);
+
+        session.swap(Dir::Next).unwrap();
+        session
+            .handle_backend_event(BackendEvent::WindowClosed(WinId(1)))
+            .unwrap();
+        let attempts_after_close = session.backend.apply_attempts.len();
+
+        let after_close_undo = session.undo().unwrap();
+
+        assert!(!after_close_undo.projection_applied);
+        assert!(after_close_undo.state.is_none());
+        assert_eq!(session.ledger().orbit_of(WinId(1)), None);
+        assert!(session.window_metadata(WinId(1)).is_none());
+        assert_eq!(session.window_id(&BackendWindowId("r2".to_owned())), None);
+        assert_eq!(session.backend.apply_attempts.len(), attempts_after_close);
+    }
+
+    #[test]
+    fn close_request_waits_for_the_observed_close_before_mutating_state() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        session
+            .handle_backend_event(window_opened("r1", "one"))
+            .unwrap();
+        let ledger = session.ledger().clone();
+        let state = session.state().clone();
+        let projection = session.last_projection().to_vec();
+
+        assert_eq!(session.request_close_focused().unwrap(), Some(WinId(0)));
+        assert_eq!(session.backend.close_attempts, [WinId(0)]);
+        assert_eq!(session.ledger(), &ledger);
+        assert_eq!(session.state(), &state);
+        assert_eq!(session.last_projection(), projection);
+
+        session.backend.fail_next_close = Some(BackendError::Io {
+            message: "close request failed".to_owned(),
+        });
+        session.request_close_focused().unwrap_err();
+        assert_eq!(session.backend.close_attempts, [WinId(0), WinId(0)]);
+        assert_eq!(session.ledger(), &ledger);
+        assert_eq!(session.state(), &state);
+        assert_eq!(session.last_projection(), projection);
+
+        session
+            .handle_backend_event(BackendEvent::WindowClosed(WinId(0)))
+            .unwrap();
+        assert!(session.ledger().is_empty());
+    }
+
+    #[test]
+    fn close_request_is_a_no_op_without_a_focused_window() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+
+        assert_eq!(session.request_close_focused().unwrap(), None);
+        assert!(session.backend.close_attempts.is_empty());
+        assert_eq!(session.state().revision, 0);
+        assert!(session.backend.apply_attempts.is_empty());
+    }
+
+    #[test]
+    fn whichkey_toggle_only_emits_state_until_workarea_is_observed() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        session
+            .handle_backend_event(window_opened("r1", "one"))
+            .unwrap();
+        let attempts = session.backend.apply_attempts.len();
+        let revision = session.state().revision;
+
+        let update = session.toggle_whichkey();
+
+        assert!(!update.projection_applied);
+        assert!(!update.state.as_ref().unwrap().whichkey);
+        assert_eq!(session.state().revision, revision + 1);
+        assert_eq!(session.backend.apply_attempts.len(), attempts);
+
+        let changed = Workarea {
+            output: Rect::new(0, 0, 2560, 1440),
+            tiles: Rect::new(0, 64, 2560, 1324),
+        };
+        let workarea_update = session
+            .handle_backend_event(BackendEvent::WorkareaChanged(changed))
+            .unwrap();
+        assert!(workarea_update.projection_applied);
+        assert_eq!(session.backend.apply_attempts.len(), attempts + 1);
     }
 }

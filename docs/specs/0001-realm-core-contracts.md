@@ -1,6 +1,6 @@
 # SPEC 0001 — realm-core contracts
 
-- **Status:** Implemented (2026-08-26)
+- **Status:** Accepted (2026-09-10)
 - **Milestone:** M0
 - **Decisions:** [ADR 0001](../adr/0001-ledger-as-single-source-of-truth.md),
   [ADR 0004](../adr/0004-ndjson-control-socket.md),
@@ -42,14 +42,23 @@ template expansion to `realm-theme`, and process spawning to `realm-ctl`.
 ### Ledger
 
 Six orbits, each an ordered `Vec<WinId>` with an optional focus index, a stow
-list, a layout and an optional fullscreen window. Every mutation checkpoints the
-whole state first, bounded to `HISTORY_DEPTH` (64) snapshots, so undo restores an
-earlier ledger exactly rather than replaying inverse operations.
+list, a layout and an optional fullscreen window. Every desired mutation
+checkpoints the whole state first, bounded to `HISTORY_DEPTH` (64) snapshots,
+so undo restores an earlier desired ledger exactly rather than replaying
+inverse operations.
+
+Observed window lifecycle is not undoable. A successful `summon` or `banish`
+changes the current window set without creating a checkpoint and clears both
+undo and redo history. This is a deliberate MVP history boundary: retaining an
+older snapshot across an observed open could make Undo remove a live window,
+while retaining one across an observed close could resurrect a nonexistent
+`WinId`. The current ledger, every historical snapshot, session metadata, and
+backend identity map must never disagree about which windows exist.
 
 `summon` inserts **after the focused window**, not at the end: opening a terminal
 beside the current one is what muscle memory expects. Mutations that change
-nothing (switching to the orbit already shown, setting the layout already set)
-do not consume undo depth.
+nothing (switching to the orbit already shown, setting the layout already set,
+or stepping focus in a singleton orbit) do not consume undo depth.
 
 ### Layout projection
 
@@ -87,7 +96,9 @@ inventory with a documented ASCII fallback.
 |---|---|---|
 | A1 | Summoning a window while another is focused places it immediately after the focused one | `ledger::tests::summon_inserts_after_focus_not_at_the_end` |
 | A2 | Swapping carries focus with the moved window | `ledger::tests::swap_carries_focus_with_the_window` |
-| A3 | Undo restores the exact previous ledger, and history stays bounded | `ledger::tests::undo_restores_the_exact_previous_ledger`, `::undo_history_is_bounded` |
+| A3 | Undo restores the exact previous desired ledger, and history stays bounded | `ledger::tests::undo_restores_the_exact_previous_ledger`, `::undo_history_is_bounded` |
+| A3a | An observed summon or banish clears undo and redo without allowing Undo to remove a live window or restore a closed one | `ledger::tests::window_lifecycle_is_a_hard_undo_boundary` |
+| A3b | Stepping focus in a singleton orbit is a no-op and consumes no undo depth | `ledger::tests::singleton_focus_step_does_not_checkpoint` |
 | A4 | Stowing removes a window from the projection but not from the ledger | `ledger::tests::stow_removes_from_projection_but_not_from_the_ledger` |
 | A5 | The triptych reproduces the reference desktop's geometry at 1920×1080 | `layout::tests::triptych_matches_the_reference_desktop` |
 | A6 | Every layout tiles the workarea exactly at every plausible size and window count | `layout::tests::every_layout_tiles_exactly_for_every_plausible_size` |
