@@ -134,6 +134,15 @@ impl RealmDir {
     pub fn as_fd(&self) -> BorrowedFd<'_> {
         self.fd.as_fd()
     }
+
+    pub(crate) fn retained_euid(&self) -> u32 {
+        self.euid
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_retained_euid_for_test(&mut self, euid: u32) {
+        self.euid = euid;
+    }
 }
 
 fn resolve_runtime(path: &Path) -> Result<RuntimeDir, IpcPathError> {

@@ -9,7 +9,6 @@ use rustix::fs::{
 use rustix::io::{fcntl_getfd, Errno, FdFlags};
 use rustix::net::sockopt::socket_error;
 use rustix::net::{connect, socket_with, AddressFamily, SocketAddrUnix, SocketFlags, SocketType};
-use rustix::process::geteuid;
 
 use crate::sys::CONTROL_SOCKET;
 use crate::{IpcPathError, RealmDir};
@@ -105,12 +104,17 @@ impl SocketEndpoint {
     where
         F: FnOnce(),
     {
-        let endpoint_lock = EndpointLock::acquire(&self.realm_dir)?;
-        self.reclaim_stale_entry(before_recheck)?;
+        let retained_euid = self.realm_dir.retained_euid();
+        let endpoint_lock = EndpointLock::acquire(&self.realm_dir, retained_euid)?;
+        self.reclaim_stale_entry(retained_euid, before_recheck)?;
         Ok(endpoint_lock)
     }
 
-    fn reclaim_stale_entry<F>(&self, before_recheck: F) -> Result<(), IpcPathError>
+    fn reclaim_stale_entry<F>(
+        &self,
+        retained_euid: u32,
+        before_recheck: F,
+    ) -> Result<(), IpcPathError>
     where
         F: FnOnce(),
     {
@@ -123,7 +127,7 @@ impl SocketEndpoint {
             Err(Errno::NOENT) => return Ok(()),
             Err(error) => return Err(IpcPathError::from(error)),
         };
-        let initial_identity = validate_socket_stat(&initial_stat, geteuid().as_raw())?;
+        let initial_identity = validate_socket_stat(&initial_stat, retained_euid)?;
 
         if probe_stale(&self.bind_address)? != ProbeDecision::Stale {
             return Err(IpcPathError::EndpointInUse);
@@ -136,7 +140,7 @@ impl SocketEndpoint {
             AtFlags::SYMLINK_NOFOLLOW,
         )
         .map_err(IpcPathError::from)?;
-        let current_identity = match validate_socket_stat(&current_stat, geteuid().as_raw()) {
+        let current_identity = match validate_socket_stat(&current_stat, retained_euid) {
             Ok(identity) => identity,
             Err(_) => return Err(IpcPathError::EndpointInUse),
         };
@@ -147,10 +151,23 @@ impl SocketEndpoint {
         unlinkat(self.realm_dir.as_fd(), CONTROL_SOCKET, AtFlags::empty())
             .map_err(IpcPathError::from)
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_retained_euid_for_test(&mut self, euid: u32) {
+        self.realm_dir.set_retained_euid_for_test(euid);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn validate_socket_stat_for_test(
+        &self,
+        stat: &Stat,
+    ) -> Result<SocketIdentity, IpcPathError> {
+        validate_socket_stat(stat, self.realm_dir.retained_euid())
+    }
 }
 
 impl EndpointLock {
-    fn acquire(realm_dir: &RealmDir) -> Result<Self, IpcPathError> {
+    fn acquire(realm_dir: &RealmDir, retained_euid: u32) -> Result<Self, IpcPathError> {
         let fd = openat2(
             realm_dir.as_fd(),
             ".",
@@ -162,7 +179,7 @@ impl EndpointLock {
         let expected = fstat(realm_dir.as_fd()).map_err(IpcPathError::from)?;
         let actual = fstat(fd.as_fd()).map_err(IpcPathError::from)?;
         let flags = fcntl_getfd(fd.as_fd()).map_err(IpcPathError::from)?;
-        validate_lock_stat(&expected, &actual, geteuid().as_raw(), flags)?;
+        validate_lock_stat(&expected, &actual, retained_euid, flags)?;
 
         match flock(fd.as_fd(), FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => Ok(Self { fd }),

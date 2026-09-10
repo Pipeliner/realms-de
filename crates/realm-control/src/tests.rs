@@ -842,3 +842,37 @@ fn stale_reclaim_rechecks_identity_before_unlink() {
     let replacement_identity = path_identity(&socket_path);
     assert_ne!(replacement_identity, stale_identity);
 }
+
+/// Catches a regression where endpoint validation resamples the ambient euid
+/// instead of using the authority retained by `RealmDir` at resolution time.
+#[test]
+fn endpoint_validation_uses_retained_realm_euid() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    let mut endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let _listener = bind_control_listener(&socket_path, 0o600);
+    let before = path_identity(&socket_path);
+    let socket_stat = statat(
+        endpoint.realm_dir().as_fd(),
+        "ctl.sock",
+        AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .unwrap();
+    let retained_euid = geteuid().as_raw().wrapping_add(1);
+    endpoint.set_retained_euid_for_test(retained_euid);
+
+    assert_eq!(endpoint.realm_dir().retained_euid(), retained_euid);
+    assert!(matches!(
+        endpoint.validate_socket_stat_for_test(&socket_stat),
+        Err(IpcPathError::UnsafeSocketEntry)
+    ));
+    assert!(matches!(
+        result_error(endpoint.acquire_lock_and_reclaim()),
+        IpcPathError::UnsafeRealmDirectory
+    ));
+    assert_eq!(path_identity(&socket_path), before);
+}
