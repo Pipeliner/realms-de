@@ -300,6 +300,11 @@ step 3 and in the workarea note above. One further correction:
 > focused-window border and `RealmState::focused_title`; on `focus_none`, return
 > focus to `Ledger::focused()`.
 
+The compositor seam preserves that distinction: ordinary effective window
+focus is `BackendEvent::FocusChanged`, while layer-shell exclusivity is
+`BackendEvent::ExclusiveFocusChanged`. A generic session must not infer one
+from `FocusChanged(None)`.
+
 **`river-xkb-bindings-v1` — the keymap does not exist until this is served.**
 No `river_xkb_binding_v1` object means no keybinding fires at all; the desktop
 is a mouse-only tiler.
@@ -521,7 +526,10 @@ would restore.
 > printable ASCII bytes" *(verified)*. They are different types. `realm-session`
 > therefore maintains a bijection and allocates `WinId`s from a monotonic
 > counter whose next value is persisted and never reused within or across a
-> session. The
+> session. `BackendEvent::WindowOpened` carries the compositor's stable
+> `BackendWindowId`, not a guessed `WinId`; realm restores or allocates the
+> numeric id and calls `WmBackend::assign_window` before the window can appear
+> in another backend request. The
 > *non-reuse property* ADR 0013 relies on is real and does carry over — but it
 > comes from realm's counter, backed by river's guarantee that the identifier it
 > is keyed on never repeats *(verified: "The identifier must not be reused. This
@@ -558,6 +566,10 @@ against what river reports:
 deterministic given a deterministic report order.
 `ledger::tests::summoning_a_known_window_twice_is_ignored` means the reconcile
 pass is safe to run more than once.
+After reconciliation, realm explicitly clears undo and redo history before it
+publishes state. Deserialisation starts with empty history, but the removal and
+summon operations used to reconcile with live windows must not become actions a
+user can undo.
 
 **What a restart must *not* restore:** the input mode (reset to `Mode::Nav` — a
 restart with a dangling `ensure_next_key_eaten` in the compositor would eat the
@@ -644,8 +656,9 @@ compares it with the last broadcast one using `RealmState::renders_same_as`,
 which ignores `revision` by construction. If they render the same, **nothing
 happens**: no increment, no encode, no socket write, no wake-up for any
 subscriber. If they differ, `revision += 1` and one `Event::State` goes to every
-subscriber. So `revision` counts *visible* changes, monotonically and without
-reset, and `state::tests::revision_alone_does_not_force_a_redraw` describes the
+subscriber. So `revision` counts *visible* changes, monotonically within one
+daemon incarnation, and `state::tests::revision_alone_does_not_force_a_redraw`
+describes the
 bar's belt-and-braces check rather than the primary gate — the primary gate is
 here, one process upstream, where it also saves the serialisation and the
 syscall.
@@ -683,7 +696,7 @@ Each row is one happy path and becomes one test.
 | A15 | Given an idle session, when the clock module's tick changes the clock text, then exactly one `Event::State` is broadcast and no `manage_dirty` and no other river request is made | |
 | A16 | Given a module that recomputes to the text it already had, when derivation runs, then `revision` does not increment and no `Event::State` is sent | |
 | A17 | Given a client that quantises its dimensions down to a multiple of a 9×18 cell, when a triptych of three such clients is applied, then after at most one corrective `propose_dimensions` per window each `set_content_clip_box` equals that window's projected rect and the clip boxes tile the workarea exactly | |
-| A18 | Given a successfully persisted ledger snapshot holding three windows across two orbits and a next-`WinId` watermark, when the session is killed, all three windows survive, and the first manage sequence after restart completes, then each window is back in its snapshotted orbit and ledger position, focus is restored, the broadcast `RealmState` equals the snapshot apart from `revision`, and a newly reported window receives the persisted next id rather than a reused id | |
+| A18 | Given a successfully persisted ledger snapshot holding three windows across two orbits, their `BackendWindowId` mappings, and a next-`WinId` watermark, when the session is killed, all three identities replay, and the first manage sequence after restart completes, then each window is back in its snapshotted orbit and ledger position, focus is restored, a newly reported identity receives the persisted next id rather than a reused id, immediate Undo is a no-op, and the first full `RealmState` has the ledger-derived fields from the snapshot, revision 1, `Mode::Nav`, empty chord/module state, and the default which-key state | |
 | A19 | Given a backend operation whose required capability is listed as unsupported, when the operation is invoked, then it returns `BackendError::Unsupported` carrying that exact capability name and produces no frame | |
 
 ## Budgets

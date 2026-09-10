@@ -30,7 +30,9 @@ make_fixture() {
         "$fixture_root/packaging/fedora" \
         "$fixture_root/configs/portal" \
         "$fixture_root/configs/templates" \
-        "$fixture_root/crates/realm-theme/src"
+        "$fixture_root/crates/realm-theme/src" \
+        "$fixture_root/crates/realm-ctl/src" \
+        "$fixture_root/crates/realm-session/src"
     cp "$repo_root/README.md" "$fixture_root/README.md"
     cp "$repo_root/docs/ROADMAP.md" "$fixture_root/docs/ROADMAP.md"
     cp "$repo_root/.github/workflows/ci.yml" "$fixture_root/.github/workflows/ci.yml"
@@ -42,6 +44,11 @@ make_fixture() {
     : >"$fixture_root/crates/realm-theme/Cargo.toml"
     : >"$fixture_root/crates/realm-theme/src/lib.rs"
     printf '%s\n' '#[test]' >"$fixture_root/crates/realm-theme/src/theme.rs"
+    printf '%s\n' '[[bin]]' 'name = "realmctl"' >"$fixture_root/crates/realm-ctl/Cargo.toml"
+    printf '%s\n' 'enum ThemeCommand {}' >"$fixture_root/crates/realm-ctl/src/main.rs"
+    : >"$fixture_root/crates/realm-session/Cargo.toml"
+    : >"$fixture_root/crates/realm-session/src/lib.rs"
+    printf '%s\n' 'pub trait WmBackend {}' >"$fixture_root/crates/realm-session/src/backend.rs"
     : >"$fixture_root/packaging/nix/nixos-module.nix"
     : >"$fixture_root/packaging/debian/control"
     : >"$fixture_root/packaging/fedora/realm.spec"
@@ -179,10 +186,20 @@ sed 's/2026-08-30T06:18:36Z/2026-08-30T06:18:37Z/' "$fixture_root/README.md" \
 mv "$fixture_root/README.next" "$fixture_root/README.md"
 expect_fail changed-snapshot-timestamp "$fixture_root" 'README needs-human snapshot timestamp differs from the accepted snapshot'
 
-fixture_root=$(make_fixture implemented-wm-crate)
-mkdir -p "$fixture_root/crates/realm-session"
-: >"$fixture_root/crates/realm-session/Cargo.toml"
-expect_fail implemented-wm-crate "$fixture_root" 'README must not say realm-wm is absent after its implementation crate lands'
+fixture_root=$(make_fixture missing-wm-seam)
+rm "$fixture_root/crates/realm-session/src/backend.rs"
+expect_fail missing-wm-seam "$fixture_root" \
+    'README truth snapshot artifact is missing: crates/realm-session/src/backend.rs'
+
+fixture_root=$(make_fixture missing-realmctl)
+rm "$fixture_root/crates/realm-ctl/src/main.rs"
+expect_fail missing-realmctl "$fixture_root" \
+    'README truth snapshot artifact is missing: crates/realm-ctl/src/main.rs'
+
+fixture_root=$(make_fixture implemented-wm-binary)
+mkdir -p "$fixture_root/crates/realm-session/src/bin"
+: >"$fixture_root/crates/realm-session/src/bin/realm-wm.rs"
+expect_fail implemented-wm-binary "$fixture_root" 'README must not say realm-wm is absent after its binary lands'
 
 fixture_root=$(make_fixture missing-nix-module)
 rm "$fixture_root/packaging/nix/nixos-module.nix"

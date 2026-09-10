@@ -20,6 +20,9 @@ river's window manager; `NativeBackend` implements it in-process against
 ```rust
 pub type BackendResult<T> = std::result::Result<T, BackendError>;
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BackendWindowId(pub String);
+
 #[derive(Debug, thiserror::Error)]
 pub enum BackendError {
     #[error("backend cannot honour capability {capability}")]
@@ -44,6 +47,15 @@ pub trait WmBackend: Send {
 
     /// Connect, and report what the backend can actually honour.
     fn connect(&mut self) -> BackendResult<Capabilities>;
+
+    /// Bind a compositor-stable window identity to Realm's allocated id.
+    /// Called exactly once for each `WindowOpened` event before that window is
+    /// included in another backend operation.
+    fn assign_window(
+        &mut self,
+        backend_id: &BackendWindowId,
+        win: WinId,
+    ) -> BackendResult<()>;
 
     /// Apply a projection. Called only when the projection has changed.
     ///
@@ -89,10 +101,13 @@ pub struct Capabilities {
 
 /// Something the compositor did that the ledger needs to know about.
 pub enum BackendEvent {
-    WindowOpened { win: WinId, app_id: String, title: String },
+    WindowOpened { backend_id: BackendWindowId, app_id: String, title: String },
     WindowClosed(WinId),
     TitleChanged { win: WinId, title: String },
+    /// Effective keyboard focus among managed windows changed.
     FocusChanged(Option<WinId>),
+    /// A layer surface acquired or released exclusive keyboard focus.
+    ExclusiveFocusChanged(bool),
     WorkareaChanged(Workarea),
     /// The compositor moved a window itself. realm treats this as advisory: the
     /// ledger remains the truth and the next projection will overrule it.
@@ -117,7 +132,7 @@ backend is a translation rather than an approximation:
 | Focus | `river_seat_v1::focus_window` / `clear_focus` | Exact. Note `focus_exclusive` / `focus_non_exclusive` / `focus_none` are **events**, not requests: realm is told about exclusive focus, it does not grant it |
 | 1px seams | `set_borders`, drawn by the compositor | Exact |
 | Fullscreen | `fullscreen` / `exit_fullscreen` | Exact. Whether the bar draws over a fullscreen window is decided by the bar's chosen *layer*, not by node ordering: `river-layer-shell-v1` exposes no node and no ordering request at all |
-| Window identity | `river_window_v1` `identifier` (up to 32 printable ASCII bytes) | **Requires a mapping.** `WinId` is a `u64`, so realm-session holds a bijection and allocates ids from a monotonic counter keyed on river's identifier. The never-reused property survives, but via realm's counter rather than river's string |
+| Window identity | `river_window_v1` `identifier` (up to 32 printable ASCII bytes) | **Requires a mapping.** `WindowOpened` carries `BackendWindowId`; realm-session restores or allocates a `WinId`, then calls `assign_window` before using that window. The never-reused property comes from realm's persisted counter, keyed by river's never-reused string |
 | Workarea | `river_layer_shell_output_v1::non_exclusive_area` | Exact — arrives as an event. It is a free rectangle in global coordinates, *not* the `Workarea::new(w, h, top, bottom)` shape, so the backend converts |
 | Atomic relayout | the `manage` **and** `render` sequences, in that order | Exact, but it is **two** phases and realm must respect the boundary — see below |
 

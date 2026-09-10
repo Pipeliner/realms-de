@@ -17,6 +17,26 @@ use crate::state::RealmState;
 /// rather than misinterpreting fields.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Window-manager features a backend can honour exactly.
+///
+/// Capability names in [`Self::unsupported`] are stable user-facing identifiers
+/// shared by the session health response and `realmctl doctor`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Capabilities {
+    /// Whether the rendered rectangle exactly matches the projected rectangle.
+    pub exact_geometry: bool,
+    /// Whether the compositor draws Realm's window borders.
+    pub server_side_borders: bool,
+    /// Whether windows can remain managed while hidden and later be shown.
+    pub hide_show: bool,
+    /// Whether Realm can control rendering order directly.
+    pub explicit_ordering: bool,
+    /// Whether fullscreen can be requested and exited explicitly.
+    pub fullscreen: bool,
+    /// Stable names of Realm behaviours this backend cannot honour.
+    pub unsupported: Vec<String>,
+}
+
 /// Socket path: `$XDG_RUNTIME_DIR/realm/ctl.sock`, or a `/tmp` fallback.
 ///
 /// The fallback is per-uid so two users on one machine never collide.
@@ -223,5 +243,21 @@ mod tests {
     fn unknown_frames_are_an_error_not_a_panic() {
         assert!(decode::<Request>("{\"cmd\":\"detonate\"}").is_err());
         assert!(decode::<Request>("not json").is_err());
+    }
+
+    #[test]
+    fn backend_capabilities_are_an_owned_wire_type() {
+        let capabilities = Capabilities {
+            exact_geometry: true,
+            server_side_borders: true,
+            hide_show: true,
+            explicit_ordering: true,
+            fullscreen: true,
+            unsupported: vec!["unclipped-dimension-quantisation".to_owned()],
+        };
+
+        let frame = encode(&capabilities).unwrap();
+        let decoded: Capabilities = decode(&frame).unwrap();
+        assert_eq!(decoded, capabilities);
     }
 }

@@ -8,6 +8,7 @@ members = [
     "crates/realm-theme",
     "crates/realm-agent-sdd",
     "crates/realm-ctl",
+    "crates/realm-session",
 ]
 
 [workspace.package]

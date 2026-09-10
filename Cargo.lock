@@ -312,6 +312,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "realm-session"
+version = "0.1.0"
+dependencies = [
+ "realm-core",
+ "thiserror",
+]
+
+[[package]]
 name = "realm-theme"
 version = "0.1.0"
 dependencies = [
