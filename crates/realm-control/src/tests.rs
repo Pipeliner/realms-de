@@ -1,18 +1,119 @@
 use std::ffi::OsString;
 use std::fs;
-use std::os::unix::fs::{symlink, PermissionsExt};
-use std::path::Path;
+use std::os::fd::{BorrowedFd, OwnedFd};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use rustix::fs::{fstat, FileType, Mode};
+use rustix::fs::{fstat, openat2, FileType, Mode, OFlags, ResolveFlags, Stat, CWD};
 use rustix::io::Errno;
-use rustix::process::geteuid;
+use rustix::process::{geteuid, umask};
 
-use crate::{production_runtime_dir, test_runtime_dir, IpcPathError, RuntimeDir};
+use crate::{production_runtime_dir, test_runtime_dir, IpcPathError, RuntimeDir, SocketEndpoint};
 
 fn environment_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn umask_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct ProcessUmaskRestore {
+    original: Mode,
+}
+
+impl ProcessUmaskRestore {
+    fn replace(mask: u32) -> Self {
+        Self {
+            original: umask(Mode::from_raw_mode(mask)),
+        }
+    }
+}
+
+impl Drop for ProcessUmaskRestore {
+    fn drop(&mut self) {
+        umask(self.original);
+    }
+}
+
+fn current_umask() -> u32 {
+    let current = umask(Mode::empty());
+    umask(current);
+    current.bits()
+}
+
+#[derive(Clone)]
+enum BridgeOpen {
+    Requested,
+    ProcFdParent,
+    OtherDirectory(PathBuf),
+    Error(Errno),
+}
+
+#[derive(Clone, Copy)]
+enum BridgeStat {
+    Actual,
+    Error(Errno),
+    WrongDevice,
+    WrongInode,
+    WrongType,
+    WrongOwner,
+    WrongMode,
+}
+
+#[derive(Clone)]
+struct InjectedRuntimeBridge {
+    open: BridgeOpen,
+    stat: BridgeStat,
+}
+
+impl InjectedRuntimeBridge {
+    fn actual() -> Self {
+        Self {
+            open: BridgeOpen::Requested,
+            stat: BridgeStat::Actual,
+        }
+    }
+}
+
+impl crate::sys::RuntimeBridge for InjectedRuntimeBridge {
+    fn open(&self, requested: &Path) -> rustix::io::Result<OwnedFd> {
+        let path = match &self.open {
+            BridgeOpen::Requested => requested,
+            BridgeOpen::ProcFdParent => Path::new("/proc/self/fd"),
+            BridgeOpen::OtherDirectory(path) => path,
+            BridgeOpen::Error(error) => return Err(*error),
+        };
+        openat2(
+            CWD,
+            path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::empty(),
+        )
+    }
+
+    fn stat(&self, fd: BorrowedFd<'_>) -> rustix::io::Result<Stat> {
+        let mut stat = fstat(fd)?;
+        match self.stat {
+            BridgeStat::Actual => {}
+            BridgeStat::Error(error) => return Err(error),
+            BridgeStat::WrongDevice => stat.st_dev = stat.st_dev.wrapping_add(1),
+            BridgeStat::WrongInode => stat.st_ino = stat.st_ino.wrapping_add(1),
+            BridgeStat::WrongType => {
+                stat.st_mode = FileType::RegularFile.as_raw_mode() | 0o700;
+            }
+            BridgeStat::WrongOwner => stat.st_uid = stat.st_uid.wrapping_add(1),
+            BridgeStat::WrongMode => {
+                stat.st_mode = FileType::Directory.as_raw_mode() | 0o755;
+            }
+        }
+        Ok(stat)
+    }
 }
 
 struct EnvironmentRestore {
@@ -200,4 +301,251 @@ fn realm_directory_validation_is_descriptor_relative_and_exact() {
             Err(IpcPathError::UnsafeRealmDirectory)
         ));
     }
+}
+
+fn runtime_fixture() -> (tempfile::TempDir, PathBuf) {
+    let temporary = tempfile::tempdir().unwrap();
+    let runtime_path = temporary.path().join("runtime");
+    fs::create_dir(&runtime_path).unwrap();
+    set_mode(&runtime_path, 0o700);
+    (temporary, runtime_path)
+}
+
+fn endpoint_error(result: Result<SocketEndpoint, IpcPathError>) -> IpcPathError {
+    match result {
+        Err(error) => error,
+        Ok(_) => panic!("expected endpoint preparation to fail"),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct EntryFingerprint {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    bytes: Vec<u8>,
+}
+
+fn entry_fingerprint(path: &Path) -> EntryFingerprint {
+    let metadata = fs::symlink_metadata(path).unwrap();
+    EntryFingerprint {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        mode: metadata.mode(),
+        bytes: fs::read(path).unwrap(),
+    }
+}
+
+fn assert_preflight_failure_preserves_namespace(bridge: InjectedRuntimeBridge) {
+    let (_temporary, runtime_path) = runtime_fixture();
+    let runtime = test_runtime_dir(&runtime_path).unwrap();
+    endpoint_error(runtime.prepare_server_endpoint_with(&bridge, 108));
+    assert!(!runtime_path.join("realm").exists());
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let realm_path = runtime_path.join("realm");
+    fs::create_dir(&realm_path).unwrap();
+    set_mode(&realm_path, 0o700);
+    let socket_path = realm_path.join("ctl.sock");
+    fs::write(&socket_path, b"must remain untouched").unwrap();
+    set_mode(&socket_path, 0o600);
+    let before = entry_fingerprint(&socket_path);
+
+    let runtime = test_runtime_dir(&runtime_path).unwrap();
+    endpoint_error(runtime.prepare_server_endpoint_with(&bridge, 108));
+    assert_eq!(entry_fingerprint(&socket_path), before);
+}
+
+/// Catches a regression where endpoint preparation inherits a hostile umask,
+/// replaces or chmods an existing realm, or leaks its temporary umask.
+#[test]
+fn server_creates_realm_exactly_once_under_scoped_umask() {
+    let _lock = umask_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (temporary, runtime_path) = runtime_fixture();
+    let _restore = ProcessUmaskRestore::replace(0o777);
+
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let realm_path = runtime_path.join("realm");
+    let realm_metadata = fs::metadata(&realm_path).unwrap();
+    assert_eq!(realm_metadata.mode() & 0o777, 0o700);
+    assert_eq!(
+        endpoint.path(),
+        runtime_path.join("realm/ctl.sock").as_path()
+    );
+    assert_eq!(
+        Mode::from_raw_mode(fstat(endpoint.realm_dir().as_fd()).unwrap().st_mode).bits(),
+        0o700
+    );
+    assert_eq!(current_umask(), 0o777);
+    let original_realm_inode = realm_metadata.ino();
+    drop(endpoint);
+
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let realm_metadata = fs::metadata(&realm_path).unwrap();
+    assert_eq!(realm_metadata.ino(), original_realm_inode);
+    assert_eq!(realm_metadata.mode() & 0o777, 0o700);
+    assert_eq!(current_umask(), 0o777);
+    drop(endpoint);
+
+    set_mode(&realm_path, 0o755);
+    assert!(matches!(
+        endpoint_error(
+            test_runtime_dir(&runtime_path)
+                .unwrap()
+                .prepare_server_endpoint()
+        ),
+        IpcPathError::UnsafeRealmDirectory
+    ));
+    let realm_metadata = fs::metadata(&realm_path).unwrap();
+    assert_eq!(realm_metadata.ino(), original_realm_inode);
+    assert_eq!(realm_metadata.mode() & 0o777, 0o755);
+    assert_eq!(current_umask(), 0o777);
+
+    let unwind = std::panic::catch_unwind(|| {
+        let _scoped = crate::sys::ScopedUmask::new(Mode::from_raw_mode(0o077));
+        assert_eq!(current_umask(), 0o077);
+        panic!("intentional scoped-umask unwind");
+    });
+    assert!(unwind.is_err());
+    assert_eq!(current_umask(), 0o777);
+    drop(temporary);
+}
+
+/// Catches a regression where checking `/proc/self/fd` is mistaken for
+/// traversing and validating the bridge for the retained runtime descriptor.
+#[test]
+fn actual_runtime_procfd_bridge_is_verified_before_mutation() {
+    let _lock = umask_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint_with(&InjectedRuntimeBridge::actual(), 108)
+        .unwrap();
+    assert_eq!(
+        endpoint.path(),
+        runtime_path.join("realm/ctl.sock").as_path()
+    );
+    assert!(runtime_path.join("realm").is_dir());
+
+    assert_preflight_failure_preserves_namespace(InjectedRuntimeBridge {
+        open: BridgeOpen::ProcFdParent,
+        stat: BridgeStat::Actual,
+    });
+}
+
+/// Catches regressions that ignore bridge open/stat failures or omit any of
+/// the retained runtime identity, type, owner, and exact-mode comparisons.
+#[test]
+fn missing_inaccessible_or_mismatched_procfd_fails_before_mutation() {
+    let _lock = umask_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let other = tempfile::tempdir().unwrap();
+    set_mode(other.path(), 0o700);
+
+    for bridge in [
+        InjectedRuntimeBridge {
+            open: BridgeOpen::Error(Errno::NOENT),
+            stat: BridgeStat::Actual,
+        },
+        InjectedRuntimeBridge {
+            open: BridgeOpen::Error(Errno::ACCESS),
+            stat: BridgeStat::Actual,
+        },
+        InjectedRuntimeBridge {
+            open: BridgeOpen::OtherDirectory(other.path().to_path_buf()),
+            stat: BridgeStat::Actual,
+        },
+        InjectedRuntimeBridge {
+            open: BridgeOpen::Requested,
+            stat: BridgeStat::Error(Errno::IO),
+        },
+        InjectedRuntimeBridge {
+            open: BridgeOpen::Requested,
+            stat: BridgeStat::WrongDevice,
+        },
+        InjectedRuntimeBridge {
+            open: BridgeOpen::Requested,
+            stat: BridgeStat::WrongInode,
+        },
+        InjectedRuntimeBridge {
+            open: BridgeOpen::Requested,
+            stat: BridgeStat::WrongType,
+        },
+        InjectedRuntimeBridge {
+            open: BridgeOpen::Requested,
+            stat: BridgeStat::WrongOwner,
+        },
+        InjectedRuntimeBridge {
+            open: BridgeOpen::Requested,
+            stat: BridgeStat::WrongMode,
+        },
+    ] {
+        assert_preflight_failure_preserves_namespace(bridge);
+    }
+}
+
+/// Catches a regression where canonical, NUL-containing, or widest-fd procfd
+/// addresses are rejected only after `realm` has already been created.
+#[test]
+fn sockaddr_un_overflow_fails_before_mutation_without_fallback() {
+    let _lock = umask_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let temporary = tempfile::tempdir().unwrap();
+    let long_runtime = temporary.path().join("x".repeat(100));
+    fs::create_dir(&long_runtime).unwrap();
+    set_mode(&long_runtime, 0o700);
+    endpoint_error(
+        test_runtime_dir(&long_runtime)
+            .unwrap()
+            .prepare_server_endpoint(),
+    );
+    assert!(!long_runtime.join("realm").exists());
+
+    let short_runtime = tempfile::Builder::new()
+        .prefix("r")
+        .tempdir_in("/tmp")
+        .unwrap();
+    set_mode(short_runtime.path(), 0o700);
+    assert!(
+        short_runtime
+            .path()
+            .join("realm/ctl.sock")
+            .as_os_str()
+            .as_bytes()
+            .len()
+            < 33
+    );
+    endpoint_error(
+        test_runtime_dir(short_runtime.path())
+            .unwrap()
+            .prepare_server_endpoint_with(&InjectedRuntimeBridge::actual(), 33),
+    );
+    assert!(!short_runtime.path().join("realm").exists());
+
+    let (_temporary, actual_runtime) = runtime_fixture();
+    let nul_display = PathBuf::from(OsString::from_vec(b"/nul\0runtime".to_vec()));
+    let runtime = crate::runtime::resolve_runtime_with(&nul_display, |_| {
+        openat2(
+            CWD,
+            &actual_runtime,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
+        )
+    })
+    .unwrap();
+    endpoint_error(runtime.prepare_server_endpoint_with(&InjectedRuntimeBridge::actual(), 108));
+    assert!(!actual_runtime.join("realm").exists());
 }

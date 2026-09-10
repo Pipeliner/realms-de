@@ -1,11 +1,16 @@
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 
-use rustix::fs::{fstat, openat2, FileType, Mode, OFlags, ResolveFlags, CWD};
+use rustix::fs::{fstat, mkdirat, openat2, FileType, Mode, OFlags, ResolveFlags, Stat, CWD};
 use rustix::io::Errno;
 use rustix::process::geteuid;
 
-use crate::IpcPathError;
+use crate::sys::{
+    canonical_socket_path, procfd_socket_path, runtime_procfd_path, socket_addr_un,
+    validate_socket_path, ProcFdRuntimeBridge, RuntimeBridge, ScopedUmask, REALM_DIRECTORY,
+    SUN_PATH_CAPACITY,
+};
+use crate::{IpcPathError, SocketEndpoint};
 
 const REQUIRED_DIRECTORY_MODE: u32 = 0o700;
 const SECURE_RESOLUTION: ResolveFlags =
@@ -57,11 +62,59 @@ impl RuntimeDir {
         &self.path
     }
 
+    /// Prepares the fixed `realm/ctl.sock` server endpoint.
+    pub fn prepare_server_endpoint(self) -> Result<SocketEndpoint, IpcPathError> {
+        self.prepare_server_endpoint_with(&ProcFdRuntimeBridge, SUN_PATH_CAPACITY)
+    }
+
+    pub(crate) fn prepare_server_endpoint_with<B: RuntimeBridge>(
+        self,
+        bridge: &B,
+        sun_path_capacity: usize,
+    ) -> Result<SocketEndpoint, IpcPathError> {
+        let bridge_path = runtime_procfd_path(self.fd.as_raw_fd());
+        let bridge_fd = bridge.open(&bridge_path).map_err(IpcPathError::from)?;
+        let bridge_stat = bridge.stat(bridge_fd.as_fd()).map_err(IpcPathError::from)?;
+        self.validate_bridge(&bridge_stat)?;
+        drop(bridge_fd);
+
+        let display_path = canonical_socket_path(&self.path);
+        validate_socket_path(&display_path, sun_path_capacity)?;
+        validate_socket_path(&procfd_socket_path(RawFd::MAX), sun_path_capacity)?;
+
+        {
+            let _umask = ScopedUmask::new(Mode::from_raw_mode(0o077));
+            match mkdirat(self.fd.as_fd(), REALM_DIRECTORY, Mode::from_raw_mode(0o700)) {
+                Ok(()) | Err(Errno::EXIST) => {}
+                Err(error) => return Err(IpcPathError::from(error)),
+            }
+        }
+
+        let realm_dir = self.open_realm_dir()?;
+        let bind_path = procfd_socket_path(realm_dir.as_fd().as_raw_fd());
+        let bind_address = socket_addr_un(&bind_path)?;
+        Ok(SocketEndpoint::new(display_path, realm_dir, bind_address))
+    }
+
+    fn validate_bridge(&self, stat: &Stat) -> Result<(), IpcPathError> {
+        validate_directory(
+            FileType::from_raw_mode(stat.st_mode),
+            stat.st_uid,
+            Mode::from_raw_mode(stat.st_mode),
+            self.euid,
+            IpcPathError::UnsafeRuntimeDir,
+        )?;
+        if stat.st_dev != self.device || stat.st_ino != self.inode {
+            return Err(IpcPathError::UnsafeRuntimeDir);
+        }
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub(crate) fn open_realm_dir(&self) -> Result<RealmDir, IpcPathError> {
         let fd = openat2(
             self.fd.as_fd(),
-            "realm",
+            REALM_DIRECTORY,
             DIRECTORY_OPEN_FLAGS,
             Mode::empty(),
             SECURE_RESOLUTION,
