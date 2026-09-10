@@ -603,6 +603,34 @@ unallocated `WinId` watermark, the active orbit, and `PROTOCOL_VERSION` as a
 schema guard. A snapshot whose version does not match is discarded, not
 migrated.
 
+The closed `SessionSnapshotV1` DTO has exactly these fields: `schema_version`,
+`protocol_version`, `ledger`, `bindings`, `next_win_id`, and `active_orbit`.
+Snapshot schema version 1 is independent of the control-wire version.
+`bindings` is a `WinId`-sorted array of `{ win_id, backend_id }` records rather
+than a JSON object with numeric keys. Unknown, missing, duplicate, or
+out-of-order fields or bindings are malformed. Loading succeeds only when all
+of the following semantic checks pass:
+
+- the schema version is 1, the protocol version equals `PROTOCOL_VERSION`, and
+  `active_orbit` equals the ledger's active orbit;
+- the ledger contains exactly the six canonical orbit ids in order; every
+  `WinId` occurs in exactly one orbit; each focus index is in range or absent
+  exactly when that orbit is empty; each stowed id is a unique member of that
+  orbit; fullscreen is absent or names a member of that orbit; and orbit names
+  equal the six canonical names;
+- the bindings are a bijection covering exactly the ledger's windows, every
+  backend id is 1–32 printable ASCII bytes, and no backend id or `WinId` is
+  repeated; and
+- every allocated id is strictly below `next_win_id`. `u64::MAX` is the
+  exhausted watermark sentinel and is never itself allocated.
+
+An absent snapshot starts fresh. A version mismatch, malformed JSON, or a
+semantic validation failure is reported and starts fresh without using any
+part of the record; the next successful live-state write replaces it. Any
+snapshot read error other than `NotFound` is fatal rather than guessed around.
+The library slice owns the DTO, validation, and outcome classification. The
+worker/file adapter belongs to the event-loop binary slice.
+
 **Undo history does not survive a restart.** `Ledger`'s `history` and `redo`
 fields are `#[serde(skip)]` *(verified in `crates/realm-core/src/ledger.rs`)*, so
 a round trip through JSON restores window order, focus, stow lists, per-orbit
@@ -628,6 +656,55 @@ After reconciliation, realm explicitly clears undo and redo history before it
 publishes state. Deserialisation starts with empty history, but the removal and
 summon operations used to reconcile with live windows must not become actions a
 user can undo.
+
+Recovery is an explicit three-phase state machine:
+
+1. **`InitialReplay`.** Every connection enters this phase, with or without a
+   snapshot. `WindowOpened` records are accumulated in backend report order;
+   the first occurrence fixes order and the latest metadata wins. A
+   snapshotted identity reserves its recorded `WinId`; a new identity consumes
+   nothing yet. Window/workarea lifecycle observations update only the replay
+   accumulator. Realm emits no visible state, assigns no identity, applies no
+   projection, accepts no desired mutation, and produces no persistence record
+   in this phase.
+2. **`FinalizingReplay`.** The backend emits the explicit
+   `BackendEvent::InitialReplayComplete` barrier exactly once per backend
+   incarnation; a second barrier is a protocol failure. Realm stages the whole
+   reconciliation before changing authoritative state or calling the backend.
+   It preflights id capacity for every unknown identity, traverses snapshot
+   orbits and window order to remove missing windows deterministically, then
+   allocates and summons new windows in backend report order into the resulting
+   active orbit. Only after staging succeeds does it install the result, clear
+   undo/redo once, bind each live identity exactly once for this backend
+   incarnation, and submit one forced complete projection, including an empty
+   projection. No later backend event may be read while this work is pending.
+   Staging failure retains no partial mapping, watermark, ledger, backend call,
+   publication, or persistence effect. Only successful assignment and
+   projection moves the session to `Live`; it publishes exactly one initial
+   `RealmState` at revision 1.
+3. **`Live`.** Ordinary observed and desired transitions use §§4 and 9. A
+   persistence record can be produced only here and always reflects the
+   authoritative observed ledger/mapping/watermark. It remains valid while a
+   repair of that authoritative projection is pending, but never contains a
+   rejected desired candidate.
+
+Transient backend assignment or projection failure schedules exactly one
+immediate retry for the next event-loop turn. `has_pending_backend_work()` is
+the mechanical read gate: while true, the loop must call
+`retry_pending_backend_work()` and must not call `next_event`. Retry success
+resumes the interrupted phase and restores one retry allowance for later work.
+A second failure of the same pending work is a restartable fatal session error;
+it is not retried indefinitely. `Disconnected` and `Unavailable` are
+immediately fatal because that backend incarnation is gone; `Unsupported`
+while applying authoritative recovery state is an immediate contract failure;
+and `WindowIdExhausted` is terminal. A failed desired candidate is rejected
+before its authoritative repair is scheduled; an observed lifecycle change
+remains authoritative and withholds publication until its repair succeeds.
+
+The control socket path may be safely created and bound before recovery, but
+the event-loop binary must not call `listen(2)` or signal readiness until the
+session is `Live`. Pre-live clients therefore receive `ECONNREFUSED`, not a
+provisional empty state.
 
 **What a restart must *not* restore:** the input mode (reset to `Mode::Nav` — a
 restart with a dangling `ensure_next_key_eaten` in the compositor would eat the
@@ -813,6 +890,12 @@ Each row is one happy path and becomes one test.
 | A26 | Given no focused window, when `request_close_focused()` runs, then it makes no backend request and returns no target | `session::tests::close_request_is_a_no_op_without_a_focused_window` |
 | A27 | Given a stable session, when `toggle_whichkey()` runs, then `whichkey` and the revision change once with no backend apply; only a later observed `WorkareaChanged` may re-project windows | `session::tests::whichkey_toggle_only_emits_state_until_workarea_is_observed` |
 | A28 | Given a staged mutating socket request, when its backend transaction has not completed, then no ordinary reply is queued and the connection reads no second request; backend success commits and queues `Response::Ok`, while backend failure rejects the candidate and queues `Response::Error`, without blocking the event loop or writing before `manage_finish` | Socket adapter coverage belongs to #41 |
+| A29 | Given absent, wrong-version, malformed, semantically invalid, and valid `SessionSnapshotV1` records, when they are classified, then absence and invalid content start fresh without partial state, valid content is accepted, and a non-`NotFound` read error is fatal | `session::tests::snapshot_validation_is_closed_and_total`; file-error coverage belongs to the event-loop binary slice |
+| A30 | Given a valid snapshot and an initial replay, when restored and new identities arrive before `InitialReplayComplete`, then each is assigned exactly once, no projection/state/snapshot is produced early, and the event order deterministically fixes new ids | `session::tests::initial_replay_is_silent_and_rebinds_each_identity_once` |
+| A31 | Given snapshotted identities that do not all reappear plus new identities, when `InitialReplayComplete` arrives, then missing windows are removed before new windows are summoned in report order, undo is empty, one forced complete projection succeeds, and exactly one revision-1 state is published before entering `Live` | `session::tests::replay_barrier_reconciles_then_publishes_once` |
+| A32 | Given assignment or projection fails once, when pending backend work exists, then no backend event is read and exactly one next-turn retry can complete the interrupted phase; if that retry fails, the session reports a restartable fatal error | `session::tests::backend_work_gets_one_retry_and_gates_event_reads` |
+| A33 | Given `InitialReplay`, `FinalizingReplay`, a live failed desired candidate, and a live observed change awaiting projection repair, when persistence is requested, then only the two live cases produce a snapshot and both contain authoritative state rather than a replay accumulator or rejected candidate | `session::tests::persistence_exposes_only_authoritative_live_state` |
+| A34 | Given `next_win_id == u64::MAX`, when a new backend identity appears, then it is refused as exhausted without assigning `WinId(u64::MAX)`, changing the ledger, or publishing state | `session::tests::exhausted_watermark_never_allocates_the_sentinel` |
 
 ## Budgets
 
@@ -895,6 +978,20 @@ the ledger dirty and the worker writes at most once every 250 ms.
 Realm uses the third option. It is bounded work, it never blocks the event loop,
 and the worst case is a quarter-second of lost window moves after a crash —
 which is less than the user will lose noticing the restart.
+
+The 250 ms interval is a non-sliding maximum deadline, not debounce: the first
+dirty live state starts the deadline, later commits replace the queued immutable
+snapshot without moving it, and one ordered worker prevents an older sequence
+from replacing a newer snapshot. Clean shutdown flushes the latest dirty live
+snapshot. A worker failure leaves authoritative in-memory state untouched,
+records degraded persistence, and permits a later retry. Snapshot capture occurs
+after a desired transaction applies and commits, after an observed open/close
+becomes authoritative even when its projection repair is pending, and after
+successful initial finalization. It never captures a rejected desired candidate
+or changes that affect only workarea, title, modules, mode, chord, which-key,
+pending assignments, retry state, or projection caches. “Across a session”
+means across daemon incarnations within one desktop login; the runtime directory
+intentionally resets the allocator across distinct logins.
 
 **2. What happens to windows that existed before a restart? — Resolved: river
 replays them.**
