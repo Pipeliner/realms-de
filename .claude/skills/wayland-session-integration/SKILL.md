@@ -1,6 +1,6 @@
 ---
 name: wayland-session-integration
-description: Use when working on how a realm session starts or talks to the rest of the desktop stack - the session entry script or wrapper, .desktop session files, systemd user units and graphical-session.target, XDG_CURRENT_DESKTOP / XDG_SESSION_TYPE / WAYLAND_DISPLAY, systemctl --user import-environment, dbus-update-activation-environment, xdg-desktop-portal and portal backends, D-Bus activation, cursor theme or size, XWayland, `realm ctl doctor`, or packaging in packaging/ and configs/portal/. Also use when diagnosing symptoms like a GTK file dialog that hangs for 25 seconds, screen sharing that silently fails in Firefox or Chromium, an invisible or default-black cursor, or a DBusActivatable app that will not launch.
+description: Use when working on how a realm session starts or talks to the rest of the desktop stack - the session entry script or wrapper, .desktop session files, systemd user units and graphical-session.target, XDG_CURRENT_DESKTOP / XDG_SESSION_TYPE / WAYLAND_DISPLAY, systemctl --user import-environment, dbus-update-activation-environment, xdg-desktop-portal and portal backends, D-Bus activation, cursor theme or size, XWayland, `realmctl doctor`, or packaging in packaging/ and configs/portal/. Also use when diagnosing symptoms like a GTK file dialog that hangs for 25 seconds, screen sharing that silently fails in Firefox or Chromium, an invisible or default-black cursor, or a DBusActivatable app that will not launch.
 ---
 
 # Wayland session integration
@@ -81,7 +81,7 @@ The full table with verification commands is in `reference.md`. The short form:
    `PartOf=graphical-session.target` and `After=graphical-session.target`, and
    is started by a target rather than by the entry script directly. That is what
    makes a crashed bar restartable without taking the session with it.
-3. Add a matching check to `realm ctl doctor`. Every item in this skill should be
+3. Add a matching check to `realmctl doctor`. Every item in this skill should be
    something `doctor` can confirm, because the user hits it before we do.
 4. Add or update the row in `docs/PITFALLS.md`, naming the guard.
 5. **This cannot be tested in the agent container** — there is no Wayland
@@ -93,5 +93,5 @@ The full table with verification commands is in `reference.md`. The short form:
 
 `reference.md` has the full symptom table with the exact verification command
 for each, the systemd unit relationships, the portal configuration shape, and
-the checks `realm ctl doctor` owes the user. Open it when diagnosing a specific
+the checks `realmctl doctor` owes the user. Open it when diagnosing a specific
 symptom or writing the units.

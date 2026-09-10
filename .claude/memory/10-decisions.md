@@ -60,11 +60,10 @@ default to the reference desktop's proportions** — because the mockup is 1920�
 and the same shape has to survive 2560×1440 and 3840×2160 — *revisit if* users
 want per-output pixel pinning.
 
-**2026-08-26 — Binaries are `realm-wm` and `realmctl`, not `realm-session` and
-`realm`** — because the session wrapper is already called `realm-session`, and
-because Fedora ships Kubernetes Realm at `/usr/bin/realm`, where two owners of one
-path make rpm refuse the install outright — *revisit if* the branding question
-(shipping a `realm` alias where the name is free) is answered differently.
+**2026-08-26 — Binaries are `realm-wm` and `realmctl`** — because the session
+wrapper is already called `realm-session`, while one unambiguous control command
+must match every documented invocation. SPEC 0025 settles both names and rejects
+compatibility aliases before launch.
 
 ~~**2026-08-26 — Packaging vendors river 0.4.8 specifically** — because that is
 what nixpkgs carries at the revision the flake evaluates against, and Ubuntu

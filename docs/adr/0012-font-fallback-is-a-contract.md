@@ -61,7 +61,7 @@ fallback for every entry.
 5. **The fallback chain is explicit and ordered**, from `palette.toml`, never
    fontconfig's system default. This is what stops an emoji font hijacking the
    symbol ranges.
-6. **`realm ctl doctor` runs the same probe** and reports it with
+6. **`realmctl doctor` runs the same probe** and reports it with
    `Probe::summary()`, so a user with a missing font gets a sentence naming the
    glyphs rather than a screen of boxes.
 7. **Realm does not redistribute Symbola or a generic Nerd Font.** Their

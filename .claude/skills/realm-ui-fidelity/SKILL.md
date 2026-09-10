@@ -79,7 +79,7 @@ broken before the user types anything.
   drawn — add it there first.
 - **Draw through `Probe::resolve(ch)`, never a raw `char`.** Bypassing the probe
   is exactly how tofu ships (`docs/INTERFACES.md` §3, rule 3).
-- The probe runs once at start-up against the resolved font stack; `realm ctl
+- The probe runs once at start-up against the resolved font stack; `realmctl
   doctor` prints `Probe::summary()`.
 - Guards: `glyphs::tests::every_glyph_is_unique_and_has_a_fallback` and
   `glyphs::tests::a_bare_ascii_font_degrades_instead_of_drawing_tofu`.

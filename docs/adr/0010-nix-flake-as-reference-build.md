@@ -34,7 +34,7 @@ tell you whether a session starts. Only booting one does.
    maintainer runs to reproduce a user's report. Lock updates are deliberate
    reviewed dependency changes, not incidental evaluation side effects.
 2. **The NixOS VM test is the acceptance test for the session.** It boots a
-   VM, logs into realm, and asserts the bar appears and `realm ctl doctor` passes.
+   VM, logs into realm, and asserts the bar appears and `realmctl doctor` passes.
    This is the only test that exercises the session contract (ADR 0011) end to
    end, and it is why NixOS is the reference rather than merely a target.
 3. **Native distro packaging is tracked explicitly.** Debian uses
@@ -68,7 +68,7 @@ tell you whether a session starts. Only booting one does.
 | Option | Why it was attractive | Why it lost |
 |---|---|---|
 | **Use unreviewed, ad-hoc distro packaging** | It avoids maintaining packaging definitions in the repository | It leaves package contents and dependencies unverifiable until a user fails to start a session. Tracked native definitions plus a consistency check make drift visible without pretending a generator exists |
-| **Ship only a tarball or an AppImage** | One artifact, no distro work at all, works everywhere in principle | A desktop environment is not a single application. It must install a session desktop entry where the display manager will find it, install systemd user units, and declare a dependency on a portal backend and on a compositor. None of that is expressible in a tarball, and AppImage's sandbox assumptions are wrong for something that *is* the session. It would also make `realm ctl doctor` the only line of defence against a broken install |
+| **Ship only a tarball or an AppImage** | One artifact, no distro work at all, works everywhere in principle | A desktop environment is not a single application. It must install a session desktop entry where the display manager will find it, install systemd user units, and declare a dependency on a portal backend and on a compositor. None of that is expressible in a tarball, and AppImage's sandbox assumptions are wrong for something that *is* the session. It would also make `realmctl doctor` the only line of defence against a broken install |
 | **Make a traditional distro the reference and treat Nix as a port** | Larger user base; more contributors already know `debhelper`; the reference build would match what most users run | We would lose the VM test, which is the single most valuable test in the project. Reproducing a user's exact environment would also stop being a one-line operation. Native package definitions remain supported targets, but do not replace the reference session test |
 | **Distribute via Flatpak** | Handles dependencies and works across distros | Flatpak is for applications. It cannot install a session, cannot own systemd user units, and its sandbox is on the wrong side of the boundary for a compositor and a session daemon. It is also, per ADR 0005, one of the theming pipeline's documented limits |
 | **Nix flake plus a distro-agnostic install script** | Simple; no packaging tooling to learn | An install script is an unversioned, unremovable package manager. Upgrades and uninstalls become the user's problem |
@@ -130,9 +130,9 @@ someone else is paying it.
 ## Guard
 
 - *Planned (M3):* the NixOS VM test — boots the session, asserts the bar
-  surface appears and `realm ctl doctor` exits zero.
+  surface appears and `realmctl doctor` exits zero.
 - *Planned (M3):* three container jobs, one per distro, building and installing
-  its tracked native package into a clean image and running `realm ctl doctor`.
+  its tracked native package into a clean image and running `realmctl doctor`.
 - *Planned (M3):* a metadata consistency test asserting that the dependency
   lists, binary paths, session assets, and portal policy in the root flake,
   Debian control files, and Fedora spec agree where the targets overlap. This

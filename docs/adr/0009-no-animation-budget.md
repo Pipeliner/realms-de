@@ -50,7 +50,7 @@ change that misses a budget is a regression, not a trade-off.
 | State change to bar redraw | < 8 ms | Damage-tracked CPU rasterising (ADR 0008); `RealmState::renders_same_as` drops no-op frames | *planned:* M2 benchmark |
 | Bar idle CPU | ~0% | Event-driven modules; the clock ticks to the next minute boundary and a shared 1 Hz sampler runs off the input path. Held-key repeat is a separately bounded active-input exception below | *planned:* M2 idle-frame count test |
 | Cold session start to usable | < 900 ms | No GPU context, no icon-cache scan, no thumbnailer | *planned:* M2 startup benchmark |
-| `realm ctl theme apply` | < 150 ms | Templates rendered serially and replaced atomically per file | *planned:* M1 benchmark |
+| `realmctl theme apply` | < 150 ms | Templates rendered serially and replaced atomically per file | *planned:* M1 benchmark |
 
 Benchmarks run on a fixed CI runner class so the numbers are comparable across
 commits. M6's acceptance criterion is holding the same budgets on a 2015-era

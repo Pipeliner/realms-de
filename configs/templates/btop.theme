@@ -1,4 +1,4 @@
-# realm — generated from palette.toml. Do not edit; `realm ctl theme apply`
+# realm — generated from palette.toml. Do not edit; `realmctl theme apply`
 # overwrites this file. btop (horus, the monitor) reads its theme at start and
 # has no reload signal, so a running instance keeps the old colours.
 #

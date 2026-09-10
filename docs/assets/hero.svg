@@ -131,7 +131,7 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <g class="b">
 <text x="657" y="84"><tspan fill="#7fd4c1">nav@caldera</tspan> <tspan fill="#66748e">::</tspan></text>
 <g color="#d9b06a"><use href="#sig" x="765" y="72"/></g>
-<text x="779" y="84"><tspan fill="#d9b06a">%</tspan> <tspan fill="#c2cbde">realm ctl orbit --list</tspan></text>
+<text x="779" y="84"><tspan fill="#d9b06a">%</tspan> <tspan fill="#c2cbde">realmctl orbit --list</tspan></text>
 <g color="#93a1ba"><use href="#r1" x="666" y="93"/></g>
 <text x="682" y="104" fill="#93a1ba">triptych    3 vessels   focus: odin</text>
 <g color="#93a1ba"><use href="#r2" x="666" y="113"/></g>
@@ -145,7 +145,7 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <text x="682" y="184" fill="#93a1ba">run 7f3a summoned · attaching stream…</text>
 <text x="657" y="204"><tspan fill="#7fd4c1">nav@caldera</tspan> <tspan fill="#66748e">::</tspan></text>
 <g color="#d9b06a"><use href="#sig" x="765" y="192"/></g>
-<text x="779" y="204"><tspan fill="#d9b06a">%</tspan> <tspan fill="#c2cbde">realm ctl theme apply</tspan></text>
+<text x="779" y="204"><tspan fill="#d9b06a">%</tspan> <tspan fill="#c2cbde">realmctl theme apply</tspan></text>
 <text x="682" y="224" fill="#93a1ba">14 templates rendered · 11 clients reloaded · 96ms</text>
 <text x="657" y="244"><tspan fill="#7fd4c1">nav@caldera</tspan> <tspan fill="#66748e">::</tspan></text>
 <g color="#d9b06a"><use href="#sig" x="765" y="232"/></g>
@@ -180,7 +180,7 @@ text{font-family:'IBM Plex Mono','DejaVu Sans Mono','Liberation Mono',ui-monospa
 <text x="1366" y="306">an earlier ledger restores the exact screen, gaps and all.</text>
 </g>
 <rect x="1366.5" y="330.5" width="527" height="62" fill="#0e111b" stroke="#66748e" stroke-opacity=".35"/>
-<text class="s" x="1380" y="354" fill="#7fc9e8">$ realm ctl ledger show</text>
+<text class="s" x="1380" y="354" fill="#7fc9e8">$ realmctl ledger show</text>
 <g color="#7fc9e8"><use href="#r1" x="1540" y="343"/></g>
 <text class="s" x="1380" y="378" fill="#7b89a4">0 odin    1 thoth    2 hermes</text>
 <g class="b" fill="#aab6cc">

@@ -645,7 +645,7 @@ so realm would be writing the plugin anyway. The right use of this finding is no
 entry script, because it has already found the edge cases".
 
 **Fit.** `handlr-regex` is 4/5 — Rust, fast, single-binary, and it makes
-`realm ctl` able to *set* defaults declaratively, which suits a config-file
+`realmctl` able to *set* defaults declaratively, which suits a config-file
 desktop. Against it: replacing `xdg-open` system-wide is a slightly aggressive
 move for M3, and if it misbehaves the symptom is "links do nothing", which is
 the exact failure class ADR 0011 exists to prevent. `systemd-xdg-autostart-
@@ -735,7 +735,7 @@ crate with a hard frame budget.
 **Priority: STRATEGIC. Milestone: M4.** Not MVP, and this is the most
 uncomfortable MVP exclusion on the page. Justification for holding the line: the
 week test is one person, and a person who knows their desktop has no tray
-configures Slack not to close to tray and uses `realm ctl run` to bring windows
+configures Slack not to close to tray and uses `realmctl run` to bring windows
 back. A person who does not know will lose an application on day one. That is a
 documentation problem at M3 and a product problem by M4.
 
@@ -778,7 +778,7 @@ opening a which-key row reading
 `realm-ctl` plus a keymap table entry, and it is themed, glyph-based and
 animation-free for free because the which-key strip already is.
 
-**Integration cost.** `small Rust shim` — `realm ctl session {logout,reboot,
+**Integration cost.** `small Rust shim` — `realmctl session {logout,reboot,
 poweroff,suspend,lock}` over `zbus`, plus keymap entries.
 
 **Priority: MVP. Milestone: M3.** See [§19](#19-what-realm-should-build-itself).
@@ -1020,7 +1020,7 @@ engineering.
 | 8 | Autostart | **provide** | `xdg-desktop-autostart.target` | 5 | config | **MVP** | M3 |
 | 8 | `xdg-user-dirs` | integrate | `xdg-user-dirs` | 5 | config | **MVP** | M3 |
 | 9 | Tray (SNI) | provide *if at all* | none at M3; text-only segment at M4 | 2 | work | STRATEGIC | M4 |
-| 10 | Logout / power | **provide** | **build** `realm ctl session` + which-key | 5 | shim | **MVP** | M3 |
+| 10 | Logout / power | **provide** | **build** `realmctl session` + which-key | 5 | shim | **MVP** | M3 |
 | 11 | DnD / data-control | not break | river | — | none (test) | **MVP** | M3 |
 | 12 | Desktop search | not provide | `fd` + `rg` via hecate | 5 | config → shim | LATER | M6 |
 | 13 | Trash | integrate | yazi (already) + `trashy` + a restore plugin | 5 | config | STRATEGIC | M4 |
@@ -1127,7 +1127,7 @@ there is no good answer. Stated plainly. These are `needs-human` candidates.
 [ADR 0007](../adr/0007-reuse-yazi-btop-starship.md) demands a written reason for
 any rewrite. Three items qualify; everything else on this page should be reused.
 
-### 19.1 Session control — `realm ctl session {logout,reboot,poweroff,suspend,lock}`
+### 19.1 Session control — `realmctl session {logout,reboot,poweroff,suspend,lock}`
 
 **Reason.** The reusable options (`wlogout`, `wleave`) are full-screen grids of
 large icon buttons in GTK3 and GTK4 respectively. They contradict four separate

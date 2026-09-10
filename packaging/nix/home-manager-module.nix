@@ -38,7 +38,7 @@ in
       defaultText = lib.literalExpression "\${cfg.package}/share/realm/palette.toml";
       description = ''
         This user's palette, linked to ~/.config/realm/palette.toml.
-        `realm ctl theme apply` (M1) renders every themed file from it.
+        `realmctl theme apply` (M1) renders every themed file from it.
       '';
     };
 

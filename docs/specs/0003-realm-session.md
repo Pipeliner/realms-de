@@ -57,7 +57,7 @@ lifecycle.
 | Not this component's job | Whose it is |
 |---|---|
 | Drawing anything | `realm-bar` (SPEC forthcoming, [ADR 0008](../adr/0008-layer-shell-rendering-stack.md)); the bar is an ordinary `wlr-layer-shell` client |
-| Template expansion, sealed generation publication, and generation-aware diff | `realm-theme` ([SPEC 0002](0002-theme-pipeline.md), [SPEC 0011](0011-theme-activation-generations.md)); `realm ctl` calls it in-process and the session is not involved |
+| Template expansion, sealed generation publication, and generation-aware diff | `realm-theme` ([SPEC 0002](0002-theme-pipeline.md), [SPEC 0011](0011-theme-activation-generations.md)); `realmctl` calls it in-process and the session is not involved |
 | The ledger's mutation rules, the layout projection, colour maths, the wire types | `realm-core` ([SPEC 0001](0001-realm-core-contracts.md)) |
 | The environment handshake, systemd ordering, portals, cursor theme | the session entry contract ([ADR 0011](../adr/0011-session-integration-contract.md)) and `packaging/` |
 | The CLI surface | `realm-ctl`; it is a client of this socket and holds no privilege |
@@ -447,7 +447,7 @@ the same commit as the trait, as that file's own rule requires.
 
 **Ordering rule.** `manage_finish` and `render_finish` are issued *before* the
 session derives `RealmState`, encodes it, or writes a byte to any subscriber.
-This is the single rule that makes a wedged `realm ctl` unable to wedge the
+This is the single rule that makes a wedged `realmctl` unable to wedge the
 desktop.
 
 ### 5. The dimension-proposal problem
@@ -586,7 +586,7 @@ as a second transport state machine.
 corresponding `realm-core` method, after which the session makes `manage_dirty`
 and answers `Response::Ok` **immediately** — `Ok` means "the ledger changed",
 not "the frame is on screen". Coupling the reply to the compositor round trip
-would put a `realm ctl` client on the input path, which §4 forbids.
+would put a `realmctl` client on the input path, which §4 forbids.
 `Request::ShowLedger` answers `Response::Ledger(Vec<OrbitLedger>)` built from
 the ledger plus the per-window `app_id` and `title` last reported by river (both
 nullable in the protocol *(verified)*, rendered as empty strings).
@@ -594,7 +594,7 @@ Any profile-launch request is handed to the SPEC 0012 lifecycle worker and may
 be acknowledged only after that spec's admission and durable preparation
 boundary. The exact request DTO, request-id idempotency and reply spelling are
 not accepted here; SPEC 0006/#117 owns them. `Request::ReloadTheme` has no
-supported apply or notify meaning and is not sent by `realm ctl theme apply`;
+supported apply or notify meaning and is not sent by `realmctl theme apply`;
 this Draft does not promise compatibility for that retired message. Decoding and protocol-error outcomes are exactly
 those in SPEC 0007's state/error table; they are not kept open by default merely
 because a decoder can return an error.
@@ -694,7 +694,7 @@ From [ARCHITECTURE.md §4](../ARCHITECTURE.md); no number here is new.
 | State change → bar redraw | **< 8 ms** | The first part: derive, `renders_same_as`, encode, non-blocking write |
 | Bar idle CPU | **~0%** | Nothing polls. The clock schedules the next minute boundary; one shared 1 Hz sampler runs off the input path; the key-repeat timer exists only while a key is held |
 | Cold session start → usable | **< 900 ms** | Socket bound, six globals bound, ledger seeded or recovered, first `manage_finish` made |
-| `realm ctl theme apply` | **< 150 ms** | No session share: the CLI publishes in its own process under SPEC 0011. No apply, diff, or post-commit notification may appear on the session input path |
+| `realmctl theme apply` | **< 150 ms** | No session share: the CLI publishes in its own process under SPEC 0011. No apply, diff, or post-commit notification may appear on the session input path |
 
 **Which of these become correctness bounds under river, and why.**
 

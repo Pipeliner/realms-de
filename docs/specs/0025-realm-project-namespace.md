@@ -17,7 +17,9 @@ The product and display name SHALL be `Realm`. First-party lowercase identifiers
 SHALL use `realm`; uppercase constants and environment variables SHALL use
 `REALM`; Rust libraries SHALL use `realm_*`; and executable names SHALL use the
 `realm` prefix, including `realmctl`, `realm-sdd`, `realm-session`, `realm-wm`,
-and `realm-bar` where those programs exist.
+and `realm-bar` where those programs exist. The control CLI has exactly one
+spelling: the installed `realmctl` binary. A spaced command or forwarding alias
+is not part of the product.
 
 All tracked first-party paths and file bytes SHALL be free of the retired
 four-byte ASCII namespace token, case-insensitively. The repository guard SHALL
@@ -27,8 +29,9 @@ source does not preserve the spelling. The check includes binary tracked files.
 The cutover SHALL cover Cargo packages/imports/binaries, commands and
 diagnostics, project-defined environment variables, config/state/runtime paths,
 session and systemd assets, desktop metadata, packaging, CI, tests, docs, skills,
-memory, and retained first-party source bundles. External names owned by an
-upstream project or a standard remain unchanged.
+memory, and retained first-party source bundles. An external proper name that
+cannot satisfy the tracked-byte guard SHALL be described generically instead of
+preserved as repository text.
 
 GitHub's default branch SHALL be `main`. Active issue and pull-request metadata
 SHALL use Realm terminology. Historical Git commits are immutable evidence and

@@ -31,7 +31,7 @@ is why generation atomicity is a hard requirement rather than a nicety.
 
 **In:** reading `palette.toml`; deriving the contrast variant; rendering every
 template; linting; publishing an immutable generation for future launches; and
-the generation-aware `realm ctl theme apply|lint|diff` surface.
+the generation-aware `realmctl theme apply|lint|diff` surface.
 
 **Out:** the palette *format* and its validation (SPEC 0001, `realm-core`);
 deciding which colour goes where (that is `palette.toml` itself); anything that

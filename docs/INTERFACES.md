@@ -25,7 +25,7 @@ river's window manager; `NativeBackend` implements it in-process against
 /// back into ledger deltas. They own no policy: the ledger decides what should
 /// happen, the backend only makes it so.
 pub trait WmBackend: Send {
-    /// Human-readable name, shown by `realm ctl doctor`.
+    /// Human-readable name, shown by `realmctl doctor`.
     fn name(&self) -> &str;
 
     /// Connect, and report what the backend can actually honour.
@@ -51,7 +51,7 @@ pub trait WmBackend: Send {
 }
 
 /// What a backend can and cannot do, so realm degrades honestly rather than
-/// pretending. `realm ctl doctor` prints this.
+/// pretending. `realmctl doctor` prints this.
 pub struct Capabilities {
     /// True when the *rendered* rectangle is exactly the projected one.
     ///

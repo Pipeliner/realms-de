@@ -24,7 +24,7 @@ Phase 1 — assemble (daily-drivable in weeks):
 - **Monitor (horus)**: `btop` custom theme (stopgap) or Rust TUI via `ratatui` + `sysinfo`.
 - **Shell (thoth)**: zsh + starship, themed prompt `nav@caldera :: 𓂃%`.
 - **Agent harness (odin)**: custom `ratatui` TUI wrapping your agent runner. Nothing off-the-shelf matches.
-- **Theming pipeline**: `realm-theme` crate: reads `palette.toml`, renders templates (gtk.css, Kvantum SVG, ANSI scheme, yazi/btop/rofi/helix themes), `realm ctl theme apply` hot-reloads (gsettings + SIGUSR1s).
+- **Theming pipeline**: `realm-theme` crate: reads `palette.toml`, renders templates (gtk.css, Kvantum SVG, ANSI scheme, yazi/btop/rofi/helix themes), `realmctl theme apply` hot-reloads (gsettings + SIGUSR1s).
 
 Performance rules: no compositor-side animations, no blur, no rounded corners, no shadows except the 1px borders + inset glow on focus (a static box-shadow, cheap). Damage-tracked rendering; bar updates event-driven (not polled) where possible.
 
@@ -50,7 +50,7 @@ Performance rules: no compositor-side animations, no blur, no rounded corners, n
 Reference of a GTK4 app under the realm theme + annotated reach/limits. Implement as the `realm-theme` crate:
 - Reaches: gtk3/4 via generated gtk.css (colors, square corners, flat headerbars, IBM Plex Mono); qt5/6 via qt6ct + Kvantum SVG from same palette; libadwaita named colors; terminal 16-color ANSI; electron force-dark; mono-line icon + cursor set.
 - Limits (do not fight): hardcoded app colors; libadwaita geometry (colors yes, shapes no); CSD headerbars only recolored + 1px border; flatpak needs per-app config grant.
-- Mechanism: `~/.config/realm/palette.toml` → templates → `realm ctl theme apply` hot-reload.
+- Mechanism: `~/.config/realm/palette.toml` → templates → `realmctl theme apply` hot-reload.
 
 ## Interactions & Behavior
 - Everything keyboard-first; chords under one `mod`. Mode badge in bar reflects state (NAV / RESIZE / …); chord echo shows pending prefix. `?` opens a full keybind sheet ("grimoire").

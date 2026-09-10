@@ -13,7 +13,7 @@ about and design against:
 | Surface | Why it matters | Where it lives |
 |---|---|---|
 | **The control socket** — `$XDG_RUNTIME_DIR/realm/ctl.sock` (no `/tmp` fallback or production override) | Anything that can write to it can spawn processes, move windows and change the session's state. The server therefore uses runtime/socket modes, refuses unsafe path entries, admits only same-euid `SO_PEERCRED` peers, requires Hello before requests, and bounds every connection. | [`realm-core::ipc`](crates/realm-core/src/ipc.rs), and `realm-session` when it exists |
-| **Generated theme files** | `realm ctl theme apply` renders templates and writes them into the user's config — `gtk.css`, Kvantum, terminal, `yazi`, `btop`, `starship`. A template that can be made to escape its output, or a write that can be redirected, writes attacker-chosen content into files other programs read. | `realm-theme` (planned, M1), `configs/templates/` |
+| **Generated theme files** | `realmctl theme apply` renders templates and writes them into the user's config — `gtk.css`, Kvantum, terminal, `yazi`, `btop`, `starship`. A template that can be made to escape its output, or a write that can be redirected, writes attacker-chosen content into files other programs read. | `realm-theme` (planned, M1), `configs/templates/` |
 | **The launcher** | hecate resolves and executes entries from `PATH`, from desktop files and from user "spells". Anything that decides what to run is worth attention: `PATH` order, quoting, and what counts as a trusted entry. | fuzzel as a stopgap (M3), `realm-hecate` (M4) |
 | **Session startup** | Session entry sets and exports the environment into systemd and D-Bus. Getting this wrong leaks variables into services that should not have them, or lets a stale value point a portal somewhere unexpected. | ADR 0011, `packaging/` (planned, M3) |
 | **The compositor and the session daemon** | They hold input and window state for the whole session. Once `realm-compositor` exists it also mediates screen capture and clipboard. | `realm-session` (M2), `realm-compositor` (M5) |
@@ -48,7 +48,7 @@ issue**.
    vulnerability details in a public issue.
 
 Please include, as far as you can: what you did, what happened, what you
-expected, the distribution and compositor, and whether `realm ctl doctor` had
+expected, the distribution and compositor, and whether `realmctl doctor` had
 been run. A reproducer is worth more than a description.
 
 **What to expect.** This is a small, volunteer, pre-alpha project. We aim to

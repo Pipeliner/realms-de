@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 RETIRED = bytes((104, 101, 108, 109))
+SPACED_CLI = bytes((114, 101, 97, 108, 109, 32, 99, 116, 108))
 WORKSPACE_ARCHIVE = Path("packaging/tool-sources/bundles/realm-workspace/source.tar.gz")
 
 
@@ -38,8 +39,12 @@ def archive_failures(archive: Path) -> list[str]:
             if not member.isfile():
                 continue
             source = contents.extractfile(member)
-            if source is not None and RETIRED in source.read().lower():
-                failures.append(f"retired namespace in archive content: {member.name}")
+            if source is not None:
+                data = source.read().lower()
+                if RETIRED in data:
+                    failures.append(f"retired namespace in archive content: {member.name}")
+                if SPACED_CLI in data:
+                    failures.append(f"invalid spaced CLI in archive content: {member.name}")
     return failures
 
 
@@ -49,8 +54,11 @@ def main() -> int:
         path = Path(os.fsdecode(raw_path))
         if RETIRED in raw_path.lower():
             failures.append(f"retired namespace in path: {path}")
-        if RETIRED in content(path).lower():
+        data = content(path).lower()
+        if RETIRED in data:
             failures.append(f"retired namespace in content: {path}")
+        if SPACED_CLI in data:
+            failures.append(f"invalid spaced CLI in content: {path}")
 
     if WORKSPACE_ARCHIVE in [Path(os.fsdecode(path)) for path in tracked_paths()]:
         failures.extend(archive_failures(WORKSPACE_ARCHIVE))

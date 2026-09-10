@@ -72,7 +72,7 @@ grabbed the keyboard would be a second input path, and realm has one.
 (ADR 0013). If `realm-session` does not serve that protocol, the bar does not
 appear at all — and the symptom reads as a broken bar rather than a missing
 protocol, which is why `docs/PITFALLS.md` carries it as its own row and why
-`realm ctl doctor` checks it by name (SPEC 0006).
+`realmctl doctor` checks it by name (SPEC 0006).
 
 **The exclusive zone is the only thing that reserves space.** river turns the
 zones into `river_layer_shell_output_v1::non_exclusive_area`, which reaches
@@ -154,7 +154,7 @@ full height of the bar. The rune drawn is `Probe::resolve(cell.rune)` — never
 
 The 2 px border is the one place in realm where a border is not 1 px, and it is
 the prototype's `border-bottom:2px solid #a692ec`. `cell.windows` is not drawn:
-it exists for `realm ctl orbit list` (SPEC 0006) and for a tooltip realm does not
+it exists for `realmctl orbit list` (SPEC 0006) and for a tooltip realm does not
 have.
 
 **Layout indicator.** `⌗ ` + `Layout::label()` in `text.dim`, preceded by a
@@ -358,7 +358,7 @@ At startup, before the first frame:
 2. `let probe = Probe::run(|c| /* some face in the configured chain covers c */)`.
    That is 37 codepoint lookups, once, on the cold-start path.
 3. Log `probe.summary()` once — `fonts: 37/37 glyphs covered`, or
-   `fonts: 24/37 glyphs covered; substituting for ᚠᚢᚦ…`. `realm ctl doctor`
+   `fonts: 24/37 glyphs covered; substituting for ᚠᚢᚦ…`. `realmctl doctor`
    runs the same probe and prints the same line (SPEC 0006).
 4. Draw. `Probe::resolve(ch)` returns the glyph when covered and the
    inventory's documented ASCII fallback when not.

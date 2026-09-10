@@ -93,7 +93,7 @@ pub struct Orbit {
     pub layout: Layout,
     /// Window promoted to cover the whole workarea, if any (`mod+f`).
     pub fullscreen: Option<WinId>,
-    /// Human-facing name shown by `realm ctl orbit --list`.
+    /// Human-facing name shown by `realmctl orbit --list`.
     pub name: String,
 }
 

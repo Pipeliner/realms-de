@@ -143,7 +143,7 @@ The first release anyone can log into is **M3**, whose cut line is written down
 in [docs/MVP.md](docs/MVP.md): log in, tile windows across six orbits, see and
 discover the keys, launch things, files, monitor, shell, one coherent theme
 across GTK/Qt/TUIs, working portals, packages for NixOS, Ubuntu and Fedora, and
-a `realm ctl doctor` that says what is wrong before you file a bug.
+a `realmctl doctor` that says what is wrong before you file a bug.
 
 ---
 

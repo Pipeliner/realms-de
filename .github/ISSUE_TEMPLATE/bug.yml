@@ -52,7 +52,7 @@ body:
     id: version
     attributes:
       label: realm version
-      description: "`realm ctl --version` if you have it, otherwise the commit you built from (`git rev-parse --short HEAD`)."
+      description: "`realmctl --version` if you have it, otherwise the commit you built from (`git rev-parse --short HEAD`)."
       placeholder: "0.1.0 (a1b2c3d), or just a1b2c3d"
     validations:
       required: true
@@ -78,7 +78,7 @@ body:
   - type: dropdown
     id: doctor
     attributes:
-      label: Did `realm ctl doctor` pass?
+      label: Did `realmctl doctor` pass?
       description: If it did not, paste its output below — it usually names the problem outright.
       options:
         - "Yes — clean"
@@ -91,7 +91,7 @@ body:
   - type: textarea
     id: doctor-output
     attributes:
-      label: "`realm ctl doctor` output"
+      label: "`realmctl doctor` output"
       description: Paste it verbatim, even if it passed. Leave blank if the command does not exist yet.
       render: console
 

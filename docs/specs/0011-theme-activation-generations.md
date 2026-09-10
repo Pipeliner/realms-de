@@ -489,7 +489,7 @@ candidate with a partially validated or mixed generation.
 | G9 | Given concurrent applies, when both are accepted, then they serialize from input capture through pointer durability and each receipt identifies its committed generation. |
 | G10 | Given a valid current generation and a candidate whose normalized output set differs, when `theme diff` runs, then it reports only lexicographically sorted `added`, `removed`, and `byte-different` output paths after fully validating current, and performs no control initialization, recovery, lease, GC, publication, output write, pointer switch, or reload. |
 | G11 | Given a successful apply or rollback pointer commit, when existing processes continue running, then Realm sends no signal, command, or notification and only later launches may select the newly current generation. |
-| G12 | Given `Committed`, `CommittedWithCleanupPending`, or `OutcomeAmbiguous`, when `realm ctl theme apply` reports the result, then the first two exit 0 and name the selected future-launch generation (with a cleanup warning for the second), while the ambiguous result exits 6, claims no activation, safely reports its candidate/cause, and performs no automatic recovery or retry. |
+| G12 | Given `Committed`, `CommittedWithCleanupPending`, or `OutcomeAmbiguous`, when `realmctl theme apply` reports the result, then the first two exit 0 and name the selected future-launch generation (with a cleanup warning for the second), while the ambiguous result exits 6, claims no activation, safely reports its candidate/cause, and performs no automatic recovery or retry. |
 
 ## Boundaries
 

@@ -30,7 +30,7 @@ pub struct OrbitCell {
     pub rune: String,
     /// How to draw it.
     pub display: OrbitDisplay,
-    /// Window count, for tooltips and `realm ctl orbit --list`.
+    /// Window count, for tooltips and `realmctl orbit --list`.
     pub windows: usize,
 }
 

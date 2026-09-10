@@ -17,7 +17,7 @@
 realm ships several processes that all need to know the same things: which orbit
 is active, which are occupied, the current layout, the input mode, the focused
 window title, the pending chord. The bar draws all six of those. The launcher
-needs the active orbit to place what it spawns. `realm ctl` needs them to print
+needs the active orbit to place what it spawns. `realmctl` needs them to print
 `orbit --list` and `ledger show`.
 
 `realm-core::state::RealmState` is exactly that set, and it is deliberately a
@@ -98,7 +98,7 @@ clients additionally drop no-op frames with `RealmState::renders_same_as`.
 ### Neutral
 
 - The daemon is the natural home for the theme reload fan-out (ADR 0005) and for
-  `realm ctl doctor`'s runtime checks, so those get a home for free.
+  `realmctl doctor`'s runtime checks, so those get a home for free.
 
 ## Reversal
 

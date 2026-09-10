@@ -159,6 +159,6 @@ table only if `realm-compositor` slips past M5.
 The second open question: **does stow map to a hidden workspace, or does
 `NiriBackend` refuse `mod+s` entirely on niri?** Refusing is more honest;
 hidden-workspace is more useful. Recommendation: hidden workspace, with
-`realm ctl doctor` reporting it as an approximation.
+`realmctl doctor` reporting it as an approximation.
 
 Both are tracked as `needs-human` issues (standing order S3).

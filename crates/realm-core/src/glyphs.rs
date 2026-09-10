@@ -8,7 +8,7 @@
 //! So the inventory is data, not scattered string literals: a renderer resolves
 //! the font stack once at startup, reports coverage as a [`Probe`], and realm
 //! substitutes documented fallbacks for anything missing rather than drawing
-//! tofu. `realm ctl doctor` runs the same check from the command line.
+//! tofu. `realmctl doctor` runs the same check from the command line.
 
 use serde::{Deserialize, Serialize};
 
@@ -138,7 +138,7 @@ impl Probe {
             .unwrap_or('?')
     }
 
-    /// A one-line summary for `realm ctl doctor`.
+    /// A one-line summary for `realmctl doctor`.
     pub fn summary(&self) -> String {
         let total = self.covered.len() + self.missing.len();
         if self.missing.is_empty() {

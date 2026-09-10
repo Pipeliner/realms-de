@@ -203,7 +203,7 @@ is an empirical question for M2.
   compositor to buffer incoming input events is finite". `realm-session` sits on
   the compositor's input path with a hard liveness requirement. Nothing in it
   may block: not a theme apply, not a socket write to a wedged subscriber, not a
-  slow `realm ctl` client. This sharpens ADR 0003's single-point-of-failure and
+  slow `realmctl` client. This sharpens ADR 0003's single-point-of-failure and
   ADR 0009's budgets from performance goals into correctness requirements.
 - If `realm-session` dies, river has **no** window management at all. Under niri
   a dead session left a usable compositor; here it leaves windows unmanaged.

@@ -13,7 +13,7 @@ check a running system, not a description of code in this repo.
 - [Portals](#portals)
 - [Cursor](#cursor)
 - [XWayland](#xwayland)
-- [What `realm ctl doctor` owes the user](#what-realm-ctl-doctor-owes-the-user)
+- [What `realmctl doctor` owes the user](#what-realm-ctl-doctor-owes-the-user)
 
 ## Symptom to cause, with verification
 
@@ -23,7 +23,7 @@ check a running system, not a description of code in this repo.
 | Screen share dialog lists no windows or outputs, or capture produces nothing and no error | `XDG_CURRENT_DESKTOP` unset or wrong at portal start, so `portals.conf` matching failed and a backend with no ScreenCast was chosen; or no capable backend is installed | `busctl --user introspect org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop` (look for a ScreenCast interface), then `systemctl --user show-environment` (look for `XDG_CURRENT_DESKTOP=realm`) |
 | A `.desktop` entry with `DBusActivatable=true` does nothing when launched | the D-Bus activation environment has no display, so the activated service exits immediately | `gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.GetId` works, then compare `systemctl --user show-environment` against `env` |
 | Cursor is the default black X11 arrow, or vanishes over some surfaces | `XCURSOR_THEME` / `XCURSOR_SIZE` not exported before clients started, or not mirrored into gsettings for GTK | `systemctl --user show-environment` (look for `XCURSOR_THEME`), then `gsettings get org.gnome.desktop.interface cursor-theme` |
-| Nothing themed after login, though `realm ctl theme apply` works by hand | user units started before the import, so they inherited an empty environment | `systemctl --user show-environment` compared against the compositor's own `/proc/<pid>/environ` |
+| Nothing themed after login, though `realmctl theme apply` works by hand | user units started before the import, so they inherited an empty environment | `systemctl --user show-environment` compared against the compositor's own `/proc/<pid>/environ` |
 | XWayland apps do not start, or are scaled wrongly | XWayland disabled in the compositor, or `DISPLAY` set in the shell but never imported into systemd and D-Bus | `xlsclients`, then `systemctl --user show-environment` (look for `DISPLAY`) |
 | Screen stays unlocked when the lid closes | no idle/lock unit is part of `graphical-session.target` | `systemctl --user list-dependencies graphical-session.target` |
 
@@ -115,7 +115,7 @@ The theme itself is generated from `palette.toml` like everything else — see t
 - XWayland apps are themed from the same palette via `Xresources`; that is a
   template like any other.
 
-## What `realm ctl doctor` owes the user
+## What `realmctl doctor` owes the user
 
 `doctor` exists so a user diagnoses this without us. Each check should print the
 symptom it prevents, not just a pass mark:

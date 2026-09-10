@@ -7,13 +7,10 @@
 # handshake, the systemd user units and the palette. %install picks up
 # realm-wm and realm-bar automatically once they build.
 #
-# BINARY NAMES ARE SETTLED (ARCHITECTURE.md, commit 4ddcc26). Fedora ships
-# Kubernetes Realm as %%{_bindir}/realm, and two packages owning one path cannot
-# coexist — rpm refuses the install rather than warning. So realm's CLI installs
-# as `realmctl`, and the window manager and session daemon installs as `realm-wm`
+# BINARY NAMES ARE SETTLED (SPEC 0006 / SPEC 0025). Realm's CLI installs as
+# `realmctl`, and the window manager and session daemon install as `realm-wm`
 # (the crate is realm-session, but that name already belongs to the session entry
-# script the display manager runs). The %%files glob below is scoped so it can
-# never claim %%{_bindir}/realm.
+# script the display manager runs).
 #
 # Source0 is a packaging kit, not a second Realm workspace archive. It contains
 # this packaging metadata, the staging/linkage helpers, and the retained
@@ -154,9 +151,7 @@ ln -sf ../realm-bar.service %{buildroot}%{_userunitdir}/realm-session.target.wan
 # that matches nothing as a hard error ("File not found: .../realm-wm*"), so
 # globbing for binaries that do not exist yet fails the build. Verified the hard
 # way — that is exactly how this spec first failed. The list means realm-wm and
-# realm-bar need no spec change, and it can never accidentally claim
-# %%{_bindir}/realm, which on
-# Fedora belongs to Kubernetes Realm.
+# realm-bar need no spec change.
 # The list starts with the session entry, which always exists — rpm rejects an
 # *empty* -f list as firmly as it rejects a glob that matches nothing.
 echo "%{_bindir}/realm-session" >%{_builddir}/realm-binaries.list

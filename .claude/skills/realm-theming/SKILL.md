@@ -1,6 +1,6 @@
 ---
 name: realm-theming
-description: Use when anything about realm's colour or generated theme files is in play - editing palette.toml, changing a colour or contrast value, adding or editing a template in configs/templates/, theming a new app (gtk.css, Kvantum, qt6ct, ANSI/foot, yazi, btop, starship, fuzzel, helix), touching crates/realm-core/src/color.rs or palette.rs or the realm-theme crate, working on `realm ctl theme apply` or `lint`, or answering "can we make this bit blue" and "why does the accent look washed out at high contrast".
+description: Use when anything about realm's colour or generated theme files is in play - editing palette.toml, changing a colour or contrast value, adding or editing a template in configs/templates/, theming a new app (gtk.css, Kvantum, qt6ct, ANSI/foot, yazi, btop, starship, fuzzel, helix), touching crates/realm-core/src/color.rs or palette.rs or the realm-theme crate, working on `realmctl theme apply` or `lint`, or answering "can we make this bit blue" and "why does the accent look washed out at high contrast".
 ---
 
 # realm theming

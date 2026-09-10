@@ -42,7 +42,7 @@ Electron apps are non-negotiable in a work week".
 ## Decision
 
 The session entry point is a contract, not a convenience script. It performs the
-steps below in this order, and `realm ctl doctor` verifies each one at runtime.
+steps below in this order, and `realmctl doctor` verifies each one at runtime.
 
 ### The checklist a packager must follow
 
@@ -124,7 +124,7 @@ locker would depend on `realm-session` serving layer shell, so a crash in realm
 would expose the desktop. Which client we ship is still open; see *Needs a
 human*. The idle daemon may be any `ext-idle-notify-v1` client.
 
-**9. `realm ctl doctor` verifies every one of the above.**
+**9. `realmctl doctor` verifies every one of the above.**
 
 Not a subset. The doctor is what turns this contract from documentation into
 something that fails loudly. Its checks:
@@ -185,7 +185,7 @@ is not reversible: it is imposed by how D-Bus activation works.
 ## Guard
 
 - *Planned (M3):* the NixOS VM test boots the session and runs
-  `realm ctl doctor`, failing the build on any non-zero exit. This is the guard.
+  `realmctl doctor`, failing the build on any non-zero exit. This is the guard.
 - *Planned (M3):* a negative test that deliberately skips the
   `dbus-update-activation-environment` call and asserts `doctor` reports it.
   A health check that has never been seen to fail is not a health check.

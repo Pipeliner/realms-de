@@ -24,7 +24,7 @@ does not serve it waits — however good it would look in a screenshot.
 | 10 | One coherent theme across GTK, Qt and TUIs | The difference between a DE and a pile of programs | `realm-theme` + `realm-ctl theme apply` |
 | 11 | Portals work: FileChooser, ScreenCast, **Settings**, and **Inhibit routed to `none`** | Browsers and Electron apps are non-negotiable in a work week. Settings is what stops every GTK4 and Flatpak app rendering light; Inhibit must be `none` or the gtk backend claims success and the screen blanks mid-call | `configs/portal` + ADR 0011 |
 | 12 | Install on NixOS, Ubuntu and Fedora with River 0.4-compatible, target-specific packaging; Fedora uses its official native candidate | The stated targets | `packaging/` |
-| 13 | `realm ctl doctor` | Tells the user what is wrong before they file a bug | `realm-ctl` |
+| 13 | `realmctl doctor` | Tells the user what is wrong before they file a bug | `realm-ctl` |
 
 ## Out — deliberately, for now
 
@@ -46,7 +46,7 @@ does not serve it waits — however good it would look in a screenshot.
 | | Milestone | Ships | Done when |
 |---|---|---|---|
 | **M0** | Foundations | `realm-core`, CI, docs, ADRs, repo furniture | `cargo test` green in CI; architecture reviewed |
-| **M1** | Theming pipeline | `realm-theme`, templates, `realm ctl theme apply/lint` | One palette edit publishes a coherent sealed generation selected by future GTK, terminal, yazi and btop launches |
+| **M1** | Theming pipeline | `realm-theme`, templates, `realmctl theme apply/lint` | One palette edit publishes a coherent sealed generation selected by future GTK, terminal, yazi and btop launches |
 | **M2** | Session and bar | `realm-session` + `RiverBackend`, and the five protocols realm must *serve* under river (`river-layer-shell-v1`, `river-xkb-bindings-v1`, `river-input-management-v1`, `river-xkb-config-v1`, `river-libinput-config-v1` — the last two are why a laptop has a working touchpad and a switchable keyboard layout), plus `realm-bar` | Bar reflects live orbit/focus/mode changes, and the reference triptych geometry is pixel-exact on river |
 | **M3** | **Daily-drivable** | Session entry, portals, packaging, install docs | A fresh NixOS/Ubuntu/Fedora box logs into realm and passes `doctor` |
 | **M4** | Native clients | `realm-hecate`, `realm-odin`, urania, charon portal | The stopgaps are retired |

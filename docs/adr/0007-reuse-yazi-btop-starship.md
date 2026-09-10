@@ -116,7 +116,7 @@ uses for what the theme pipeline is meant to prevent.
   schema change fails CI rather than a user's session.
 - *Planned (M1):* a version-floor test asserting that the installed yazi, btop
   and starship are at least the versions whose theme keys our templates use.
-- *Planned (M3):* `realm ctl doctor` reports each reused tool's presence and
+- *Planned (M3):* `realmctl doctor` reports each reused tool's presence and
   version, so a missing dependency is a diagnosis rather than a mystery.
 - *Planned (M2):* the seam guard — a CI grep asserting that the strings `yazi`,
   `btop`, `fuzzel` and `starship` appear only in `configs/`, `packaging/`,

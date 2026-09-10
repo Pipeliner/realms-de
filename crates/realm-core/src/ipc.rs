@@ -1,7 +1,7 @@
 //! The realm control protocol.
 //!
 //! One newline-delimited JSON stream over a unix socket. Deliberately boring:
-//! `realm ctl` shells out to it from scripts, the bar subscribes to it, and a
+//! `realmctl` shells out to it from scripts, the bar subscribes to it, and a
 //! human can drive the whole desktop with `socat`. Newline framing means a
 //! partially written frame can never be mistaken for a complete one.
 
@@ -115,7 +115,7 @@ pub enum Response {
     },
 }
 
-/// Window order for a single orbit, as reported by `realm ctl ledger show`.
+/// Window order for a single orbit, as reported by `realmctl ledger show`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrbitLedger {
     /// One-based orbit number.

@@ -26,7 +26,7 @@ twice: the two drift." And "half-applied theme: terminal is new, GTK is old,
 until relogin." Both are ordinary and both are avoidable.
 
 The handoff also fixes the mechanism: `~/.config/realm/palette.toml` → templates
-→ `realm ctl theme apply` hot-reload. And it fixes the budget: theme apply under
+→ `realmctl theme apply` hot-reload. And it fixes the budget: theme apply under
 150 ms (`docs/ARCHITECTURE.md` §4), which rules out anything that recompiles or
 regenerates an icon cache.
 
@@ -39,7 +39,7 @@ regenerates an icon cache.
 2. Every themed file is a template in `configs/templates/`, rendered by
    `realm-theme` from the *derived* palette — that is, from
    `Palette::derived()`, with the contrast setting already folded in (ADR 0006).
-3. `realm ctl theme apply` renders the small shipped template set serially to
+3. `realmctl theme apply` renders the small shipped template set serially to
    temporary files, then `rename(2)`s each into place, and only then performs a
    single reload fan-out: `gsettings` writes for GTK and `SIGUSR1` to clients
    that support it. A realm-client reload notification remains planned session
@@ -75,7 +75,7 @@ with the implementation: the limits are documented, not fought.
 | Hardcoded application colours | The application ignores every theming mechanism | Document it. Do not fight it |
 | libadwaita geometry | Adwaita exposes named colours but not shapes; corner radii and paddings are compiled in | Take the colours, accept the shapes |
 | CSD headerbars | Client-side decorations are drawn by the application | Recolour plus a 1px border. No shape changes |
-| Flatpak applications | Sandboxed applications cannot read `~/.config` or `~/.themes` by default | Document the per-app `--filesystem` grant in the install docs, and have `realm ctl doctor` report Flatpak apps without it |
+| Flatpak applications | Sandboxed applications cannot read `~/.config` or `~/.themes` by default | Document the per-app `--filesystem` grant in the install docs, and have `realmctl doctor` report Flatpak apps without it |
 | The lock screen *(provisional)* | Depends on which locker ships; still `needs-human` in [ADR 0011](0011-session-integration-contract.md) | If `waylock` is chosen, theming reaches four `0xRRGGBB` values and nothing else: no type, no clock, no layout. That is a deliberate trade of fidelity for attack surface on the one security-critical surface, and it belongs on this list rather than being quietly absorbed |
 
 ## Alternatives considered

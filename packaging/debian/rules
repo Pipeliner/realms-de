@@ -112,9 +112,8 @@ override_dh_auto_install:
 		debian/realm/usr/lib/systemd/user/realm-session.target.wants/realm-bar.service
 	# Install whichever realm binaries this revision actually built. `realmctl` is
 	# built now; the loop means realm-wm and realm-bar need no packaging change. The
-	# names
-	# are the settled ones: realm-wm (the window manager and session daemon) and
-	# realmctl (the CLI, so it cannot collide with Kubernetes realm).
+	# names are the settled ones: realm-wm (the window manager and session
+	# daemon) and realmctl (the one CLI spelling on every distribution).
 	set -e; \
 	for bin in realmctl realm-wm realm-bar; do \
 		if [ -x "$(CARGO_TARGET_DIR)/release/$$bin" ]; then \

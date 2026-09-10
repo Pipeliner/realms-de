@@ -64,12 +64,12 @@ one edit publish a coherent sealed theme generation for future launches.
 - Templates for the surfaces the MVP needs: `gtk.css` for GTK 3 and 4,
   libadwaita named colours, `qt6ct` colour scheme, the terminal's 16-colour ANSI
   scheme, `yazi`, `btop`, `starship`, `fuzzel`.
-- `realm ctl theme apply` and `realm ctl theme lint` — the first two subcommands
+- `realmctl theme apply` and `realmctl theme lint` — the first two subcommands
   of the CLI, and its argument surface.
 - A CI check that no colour literal exists outside `palette.toml`.
 
 **Exit criterion.** Change one accent in `palette.toml`, run
-`realm ctl theme apply`, and select in under 150 ms one sealed generation whose
+`realmctl theme apply`, and select in under 150 ms one sealed generation whose
 normalized outputs all carry that change. Existing processes stay pinned and
 future launches select the new generation.
 
@@ -101,7 +101,7 @@ or mismatched selectable generation, and colour written down twice.
 - `realm-bar`: layer-shell bar at 32 px — orbit runes, layout indicator, mode
   badge, chord echo, focused title, the right-hand modules and the clock — plus
   the which-key strip and the `?` grimoire sheet.
-- `realm ctl orbit` and `realm ctl ledger`: the scriptable surface over the
+- `realmctl orbit` and `realmctl ledger`: the scriptable surface over the
   socket.
 - The rendering stack decided in
   [ADR 0008](adr/0008-layer-shell-rendering-stack.md), including real font
@@ -146,7 +146,7 @@ on a machine that is not the author's.
   package is the Fedora candidate, but no Realm session has tested that pairing.
   Ubuntu and Nix retain their independent source and pinning obligations under
   ADR 0010/0013; Fedora package availability does not settle those choices.
-- `realm ctl doctor`: checks the environment handshake, the portal backend, the
+- `realmctl doctor`: checks the environment handshake, the portal backend, the
   cursor theme, the font stack and the socket, and says what is wrong in plain
   words before the user has to file a bug.
 - Idle and lock handling — **blocked on an open
@@ -155,7 +155,7 @@ on a machine that is not the author's.
 - Install documentation for all three distributions.
 
 **Exit criterion.** A fresh NixOS, Ubuntu and Fedora box each log into realm and
-pass `realm ctl doctor` clean, with no manual steps beyond installing the
+pass `realmctl doctor` clean, with no manual steps beyond installing the
 package.
 
 **Unblocks.** Everything after this point is improvement rather than arrival.

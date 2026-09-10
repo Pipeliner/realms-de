@@ -1,10 +1,10 @@
 # realm — canonical palette. Single source of truth for every themed surface.
 #
-# `realm ctl theme apply` reads this file, renders every template in
+# `realmctl theme apply` reads this file, renders every template in
 # `configs/templates/`, and hot-reloads live clients. Nothing downstream may
 # hardcode a colour: if a value is missing here, add it here.
 #
-# Hue discipline: keep saturated accents >25 deg apart. `realm ctl theme lint`
+# Hue discipline: keep saturated accents >25 deg apart. `realmctl theme lint`
 # enforces this, plus WCAG contrast floors for text-on-background pairs.
 
 name = "realm-void"

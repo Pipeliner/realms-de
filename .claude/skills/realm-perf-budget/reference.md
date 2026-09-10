@@ -63,9 +63,9 @@ Run with `cargo test --release -p realm-core -- --nocapture`. `black_box` matter
 ### A whole command
 
 ```sh
-/usr/bin/time -v realm ctl theme apply     # wall clock and peak RSS
-perf stat -d realm ctl theme apply         # cycles, instructions, cache misses
-strace -c -f realm ctl theme apply         # syscall counts, when I/O is suspected
+/usr/bin/time -v realmctl theme apply     # wall clock and peak RSS
+perf stat -d realmctl theme apply         # cycles, instructions, cache misses
+strace -c -f realmctl theme apply         # syscall counts, when I/O is suspected
 ```
 
 ### Idle CPU

@@ -1,4 +1,4 @@
-# SPEC 0006 — realm ctl
+# SPEC 0006 — realmctl
 
 - **Status:** Accepted (2026-08-26; generation contract reconciled by #159) —
   `theme apply`, `theme lint`, and `theme diff` implemented; remaining command
@@ -24,7 +24,7 @@ Two jobs, and they are less unlike each other than they look.
 
 The first is the scriptable surface. realm is a keyboard-first desktop for
 people who will want to bind something we did not think of, and ADR 0004 chose
-a protocol they can drive from a shell. `realm ctl` is the ergonomic front of
+a protocol they can drive from a shell. `realmctl` is the ergonomic front of
 that: `orbit switch`, `ledger show`, `run`, `theme apply`.
 
 The second is `doctor`, and it is the component a user meets when something is
@@ -49,31 +49,26 @@ with no session, and with no session bus.
 
 **Out:** rendering templates and publishing or comparing immutable generations
 — that is `realm-theme`, [SPEC 0002](0002-theme-pipeline.md), and
-[SPEC 0011](0011-theme-activation-generations.md); `realm ctl` calls those
+[SPEC 0011](0011-theme-activation-generations.md); `realmctl` calls those
 boundaries in-process and reports their generation-aware results. Serving the
 socket, owning `RealmState`, and everything
 `Capabilities` describes (`realm-session`). Drawing anything ([SPEC
 0004](0004-realm-bar.md)). Deciding what a healthy session *is* — that is
 ADR 0011's checklist, which this spec turns into checks rather than restates.
 
-**A note on naming.** Every document in the repository, and `realm-core`'s own
-doc comments, spell the surface `realm ctl <group> <verb>`, and this spec
-follows them. `docs/ARCHITECTURE.md` §2 now names the installed binary
-`realmctl`, which sidesteps the Fedora collision recorded as `needs-human` in
-`packaging/fedora/realm.spec` — Fedora ships a `realm` for the Kubernetes package
-manager and it owns `/usr/bin/realm`. Whatever the binary ends up called, it
-must accept exactly the grammar below, and a `realm` that forwards its `ctl`
-subcommand is provided only where the name is free. The spelling is a packaging
-decision and this spec does not make it.
+**Command name.** The installed binary and every documented invocation use
+`realmctl`. There is no spaced spelling and no forwarding alias. This is part
+of the accepted project namespace contract in SPEC 0025, not a packaging-time
+choice.
 
 ## Behaviour
 
 ### 1. Command surface
 
 ```
-realm ctl [--json] [--palette PATH] <group> <verb> [args]
-realm ctl doctor [--json] [--portal-roundtrip]
-realm ctl --version
+realmctl [--json] [--palette PATH] <group> <verb> [args]
+realmctl doctor [--json] [--portal-roundtrip]
+realmctl --version
 ```
 
 The control endpoint is always the fixed descendant resolved by SPEC 0007;
@@ -104,7 +99,7 @@ the socket at all (§4).
 
 `run` is fire-and-forget by construction. `Response::Ok` means the session
 accepted the argv, not that the program started — `execve` fails after the fork
-and there is nowhere to report it to. The session logs the failure; `realm ctl`
+and there is nowhere to report it to. The session logs the failure; `realmctl`
 says "accepted" and not "launched", because the difference matters to someone
 debugging a `.desktop` entry.
 
@@ -121,8 +116,8 @@ meaning is retired and it is not sent by the supported theme path.
 
 | # | Gap | Addition |
 |---|---|---|
-| 1 | `Request::ReloadTheme` is documented as "re-read `palette.toml`, re-render templates, hot-reload clients", which conflicts with generation-only future-launch activation | Retire that meaning. The supported `theme apply` neither sends this request nor preserves a notify-only replacement. Any later wire compatibility or live upgrade is a separate #22 design and must be generation-aware; it cannot reload on pointer switch. A key action may spawn `realm ctl theme apply`, whose effect is still future-launch-only |
-| 2 | No request reports the session's health. `WmBackend::name()` is documented "shown by `realm ctl doctor`" and `Capabilities` "`realm ctl doctor` prints this" ([INTERFACES.md §1](../INTERFACES.md)) — and neither is reachable over the wire | `Request::GetHealth` → `Response::Health(Box<SessionHealth>)` carrying: session build version, `PROTOCOL_VERSION`, backend `name()`, `Capabilities`, the bound compositor interface names and versions, whether `river-layer-shell-v1` is being served, the palette path in use, the session's own `glyphs::Probe`, and uptime |
+| 1 | `Request::ReloadTheme` is documented as "re-read `palette.toml`, re-render templates, hot-reload clients", which conflicts with generation-only future-launch activation | Retire that meaning. The supported `theme apply` neither sends this request nor preserves a notify-only replacement. Any later wire compatibility or live upgrade is a separate #22 design and must be generation-aware; it cannot reload on pointer switch. A key action may spawn `realmctl theme apply`, whose effect is still future-launch-only |
+| 2 | No request reports the session's health. `WmBackend::name()` is documented "shown by `realmctl doctor`" and `Capabilities` "`realmctl doctor` prints this" ([INTERFACES.md §1](../INTERFACES.md)) — and neither is reachable over the wire | `Request::GetHealth` → `Response::Health(Box<SessionHealth>)` carrying: session build version, `PROTOCOL_VERSION`, backend `name()`, `Capabilities`, the bound compositor interface names and versions, whether `river-layer-shell-v1` is being served, the palette path in use, the session's own `glyphs::Probe`, and uptime |
 | 3 | `Capabilities` lives in `docs/INTERFACES.md` as a sketch, not in `realm-core`, and its `unsupported: Vec<&'static str>` cannot be deserialised into an owned value — yet it is exactly what `doctor` must print, entries like `"unclipped-dimension-quantisation"` included | Move it into `realm_core::ipc` with `Serialize`/`Deserialize`, and make `unsupported` a `Vec<String>`. It is a wire type now, not just a trait's return |
 | 4 | `Response::Error { message }` carries prose only, so a caller can map a refusal to an exit code only by matching on English | Add `kind`, a kebab-case enum: `unknown-request`, `bad-argument`, `no-such-orbit`, `no-focused-window`, `backend-refused`, `internal`. Exit codes come from data, not from a string |
 | 5 | `OrbitLedger` has `orbit`, `rune`, `name` and `windows`, but nothing says which orbit is active or what layout it holds, so `orbit list` cannot print what the bar shows without a second round trip | Add `active: bool` and `layout: Layout` |
@@ -135,12 +130,12 @@ these.
 
 **Human-readable by default.** Aligned columns, lower case, no decoration that
 does not carry information. Diagnostics and progress go to stderr; the answer
-goes to stdout, so `realm ctl orbit list | grep` behaves.
+goes to stdout, so `realmctl orbit list | grep` behaves.
 
 **`--json` for scripts.** Exactly one JSON object on stdout, no NDJSON, nothing
 else on the stream — a warning that would have gone to stdout goes to stderr
 instead. The object's shape is the `Response` it came from wherever there is
-one, so `realm ctl ledger show --json` round-trips `Response::Ledger` and a
+one, so `realmctl ledger show --json` round-trips `Response::Ledger` and a
 script can rely on `realm-core`'s serde definitions rather than on a format
 invented here. `theme lint` and `theme diff` shapes are refined by
 [SPEC 0020](0020-realmctl-theme-json.md); `doctor` remains defined here and
@@ -148,7 +143,7 @@ versioned by `PROTOCOL_VERSION`.
 
 **Colour** only when stdout is a terminal and `NO_COLOR` is unset, and only as
 ANSI indices — never a truecolor literal. The generated ANSI theme already maps
-those indices to the palette (SPEC 0002), so `realm ctl` picks up the user's
+those indices to the palette (SPEC 0002), so `realmctl` picks up the user's
 theme for free and no colour is written down twice
 (`docs/PITFALLS.md`).
 
@@ -286,7 +281,7 @@ the tool's absence *is* the finding.
 | `session/protocol-version` | the session's version equals `ipc::PROTOCOL_VERSION` | `Response::Hello` | *"The CLI and the session are from different builds and would misread each other's frames."* Both versions printed |
 | `session/degraded` | every `DEGRADED <CODE>` in force for this session | the session log's stable codes (SPEC 0005 §6) | any code present is a `warn` reprinting the entry's own sentence. *"A degraded session pretending to be healthy."* This is the check that stops a session that started with no cursor theme from reading as clean |
 | `palette/lint` | the palette parses and passes `Palette::lint` | `Palette::load` on the resolved path, then `lint()`; names the file used, user or shipped, and prints the accent hue separations | `FAIL` on any fatal `Finding`, `warn` otherwise. Prints every finding through its `Display` impl — `error text.normal: contrast 1.02:1 on background.pane is below 4.5:1` — not the first |
-| `theme/outputs` | the fully validated current generation matches the candidate rendered from the palette | the generation-aware comparison `theme diff` makes | `warn`: *"Future launches still select the previous generated theme."* Remedy: `realm ctl theme apply` |
+| `theme/outputs` | the fully validated current generation matches the candidate rendered from the palette | the generation-aware comparison `theme diff` makes | `warn`: *"Future launches still select the previous generated theme."* Remedy: `realmctl theme apply` |
 | `fonts/glyphs` | the glyph inventory against the chain in `palette.toml` | build the database from `typography.family` + `typography.fallback`, then `glyphs::Probe::run`; print `Probe::summary()` verbatim | **`warn`**, never `FAIL`: the runes are non-essential by ADR 0012 and realm degrades to digits rather than tofu. *"Orbit runes draw as the digits 1–6 and the bar looks plain."* Prints `substituting for ᚠᚢᚦ…` and the package to install |
 | `fonts/attribution` | **which** family supplied each at-risk glyph — the six runes and `𓂃` | the resolved chain, per codepoint | `warn` when a family outside `typography.fallback` supplied one. *"Runes render in colour at the wrong size."* This is how an emoji font hijacking the symbol range becomes visible instead of merely puzzling |
 | `tools/floors` | the reused tools are installed and at their version floors | each tool's own `--version` | `warn` naming the tool and the package. *"charon, horus or thoth will be missing or unthemed"* (ADR 0007) |
@@ -365,7 +360,7 @@ therefore pasteable as-is.
 
 ```json
 {
-  "tool": "realm ctl doctor",
+  "tool": "realmctl doctor",
   "version": "0.1.0",
   "protocol": 1,
   "checks": [
@@ -429,7 +424,7 @@ SSH into a machine that will not start, or from a TTY after a failed session.
   or not a session is running. A committed pointer affects future launches
   only; existing processes remain pinned to their selected generation.
 
-A missing session is never spelled as a crash. `realm ctl orbit switch` with no
+A missing session is never spelled as a crash. `realmctl orbit switch` with no
 session prints the socket path it tried and how to start a session, and exits
 3.
 
@@ -463,17 +458,17 @@ From [ARCHITECTURE.md §4](../ARCHITECTURE.md):
 
 | Path | Budget | How it is held |
 |---|---|---|
-| `realm ctl theme apply` | **< 150 ms** | templates rendered serially, then one complete generation is validated, sealed, fsynced, and published (SPEC 0011); no mutable-target equality shortcut is promised |
+| `realmctl theme apply` | **< 150 ms** | templates rendered serially, then one complete generation is validated, sealed, fsynced, and published (SPEC 0011); no mutable-target equality shortcut is promised |
 
 Two budgets belong to this component alone:
 
 - **`doctor` completes in under 3 s wall clock**, with every probe individually
   bounded and the largest deadline 2 s. A diagnostic that hangs is the bug it
   is diagnosing.
-- **No `realm ctl` invocation may stall `realm-session`.** Under river a stalled
+- **No `realmctl` invocation may stall `realm-session`.** Under river a stalled
   window manager is a dead session, not a slow frame (ADR 0013). A CLI that
   stops reading its side of the socket must not block the daemon; the session
-  is entitled to drop a wedged client, and `realm ctl` must therefore treat a
+  is entitled to drop a wedged client, and `realmctl` must therefore treat a
   closed connection as an ordinary outcome rather than an error to retry.
 
 `doctor` builds a font database to run the probe, which costs a fontconfig
@@ -507,12 +502,6 @@ check.
 
 ## Open questions
 
-- **The binary name.** Already `needs-human` in `packaging/fedora/realm.spec`:
-  Fedora's `realm` is the Kubernetes package manager and owns `/usr/bin/realm`.
-  `docs/ARCHITECTURE.md` §2 now names the binary `realmctl`.
-  *Recommendation: `realmctl` everywhere, with a `realm` wrapper provided only
-  where the name is free, and the documents' `realm ctl` spelling read as the
-  command it forwards to.*
 - **Should `doctor` be able to fix anything?** A `--fix` that re-runs the
   environment import and re-applies the gsettings keys would close most
   failures in one step.
@@ -529,7 +518,7 @@ check.
   the `WmBackend` trait. This needs `realm-session`'s spec to agree rather than
   being settled here.
 - **A subscribe surface.** `Request::Subscribe` exists and nothing in this
-  command set uses it. A `realm ctl watch` emitting NDJSON `RealmState` frames
+  command set uses it. A `realmctl watch` emitting NDJSON `RealmState` frames
   would make the socket scriptable from a shell loop without `socat`.
   *Recommendation: M4; ADR 0004's `socat` example already covers the need, and
   a command with no consumer is a command with no test.*

@@ -1,7 +1,7 @@
 //! Palette loading and lint, plus the legacy mutable apply/diff implementation.
 //!
 //! The public mutable writer items in this module are retained for implementation
-//! migration and historical tests. They are not the supported `realm ctl theme
+//! migration and historical tests. They are not the supported `realmctl theme
 //! apply|diff` contract. Supported apply publishes a sealed generation and
 //! supported diff compares against a fully validated current generation as
 //! specified by SPEC 0011.
@@ -186,7 +186,7 @@ pub struct HueSeparation {
     pub degrees: f32,
 }
 
-/// Everything `realm ctl theme lint` prints.
+/// Everything `realmctl theme lint` prints.
 #[derive(Debug)]
 pub struct LintReport {
     /// Findings from [`Palette::lint`], in order.

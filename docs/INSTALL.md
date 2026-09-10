@@ -232,11 +232,9 @@ lower `rust-version` to match a distro toolchain, because the locked dependency
 graph would still fail to parse. RPM builds remain governed by the toolchain
 requirement in `packaging/fedora/realm.spec`.
 
-**Name collision, settled:** Fedora ships a `realm` package for the Kubernetes
-package manager, which owns `/usr/bin/realm` — and rpm refuses an install that
-would collide rather than warning. realm's CLI therefore installs as `realmctl`,
-and the window manager as `realm-wm`. The `%files` list is scoped so it can never
-claim `/usr/bin/realm`.
+**Command names are settled:** the CLI installs as `realmctl`, the session entry
+as `realm-session`, and the window manager as `realm-wm`. These names are the
+same on every supported distribution.
 
 ### SELinux
 
@@ -338,7 +336,7 @@ Preflight, without logging in:
 realm-session --check
 ```
 
-That is the stand-in for `realm ctl doctor` until the CLI exists.
+That is the stand-in for `realmctl doctor` until the CLI exists.
 
 ---
 
@@ -365,7 +363,7 @@ compositor's own environment has `WAYLAND_DISPLAY` and systemd or D-Bus does
 not, the import ran too early or was skipped — that is the whole diagnosis,
 every time.
 
-*`realm ctl doctor` will check this in three separate places — the process,
+*`realmctl doctor` will check this in three separate places — the process,
 systemd, and D-Bus — because they fail separately.*
 
 ### Screen sharing offers no sources, or produces nothing
@@ -399,7 +397,7 @@ module installs IBM Plex, but does not install a Symbola or Nerd Font
 automatically. These symbol-font packages are optional recommendations: the
 glyph probe and ASCII fallbacks keep Realm legible when they are absent.
 
-*`realm ctl doctor` will print the glyph coverage summary —
+*`realmctl doctor` will print the glyph coverage summary —
 `realm-core::glyphs::Probe::summary()` already produces exactly that line.*
 
 ### The cursor is a black X11 arrow, or disappears over some windows
@@ -417,7 +415,7 @@ gsettings get org.gnome.desktop.interface cursor-theme
 The wrapper sets all three. If the theme name is set but the cursor is still
 wrong, the theme itself is not installed: `ls /usr/share/icons/*/cursors`.
 
-*`realm ctl doctor` will check the theme resolves *and* that gsettings agrees.*
+*`realmctl doctor` will check the theme resolves *and* that gsettings agrees.*
 
 ### I select realm and land straight back at the login screen
 
@@ -462,7 +460,7 @@ If `list-dependencies` shows the target with nothing under it, the package's
 `realm-session.target.wants/` symlinks are missing — starting the target then
 starts nothing at all and still exits 0.
 
-### Running apps keep the old theme after `realm ctl theme apply`
+### Running apps keep the old theme after `realmctl theme apply`
 
 This is expected: apply selects a sealed generation for future launches and
 never rethemes an existing process. Test a newly launched program started
@@ -487,7 +485,6 @@ None of them block building from source today.
 | How a River 0.4-compatible source is provided for the deb | `packaging/debian/rules` | Build from an upstream tag; package an upstream binary; require a PPA; raise the minimum Ubuntu version |
 | Package hosting | `packaging/debian/control`, spec | PPA / self-hosted apt / GitHub Releases; COPR / dist-git / release tarballs |
 | Maintainer identity | `packaging/debian/control`, `changelog`, spec, `SECURITY.md` | `vadim.evard@gmail.com` is the reachable package and private-security fallback contact |
-| `realm` binary name on Fedora | `packaging/fedora/realm.spec` | `realm-ctl`; rename the package to `realm-de`; confirm no collision with Kubernetes realm |
 | Idle and lock | `packaging/systemd/realm-session.target` | SPEC 0005 OQ-1: river 0.4 speaks `ext-session-lock-v1`, so the locker must too — gtklock (recommended), waylock (Zig), a new-enough swaylock, or `realm-ward` in M6. The idle defaults are a user-visible security decision and are not guessed |
 | ScreenCast actually working under river | `configs/portal/realm-portals.conf` | SPEC 0005 OQ-2: whether river 0.4.8 exports `wlr-screencopy-unstable-v1` and whether xdpw works with external window management. Routed to `wlr`; **unverified**, and screen sharing stays unproven until someone tests it on hardware |
 | How river is pinned in Nix | `packaging/nix/support.nix` | Pin via the nixpkgs input (current); or a tag-pinned input needing a second, human-produced `zigDeps` hash |

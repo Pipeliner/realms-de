@@ -48,7 +48,7 @@ exact environment set and where it is published; discovery of `WAYLAND_DISPLAY`
 and `DISPLAY`; the systemd user units and their supervision policy; portal
 backend selection and verification; the non-systemd and non-D-Bus degraded
 paths; session teardown; the log-line contract; and the list of checks
-`realm ctl doctor` owes the user.
+`realmctl doctor` owes the user.
 
 **Out:**
 
@@ -157,7 +157,7 @@ must be discovered, in two phases:
 2. **Liveness.** The socket file appearing proves `bind(2)`, not that the
    compositor is dispatching. Confirm with a connect-and-roundtrip probe —
    connect, bind `wl_registry`, `wl_display_roundtrip` — and proceed only when
-   it returns. `realm ctl wait-display --timeout <s>` is the required
+   it returns. `realmctl wait-display --timeout <s>` is the required
    implementation of this probe and is a hard requirement on `realm-ctl`. Until
    it exists, the entry falls back to file existence alone and logs
    `DEGRADED NO-DISPLAY-PROBE`, because file existence is a weaker claim than
@@ -482,7 +482,7 @@ that it works.
   ```
   It must answer immediately. A pause of about twenty-five seconds *is* the
   D-Bus activation timeout and *is* the diagnosis.
-- Round trip, on demand and in the VM test — `realm ctl doctor --portal-roundtrip`:
+- Round trip, on demand and in the VM test — `realmctl doctor --portal-roundtrip`:
   issue `org.freedesktop.portal.FileChooser.OpenFile` (signature `ssa{sv}` →
   object path), assert a handle within two seconds, then close it via
   `org.freedesktop.portal.Request.Close`. This opens a real dialog, which is why
@@ -514,7 +514,7 @@ with a stable `CODE`, so the line can be grepped, documented and referenced by
 | `NO-SESSION-BUS` | no `DBUS_SESSION_BUS_ADDRESS` and no `$XDG_RUNTIME_DIR/bus` | Re-exec once under `dbus-run-session -- realm-session`, guarded by `REALM_DBUS_REEXEC=1` so it cannot loop. If that binary is absent, continue and state plainly that portals, file dialogs and screen sharing will not work in this session. |
 | `NO-DBUS-ACTIVATION` | `dbus-update-activation-environment` absent | Continue. State that D-Bus-activated services will not see the display, so file dialogs will hang for twenty-five seconds. Suggest `dbus-user-session` (Debian/Ubuntu) or the equivalent dbus package (Fedora, Nix). |
 | `NO-SYSTEMD-USER` | `systemctl --user show-environment` does not succeed | Continue on the direct-launch path below. |
-| `NO-DISPLAY-PROBE` | `realm ctl wait-display` not installed | Continue with file-existence detection only. |
+| `NO-DISPLAY-PROBE` | `realmctl wait-display` not installed | Continue with file-existence detection only. |
 | `NO-XWAYLAND` | no new X11 socket appeared | Continue; `DISPLAY` is absent from both imports. |
 | `NO-GSETTINGS` | `gsettings` or the schemas absent | Continue; GTK apps get the wrong cursor. |
 | `NO-CURSOR-THEME` | the named theme resolves to no directory under any icon path | Continue; the cursor will be the default arrow. |
@@ -595,7 +595,7 @@ plain relogin. Without step 3 the next login inherits a `WAYLAND_DISPLAY`
 naming a dead socket, and the symptoms are identical to never having imported it
 (failure mode **N3**).
 
-### 8. What `realm ctl doctor` must check (input to SPEC 0006)
+### 8. What `realmctl doctor` must check (input to SPEC 0006)
 
 Every step above has a check. The names below are the contract; SPEC 0006 owns
 the implementation. Each check must print **the symptom it prevents**, not a

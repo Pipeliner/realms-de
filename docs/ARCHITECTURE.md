@@ -183,7 +183,7 @@ Neither word is allowed to stay an adjective. Both are tests.
 | Bar idle CPU | ~0% | The bar owns no timer and redraws only on a state change |
 | Sampler wakeups | 1 Hz, one thread, in `realm-session` | cpu, mem, gpu and net throughput are rates over counters with no kernel event behind them. One shared sampler off the input path is the single documented exception to the no-timers rule; the clock ticks to the next minute boundary, not every second |
 | Cold session start → usable | < 900 ms | No GPU context for the bar, no icon-cache scan, no thumbnailer |
-| `realm ctl theme apply` | < 150 ms | Templates rendered serially, then one complete generation is validated, sealed, fsynced, and selected for future launches; no mutable-target shortcut or reload |
+| `realmctl theme apply` | < 150 ms | Templates rendered serially, then one complete generation is validated, sealed, fsynced, and selected for future launches; no mutable-target shortcut or reload |
 
 **Robust — the failure modes we refuse to ship** (see
 [docs/PITFALLS.md](PITFALLS.md) for the full register):
@@ -230,19 +230,15 @@ be checked mechanically before release.
 
 ### Binary names
 
-Crate names and installed binary names deliberately differ in two places, both
-to avoid a collision that would otherwise be found by a user rather than by us:
+Crate names and installed binary names deliberately differ where the executable
+role needs to be immediately clear to a user:
 
 | Crate | Binary | Why |
 |---|---|---|
 | `realm-session` | `realm-wm` | `realm-session` is already the session *wrapper* script the display manager runs. Two different things called `realm-session` in one `ps` output is a support burden, and under river the daemon genuinely is the window manager |
-| `realm-ctl` | `realmctl` | Fedora ships Kubernetes Realm as `/usr/bin/realm`. Two packages owning that path cannot coexist, and rpm refuses the install rather than warning |
+| `realm-ctl` | `realmctl` | SPEC 0006 and SPEC 0025 define one unambiguous command spelling across every distribution and document |
 
-The design handoff writes the CLI as `realm ctl orbit --list`. That copy is
-otherwise final, and this is a deliberate departure with a reason, per the
-precedence rule in `design/README.md`. Whether to also ship a `realm` alias where
-the name is free is **`needs-human`**: it is a branding call, not a technical
-one.
+The CLI is always `realmctl`; no forwarding alias is part of the product.
 
 ## 6. Repository layout
 
