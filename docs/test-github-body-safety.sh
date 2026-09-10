@@ -38,6 +38,10 @@ fixture=$tmp/repository
 make_fixture "$fixture"
 expect_pass "$fixture"
 
+printf '%s\n' 'unsafe=$''(id)' >>"$fixture/scripts/gh-body-file"
+git -C "$fixture" add scripts/gh-body-file
+expect_fail "$fixture"
+
 directive_prefix='shellcheck dis'
 directive_suffix='able'
 if grep -F -q "$directive_prefix$directive_suffix" "$guard" ||

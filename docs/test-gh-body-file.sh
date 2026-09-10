@@ -43,6 +43,9 @@ expect_no_gh_on_failure() {
 }
 
 body=$fixture/literal-body.md
+title_file=$fixture/literal-title.txt
+dollar='$'
+title="Literal \`title\` ${dollar}(touch /tmp/gh-body-file-escaped) \"quotes\" and * glob"
 escape_marker=/tmp/gh-body-file-escaped
 rm -f "$escape_marker"
 
@@ -59,6 +62,13 @@ run_helper "$capture" issue-create 'body safety' "$body"
 write_expected "$expected" issue create --title 'body safety' --body-file "$body"
 expect_argv "$capture" "$expected"
 
+capture=$tmp/issue-edit.argv
+expected=$tmp/issue-edit.expected
+run_helper "$capture" issue-edit 123 "$title_file" "$body"
+write_expected "$expected" issue edit 123 --title "$title" --body-file "$body"
+expect_argv "$capture" "$expected"
+[ ! -e "$escape_marker" ] || fail 'literal title was evaluated by a shell'
+
 capture=$tmp/pr-create.argv
 expected=$tmp/pr-create.expected
 run_helper "$capture" pr-create main codex/body-safety 'body safety' "$body"
@@ -70,19 +80,43 @@ expect_no_gh_on_failure "$capture" issue-comment -1 "$body"
 expect_no_gh_on_failure "$capture" issue-create 'body safety' "$tmp/missing"
 expect_no_gh_on_failure "$capture" pr-create -main codex/body-safety 'body safety' "$body"
 expect_no_gh_on_failure "$capture" issue-comment 123 "$tmp"
+expect_no_gh_on_failure "$capture" issue-edit 123 "$tmp/missing" "$body"
+expect_no_gh_on_failure "$capture" issue-edit 123 "$title_file" "$tmp/missing"
+
+empty_title=$tmp/empty-title.txt
+: >"$empty_title"
+expect_no_gh_on_failure "$capture" issue-edit 123 "$empty_title" "$body"
+
+unterminated_title=$tmp/unterminated-title.txt
+printf '%s' 'unterminated title' >"$unterminated_title"
+expect_no_gh_on_failure "$capture" issue-edit 123 "$unterminated_title" "$body"
+
+multiline_title=$tmp/multiline-title.txt
+printf '%s\\n%s\\n' 'first title line' 'second title line' >"$multiline_title"
+expect_no_gh_on_failure "$capture" issue-edit 123 "$multiline_title" "$body"
+
+crlf_title=$tmp/crlf-title.txt
+printf '%s\\r\\n' 'CRLF title' >"$crlf_title"
+expect_no_gh_on_failure "$capture" issue-edit 123 "$crlf_title" "$body"
 
 fifo=$tmp/body.fifo
 mkfifo "$fifo"
 expect_no_gh_on_failure "$capture" issue-comment 123 "$fifo"
+
+title_fifo=$tmp/title.fifo
+mkfifo "$title_fifo"
+expect_no_gh_on_failure "$capture" issue-edit 123 "$title_fifo" "$body"
 
 if [ "$(id -u)" -ne 0 ]; then
     unreadable=$tmp/unreadable.md
     cp "$body" "$unreadable"
     chmod 000 "$unreadable"
     expect_no_gh_on_failure "$capture" issue-comment 123 "$unreadable"
+    expect_no_gh_on_failure "$capture" issue-edit 123 "$unreadable" "$body"
 fi
 
 expect_no_gh_on_failure "$capture" unknown 123 "$body"
 expect_no_gh_on_failure "$capture" issue-comment 123
+expect_no_gh_on_failure "$capture" issue-edit 123 "$title_file"
 
 echo 'PASS: GitHub body helper'

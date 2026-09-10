@@ -8,8 +8,8 @@
 
 ## Purpose
 
-Prevent Markdown intended for a GitHub issue comment, issue creation, or pull
-request creation from being interpreted by the local shell while a
+Prevent Markdown intended for a GitHub issue comment, issue creation, issue
+metadata edit, or pull request creation from being interpreted by the local shell while a
 repository-controlled publication command is assembled.
 
 ## Scope and boundary
@@ -26,11 +26,16 @@ and is not introduced here.
    a final `BODY_FILE` argument, requires it to be a readable regular file, and
    forwards that pathname through GitHub CLI's file-body facility. Body bytes
    are never a shell argument, shell program, or helper-generated string.
-2. The helper supports `issue-create`, `issue-comment`, and `pr-create` with
-   fixed argument positions. Issue numbers are positive decimal identifiers;
-   branch references are nonempty and do not begin with `-`; titles remain one
-   separately quoted metadata argument. Invalid arity or body files fail before
-   any GitHub CLI invocation.
+2. The helper supports `issue-create`, `issue-comment`, `issue-edit`, and
+   `pr-create` with fixed argument positions. Issue numbers are positive decimal
+   identifiers; branch references are nonempty and do not begin with `-`;
+   inline titles remain one separately quoted metadata argument. `issue-edit`
+   takes `ISSUE TITLE_FILE BODY_FILE`: both files must be readable regular
+   files, and its title file must contain exactly one nonempty LF-terminated
+   line. The helper reads that line without evaluating it and invokes GitHub CLI
+   with it as the separately quoted title metadata argument and the body
+   pathname through `--body-file`. Invalid arity, identifiers, title files, or
+   body files fail before any GitHub CLI invocation.
 3. `docs/check-github-body-safety.sh` deterministically examines every tracked
    shell command source, Make/just source, workflow, and composite action,
    excluding only its static test fixtures and the checker itself. It rejects a
@@ -48,8 +53,8 @@ and is not introduced here.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| A1 | Given a body fixture containing backticks, substitution syntax, quotes, glob characters and newlines, when every supported helper operation runs against a fake GitHub CLI, then the fake receives the exact fixed argv and only the fixture pathname; no fixture content is evaluated. | `docs/test-gh-body-file.sh` — `literal-file-forwarding` |
-| A2 | Given invalid identifiers, arity, or non-regular/unreadable body inputs, when the helper is run, then it fails before invoking the fake GitHub CLI. | `docs/test-gh-body-file.sh` — `reject-before-gh` |
+| A1 | Given body and one-line title fixtures containing shell-looking Markdown, quotes, glob characters and newlines where applicable, when every supported helper operation runs against a fake GitHub CLI, then the fake receives the exact fixed argv, the body pathname, and the literal title value; no fixture content is evaluated. | `docs/test-gh-body-file.sh` — `literal-file-forwarding` |
+| A2 | Given invalid identifiers, arity, non-regular/unreadable body inputs, or invalid title files, when the helper is run, then it fails before invoking the fake GitHub CLI. | `docs/test-gh-body-file.sh` — `reject-before-gh` |
 | A3 | Given a tracked automation fixture containing any forbidden direct body publication form, when the repository guard runs, then it fails; given the approved helper and read-only queries, it passes. | `docs/test-github-body-safety.sh` — `tracked-command-allowlist` |
 | A4 | Given the normal pull-request CI workflow, when documentation checks run, then the helper and guard fixtures execute and the repository guard passes. | `.github/workflows/ci.yml` — `docs` |
 | A5 | Given the helper guard and its fixture test, when the pinned ShellCheck policy examines them, then both parse and pass without a ShellCheck suppression. | `docs/test-github-body-safety.sh` — `guard-source-is-shellcheck-clean`; `checks.shellcheck` |

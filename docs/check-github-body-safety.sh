@@ -33,14 +33,15 @@ helper=$root/scripts/gh-body-file
 for line in \
     "        exec gh issue create --title \"\$title\" --body-file \"\$body_file\"" \
     "        exec gh issue comment \"\$issue\" --body-file \"\$body_file\"" \
+    "        exec gh issue edit \"\$issue\" --title \"\$title\" --body-file \"\$body_file\"" \
     "        exec gh pr create --base \"\$base\" --head \"\$head\" --title \"\$title\" --body-file \"\$body_file\""; do
     grep -F -x -q "$line" "$helper" || fail 'helper command surface changed'
 done
 
 helper_gh_count=$(grep -c -E '^[[:space:]]*exec gh[[:space:]]' "$helper" || true)
-[ "$helper_gh_count" -eq 3 ] || fail 'helper has an unapproved GitHub CLI invocation'
+[ "$helper_gh_count" -eq 4 ] || fail 'helper has an unapproved GitHub CLI invocation'
 if grep -n -E '(^|[[:space:];])eval[[:space:]]|<<' "$helper" >/dev/null ||
-    grep -F -q "\$(" "$helper" ||
+    grep -n -E '\$\([^(]' "$helper" >/dev/null ||
     grep -F -q '`' "$helper"; then
     fail 'helper dynamically constructs a shell command'
 fi
