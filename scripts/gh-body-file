@@ -21,7 +21,8 @@ require_title_file() {
         echo "title file must be a readable regular file: $title_file" >&2
         exit 66
     fi
-    if od -An -t x1 "$title_file" | grep -q '0d'; then
+    if od -An -t x1 <"$title_file" |
+        grep -Eq '(^|[[:space:]])(00|0d)([[:space:]]|$)'; then
         echo "title file must contain exactly one nonempty LF-terminated line" >&2
         exit 64
     fi

@@ -42,6 +42,12 @@ printf '%s\n' 'unsafe=$''(id)' >>"$fixture/scripts/gh-body-file"
 git -C "$fixture" add scripts/gh-body-file
 expect_fail "$fixture"
 
+multiline_fixture=$tmp/multiline-repository
+make_fixture "$multiline_fixture"
+printf '%s\n' 'unsafe=$''(' 'id' ')' >>"$multiline_fixture/scripts/gh-body-file"
+git -C "$multiline_fixture" add scripts/gh-body-file
+expect_fail "$multiline_fixture"
+
 directive_prefix='shellcheck dis'
 directive_suffix='able'
 if grep -F -q "$directive_prefix$directive_suffix" "$guard" ||

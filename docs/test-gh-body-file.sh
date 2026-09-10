@@ -92,12 +92,23 @@ printf '%s' 'unterminated title' >"$unterminated_title"
 expect_no_gh_on_failure "$capture" issue-edit 123 "$unterminated_title" "$body"
 
 multiline_title=$tmp/multiline-title.txt
-printf '%s\\n%s\\n' 'first title line' 'second title line' >"$multiline_title"
+printf '%s\n%s\n' 'first title line' 'second title line' >"$multiline_title"
 expect_no_gh_on_failure "$capture" issue-edit 123 "$multiline_title" "$body"
 
 crlf_title=$tmp/crlf-title.txt
-printf '%s\\r\\n' 'CRLF title' >"$crlf_title"
+printf '%s\r\n' 'CRLF title' >"$crlf_title"
 expect_no_gh_on_failure "$capture" issue-edit 123 "$crlf_title" "$body"
+
+nul_title=$tmp/nul-title.txt
+printf '%s\0%s\n' 'NUL' 'title' >"$nul_title"
+expect_no_gh_on_failure "$capture" issue-edit 123 "$nul_title" "$body"
+
+hyphen_title=-crlf-title.txt
+printf '%s\r\n' 'hyphen title' >"$tmp/$hyphen_title"
+if (cd "$tmp" && run_helper "$capture" issue-edit 123 "$hyphen_title" "$body"); then
+    fail 'hyphen-prefixed CRLF title invocation succeeded'
+fi
+[ ! -e "$capture" ] || fail 'hyphen-prefixed title invocation reached GitHub CLI'
 
 fifo=$tmp/body.fifo
 mkfifo "$fifo"

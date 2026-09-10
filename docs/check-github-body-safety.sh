@@ -41,7 +41,7 @@ done
 helper_gh_count=$(grep -c -E '^[[:space:]]*exec gh[[:space:]]' "$helper" || true)
 [ "$helper_gh_count" -eq 4 ] || fail 'helper has an unapproved GitHub CLI invocation'
 if grep -n -E '(^|[[:space:];])eval[[:space:]]|<<' "$helper" >/dev/null ||
-    grep -n -E '\$\([^(]' "$helper" >/dev/null ||
+    tr '\n' ' ' <"$helper" | grep -q -E '\$\([^(]' ||
     grep -F -q '`' "$helper"; then
     fail 'helper dynamically constructs a shell command'
 fi
