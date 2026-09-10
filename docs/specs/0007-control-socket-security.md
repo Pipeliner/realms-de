@@ -51,6 +51,7 @@ pub struct SocketEndpoint(/* canonical display path + retained capability */);
 pub struct BoundControlEndpoint(/* private non-listening fd + ownership */);
 pub struct ActiveControlListener(/* private listening fd + ownership */);
 pub struct ClientEndpoint(/* retained runtime capability for retries */);
+pub struct Client(/* connected #41 transport wrapper */);
 
 pub enum IpcPathError {
     MissingRuntimeDir,
@@ -112,7 +113,11 @@ that descendant. Bound and active wrappers expose borrows of their endpoint and
 `RealmDir`; neither wrapper is `Clone`. `BoundControlEndpoint` deliberately
 does not implement `AsFd`, so code outside the one-shot transition cannot call
 `listen`. `ActiveControlListener` implements `AsFd` for `poll`/`accept` while
-keeping its fd private.
+keeping its fd private. Its `AsFd` borrow is the listener only: the singleton
+lock descriptor is private to the ownership wrappers and no accessor or trait
+implementation exposes it. `Client` is the later #41 connected transport
+wrapper; naming it here is not a claim that the endpoint-only slice implements
+that transport.
 
 `production_runtime_dir` alone reads `XDG_RUNTIME_DIR`. It rejects an absent,
 relative, or non-directory value as `MissingRuntimeDir`; a caller-provided
@@ -154,13 +159,18 @@ the generated procfd bridge.
 Server construction order is exact:
 
 1. resolve and retain the runtime capability and effective uid;
-2. under scoped umask `0077`, attempt `mkdirat(..., "realm", 0700)`, accepting
+2. before any filesystem mutation, verify that `/proc/self/fd` is accessible,
+   length-check the fixed canonical address, and length-check a procfd address
+   using the widest possible Linux fd decimal representation; each check
+   includes the terminating NUL in `sockaddr_un`;
+3. under scoped umask `0077`, attempt `mkdirat(..., "realm", 0700)`, accepting
    only absence/create or `EEXIST`, then restore the old umask;
-3. securely open and validate `realm`, retaining `RealmDir`;
-4. form and length-check the fixed canonical display path and the generated
-   procfd address, including each terminating NUL;
-5. separately open the validated realm directory, acquire the singleton lock,
-   and retain its independent open-file description;
+4. securely open and validate `realm`, retaining `RealmDir`, then form the
+   actual procfd address whose fit was guaranteed by step 2;
+5. open the validated realm directory again as a private independent open-file
+   description with `O_RDONLY | O_DIRECTORY | O_CLOEXEC` (or an exactly
+   equivalent atomic close-on-exec directory open), verify `FD_CLOEXEC` with
+   `fcntl(F_GETFD)`, acquire the singleton lock, and retain that fd privately;
 6. only then inspect, probe, identity-recheck, and if authorized unlink an
    existing `ctl.sock`;
 7. create the nonblocking close-on-exec socket fd;
@@ -170,21 +180,27 @@ Server construction order is exact:
    `getsockname` and pre-activation `SO_ACCEPTCONN`, then return the bound
    capability.
 
-Steps 1–9 complete before the process starts any other thread. Every failure
-closes capabilities already acquired, preserves any entry not proved to be the
-one owned or stale identity, and returns without falling back.
+Steps 1–9 complete before the process starts any other thread. Step 2 failure
+does not create `realm`, inspect or alter `ctl.sock`, or try another pathname.
+Every failure closes capabilities already acquired, preserves any entry not
+proved to be the one owned or stale identity, and returns without falling back.
 
 ## Listener ownership and stale reclaim
 
 Before examining `ctl.sock`, the server opens the already validated realm
-directory again to obtain a separate open-file description, acquires
-`flock(LOCK_EX | LOCK_NB)` on it, and retains that descriptor through bound,
-active, and cleanup states. Lock contention returns
+directory again with `O_RDONLY | O_DIRECTORY | O_CLOEXEC` (or an exact
+equivalent) to obtain a separate open-file description. It verifies
+`FD_CLOEXEC` through `fcntl(F_GETFD)`, acquires `flock(LOCK_EX | LOCK_NB)`, and
+retains that private descriptor through bound, active, and cleanup states. No
+public borrow exposes the lock fd. Lock contention returns
 `IpcPathError::EndpointInUse` without a socket probe, stat, unlink, bind, or
 other mutation. A duplicate fd would share the same open-file description and
 therefore the same `flock`; a separate open is required so singleton ownership
 has its own lifetime, independent of temporary or borrowed copies of the realm
-resolution fd. Any non-contention lock failure fails closed.
+resolution fd. Any open, flag-verification, or non-contention lock failure
+fails closed. No launch path may clear `FD_CLOEXEC`: after a successful `exec`,
+a launched client must hold no copy of the singleton lock and therefore cannot
+extend server ownership beyond the daemon's lifetime.
 
 Only after holding that singleton lock may an existing `ctl.sock` be examined.
 It must no-follow-stat as a socket owned by the daemon euid with mode exactly
@@ -316,10 +332,12 @@ Production uses `CLOCK_MONOTONIC` and a Linux `SO_PEERCRED` provider; test-only 
 |---|---|---|
 | A1 | Given an absent, relative, non-directory, symlinked, foreign-owned, or not-exactly-`0700` runtime path (including modes missing owner bits), or any secure `openat2` failure, when resolved, then the specified path error is returned and no fallback or override is read | `realm_control::tests::runtime_capability_rejects_every_unsafe_input_and_openat2_failure` |
 | A2 | Given a hostile ambient umask, when the server prepares a missing fixed descendant, then `realm` is exactly `0700` and the old umask is restored; given the same absence on a client, it does not create `realm` | `realm_control::tests::server_creates_realm_exactly_once_under_scoped_umask`, `realm_control::tests::client_never_creates_realm` |
+| A2a | Given missing or inaccessible `/proc/self/fd`, or a canonical or worst-case procfd address that overflows Linux `sockaddr_un` including its terminating NUL, when server endpoint preparation begins, then it fails before creating `realm` or inspecting/mutating `ctl.sock` and never falls back to the canonical or another path | `realm_control::tests::missing_or_inaccessible_procfs_fails_before_mutation_without_fallback`, `realm_control::tests::sockaddr_un_overflow_fails_before_mutation_without_fallback` |
 | A3 | Given an unsafe realm object or unsafe existing `ctl.sock`, when an endpoint is prepared, then the object is rejected and remains byte/identity unchanged | `realm_control::tests::unsafe_realm_and_socket_entries_are_preserved` |
 | A4 | Given a reachable listener or an unchanged refused stale socket, when another server prepares the endpoint, then the live entry is preserved and only the unchanged refused identity is reclaimed | `realm_control::tests::live_listener_is_preserved_and_verified_refusal_is_reclaimed` |
 | A5 | Given immediate refusal, `EAGAIN`, `EINPROGRESS`, completion success/refusal/error, timeout, poll failure, or unexpected `EALREADY`, when the one-shot nonblocking stale probe runs, then only immediate or completed `ECONNREFUSED` is a stale candidate and every other result preserves the entry | `realm_control::tests::linux_stale_probe_completion_table_is_total` |
 | A6 | Given a first server that holds a bound but non-listening endpoint, when a second binder starts, then it returns `EndpointInUse` without probing or unlinking `ctl.sock` | `realm_control::tests::singleton_lock_protects_the_prelisten_state` |
+| A6a | Given a bound or active owner, then its singleton lock uses a private independent directory fd with `FD_CLOEXEC`; when a long-lived exec-launched client remains after that owner drops, the client retains no lock and a second binder can acquire ownership | `realm_control::tests::singleton_lock_fd_is_private_directory_cloexec_and_not_inherited_across_exec` |
 | A7 | Given a successful bind, then the pathname is an euid-owned socket of exact mode `0600`, the fd has `NONBLOCK` and `CLOEXEC`, the canonical external path denotes the same entry, `getsockname` equals the generated procfd address, and `SO_ACCEPTCONN` is false | `realm_control::tests::bound_capability_has_exact_path_fd_and_address_properties` |
 | A8 | Given one bound capability, when it is consumed by activation, then `listen(..., 64)` occurs exactly once, `SO_ACCEPTCONN` is true, and a connection succeeds | `realm_control::tests::activation_is_consuming_one_shot_and_listens_with_backlog_64` |
 | A9 | Given a bound or active owner and either its unchanged entry or an attacker replacement, when it drops, then its socket fd closes first, only the owned unchanged entry is removed under the retained lock, and the replacement remains | `realm_control::tests::drop_cleanup_preserves_replacements` |

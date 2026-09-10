@@ -55,12 +55,14 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
   `/proc/self/fd/<realm-dir-fd>/ctl.sock` bridge after capability validation;
   inaccessible procfs fails closed with no display-path fallback.
 - Before inspecting an existing socket, a server holds an exclusive
-  nonblocking `flock` on a separately opened description of the validated
-  realm directory. This protects the bound-but-not-listening recovery window,
-  where connect refusal alone cannot distinguish a live owner from a stale
-  socket. After bind, pathname ownership is proved from no-follow pathname
-  metadata plus `getsockname` and `SO_ACCEPTCONN`, not by comparing the
-  pathname inode with the distinct sockfs inode returned for the socket fd.
+  nonblocking `flock` on a private, independent
+  `O_DIRECTORY | O_CLOEXEC` description of the validated realm directory.
+  `FD_CLOEXEC` is verified and the fd is never exposed, so an exec-launched
+  client cannot inherit ownership. This protects the bound-but-not-listening
+  recovery window, where connect refusal alone cannot distinguish a live owner
+  from a stale socket. After bind, pathname ownership is proved from no-follow
+  pathname metadata plus `getsockname` and `SO_ACCEPTCONN`, not by comparing
+  the pathname inode with the distinct sockfs inode returned for the socket fd.
   Only verified `ECONNREFUSED` under the singleton lock authorizes a stale
   candidate; timeout, success, permission failure, overload, and every other
   result preserve the entry. Listening is a consuming one-shot operation after
