@@ -24,7 +24,17 @@ same-euid process is trusted for every existing command; directory mode is
 defence in depth, not per-command authorization. The endpoint capability slice
 tracked by #218 is narrower still: it does not implement or redesign peer
 credentials, Hello/framing, request dispatch, subscriptions, the client retry
-schedule, the persistence worker, the outer event loop, or daemon assembly.
+schedule, `ClientEndpoint`, client realm reopens or attempt resolution, the
+persistence worker, the outer event loop, or daemon assembly.
+
+Same-euid processes are already trusted control peers and are also trusted not
+to mutate Realm's runtime namespace concurrently with endpoint construction or
+cleanup. Linux provides no atomic `statat`-and-`unlinkat`, and a pathname Unix
+socket's VFS inode cannot be proved by comparing it with `fstat(socket_fd)`
+because those descriptors name different kernel objects. Identity rechecks
+reject replacements detectable before the final pathname operation; preserving
+a replacement made by a trusted same-euid process in the final stat-to-unlink
+or bind-to-stat gap is outside this threat model, not an implementation promise.
 
 ## Ownership, target, and API boundary
 
@@ -42,7 +52,7 @@ work. `realm-control` is Linux-only and must reject every non-Linux compilation
 explicitly (for example with a target-gated `compile_error!`), rather than
 silently weakening the contract or omitting functionality.
 
-Its endpoint capability boundary includes at least:
+The complete `realm-control` boundary across #218 and #41 includes at least:
 
 ```rust
 pub struct RuntimeDir(/* absolute display path, retained fd, daemon euid */);
@@ -72,6 +82,7 @@ pub fn test_runtime_dir(path: &Path) -> Result<RuntimeDir, IpcPathError>;
 impl RuntimeDir {
     pub fn path(&self) -> &Path;
     pub fn prepare_server_endpoint(self) -> Result<SocketEndpoint, IpcPathError>;
+    // #41, not #218.
     pub fn client_endpoint(self) -> ClientEndpoint;
 }
 
@@ -99,9 +110,15 @@ impl ActiveControlListener {
 impl AsFd for ActiveControlListener { /* poll/accept only */ }
 
 impl ClientEndpoint {
+    // #41, not #218.
     pub fn connect(&self) -> Result<Client>;
 }
 ```
+
+Issue #218 implements only `RuntimeDir`, `RealmDir`, `SocketEndpoint`,
+`BoundControlEndpoint`, and `ActiveControlListener`. `ClientEndpoint`,
+`Client`, `RuntimeDir::client_endpoint`, client realm reopen/attempt resolution,
+and retry behavior are delivered by #41.
 
 `RuntimeDir` retains the absolute public display path, the securely resolved
 runtime-directory fd, and the daemon effective uid captured for validation.
@@ -147,9 +164,13 @@ including the stale probe and every shared-crate client attempt, therefore uses
 a private address generated internally as
 `/proc/self/fd/<realm-dir-fd>/ctl.sock`. Following this procfs fd bridge is the
 one intentional magic-link traversal after the descriptor capability has been
-validated; no caller can supply or alter it. Missing or inaccessible procfs,
-or an internal bridge that does not fit `sockaddr_un`, fails closed with no
-absolute-path fallback. The canonical public
+validated; no caller can supply or alter it. Before server mutation, opening
+`/proc/self/fd` alone is insufficient: the server must traverse the actual
+`/proc/self/fd/<held-runtime-fd>` bridge and verify that the resulting directory
+has the same device/inode, type, euid owner, and exact `0700` mode as the
+retained `RuntimeDir`. A missing, inaccessible, mismatched, or otherwise
+unusable actual bridge, or an internal socket address that does not fit
+`sockaddr_un`, fails closed with no absolute-path fallback. The canonical public
 `$XDG_RUNTIME_DIR/realm/ctl.sock` is retained only for display and external
 clients such as `socat`; it must also fit Linux `sockaddr_un`, including its
 terminating NUL, and reaches the same directory entry. Shared-crate clients do
@@ -159,10 +180,12 @@ the generated procfd bridge.
 Server construction order is exact:
 
 1. resolve and retain the runtime capability and effective uid;
-2. before any filesystem mutation, verify that `/proc/self/fd` is accessible,
-   length-check the fixed canonical address, and length-check a procfd address
-   using the widest possible Linux fd decimal representation; each check
-   includes the terminating NUL in `sockaddr_un`;
+2. before any filesystem mutation, traverse the actual
+   `/proc/self/fd/<held-runtime-fd>` bridge, verify its directory identity and
+   properties against the retained `RuntimeDir`, length-check the fixed
+   canonical address, and length-check a procfd socket address using the widest
+   possible Linux fd decimal representation; each address check includes the
+   terminating NUL in `sockaddr_un`;
 3. under scoped umask `0077`, attempt `mkdirat(..., "realm", 0700)`, accepting
    only absence/create or `EEXIST`, then restore the old umask;
 4. securely open and validate `realm`, retaining `RealmDir`, then form the
@@ -182,8 +205,9 @@ Server construction order is exact:
 
 Steps 1–9 complete before the process starts any other thread. Step 2 failure
 does not create `realm`, inspect or alter `ctl.sock`, or try another pathname.
-Every failure closes capabilities already acquired, preserves any entry not
-proved to be the one owned or stale identity, and returns without falling back.
+Every failure closes capabilities already acquired, preserves any entry whose
+identity mismatch was detected before the final operation, and returns without
+falling back. The trusted same-euid final-gap limitation above still applies.
 
 ## Listener ownership and stale reclaim
 
@@ -221,8 +245,10 @@ attempt. Linux results are total:
 A stale candidate is not yet authority to unlink. Immediately before
 `unlinkat`, the server repeats the no-follow stat and requires the same
 filesystem device/inode, socket type, euid owner, and exact `0600` mode observed
-before probing. A mismatch preserves the replacement and fails. Only an
-unchanged candidate is reclaimed.
+before probing. A mismatch detected by the second stat preserves the
+replacement and fails. Only a candidate unchanged at that recheck is authorized
+for reclaim; the subsequent stat-to-unlink gap is not atomic and relies on the
+stated same-euid trust boundary.
 
 With no entry remaining, `SocketEndpoint::bind(self)` creates one
 `AF_UNIX/SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC` fd. Under a scoped `0177`
@@ -233,10 +259,15 @@ pathname `st_dev/st_ino` becomes the retained cleanup identity. It must **not**
 compare that identity with `fstat(socket_fd)`: a Unix socket fd refers to a
 sockfs inode distinct from the pathname's VFS inode. Instead, `getsockname`
 must equal the exact internally generated bind address and
-`getsockopt(SO_ACCEPTCONN)` must be false. If pathname type, owner, or mode
-cannot establish owned identity, the server closes the fd, preserves the entry,
-and fails. A later `getsockname` or `SO_ACCEPTCONN` failure closes the fd and
-removes only the unchanged established owned identity under the singleton lock.
+`getsockopt(SO_ACCEPTCONN)` must be false. If the post-bind pathname stat syscall
+fails, the server closes the fd, preserves the observed pathname, and returns
+`IpcPathError::Io` with the original errno. Only a successfully read stat with
+bad type, owner, or mode maps to `UnsafeSocketEntry`; the server closes the fd,
+preserves the detected entry, and fails. A later `getsockname` or
+`SO_ACCEPTCONN` failure closes the fd and removes only an identity that still
+matches at cleanup recheck under the singleton lock. A trusted same-euid
+mutation in the unavoidable bind-to-stat or final stat-to-unlink gap remains
+outside the threat model.
 
 The returned `BoundControlEndpoint` owns the private non-listening fd, the
 singleton lock, and the retained pathname identity. Its consuming
@@ -249,9 +280,10 @@ the bound wrapper make a second activation unavailable through the public API.
 Drop for either bound or active ownership closes the socket fd first, then,
 while still holding the singleton lock, no-follow-stats and unlinks only a path
 whose device/inode, socket type, daemon-euid owner, and `0600` mode all match the
-retained identity. A replacement is preserved. Drop cleanup is best effort;
-abrupt process death is recovered by the locked stale-reclaim procedure, not by
-weakening identity checks.
+retained identity. A replacement visible at that stat is preserved. The final
+stat-to-unlink step is not atomic and relies on the stated same-euid trust
+boundary. Drop cleanup is best effort; abrupt process death is recovered by the
+locked stale-reclaim procedure, not by weakening identity checks.
 
 ## Linux admission and connection state machine
 
@@ -296,7 +328,7 @@ For `AwaitHello` and `Ready`, input consists of at most one partial frame and on
 
 Every write is nonblocking. Ordinary responses and subscriber state use a two-second no-progress stall limit. Terminal mismatch/ordering/invalid-request replies use the shorter 100 ms `CloseAfterReply` drain limit; delivery is best-effort, then EOF is mandatory. On shutdown, each subscriber may receive one `Event::Shutdown` only if it can be queued without displacing a partial frame; the process drains all such writes for at most 100 ms total and exits regardless. No reply or shutdown guarantee permits blocking the event loop.
 
-## Client startup race
+## Client startup race (#41, not #218)
 
 The reusable `ClientEndpoint` retains its validated `RuntimeDir` capability.
 For every connection attempt it reopens and validates `realm`
@@ -331,17 +363,17 @@ Production uses `CLOCK_MONOTONIC` and a Linux `SO_PEERCRED` provider; test-only 
 | # | Given / When / Then | Test |
 |---|---|---|
 | A1 | Given an absent, relative, non-directory, symlinked, foreign-owned, or not-exactly-`0700` runtime path (including modes missing owner bits), or any secure `openat2` failure, when resolved, then the specified path error is returned and no fallback or override is read | `realm_control::tests::runtime_capability_rejects_every_unsafe_input_and_openat2_failure` |
-| A2 | Given a hostile ambient umask, when the server prepares a missing fixed descendant, then `realm` is exactly `0700` and the old umask is restored; given the same absence on a client, it does not create `realm` | `realm_control::tests::server_creates_realm_exactly_once_under_scoped_umask`, `realm_control::tests::client_never_creates_realm` |
-| A2a | Given missing or inaccessible `/proc/self/fd`, or a canonical or worst-case procfd address that overflows Linux `sockaddr_un` including its terminating NUL, when server endpoint preparation begins, then it fails before creating `realm` or inspecting/mutating `ctl.sock` and never falls back to the canonical or another path | `realm_control::tests::missing_or_inaccessible_procfs_fails_before_mutation_without_fallback`, `realm_control::tests::sockaddr_un_overflow_fails_before_mutation_without_fallback` |
+| A2 | Given a hostile ambient umask, when the server prepares a missing fixed descendant, then `realm` is exactly `0700` and the old umask is restored; given the same absence on a client, it does not create `realm` | `realm_control::tests::server_creates_realm_exactly_once_under_scoped_umask`; client half in #41: `realm_control::tests::client_never_creates_realm` |
+| A2a | Given an actual retained runtime-fd bridge that is missing, inaccessible, mismatched, or otherwise unusable, or a canonical or worst-case procfd address that overflows Linux `sockaddr_un` including its terminating NUL, when server endpoint preparation begins, then it fails before creating `realm` or inspecting/mutating `ctl.sock` and never falls back to the canonical or another path | `realm_control::tests::actual_runtime_procfd_bridge_is_verified_before_mutation`, `realm_control::tests::missing_inaccessible_or_mismatched_procfd_fails_before_mutation`, `realm_control::tests::sockaddr_un_overflow_fails_before_mutation_without_fallback` |
 | A3 | Given an unsafe realm object or unsafe existing `ctl.sock`, when an endpoint is prepared, then the object is rejected and remains byte/identity unchanged | `realm_control::tests::unsafe_realm_and_socket_entries_are_preserved` |
 | A4 | Given a reachable listener or an unchanged refused stale socket, when another server prepares the endpoint, then the live entry is preserved and only the unchanged refused identity is reclaimed | `realm_control::tests::live_listener_is_preserved_and_verified_refusal_is_reclaimed` |
 | A5 | Given immediate refusal, `EAGAIN`, `EINPROGRESS`, completion success/refusal/error, timeout, poll failure, or unexpected `EALREADY`, when the one-shot nonblocking stale probe runs, then only immediate or completed `ECONNREFUSED` is a stale candidate and every other result preserves the entry | `realm_control::tests::linux_stale_probe_completion_table_is_total` |
 | A6 | Given a first server that holds a bound but non-listening endpoint, when a second binder starts, then it returns `EndpointInUse` without probing or unlinking `ctl.sock` | `realm_control::tests::singleton_lock_protects_the_prelisten_state` |
 | A6a | Given a bound or active owner, then its singleton lock uses a private independent directory fd with `FD_CLOEXEC`; when a long-lived exec-launched client remains after that owner drops, the client retains no lock and a second binder can acquire ownership | `realm_control::tests::singleton_lock_fd_is_private_directory_cloexec_and_not_inherited_across_exec` |
-| A7 | Given a successful bind, then the pathname is an euid-owned socket of exact mode `0600`, the fd has `NONBLOCK` and `CLOEXEC`, the canonical external path denotes the same entry, `getsockname` equals the generated procfd address, and `SO_ACCEPTCONN` is false | `realm_control::tests::bound_capability_has_exact_path_fd_and_address_properties` |
+| A7 | Given a successful bind, then the pathname is an euid-owned socket of exact mode `0600`, the fd has `NONBLOCK` and `CLOEXEC`, the canonical external path denotes the same entry, `getsockname` equals the generated procfd address, and `SO_ACCEPTCONN` is false; a post-bind stat syscall error preserves its errno and observed pathname | `realm_control::tests::bound_capability_has_exact_path_fd_and_address_properties`, `realm_control::tests::post_bind_stat_error_preserves_errno_and_pathname` |
 | A8 | Given one bound capability, when it is consumed by activation, then `listen(..., 64)` occurs exactly once, `SO_ACCEPTCONN` is true, and a connection succeeds | `realm_control::tests::activation_is_consuming_one_shot_and_listens_with_backlog_64` |
-| A9 | Given a bound or active owner and either its unchanged entry or an attacker replacement, when it drops, then its socket fd closes first, only the owned unchanged entry is removed under the retained lock, and the replacement remains | `realm_control::tests::drop_cleanup_preserves_replacements` |
-| A10 | Given a reusable client endpoint and an environment change between retries, when connection is retried, then the retained runtime capability is reused, `realm` is reopened and validated relative to it, and neither the environment nor canonical display path is reread | `realm_control::tests::client_retry_reuses_the_retained_capability` |
+| A9 | Given a bound or active owner and either its unchanged entry or a replacement visible at the cleanup identity stat, when it drops, then its socket fd closes first, only the matching identity is removed under the retained lock, and the detected replacement remains; the stated trusted same-euid final gap applies | `realm_control::tests::bound_drop_closes_and_removes_only_matching_identity`, `realm_control::tests::active_drop_preserves_detected_replacement` |
+| A10 (#41) | Given a reusable client endpoint and an environment change between retries, when connection is retried, then the retained runtime capability is reused, `realm` is reopened and validated relative to it, and neither the environment nor canonical display path is reread | `realm_control::tests::client_retry_reuses_the_retained_capability` |
 | A11 | Given a program that calls `activate` twice on one bound value, when compiled, then the second call fails because the first consumed the capability | `realm_control::compile_fail::bound_endpoint_cannot_activate_twice` |
 | A12 | Given recovery is incomplete, when the endpoint is bound, then it is non-listening and readiness is absent; only after transition to `Live` may activation verify `SO_ACCEPTCONN` and precede `READY=1` | `realm_session::tests::readiness_follows_live_listener_activation` |
 | A13 | Given foreign or missing credentials, when accepted, then no byte is read; a same-euid peer remains live | `control_socket::tests::rejects_foreign_uid_before_read`, `control_socket::tests::rejects_missing_peer_credentials_before_read` |
