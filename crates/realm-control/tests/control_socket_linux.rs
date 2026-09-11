@@ -99,6 +99,7 @@ impl Fixture {
                 ReadyEvent {
                     token: self.listener_token,
                     readable: true,
+                    terminal: false,
                     writable: false,
                 },
             )
@@ -138,6 +139,7 @@ impl Fixture {
                 ReadyEvent {
                     token,
                     readable,
+                    terminal: false,
                     writable,
                 },
             )
@@ -254,24 +256,28 @@ fn respond(server: &mut ControlServer, action: ControlAction) {
         ControlAction::Request {
             connection,
             request: Request::GetState,
-        } => server
-            .complete_request(now, connection, Response::State(Box::default()))
-            .expect("the test responder completes GetState"),
+        } => {
+            server
+                .complete_request(now, connection, Response::State(Box::default()))
+                .expect("the test responder completes GetState");
+        }
         ControlAction::Request {
             connection,
             request: Request::Subscribe,
         } => server
             .complete_subscribe(now, connection, RealmState::default())
             .expect("the test responder completes Subscribe"),
-        ControlAction::Request { connection, .. } => server
-            .complete_request(
-                now,
-                connection,
-                Response::Error {
-                    message: "unsupported by integration fixture".into(),
-                },
-            )
-            .expect("the test responder completes an unsupported request"),
+        ControlAction::Request { connection, .. } => {
+            server
+                .complete_request(
+                    now,
+                    connection,
+                    Response::Error {
+                        message: "unsupported by integration fixture".into(),
+                    },
+                )
+                .expect("the test responder completes an unsupported request");
+        }
     }
 }
 
@@ -297,6 +303,7 @@ impl ServerThread {
                             ReadyEvent {
                                 token,
                                 readable,
+                                terminal: false,
                                 writable,
                             },
                         )
