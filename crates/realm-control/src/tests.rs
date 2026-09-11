@@ -2030,6 +2030,75 @@ fn all_output_classes_obey_exact_nonblocking_deadlines() {
         subscriber.next_deadline(),
         Some(base + Duration::from_secs(3))
     );
+
+    let (mut ordinary, action) = pending_protocol_machine(base, b"{\"cmd\":\"get-state\"}\n");
+    assert_eq!(action, MachineAction::Request(Request::GetState));
+    assert_eq!(
+        ordinary.complete_request(base, &Response::Ok),
+        MachineAction::None
+    );
+    assert_eq!(
+        ordinary.advance_output(base + Duration::from_secs(1), 1),
+        MachineAction::None
+    );
+    assert_eq!(
+        ordinary.next_deadline(),
+        Some(base + Duration::from_secs(3))
+    );
+
+    let mut shutdown = subscriber_protocol_machine(base, 1);
+    let initial_len = shutdown.output().unwrap().len();
+    assert_eq!(
+        shutdown.advance_output(base, initial_len),
+        MachineAction::None
+    );
+    assert_eq!(shutdown.begin_shutdown(base), MachineAction::None);
+    assert_eq!(
+        shutdown.advance_output(base + Duration::from_millis(50), 1),
+        MachineAction::None
+    );
+    assert_eq!(
+        shutdown.next_deadline(),
+        Some(base + Duration::from_millis(100))
+    );
+}
+
+#[test]
+fn shutdown_subscriber_input_interest_tracks_read_half_close() {
+    let base = Instant::now();
+    let mut read_open = subscriber_protocol_machine(base, 1);
+    assert_eq!(read_open.begin_shutdown(base), MachineAction::None);
+
+    // Catches suppressing subscriber reads merely because shutdown is draining.
+    assert!(read_open.input_enabled());
+    assert_eq!(
+        read_open.ingest(base, b"x"),
+        MachineAction::Close(MachineClose::SubscriberInput)
+    );
+
+    let mut half_closed = subscriber_protocol_machine(base, 1);
+    assert_eq!(half_closed.read_eof(base), MachineAction::None);
+    assert_eq!(half_closed.begin_shutdown(base), MachineAction::None);
+    assert!(!half_closed.input_enabled());
+}
+
+#[test]
+fn oversized_hello_reply_returns_close_action() {
+    let now = Instant::now();
+    let oversized_session = "x".repeat(MAX_FRAME_BYTES);
+    let mut machine = ConnectionMachine::new(now, &oversized_session);
+
+    // Catches discarding the close action produced by bounded Hello encoding.
+    assert_eq!(
+        machine.ingest(
+            now,
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n"
+        ),
+        MachineAction::Close(MachineClose::FrameTooLarge)
+    );
+    assert_eq!(machine.phase(), ConnectionPhase::Closing);
+    assert_eq!(machine.output(), None);
+    assert!(!machine.input_enabled());
 }
 
 #[test]

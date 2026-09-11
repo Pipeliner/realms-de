@@ -166,12 +166,14 @@ impl ConnectionMachine {
     }
 
     pub(crate) fn input_enabled(&self) -> bool {
-        if self.read_half_closed || self.shutting_down {
+        if self.read_half_closed {
             return false;
         }
         match self.phase {
-            ConnectionPhase::AwaitHello => true,
-            ConnectionPhase::Ready => !self.request_pending && self.output.is_none(),
+            ConnectionPhase::AwaitHello => !self.shutting_down,
+            ConnectionPhase::Ready => {
+                !self.shutting_down && !self.request_pending && self.output.is_none()
+            }
             ConnectionPhase::Subscriber => true,
             _ => false,
         }
@@ -246,7 +248,10 @@ impl ConnectionMachine {
                     match self.phase {
                         ConnectionPhase::AwaitHello => match decode_frame(&frame) {
                             DecodedFrame::Request(Request::Hello { version, .. }) => {
-                                self.queue_hello(now, version == PROTOCOL_VERSION);
+                                let action = self.queue_hello(now, version == PROTOCOL_VERSION);
+                                if action != MachineAction::None {
+                                    return action;
+                                }
                                 if version != PROTOCOL_VERSION {
                                     break;
                                 }
@@ -464,14 +469,13 @@ impl ConnectionMachine {
         MachineAction::None
     }
 
-    fn queue_hello(&mut self, now: Instant, version_matches: bool) {
+    fn queue_hello(&mut self, now: Instant, version_matches: bool) -> MachineAction {
         let reply = Response::Hello {
             version: PROTOCOL_VERSION,
             session: self.session.clone(),
         };
         let Some(bytes) = encode_response(&reply) else {
-            self.close(MachineClose::FrameTooLarge);
-            return;
+            return self.close(MachineClose::FrameTooLarge);
         };
         self.output = Some(OutputCursor::new(bytes, OutputClass::Hello));
         if version_matches {
@@ -481,6 +485,7 @@ impl ConnectionMachine {
             self.phase = ConnectionPhase::CloseAfterReply;
             self.close_deadline = Some(now + TERMINAL_TIMEOUT);
         }
+        MachineAction::None
     }
 
     fn queue_terminal_error(&mut self, now: Instant, message: &str) {
