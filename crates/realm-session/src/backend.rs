@@ -488,11 +488,11 @@ pub trait WmBackend: Send {
 
     /// Bind a stable backend identity to Realm's allocated window id.
     ///
-    /// This operation is idempotent and error-atomic. Repeating the same pair
-    /// after success is a no-op; an error leaves no binding installed, so the
-    /// session can retry it before reading another backend event. A conflicting
-    /// pair is an error. The binding must succeed before the window appears in
-    /// another backend operation.
+    /// This is a local, bounded, nonblocking identity-map installation and
+    /// emits no compositor request. Repeating the same pair is a no-op. An
+    /// unknown object or conflicting pair is a fatal backend-contract error;
+    /// it is never retryable while the compositor waits for a policy response.
+    /// The binding must succeed before the response can include the window.
     fn assign_window(
         &mut self,
         backend_id: &BackendWindowId,
