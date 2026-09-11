@@ -24,8 +24,10 @@ use rustix::process::{geteuid, umask};
 use crate::protocol::{ConnectionMachine, ConnectionPhase, MachineAction, MachineClose};
 use crate::{
     production_runtime_dir, test_runtime_dir, ActiveControlListener, BoundControlEndpoint,
-    ConnectionId, ControlAction, ControlError, ControlServer, ControlToken, IpcPathError,
-    ReadyEvent, RuntimeDir, SocketEndpoint, TestPeerCredential, TestReceive, TestSend,
+    ClientError, ClientPhase, ConnectionId, ControlAction, ControlError, ControlServer,
+    ControlToken, IpcPathError, ReadyEvent, RuntimeDir, SocketEndpoint, TestClientConnect,
+    TestClientOperations, TestClientPoll, TestClientReceive, TestClientSend, TestClientSocketError,
+    TestPeerCredential, TestReceive, TestSend,
 };
 use realm_core::ipc::{Event, Request, Response, MAX_FRAME_BYTES};
 use realm_core::state::RealmState;
@@ -359,6 +361,631 @@ fn runtime_fixture() -> (tempfile::TempDir, PathBuf) {
     fs::create_dir(&runtime_path).unwrap();
     set_mode(&runtime_path, 0o700);
     (temporary, runtime_path)
+}
+
+/// Catches a client resolution path that creates the fixed realm directory or
+/// classifies its absence as an unsafe path.
+#[test]
+fn client_endpoint_missing_realm_is_retryable_and_creates_nothing() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path).unwrap().client_endpoint();
+
+    let error = endpoint.connect("realmctl").unwrap_err();
+
+    assert!(matches!(error, ClientError::MissingRealm));
+    assert!(error.is_retryable());
+    assert!(!runtime_path.join("realm").exists());
+}
+
+/// Catches a reusable endpoint rereading the environment or reopening the
+/// caller-visible absolute path after its runtime capability was retained.
+#[test]
+fn client_endpoint_ignores_environment_and_path_replacement() {
+    let _lock = process_test_lock();
+    let _actual_environment = EnvironmentRestore::capture();
+    let (temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path).unwrap().client_endpoint();
+
+    let retained_path = temporary.path().join("retained-runtime");
+    fs::rename(&runtime_path, &retained_path).unwrap();
+    fs::create_dir(&runtime_path).unwrap();
+    set_mode(&runtime_path, 0o700);
+    fs::create_dir(runtime_path.join("realm")).unwrap();
+    set_mode(&runtime_path.join("realm"), 0o700);
+    fs::create_dir(retained_path.join("realm")).unwrap();
+    set_mode(&retained_path.join("realm"), 0o600);
+    std::env::set_var("XDG_RUNTIME_DIR", &runtime_path);
+    std::env::set_var("REALM_SOCKET", runtime_path.join("realm/elsewhere.sock"));
+
+    let error = endpoint.connect("bar").unwrap_err();
+
+    assert!(matches!(
+        error,
+        ClientError::Path(IpcPathError::UnsafeRealmDirectory)
+    ));
+}
+
+/// Catches retaining one realm descriptor across attempts instead of reopening
+/// the fixed descendant relative to the retained runtime descriptor each time.
+#[test]
+fn client_endpoint_reopens_realm_for_every_single_attempt() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path).unwrap().client_endpoint();
+
+    assert!(matches!(
+        endpoint.connect("realmctl").unwrap_err(),
+        ClientError::MissingRealm
+    ));
+
+    fs::create_dir(runtime_path.join("realm")).unwrap();
+    set_mode(&runtime_path.join("realm"), 0o600);
+    assert!(matches!(
+        endpoint.connect("realmctl").unwrap_err(),
+        ClientError::Path(IpcPathError::UnsafeRealmDirectory)
+    ));
+
+    set_mode(&runtime_path.join("realm"), 0o700);
+    assert!(matches!(
+        endpoint.connect("realmctl").unwrap_err(),
+        ClientError::MissingRealm
+    ));
+}
+
+/// Catches collapsing a client phase or version field, and prevents future
+/// callers from accidentally broadening startup retry beyond absence/refusal.
+#[test]
+fn client_error_preserves_all_phases_versions_and_exact_retryability() {
+    let phases = [
+        ClientPhase::Connect,
+        ClientPhase::HelloWrite,
+        ClientPhase::HelloRead,
+        ClientPhase::RequestWrite,
+        ClientPhase::ResponseRead,
+        ClientPhase::SubscribeWrite,
+        ClientPhase::InitialState,
+        ClientPhase::SubscriptionEvent,
+    ];
+    assert_eq!(phases[0], ClientPhase::Connect);
+    assert_eq!(phases[1], ClientPhase::HelloWrite);
+    assert_eq!(phases[2], ClientPhase::HelloRead);
+    assert_eq!(phases[3], ClientPhase::RequestWrite);
+    assert_eq!(phases[4], ClientPhase::ResponseRead);
+    assert_eq!(phases[5], ClientPhase::SubscribeWrite);
+    assert_eq!(phases[6], ClientPhase::InitialState);
+    assert_eq!(phases[7], ClientPhase::SubscriptionEvent);
+
+    let mismatch = ClientError::VersionMismatch {
+        client: 17,
+        server: 23,
+    };
+    match mismatch {
+        ClientError::VersionMismatch { client, server } => {
+            assert_eq!(client, 17);
+            assert_eq!(server, 23);
+        }
+        other => panic!("unexpected client error: {other:?}"),
+    }
+
+    let terminal = [
+        ClientError::Path(IpcPathError::UnsafeRealmDirectory),
+        ClientError::VersionMismatch {
+            client: 1,
+            server: 2,
+        },
+        ClientError::Timeout {
+            phase: ClientPhase::Connect,
+        },
+        ClientError::FrameTooLarge {
+            phase: ClientPhase::HelloRead,
+        },
+        ClientError::InvalidRequest,
+        ClientError::UnexpectedResponse {
+            phase: ClientPhase::ResponseRead,
+        },
+        ClientError::MalformedResponse {
+            phase: ClientPhase::InitialState,
+        },
+        ClientError::Eof {
+            phase: ClientPhase::SubscriptionEvent,
+        },
+        ClientError::Io {
+            phase: ClientPhase::Connect,
+            source: std::io::Error::from(Errno::IO),
+        },
+    ];
+    assert!(ClientError::MissingRealm.is_retryable());
+    assert!(ClientError::Refused.is_retryable());
+    for error in terminal {
+        assert!(
+            !error.is_retryable(),
+            "unexpected retryable error: {error:?}"
+        );
+    }
+}
+
+fn client_listener_fixture() -> (tempfile::TempDir, crate::ClientEndpoint, UnixListener) {
+    let (temporary, runtime_path) = runtime_fixture();
+    fs::create_dir(runtime_path.join("realm")).unwrap();
+    set_mode(&runtime_path.join("realm"), 0o700);
+    let endpoint = test_runtime_dir(&runtime_path).unwrap().client_endpoint();
+    let listener = UnixListener::bind(runtime_path.join("realm/ctl.sock")).unwrap();
+    (temporary, endpoint, listener)
+}
+
+fn read_test_request(stream: &mut UnixStream) -> Request {
+    let mut bytes = Vec::new();
+    loop {
+        let mut byte = [0_u8; 1];
+        stream.read_exact(&mut byte).unwrap();
+        bytes.push(byte[0]);
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
+    realm_core::ipc::decode(std::str::from_utf8(&bytes).unwrap()).unwrap()
+}
+
+fn write_test_response(stream: &mut UnixStream, value: &Response) {
+    stream
+        .write_all(realm_core::ipc::encode(value).unwrap().as_bytes())
+        .unwrap();
+}
+
+fn matching_hello() -> Response {
+    Response::Hello {
+        version: realm_core::ipc::PROTOCOL_VERSION,
+        session: "test-session".into(),
+    }
+}
+
+fn assert_client_io(error: ClientError, phase: ClientPhase, expected: Errno) {
+    match error {
+        ClientError::Io {
+            phase: actual,
+            source,
+        } => {
+            assert_eq!(actual, phase);
+            assert_eq!(source.raw_os_error(), Some(expected.raw_os_error()));
+        }
+        other => panic!("unexpected client error: {other:?}"),
+    }
+}
+
+/// Catches skipping Hello, using the wrong client name, or creating a stream
+/// without atomic NONBLOCK/CLOEXEC on the immediate-success path.
+#[test]
+fn single_attempt_client_immediate_connect_sends_named_hello_on_cloexec_nonblocking_stream() {
+    let _lock = process_test_lock();
+    let (_temporary, endpoint, listener) = client_listener_fixture();
+    let peer = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_test_request(&mut stream);
+        write_test_response(&mut stream, &matching_hello());
+        request
+    });
+
+    let client = endpoint.connect("realm-bar").unwrap();
+
+    assert_eq!(
+        peer.join().unwrap(),
+        Request::Hello {
+            version: realm_core::ipc::PROTOCOL_VERSION,
+            client: "realm-bar".into(),
+        }
+    );
+    assert!(fcntl_getfl(client.fd_for_test())
+        .unwrap()
+        .contains(OFlags::NONBLOCK));
+    assert!(rustix::io::fcntl_getfd(client.fd_for_test())
+        .unwrap()
+        .contains(FdFlags::CLOEXEC));
+}
+
+/// Catches an incomplete in-progress connect table, failure to inspect
+/// SO_ERROR, or a second connect syscall after readiness.
+#[test]
+fn single_attempt_client_in_progress_so_error_table_is_total_and_connects_once() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    fs::create_dir(runtime_path.join("realm")).unwrap();
+    set_mode(&runtime_path.join("realm"), 0o700);
+    let endpoint = test_runtime_dir(&runtime_path).unwrap().client_endpoint();
+    let base = Instant::now();
+
+    for initial in [Errno::INPROGRESS, Errno::AGAIN] {
+        for completion in [
+            TestClientSocketError::Connected,
+            TestClientSocketError::Socket(Errno::NOENT),
+            TestClientSocketError::Socket(Errno::NOTDIR),
+            TestClientSocketError::Socket(Errno::CONNREFUSED),
+            TestClientSocketError::Socket(Errno::IO),
+            TestClientSocketError::Lookup(Errno::NOENT),
+            TestClientSocketError::Lookup(Errno::BADF),
+        ] {
+            let operations = TestClientOperations::new(base);
+            operations.push_connect(TestClientConnect::Error(initial));
+            operations.push_poll(TestClientPoll::ReadyAfter(Duration::ZERO));
+            operations.push_socket_error(completion);
+            if matches!(completion, TestClientSocketError::Connected) {
+                operations.push_receive(TestClientReceive::BytesAfter(
+                    realm_core::ipc::encode(&matching_hello())
+                        .unwrap()
+                        .into_bytes(),
+                    Duration::ZERO,
+                ));
+            }
+
+            let result = endpoint.connect_with_test_operations("test", operations.clone());
+
+            match completion {
+                TestClientSocketError::Connected => assert!(result.is_ok()),
+                TestClientSocketError::Socket(Errno::NOENT | Errno::NOTDIR) => {
+                    assert!(matches!(result, Err(ClientError::MissingRealm)));
+                }
+                TestClientSocketError::Socket(Errno::CONNREFUSED) => {
+                    assert!(matches!(result, Err(ClientError::Refused)));
+                }
+                TestClientSocketError::Socket(error) | TestClientSocketError::Lookup(error) => {
+                    assert_client_io(result.unwrap_err(), ClientPhase::Connect, error);
+                }
+            }
+            assert_eq!(operations.connect_calls(), 1);
+        }
+    }
+}
+
+/// Catches retrying terminal connect errors, repeating connect after EINTR, or
+/// sliding the hard 100 ms deadline while poll is interrupted.
+#[test]
+fn single_attempt_client_connect_terminal_errors_and_hard_timeout_are_exact() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    fs::create_dir(runtime_path.join("realm")).unwrap();
+    set_mode(&runtime_path.join("realm"), 0o700);
+    let endpoint = test_runtime_dir(&runtime_path).unwrap().client_endpoint();
+    let base = Instant::now();
+
+    for immediate in [Errno::INTR, Errno::ALREADY] {
+        let operations = TestClientOperations::new(base);
+        operations.push_connect(TestClientConnect::Error(immediate));
+        let error = endpoint
+            .connect_with_test_operations("test", operations.clone())
+            .unwrap_err();
+        assert_client_io(error, ClientPhase::Connect, immediate);
+        assert_eq!(operations.connect_calls(), 1);
+        assert!(operations.poll_timeouts().is_empty());
+    }
+
+    let operations = TestClientOperations::new(base);
+    operations.push_connect(TestClientConnect::Error(Errno::INPROGRESS));
+    operations.push_poll(TestClientPoll::ErrorAfter(
+        Errno::INTR,
+        Duration::from_millis(60),
+    ));
+    operations.push_poll(TestClientPoll::TimeoutAfter(Duration::from_millis(40)));
+
+    assert!(matches!(
+        endpoint.connect_with_test_operations("test", operations.clone()),
+        Err(ClientError::Timeout {
+            phase: ClientPhase::Connect
+        })
+    ));
+    assert_eq!(operations.connect_calls(), 1);
+    assert_eq!(
+        operations.poll_timeouts(),
+        vec![
+            Some(Duration::from_millis(100)),
+            Some(Duration::from_millis(40))
+        ]
+    );
+
+    let operations = TestClientOperations::new(base);
+    operations.push_connect(TestClientConnect::Error(Errno::INPROGRESS));
+    operations.push_poll(TestClientPoll::ReadyAfter(Duration::from_millis(100)));
+    operations.push_socket_error(TestClientSocketError::Connected);
+    operations.push_receive(TestClientReceive::BytesAfter(
+        realm_core::ipc::encode(&matching_hello())
+            .unwrap()
+            .into_bytes(),
+        Duration::ZERO,
+    ));
+    assert!(matches!(
+        endpoint.connect_with_test_operations("test", operations.clone()),
+        Err(ClientError::Timeout {
+            phase: ClientPhase::Connect
+        })
+    ));
+    assert_eq!(operations.connect_calls(), 1);
+}
+
+/// Catches separate write/read timers, sliding readiness waits, or omission of
+/// MSG_NOSIGNAL on client frames.
+#[test]
+fn client_hello_uses_one_hard_two_second_deadline_and_msg_nosignal() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    fs::create_dir(runtime_path.join("realm")).unwrap();
+    set_mode(&runtime_path.join("realm"), 0o700);
+    let endpoint = test_runtime_dir(&runtime_path).unwrap().client_endpoint();
+    let base = Instant::now();
+    let operations = TestClientOperations::new(base);
+    operations.push_connect(TestClientConnect::Success);
+    operations.push_send(TestClientSend::ErrorAfter(
+        Errno::AGAIN,
+        Duration::from_millis(1_500),
+    ));
+    operations.push_poll(TestClientPoll::ReadyAfter(Duration::from_millis(400)));
+    operations.push_receive(TestClientReceive::ErrorAfter(Errno::AGAIN, Duration::ZERO));
+    operations.push_poll(TestClientPoll::TimeoutAfter(Duration::from_millis(100)));
+
+    assert!(matches!(
+        endpoint.connect_with_test_operations("deadline-test", operations.clone()),
+        Err(ClientError::Timeout {
+            phase: ClientPhase::HelloRead
+        })
+    ));
+    assert_eq!(
+        operations.poll_timeouts(),
+        vec![
+            Some(Duration::from_millis(500)),
+            Some(Duration::from_millis(100))
+        ]
+    );
+    assert!(operations
+        .send_flags()
+        .iter()
+        .all(|flags| flags.contains(SendFlags::NOSIGNAL)));
+    let hello: Request =
+        realm_core::ipc::decode(std::str::from_utf8(&operations.sent_bytes()).unwrap()).unwrap();
+    assert_eq!(
+        hello,
+        Request::Hello {
+            version: realm_core::ipc::PROTOCOL_VERSION,
+            client: "deadline-test".into()
+        }
+    );
+}
+
+/// Catches collapsing version refusal, malformed JSON, wrong response kind,
+/// EOF, or an impossible full prefix into a generic I/O error.
+#[test]
+fn client_hello_response_errors_are_phase_specific_and_bounded() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    fs::create_dir(runtime_path.join("realm")).unwrap();
+    set_mode(&runtime_path.join("realm"), 0o700);
+    let endpoint = test_runtime_dir(&runtime_path).unwrap().client_endpoint();
+    let base = Instant::now();
+
+    let cases = [
+        (
+            realm_core::ipc::encode(&Response::Hello {
+                version: 99,
+                session: "future".into(),
+            })
+            .unwrap()
+            .into_bytes(),
+            0,
+        ),
+        (b"{not-json}\n".to_vec(), 1),
+        (
+            realm_core::ipc::encode(&Response::Ok).unwrap().into_bytes(),
+            2,
+        ),
+        (vec![b'x'; MAX_FRAME_BYTES], 3),
+    ];
+
+    for (bytes, case) in cases {
+        let operations = TestClientOperations::new(base);
+        operations.push_connect(TestClientConnect::Success);
+        operations.push_receive(TestClientReceive::BytesAfter(bytes, Duration::ZERO));
+        let error = endpoint
+            .connect_with_test_operations("test", operations)
+            .unwrap_err();
+        match case {
+            0 => assert!(matches!(
+                error,
+                ClientError::VersionMismatch {
+                    client: realm_core::ipc::PROTOCOL_VERSION,
+                    server: 99
+                }
+            )),
+            1 => assert!(matches!(
+                error,
+                ClientError::MalformedResponse {
+                    phase: ClientPhase::HelloRead
+                }
+            )),
+            2 => assert!(matches!(
+                error,
+                ClientError::UnexpectedResponse {
+                    phase: ClientPhase::HelloRead
+                }
+            )),
+            3 => assert!(matches!(
+                error,
+                ClientError::FrameTooLarge {
+                    phase: ClientPhase::HelloRead
+                }
+            )),
+            _ => unreachable!(),
+        }
+    }
+
+    let operations = TestClientOperations::new(base);
+    operations.push_connect(TestClientConnect::Success);
+    operations.push_receive(TestClientReceive::EofAfter(Duration::ZERO));
+    assert!(matches!(
+        endpoint.connect_with_test_operations("test", operations),
+        Err(ClientError::Eof {
+            phase: ClientPhase::HelloRead
+        })
+    ));
+}
+
+/// Catches sending locally invalid requests, resetting the request deadline
+/// between write/read, or treating an application Error response as transport failure.
+#[test]
+fn client_request_is_local_forbidden_or_one_bounded_exchange() {
+    let _lock = process_test_lock();
+    let (_temporary, endpoint, listener) = client_listener_fixture();
+    let peer = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = read_test_request(&mut stream);
+        write_test_response(&mut stream, &matching_hello());
+        let request = read_test_request(&mut stream);
+        write_test_response(
+            &mut stream,
+            &Response::Error {
+                message: "application refusal".into(),
+            },
+        );
+        request
+    });
+    let mut client = endpoint.connect("realmctl").unwrap();
+
+    assert!(matches!(
+        client.request(Request::Hello {
+            version: 1,
+            client: "duplicate".into()
+        }),
+        Err(ClientError::InvalidRequest)
+    ));
+    assert!(matches!(
+        client.request(Request::Subscribe),
+        Err(ClientError::InvalidRequest)
+    ));
+    assert_eq!(
+        client.request(Request::GetState).unwrap(),
+        Response::Error {
+            message: "application refusal".into()
+        }
+    );
+    assert_eq!(peer.join().unwrap(), Request::GetState);
+}
+
+/// Catches a request read timer starting after its write or moving after EINTR.
+#[test]
+fn client_request_write_and_response_share_one_hard_deadline() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    fs::create_dir(runtime_path.join("realm")).unwrap();
+    set_mode(&runtime_path.join("realm"), 0o700);
+    let endpoint = test_runtime_dir(&runtime_path).unwrap().client_endpoint();
+    let base = Instant::now();
+    let operations = TestClientOperations::new(base);
+    operations.push_connect(TestClientConnect::Success);
+    operations.push_receive(TestClientReceive::BytesAfter(
+        realm_core::ipc::encode(&matching_hello())
+            .unwrap()
+            .into_bytes(),
+        Duration::ZERO,
+    ));
+    let mut client = endpoint
+        .connect_with_test_operations("test", operations.clone())
+        .unwrap();
+    operations.push_send(TestClientSend::ErrorAfter(
+        Errno::AGAIN,
+        Duration::from_millis(1_000),
+    ));
+    operations.push_poll(TestClientPoll::ReadyAfter(Duration::from_millis(900)));
+    operations.push_receive(TestClientReceive::ErrorAfter(
+        Errno::INTR,
+        Duration::from_millis(100),
+    ));
+
+    assert!(matches!(
+        client.request(Request::GetState),
+        Err(ClientError::Timeout {
+            phase: ClientPhase::ResponseRead
+        })
+    ));
+}
+
+/// Catches returning Subscribe before the initial State, losing a coalesced
+/// frame already read with it, or yielding Shutdown more than once.
+#[test]
+fn client_subscribe_returns_initial_state_and_yields_shutdown_once() {
+    let _lock = process_test_lock();
+    let (_temporary, endpoint, listener) = client_listener_fixture();
+    let initial = protocol_state(41);
+    let expected = initial.clone();
+    let peer = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = read_test_request(&mut stream);
+        write_test_response(&mut stream, &matching_hello());
+        assert_eq!(read_test_request(&mut stream), Request::Subscribe);
+        let mut frames = realm_core::ipc::encode(&Event::State(Box::new(initial))).unwrap();
+        frames.push_str(&realm_core::ipc::encode(&Event::Shutdown).unwrap());
+        stream.write_all(frames.as_bytes()).unwrap();
+    });
+    let client = endpoint.connect("realm-bar").unwrap();
+
+    let mut subscription = client.subscribe().unwrap();
+    assert!(matches!(
+        subscription.next(),
+        Some(Ok(Event::State(state))) if *state == expected
+    ));
+    assert!(matches!(subscription.next(), Some(Ok(Event::Shutdown))));
+    assert!(subscription.next().is_none());
+    peer.join().unwrap();
+}
+
+/// Catches bounding empty subscription idle or sliding the two-second partial
+/// event deadline after the first positive byte.
+#[test]
+fn client_subscription_idle_is_unbounded_but_partial_event_deadline_is_hard() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    fs::create_dir(runtime_path.join("realm")).unwrap();
+    set_mode(&runtime_path.join("realm"), 0o700);
+    let endpoint = test_runtime_dir(&runtime_path).unwrap().client_endpoint();
+    let base = Instant::now();
+    let operations = TestClientOperations::new(base);
+    operations.push_connect(TestClientConnect::Success);
+    operations.push_receive(TestClientReceive::BytesAfter(
+        realm_core::ipc::encode(&matching_hello())
+            .unwrap()
+            .into_bytes(),
+        Duration::ZERO,
+    ));
+    let client = endpoint
+        .connect_with_test_operations("bar", operations.clone())
+        .unwrap();
+    operations.push_receive(TestClientReceive::BytesAfter(
+        realm_core::ipc::encode(&Event::State(Box::new(protocol_state(1))))
+            .unwrap()
+            .into_bytes(),
+        Duration::ZERO,
+    ));
+    let mut subscription = client.subscribe().unwrap();
+    assert!(matches!(subscription.next(), Some(Ok(Event::State(_)))));
+
+    operations.push_receive(TestClientReceive::ErrorAfter(Errno::AGAIN, Duration::ZERO));
+    operations.push_poll(TestClientPoll::ReadyAfter(Duration::from_secs(60 * 60)));
+    operations.push_receive(TestClientReceive::BytesAfter(b"{".to_vec(), Duration::ZERO));
+    operations.push_receive(TestClientReceive::ErrorAfter(
+        Errno::AGAIN,
+        Duration::from_millis(1_500),
+    ));
+    operations.push_poll(TestClientPoll::ErrorAfter(
+        Errno::INTR,
+        Duration::from_millis(500),
+    ));
+
+    assert!(matches!(
+        subscription.next(),
+        Some(Err(ClientError::Timeout {
+            phase: ClientPhase::SubscriptionEvent
+        }))
+    ));
+    assert!(subscription.next().is_none());
+    assert_eq!(
+        operations.poll_timeouts(),
+        vec![None, Some(Duration::from_millis(500))]
+    );
 }
 
 fn active_control_listener() -> (tempfile::TempDir, PathBuf, ActiveControlListener) {

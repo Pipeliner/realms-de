@@ -10,7 +10,7 @@ use crate::sys::{
     validate_socket_path, ProcFdRuntimeBridge, RuntimeBridge, ScopedUmask, REALM_DIRECTORY,
     SUN_PATH_CAPACITY,
 };
-use crate::{IpcPathError, SocketEndpoint};
+use crate::{ClientEndpoint, ClientError, IpcPathError, SocketEndpoint};
 
 const REQUIRED_DIRECTORY_MODE: u32 = 0o700;
 const SECURE_RESOLUTION: ResolveFlags =
@@ -60,6 +60,11 @@ impl RuntimeDir {
     /// The canonical display path supplied by the validated runtime input.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Retains this runtime capability for reusable, single-attempt clients.
+    pub fn client_endpoint(self) -> ClientEndpoint {
+        ClientEndpoint::new(self)
     }
 
     #[cfg(test)]
@@ -135,6 +140,18 @@ impl RuntimeDir {
         )
         .map_err(map_realm_open_error)?;
         realm_dir_from_fd(fd, self.euid)
+    }
+
+    pub(crate) fn open_client_realm_dir(&self) -> Result<RealmDir, ClientError> {
+        let fd = openat2(
+            self.fd.as_fd(),
+            REALM_DIRECTORY,
+            DIRECTORY_OPEN_FLAGS,
+            Mode::empty(),
+            SECURE_RESOLUTION,
+        )
+        .map_err(map_client_realm_open_error)?;
+        realm_dir_from_fd(fd, self.euid).map_err(ClientError::Path)
     }
 }
 
@@ -280,5 +297,15 @@ fn map_realm_open_error(error: Errno) -> IpcPathError {
             IpcPathError::UnsafeRealmDirectory
         }
         other => IpcPathError::from(other),
+    }
+}
+
+fn map_client_realm_open_error(error: Errno) -> ClientError {
+    match error {
+        Errno::NOENT | Errno::NOTDIR => ClientError::MissingRealm,
+        Errno::LOOP | Errno::ACCESS | Errno::PERM => {
+            ClientError::Path(IpcPathError::UnsafeRealmDirectory)
+        }
+        other => ClientError::Path(IpcPathError::from(other)),
     }
 }
