@@ -1,0 +1,16 @@
+[package]
+name = "realm-control"
+description = "Linux control-endpoint capabilities for Realm."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rustix = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+trybuild = "=1.0.119"

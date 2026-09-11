@@ -1,0 +1,16 @@
+error[E0382]: use of moved value: `bound`
+  --> tests/ui/bound_endpoint_cannot_activate_twice.rs:17:26
+   |
+10 |     let bound = test_runtime_dir(Path::new("/tmp"))
+   |         ----- move occurs because `bound` has type `BoundControlEndpoint`, which does not implement the `Copy` trait
+...
+16 |     let _active = bound.activate().unwrap();
+   |                         ---------- `bound` moved due to this method call
+17 |     let _second_active = bound.activate().unwrap();
+   |                          ^^^^^ value used here after move
+   |
+note: `BoundControlEndpoint::activate` takes ownership of the receiver `self`, which moves `bound`
+  --> src/endpoint.rs
+   |
+   |     pub fn activate(self) -> Result<ActiveControlListener, IpcPathError> {
+   |                     ^^^^
