@@ -50,7 +50,7 @@ pub enum Error {
         limit: usize,
     },
     /// An IPC frame did not decode or encode.
-    #[error("ipc decode error: {0}")]
+    #[error("ipc codec error: {0}")]
     Ipc(#[from] serde_json::Error),
 }
 

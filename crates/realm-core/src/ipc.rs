@@ -203,6 +203,17 @@ pub fn decode<T: serde::de::DeserializeOwned>(line: &str) -> crate::Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn ipc_error_display_describes_encoding_and_decoding() {
+        let encoding_error = encode(&BTreeMap::from([((1_u8, 2_u8), 3_u8)])).unwrap_err();
+        let decoding_error = decode::<serde_json::Value>("not json").unwrap_err();
+
+        for error in [encoding_error, decoding_error] {
+            assert!(error.to_string().starts_with("ipc codec error: "));
+        }
+    }
 
     #[test]
     fn requests_round_trip_through_a_frame() {
