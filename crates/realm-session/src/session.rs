@@ -13,7 +13,9 @@ use serde::de::{Error as _, MapAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::backend::{BackendError, BackendEvent, BackendResult, BackendWindowId, WmBackend};
+use crate::backend::{
+    BackendContractError, BackendError, BackendEvent, BackendResult, BackendWindowId, WmBackend,
+};
 
 const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 const ORBIT_NAMES: [&str; ORBIT_COUNT] = [
@@ -484,15 +486,6 @@ impl SessionSnapshotV1 {
                 ));
             }
             previous = Some(binding.win_id);
-            let bytes = binding.backend_id.0.as_bytes();
-            if bytes.is_empty()
-                || bytes.len() > 32
-                || !bytes.iter().all(|byte| (0x20..=0x7e).contains(byte))
-            {
-                return Err(SessionSnapshotError::Invalid(
-                    "backend identity must be 1-32 printable ASCII bytes",
-                ));
-            }
         }
         if bound_windows != ledger_windows {
             return Err(SessionSnapshotError::Invalid(
@@ -564,6 +557,9 @@ pub enum SessionEventError {
     /// The compositor backend failed.
     #[error(transparent)]
     Backend(#[from] BackendError),
+    /// The backend violated its local identity or policy contract.
+    #[error(transparent)]
+    BackendContract(#[from] BackendContractError),
     /// Every possible numeric window id has already been allocated.
     #[error("Realm window id space is exhausted")]
     WindowIdExhausted,
@@ -613,6 +609,7 @@ pub struct Session<B: WmBackend> {
     pending_backend_work: bool,
 }
 
+#[allow(deprecated)]
 impl<B: WmBackend> Session<B> {
     /// Connect a backend and seed an empty six-orbit session.
     pub fn connect(backend: B) -> BackendResult<Self> {
@@ -827,7 +824,10 @@ impl<B: WmBackend> Session<B> {
         } else {
             self.repair_authoritative_projection()
         };
-        result.map_err(SessionEventError::BackendRetryExhausted)
+        result.map_err(|error| match error {
+            SessionEventError::Backend(error) => SessionEventError::BackendRetryExhausted(error),
+            error => error,
+        })
     }
 
     /// Apply one compositor event that has compositor-independent semantics.
@@ -886,7 +886,10 @@ impl<B: WmBackend> Session<B> {
             | BackendEvent::ExclusiveFocusChanged(_)
             | BackendEvent::GeometryDrifted { .. }
             | BackendEvent::TitleChanged { .. }
-            | BackendEvent::WindowClosed(_)) => {
+            | BackendEvent::WindowClosed(_)
+            | BackendEvent::PolicyTurn(_)
+            | BackendEvent::OperationCompleted { .. }
+            | BackendEvent::RetainedObservationsDrained { .. }) => {
                 Err(SessionEventError::UnexpectedInitialReplayEvent(event))
             }
         }
@@ -931,7 +934,12 @@ impl<B: WmBackend> Session<B> {
                 self.commit_observed(self.ledger.clone(), self.windows.clone(), workarea)
             }
             BackendEvent::GeometryDrifted { .. } => Ok(SessionUpdate::unchanged()),
-            BackendEvent::Disconnected => Err(BackendError::Disconnected),
+            BackendEvent::Disconnected => Err(BackendError::Disconnected.into()),
+            BackendEvent::PolicyTurn(_)
+            | BackendEvent::OperationCompleted { .. }
+            | BackendEvent::RetainedObservationsDrained { .. } => {
+                Err(SessionEventError::BackendWorkPending)
+            }
             event @ (BackendEvent::FocusChanged(_) | BackendEvent::ExclusiveFocusChanged(_)) => {
                 Ok(SessionUpdate::deferred(event))
             }
@@ -939,8 +947,11 @@ impl<B: WmBackend> Session<B> {
         match result {
             Ok(update) => Ok(update),
             Err(error) => {
-                self.pending_backend_work = should_retry_authoritative(&error);
-                Err(error.into())
+                self.pending_backend_work = matches!(
+                    &error,
+                    SessionEventError::Backend(error) if should_retry_authoritative(error)
+                );
+                Err(error)
             }
         }
     }
@@ -1030,13 +1041,16 @@ impl<B: WmBackend> Session<B> {
         match self.finish_replay() {
             Ok(update) => Ok(update),
             Err(error) => {
-                self.pending_backend_work = should_retry_authoritative(&error);
-                Err(error.into())
+                self.pending_backend_work = matches!(
+                    &error,
+                    SessionEventError::Backend(error) if should_retry_authoritative(error)
+                );
+                Err(error)
             }
         }
     }
 
-    fn finish_replay(&mut self) -> BackendResult<SessionUpdate> {
+    fn finish_replay(&mut self) -> Result<SessionUpdate, SessionEventError> {
         self.bind_pending_windows()?;
         let projection = self.project(&self.ledger, self.workarea);
         self.apply_projection_if_needed(projection)?;
@@ -1054,7 +1068,7 @@ impl<B: WmBackend> Session<B> {
         self.state.clone()
     }
 
-    fn repair_authoritative_projection(&mut self) -> BackendResult<SessionUpdate> {
+    fn repair_authoritative_projection(&mut self) -> Result<SessionUpdate, SessionEventError> {
         self.bind_pending_windows()?;
         let projection = self.project(&self.ledger, self.workarea);
         let projection_applied = self.apply_projection_if_needed(projection)?;
@@ -1084,7 +1098,7 @@ impl<B: WmBackend> Session<B> {
         Ok(win)
     }
 
-    fn bind_pending_windows(&mut self) -> BackendResult<()> {
+    fn bind_pending_windows(&mut self) -> Result<(), BackendContractError> {
         let pending: Vec<_> = self
             .pending_assignments
             .iter()
@@ -1117,7 +1131,7 @@ impl<B: WmBackend> Session<B> {
         windows: BTreeMap<WinId, WindowMetadata>,
         workarea: Workarea,
     ) -> BackendResult<SessionUpdate> {
-        self.bind_pending_windows()?;
+        debug_assert!(self.pending_assignments.is_empty());
         let projection = self.project(&ledger, workarea);
         let projection_applied = self.apply_projection_if_needed(projection)?;
 
@@ -1137,7 +1151,7 @@ impl<B: WmBackend> Session<B> {
         ledger: Ledger,
         windows: BTreeMap<WinId, WindowMetadata>,
         workarea: Workarea,
-    ) -> BackendResult<SessionUpdate> {
+    ) -> Result<SessionUpdate, SessionEventError> {
         let projection = self.project(&ledger, workarea);
 
         self.ledger = ledger;
@@ -1224,7 +1238,8 @@ fn should_retry_desired_repair(error: &BackendError) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::os::fd::RawFd;
+    use std::fs::File;
+    use std::os::fd::{AsFd, BorrowedFd};
     use std::time::Instant;
 
     use realm_core::ipc::{Capabilities, PROTOCOL_VERSION};
@@ -1233,7 +1248,11 @@ mod tests {
     use realm_core::state::{Module, RealmState};
     use realm_core::{Ledger, OrbitId, WinId};
 
-    use crate::backend::{BackendError, BackendEvent, BackendResult, BackendWindowId, WmBackend};
+    use crate::backend::{
+        BackendBindingSpec, BackendContractError, BackendError, BackendEvent, BackendExitPolicy,
+        BackendPolicyResponse, BackendPolicyTurnId, BackendPollInterest, BackendReady,
+        BackendResult, BackendSubmission, BackendTicket, BackendWindowId, WmBackend,
+    };
 
     use super::{
         RecoveryPhase, Session, SessionActionError, SessionEventError, SessionSnapshotV1,
@@ -1247,13 +1266,14 @@ mod tests {
         apply_attempts: Vec<Vec<Placement>>,
         successful_frames: Vec<Vec<Placement>>,
         fail_next_apply: Option<BackendError>,
-        fail_next_assign: Option<BackendError>,
+        fail_next_assign: Option<BackendContractError>,
         assignment_attempts: Vec<(BackendWindowId, WinId)>,
         bound_windows: BTreeMap<BackendWindowId, WinId>,
         focus_calls: usize,
         close_attempts: Vec<WinId>,
         fail_next_close: Option<BackendError>,
         next_event_calls: usize,
+        event_file: File,
     }
 
     impl FakeBackend {
@@ -1279,6 +1299,7 @@ mod tests {
                 close_attempts: Vec::new(),
                 fail_next_close: None,
                 next_event_calls: 0,
+                event_file: File::open("/dev/null").unwrap(),
             }
         }
     }
@@ -1293,20 +1314,43 @@ mod tests {
             Ok(self.capabilities.clone())
         }
 
-        fn assign_window(&mut self, backend_id: &BackendWindowId, win: WinId) -> BackendResult<()> {
+        fn assign_window(
+            &mut self,
+            backend_id: &BackendWindowId,
+            win: WinId,
+        ) -> Result<(), BackendContractError> {
             self.assignment_attempts.push((backend_id.clone(), win));
             if let Some(error) = self.fail_next_assign.take() {
                 return Err(error);
             }
             if let Some(bound) = self.bound_windows.get(backend_id) {
                 if *bound != win {
-                    return Err(BackendError::Unavailable {
-                        message: "conflicting identity binding".to_owned(),
-                    });
+                    return Err(BackendContractError::ConflictingBackendIdentity);
                 }
                 return Ok(());
             }
             self.bound_windows.insert(backend_id.clone(), win);
+            Ok(())
+        }
+
+        fn configure_bindings(&mut self, _bindings: Vec<BackendBindingSpec>) -> BackendResult<()> {
+            Ok(())
+        }
+
+        fn request_policy_turn(&mut self) -> BackendResult<()> {
+            Ok(())
+        }
+
+        fn respond_policy_turn(
+            &mut self,
+            _turn: BackendPolicyTurnId,
+            _ticket: BackendTicket,
+            _response: BackendPolicyResponse,
+        ) -> BackendResult<BackendSubmission> {
+            Ok(BackendSubmission::Complete)
+        }
+
+        fn begin_exit_session(&mut self, _policy: BackendExitPolicy) -> BackendResult<()> {
             Ok(())
         }
 
@@ -1336,8 +1380,24 @@ mod tests {
             self.workarea
         }
 
-        fn event_fd(&self) -> RawFd {
-            -1
+        fn event_fd(&self) -> BorrowedFd<'_> {
+            self.event_file.as_fd()
+        }
+
+        fn poll_interest(&self) -> BackendPollInterest {
+            BackendPollInterest {
+                immediate: false,
+                readable: true,
+                writable: false,
+            }
+        }
+
+        fn service(
+            &mut self,
+            _ready: BackendReady,
+            _now: Instant,
+        ) -> BackendResult<Option<BackendEvent>> {
+            Ok(None)
         }
 
         fn next_event(
@@ -1351,7 +1411,7 @@ mod tests {
 
     fn window_opened(id: &str, title: &str) -> BackendEvent {
         BackendEvent::WindowOpened {
-            backend_id: BackendWindowId(id.to_owned()),
+            backend_id: BackendWindowId::new(id).unwrap(),
             app_id: "foot".to_owned(),
             title: title.to_owned(),
         }
@@ -1369,11 +1429,11 @@ mod tests {
             vec![
                 SnapshotBinding {
                     win_id: WinId(7),
-                    backend_id: BackendWindowId("restored-7".to_owned()),
+                    backend_id: BackendWindowId::new("restored-7").unwrap(),
                 },
                 SnapshotBinding {
                     win_id: WinId(9),
-                    backend_id: BackendWindowId("missing-9".to_owned()),
+                    backend_id: BackendWindowId::new("missing-9").unwrap(),
                 },
             ],
             10,
@@ -1552,21 +1612,6 @@ mod tests {
                 "fullscreen window must belong to the orbit",
             ),
             (
-                "\"backend_id\":\"restored-7\"",
-                "\"backend_id\":\"\"",
-                "backend identity must be 1-32 printable ASCII bytes",
-            ),
-            (
-                "\"backend_id\":\"restored-7\"",
-                "\"backend_id\":\"123456789012345678901234567890123\"",
-                "backend identity must be 1-32 printable ASCII bytes",
-            ),
-            (
-                "\"backend_id\":\"restored-7\"",
-                "\"backend_id\":\"bad\\nidentity\"",
-                "backend identity must be 1-32 printable ASCII bytes",
-            ),
-            (
                 "\"backend_id\":\"missing-9\"",
                 "\"backend_id\":\"restored-7\"",
                 "bindings must be a one-to-one mapping",
@@ -1593,6 +1638,21 @@ mod tests {
             ),
         ] {
             assert_snapshot_invalid(&encoded, from, to, expected);
+        }
+
+        for invalid in [
+            "\"backend_id\":\"\"",
+            "\"backend_id\":\"123456789012345678901234567890123\"",
+            "\"backend_id\":\"bad\\nidentity\"",
+        ] {
+            let changed = encoded.replacen("\"backend_id\":\"restored-7\"", invalid, 1);
+            assert!(matches!(
+                SessionSnapshotV1::from_json(changed.as_bytes()),
+                Err(super::SessionSnapshotError::Encoding(error))
+                    if error.to_string().contains(
+                        "backend window identity must be 1..=32 printable ASCII bytes"
+                    )
+            ));
         }
 
         let active_out_of_range = encoded
@@ -1639,7 +1699,7 @@ mod tests {
             "latest title"
         );
         assert_eq!(
-            session.window_id(&BackendWindowId("new-10".to_owned())),
+            session.window_id(&BackendWindowId::new("new-10").unwrap()),
             Some(WinId(10))
         );
         assert_eq!(session.backend.assignment_attempts.len(), 2);
@@ -1648,7 +1708,7 @@ mod tests {
                 .backend
                 .assignment_attempts
                 .iter()
-                .filter(|(backend_id, _)| backend_id.0 == "restored-7")
+                .filter(|(backend_id, _)| backend_id.as_str() == "restored-7")
                 .count(),
             1
         );
@@ -1773,7 +1833,7 @@ mod tests {
         assert_eq!(session.phase(), RecoveryPhase::FinalizingReplay);
         assert_eq!(session.ledger(), &ledger);
         assert_eq!(
-            session.window_id(&BackendWindowId("must-wait".to_owned())),
+            session.window_id(&BackendWindowId::new("must-wait").unwrap()),
             None
         );
         assert_eq!(session.backend.next_event_calls, 0);
@@ -1905,7 +1965,7 @@ mod tests {
             ledger.clone(),
             vec![SnapshotBinding {
                 win_id: WinId(u64::MAX - 1),
-                backend_id: BackendWindowId("old".to_owned()),
+                backend_id: BackendWindowId::new("old").unwrap(),
             }],
             u64::MAX,
         )
@@ -1959,8 +2019,8 @@ mod tests {
         assert_eq!(
             session.backend.bound_windows,
             BTreeMap::from([
-                (BackendWindowId("r1".to_owned()), WinId(0)),
-                (BackendWindowId("r2".to_owned()), WinId(1)),
+                (BackendWindowId::new("r1").unwrap(), WinId(0)),
+                (BackendWindowId::new("r2").unwrap(), WinId(1)),
             ])
         );
         assert_eq!(session.backend.successful_frames.len(), 2);
@@ -2174,7 +2234,7 @@ mod tests {
         session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap();
-        let backend_id = BackendWindowId("r1".to_owned());
+        let backend_id = BackendWindowId::new("r1").unwrap();
         assert_eq!(session.window_id(&backend_id), Some(WinId(0)));
         let previous_projection = session.last_projection().to_vec();
         session.backend.fail_next_apply = Some(BackendError::Io {
@@ -2262,36 +2322,28 @@ mod tests {
     }
 
     #[test]
-    fn failed_identity_binding_preserves_observed_window_for_retry() {
-        let backend_id = BackendWindowId("r1".to_owned());
+    fn assignment_contract_failure_uses_the_typed_fatal_event_path() {
+        let backend_id = BackendWindowId::new("r1").unwrap();
         let backend = FakeBackend::new();
         let mut session = live_session(backend);
-        session.backend.fail_next_assign = Some(BackendError::Io {
-            message: "binding failed".to_owned(),
+        session.backend.fail_next_assign = Some(BackendContractError::UnknownWindow {
+            backend_id: backend_id.clone(),
         });
 
-        session
+        let error = session
             .handle_backend_event(window_opened("r1", "one"))
             .unwrap_err();
 
-        assert_eq!(session.ledger().active_orbit().windows, [WinId(0)]);
-        assert_eq!(session.window_id(&backend_id), Some(WinId(0)));
-        assert_eq!(session.window_metadata(WinId(0)).unwrap().title, "one");
-        assert_eq!(session.next_win_id, 1);
-        assert_eq!(session.state().revision, 0);
-        assert!(session.backend.apply_attempts.is_empty());
-        assert!(session.backend.bound_windows.is_empty());
-
-        let repaired = session.retry_pending_backend_work().unwrap();
-
-        assert!(repaired.projection_applied);
-        assert_eq!(repaired.state.unwrap().focused_title, "one");
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::UnknownWindow {
+                backend_id: ref unknown,
+            }) if unknown == &backend_id
+        ));
+        assert!(!session.has_pending_backend_work());
         assert_eq!(
             session.backend.assignment_attempts,
-            [
-                (backend_id.clone(), WinId(0)),
-                (backend_id.clone(), WinId(0))
-            ]
+            [(backend_id.clone(), WinId(0))]
         );
         assert_eq!(session.window_id(&backend_id), Some(WinId(0)));
         assert_eq!(session.next_win_id, 1);
@@ -2299,7 +2351,7 @@ mod tests {
 
     #[test]
     fn replayed_backend_identity_reuses_its_window_id_without_rebinding() {
-        let backend_id = BackendWindowId("r1".to_owned());
+        let backend_id = BackendWindowId::new("r1").unwrap();
         let mut session = live_session(FakeBackend::new());
         session
             .handle_backend_event(window_opened("r1", "one"))
@@ -2552,7 +2604,10 @@ mod tests {
         assert!(after_close_undo.state.is_none());
         assert_eq!(session.ledger().orbit_of(WinId(1)), None);
         assert!(session.window_metadata(WinId(1)).is_none());
-        assert_eq!(session.window_id(&BackendWindowId("r2".to_owned())), None);
+        assert_eq!(
+            session.window_id(&BackendWindowId::new("r2").unwrap()),
+            None
+        );
         assert_eq!(session.backend.apply_attempts.len(), attempts_after_close);
     }
 

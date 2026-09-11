@@ -213,7 +213,8 @@ impl PersistenceCoordinator {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::os::fd::RawFd;
+    use std::fs::File;
+    use std::os::fd::{AsFd, BorrowedFd};
     use std::time::{Duration, Instant};
 
     use realm_core::ipc::Capabilities;
@@ -222,7 +223,11 @@ mod tests {
     use realm_core::{Ledger, WinId};
 
     use super::{PersistCompletion, PersistenceCoordinator, SNAPSHOT_DELAY};
-    use crate::backend::{BackendEvent, BackendResult, BackendWindowId, WmBackend};
+    use crate::backend::{
+        BackendBindingSpec, BackendContractError, BackendEvent, BackendExitPolicy,
+        BackendPolicyResponse, BackendPolicyTurnId, BackendPollInterest, BackendReady,
+        BackendResult, BackendSubmission, BackendTicket, BackendWindowId, WmBackend,
+    };
     use crate::session::{Session, SessionSnapshotV1};
 
     fn snapshot_with_layout(layout: Layout) -> SessionSnapshotV1 {
@@ -419,7 +424,7 @@ mod tests {
 
         pre_live
             .handle_backend_event(BackendEvent::WindowOpened {
-                backend_id: BackendWindowId("window-1".to_owned()),
+                backend_id: BackendWindowId::new("window-1").unwrap(),
                 app_id: "foot".to_owned(),
                 title: "one".to_owned(),
             })
@@ -444,9 +449,18 @@ mod tests {
         assert_ne!(pre_live.snapshot().unwrap(), baseline);
     }
 
-    #[derive(Default)]
     struct FakeBackend {
         events: VecDeque<BackendEvent>,
+        event_file: File,
+    }
+
+    impl Default for FakeBackend {
+        fn default() -> Self {
+            Self {
+                events: VecDeque::new(),
+                event_file: File::open("/dev/null").unwrap(),
+            }
+        }
     }
 
     impl WmBackend for FakeBackend {
@@ -469,7 +483,28 @@ mod tests {
             &mut self,
             _backend_id: &BackendWindowId,
             _win: WinId,
-        ) -> BackendResult<()> {
+        ) -> Result<(), BackendContractError> {
+            Ok(())
+        }
+
+        fn configure_bindings(&mut self, _bindings: Vec<BackendBindingSpec>) -> BackendResult<()> {
+            Ok(())
+        }
+
+        fn request_policy_turn(&mut self) -> BackendResult<()> {
+            Ok(())
+        }
+
+        fn respond_policy_turn(
+            &mut self,
+            _turn: BackendPolicyTurnId,
+            _ticket: BackendTicket,
+            _response: BackendPolicyResponse,
+        ) -> BackendResult<BackendSubmission> {
+            Ok(BackendSubmission::Complete)
+        }
+
+        fn begin_exit_session(&mut self, _policy: BackendExitPolicy) -> BackendResult<()> {
             Ok(())
         }
 
@@ -489,8 +524,24 @@ mod tests {
             Workarea::new(1920, 1080, 0, 0)
         }
 
-        fn event_fd(&self) -> RawFd {
-            -1
+        fn event_fd(&self) -> BorrowedFd<'_> {
+            self.event_file.as_fd()
+        }
+
+        fn poll_interest(&self) -> BackendPollInterest {
+            BackendPollInterest {
+                immediate: !self.events.is_empty(),
+                readable: true,
+                writable: false,
+            }
+        }
+
+        fn service(
+            &mut self,
+            _ready: BackendReady,
+            _now: Instant,
+        ) -> BackendResult<Option<BackendEvent>> {
+            Ok(self.events.pop_front())
         }
 
         fn next_event(

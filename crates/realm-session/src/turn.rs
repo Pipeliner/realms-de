@@ -45,7 +45,8 @@ pub fn backend_turn<B: WmBackend>(
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::os::fd::RawFd;
+    use std::fs::File;
+    use std::os::fd::{AsFd, BorrowedFd};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
@@ -55,7 +56,11 @@ mod tests {
     use realm_core::WinId;
 
     use super::{backend_turn, BackendTurn};
-    use crate::backend::{BackendError, BackendEvent, BackendResult, BackendWindowId, WmBackend};
+    use crate::backend::{
+        BackendBindingSpec, BackendContractError, BackendError, BackendEvent, BackendExitPolicy,
+        BackendPolicyResponse, BackendPolicyTurnId, BackendPollInterest, BackendReady,
+        BackendResult, BackendSubmission, BackendTicket, BackendWindowId, WmBackend,
+    };
     use crate::session::{Session, SessionEventError};
 
     #[test]
@@ -128,7 +133,7 @@ mod tests {
         backend
             .events
             .push_back(Ok(Some(BackendEvent::WindowOpened {
-                backend_id: BackendWindowId("window-1".to_owned()),
+                backend_id: BackendWindowId::new("window-1").unwrap(),
                 app_id: "foot".to_owned(),
                 title: "one".to_owned(),
             })));
@@ -184,7 +189,7 @@ mod tests {
     fn open_window(session: &mut Session<FakeBackend>) {
         session
             .handle_backend_event(BackendEvent::WindowOpened {
-                backend_id: BackendWindowId("existing".to_owned()),
+                backend_id: BackendWindowId::new("existing").unwrap(),
                 app_id: "foot".to_owned(),
                 title: "existing".to_owned(),
             })
@@ -202,6 +207,7 @@ mod tests {
         deadlines: Arc<Mutex<Vec<Option<Instant>>>>,
         events: VecDeque<BackendResult<Option<BackendEvent>>>,
         apply_results: VecDeque<BackendResult<()>>,
+        event_file: File,
     }
 
     impl FakeBackend {
@@ -214,6 +220,7 @@ mod tests {
                 deadlines,
                 events: VecDeque::new(),
                 apply_results: VecDeque::new(),
+                event_file: File::open("/dev/null").unwrap(),
             }
         }
     }
@@ -238,7 +245,28 @@ mod tests {
             &mut self,
             _backend_id: &BackendWindowId,
             _win: WinId,
-        ) -> BackendResult<()> {
+        ) -> Result<(), BackendContractError> {
+            Ok(())
+        }
+
+        fn configure_bindings(&mut self, _bindings: Vec<BackendBindingSpec>) -> BackendResult<()> {
+            Ok(())
+        }
+
+        fn request_policy_turn(&mut self) -> BackendResult<()> {
+            Ok(())
+        }
+
+        fn respond_policy_turn(
+            &mut self,
+            _turn: BackendPolicyTurnId,
+            _ticket: BackendTicket,
+            _response: BackendPolicyResponse,
+        ) -> BackendResult<BackendSubmission> {
+            Ok(BackendSubmission::Complete)
+        }
+
+        fn begin_exit_session(&mut self, _policy: BackendExitPolicy) -> BackendResult<()> {
             Ok(())
         }
 
@@ -258,8 +286,24 @@ mod tests {
             Workarea::new(1920, 1080, 0, 0)
         }
 
-        fn event_fd(&self) -> RawFd {
-            -1
+        fn event_fd(&self) -> BorrowedFd<'_> {
+            self.event_file.as_fd()
+        }
+
+        fn poll_interest(&self) -> BackendPollInterest {
+            BackendPollInterest {
+                immediate: !self.events.is_empty(),
+                readable: true,
+                writable: false,
+            }
+        }
+
+        fn service(
+            &mut self,
+            _ready: BackendReady,
+            _now: Instant,
+        ) -> BackendResult<Option<BackendEvent>> {
+            self.events.pop_front().unwrap_or(Ok(None))
         }
 
         fn next_event(&mut self, deadline: Option<Instant>) -> BackendResult<Option<BackendEvent>> {
