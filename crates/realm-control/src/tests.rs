@@ -1,10 +1,11 @@
+use std::cell::Cell;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Mutex, OnceLock};
@@ -15,12 +16,12 @@ use rustix::fs::{
 };
 use rustix::io::{Errno, FdFlags};
 use rustix::net::sockopt::socket_acceptconn;
-use rustix::net::{bind as bind_socket, getsockname, SocketAddrUnix};
+use rustix::net::{bind as bind_socket, getsockname, listen as listen_socket, SocketAddrUnix};
 use rustix::process::{geteuid, umask};
 
 use crate::{
-    production_runtime_dir, test_runtime_dir, BoundControlEndpoint, IpcPathError, RuntimeDir,
-    SocketEndpoint,
+    production_runtime_dir, test_runtime_dir, ActiveControlListener, BoundControlEndpoint,
+    IpcPathError, RuntimeDir, SocketEndpoint,
 };
 
 fn process_test_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -964,10 +965,79 @@ impl crate::endpoint::BindOperations for InjectedBindOperations {
     }
 }
 
+enum InjectedActivation {
+    Actual,
+    ListenError(Errno),
+    AcceptconnError(Errno),
+    AcceptconnFalse,
+    ReplaceWithFileThenAcceptconnError(PathBuf, Errno),
+}
+
+struct InjectedActivationOperations {
+    outcome: InjectedActivation,
+    listen_calls: Cell<u32>,
+    backlog: Cell<Option<i32>>,
+}
+
+impl InjectedActivationOperations {
+    fn actual() -> Self {
+        Self {
+            outcome: InjectedActivation::Actual,
+            listen_calls: Cell::new(0),
+            backlog: Cell::new(None),
+        }
+    }
+
+    fn with_outcome(outcome: InjectedActivation) -> Self {
+        Self {
+            outcome,
+            ..Self::actual()
+        }
+    }
+}
+
+impl crate::endpoint::ActivationOperations for InjectedActivationOperations {
+    fn listen(&self, socket: BorrowedFd<'_>, backlog: i32) -> rustix::io::Result<()> {
+        self.listen_calls.set(self.listen_calls.get() + 1);
+        self.backlog.set(Some(backlog));
+        match self.outcome {
+            InjectedActivation::ListenError(error) => Err(error),
+            InjectedActivation::Actual
+            | InjectedActivation::AcceptconnError(_)
+            | InjectedActivation::AcceptconnFalse
+            | InjectedActivation::ReplaceWithFileThenAcceptconnError(_, _) => {
+                listen_socket(socket, backlog)
+            }
+        }
+    }
+
+    fn socket_acceptconn(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<bool> {
+        match &self.outcome {
+            InjectedActivation::Actual => socket_acceptconn(socket),
+            InjectedActivation::ListenError(_) => {
+                panic!("activation queried SO_ACCEPTCONN after listen failed")
+            }
+            InjectedActivation::AcceptconnError(error) => Err(*error),
+            InjectedActivation::AcceptconnFalse => Ok(false),
+            InjectedActivation::ReplaceWithFileThenAcceptconnError(path, error) => {
+                replace_with_file(path);
+                Err(*error)
+            }
+        }
+    }
+}
+
 fn bind_error(result: Result<BoundControlEndpoint, IpcPathError>) -> IpcPathError {
     match result {
         Err(error) => error,
         Ok(_) => panic!("expected bind to fail"),
+    }
+}
+
+fn activation_error(result: Result<ActiveControlListener, IpcPathError>) -> IpcPathError {
+    match result {
+        Err(error) => error,
+        Ok(_) => panic!("expected activation to fail"),
     }
 }
 
@@ -1050,6 +1120,147 @@ fn bound_capability_has_exact_path_fd_and_address_properties() {
     let actual_address: SocketAddrUnix = getsockname(socket).unwrap().try_into().unwrap();
     assert_eq!(&actual_address, bound.bind_address_for_test());
     assert!(!socket_acceptconn(socket).unwrap());
+}
+
+/// Catches a regression where activation borrows the bound capability instead
+/// of consuming it, which would make a second activation type-check.
+#[test]
+fn activation_signature_consumes_bound_capability() {
+    let _lock = process_test_lock();
+    let _: fn(BoundControlEndpoint) -> Result<ActiveControlListener, IpcPathError> =
+        BoundControlEndpoint::activate;
+}
+
+/// Catches a regression where activation either listens more than once, uses a
+/// different backlog, or returns a listener that is not actually accepting.
+#[test]
+fn activation_is_consuming_one_shot_and_listens_with_backlog_64() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    let bound = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let operations = InjectedActivationOperations::actual();
+
+    let active = bound.activate_with(&operations).unwrap();
+
+    assert_eq!(operations.listen_calls.get(), 1);
+    assert_eq!(operations.backlog.get(), Some(64));
+    assert!(socket_acceptconn(active.as_fd()).unwrap());
+    UnixStream::connect(&socket_path).unwrap();
+    assert_eq!(active.endpoint().path(), socket_path.as_path());
+    assert_eq!(
+        active.realm_dir().as_fd().as_raw_fd(),
+        active.endpoint().realm_dir().as_fd().as_raw_fd()
+    );
+}
+
+/// Catches a regression where an activation failure leaks an unchanged owned
+/// socket or removes a pathname replacement observed by cleanup.
+#[test]
+fn activation_failure_uses_identity_checked_cleanup() {
+    let _lock = process_test_lock();
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let bound = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let operations =
+        InjectedActivationOperations::with_outcome(InjectedActivation::ListenError(Errno::IO));
+    assert_io_errno(
+        activation_error(bound.activate_with(&operations)),
+        Errno::IO,
+    );
+    assert_eq!(operations.listen_calls.get(), 1);
+    assert_eq!(operations.backlog.get(), Some(64));
+    assert!(!socket_path.exists());
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let bound = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let operations =
+        InjectedActivationOperations::with_outcome(InjectedActivation::AcceptconnFalse);
+    assert!(matches!(
+        activation_error(bound.activate_with(&operations)),
+        IpcPathError::UnsafeSocketEntry
+    ));
+    assert_eq!(operations.listen_calls.get(), 1);
+    assert_eq!(operations.backlog.get(), Some(64));
+    assert!(!socket_path.exists());
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let bound = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let operations =
+        InjectedActivationOperations::with_outcome(InjectedActivation::AcceptconnError(Errno::IO));
+    assert_io_errno(
+        activation_error(bound.activate_with(&operations)),
+        Errno::IO,
+    );
+    assert_eq!(operations.listen_calls.get(), 1);
+    assert_eq!(operations.backlog.get(), Some(64));
+    assert!(!socket_path.exists());
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let bound = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let operations = InjectedActivationOperations::with_outcome(
+        InjectedActivation::ReplaceWithFileThenAcceptconnError(socket_path.clone(), Errno::IO),
+    );
+    assert_io_errno(
+        activation_error(bound.activate_with(&operations)),
+        Errno::IO,
+    );
+    assert_eq!(fs::read(&socket_path).unwrap(), b"replacement must survive");
+}
+
+/// Catches a regression where the active wrapper's drop cleanup deletes a
+/// socket replacement that differs from the retained pathname identity.
+#[test]
+fn active_drop_preserves_detected_replacement() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    let active = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap()
+        .activate()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let replacement_path = runtime_path.join("realm/replacement.sock");
+    let _replacement = bind_control_listener(&replacement_path, 0o600);
+    fs::remove_file(&socket_path).unwrap();
+    fs::rename(&replacement_path, &socket_path).unwrap();
+    let replacement_identity = path_identity(&socket_path);
+
+    drop(active);
+
+    assert_eq!(path_identity(&socket_path), replacement_identity);
 }
 
 /// Catches a regression where a successfully read unsafe post-bind entry is

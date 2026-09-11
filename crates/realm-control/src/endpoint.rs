@@ -9,7 +9,8 @@ use rustix::fs::{
 use rustix::io::{fcntl_getfd, Errno, FdFlags};
 use rustix::net::sockopt::{socket_acceptconn, socket_error};
 use rustix::net::{
-    bind, connect, getsockname, socket_with, AddressFamily, SocketAddrUnix, SocketFlags, SocketType,
+    bind, connect, getsockname, listen, socket_with, AddressFamily, SocketAddrUnix, SocketFlags,
+    SocketType,
 };
 
 use crate::sys::{ScopedUmask, CONTROL_SOCKET};
@@ -62,7 +63,13 @@ pub(crate) trait BindOperations {
     fn socket_acceptconn(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<bool>;
 }
 
+pub(crate) trait ActivationOperations {
+    fn listen(&self, socket: BorrowedFd<'_>, backlog: i32) -> rustix::io::Result<()>;
+    fn socket_acceptconn(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<bool>;
+}
+
 struct OsBindOperations;
+struct OsActivationOperations;
 
 struct EndpointOwnership {
     endpoint: SocketEndpoint,
@@ -81,6 +88,11 @@ pub struct SocketEndpoint {
 
 /// A retained, verified control endpoint which has not started listening.
 pub struct BoundControlEndpoint {
+    ownership: EndpointOwnership,
+}
+
+/// A retained, verified control endpoint which is accepting connections.
+pub struct ActiveControlListener {
     ownership: EndpointOwnership,
 }
 
@@ -251,6 +263,35 @@ impl BoundControlEndpoint {
         self.endpoint().realm_dir()
     }
 
+    /// Starts accepting connections on this endpoint exactly once.
+    pub fn activate(self) -> Result<ActiveControlListener, IpcPathError> {
+        self.activate_using(&OsActivationOperations)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn activate_with<O: ActivationOperations>(
+        self,
+        operations: &O,
+    ) -> Result<ActiveControlListener, IpcPathError> {
+        self.activate_using(operations)
+    }
+
+    fn activate_using<O: ActivationOperations>(
+        self,
+        operations: &O,
+    ) -> Result<ActiveControlListener, IpcPathError> {
+        let ownership = self.ownership;
+        let socket = ownership.socket_fd();
+        operations.listen(socket, 64).map_err(IpcPathError::from)?;
+        if !operations
+            .socket_acceptconn(socket)
+            .map_err(IpcPathError::from)?
+        {
+            return Err(IpcPathError::UnsafeSocketEntry);
+        }
+        Ok(ActiveControlListener { ownership })
+    }
+
     #[cfg(test)]
     pub(crate) fn socket_fd_for_test(&self) -> BorrowedFd<'_> {
         self.ownership.socket_fd()
@@ -267,6 +308,24 @@ impl BoundControlEndpoint {
     }
 }
 
+impl ActiveControlListener {
+    /// Borrows the exact fixed endpoint retained by this listener.
+    pub fn endpoint(&self) -> &SocketEndpoint {
+        &self.ownership.endpoint
+    }
+
+    /// Borrows the retained, validated realm directory capability.
+    pub fn realm_dir(&self) -> &RealmDir {
+        self.endpoint().realm_dir()
+    }
+}
+
+impl AsFd for ActiveControlListener {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.ownership.socket_fd()
+    }
+}
+
 impl BindOperations for OsBindOperations {
     fn bind(&self, socket: BorrowedFd<'_>, address: &SocketAddrUnix) -> rustix::io::Result<()> {
         bind(socket, address)
@@ -278,6 +337,16 @@ impl BindOperations for OsBindOperations {
 
     fn getsockname(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<SocketAddrUnix> {
         getsockname(socket)?.try_into()
+    }
+
+    fn socket_acceptconn(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<bool> {
+        socket_acceptconn(socket)
+    }
+}
+
+impl ActivationOperations for OsActivationOperations {
+    fn listen(&self, socket: BorrowedFd<'_>, backlog: i32) -> rustix::io::Result<()> {
+        listen(socket, backlog)
     }
 
     fn socket_acceptconn(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<bool> {

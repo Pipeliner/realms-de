@@ -14,7 +14,7 @@ mod runtime;
 mod sys;
 
 #[cfg(target_os = "linux")]
-pub use endpoint::{BoundControlEndpoint, SocketEndpoint};
+pub use endpoint::{ActiveControlListener, BoundControlEndpoint, SocketEndpoint};
 #[cfg(target_os = "linux")]
 pub use error::IpcPathError;
 #[cfg(target_os = "linux")]
