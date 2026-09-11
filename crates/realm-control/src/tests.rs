@@ -867,7 +867,7 @@ fn endpoint_validation_uses_retained_realm_euid() {
 
     assert_eq!(endpoint.realm_dir().retained_euid(), retained_euid);
     assert!(matches!(
-        endpoint.validate_socket_stat_for_test(&socket_stat),
+        endpoint.validate_socket_stat(&socket_stat),
         Err(IpcPathError::UnsafeSocketEntry)
     ));
     assert!(matches!(
