@@ -375,7 +375,7 @@ pub struct SocketEndpoint(/* exact ctl.sock display path + RealmDir */);
 pub struct BoundControlEndpoint(/* non-listening fd + lock + path identity */);
 pub struct ActiveControlListener(/* listening fd + lock + path identity */);
 pub struct ControlServer(/* consumed listener + bounded connection state */);
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ConnectionId(u64); // private opaque value, never a raw fd
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ControlToken(u64); // private opaque poll-registration identity
@@ -395,7 +395,8 @@ pub enum ControlAction {
 }
 pub enum ControlError {
     StaleConnection { connection: ConnectionId },
-    OutboundFrameTooLarge { connection: ConnectionId },
+    ShuttingDown,
+    OutboundFrameTooLarge { connections: Vec<ConnectionId> }, // at most 64, ascending
     PeerIo { connection: ConnectionId, source: std::io::Error },
     ListenerIo(std::io::Error),
     ResourceExhausted(std::io::Error),
@@ -486,7 +487,8 @@ impl ControlServer {
         state: RealmState) -> Result<(), ControlError>;
     pub fn publish_state(&mut self, now: Instant, state: RealmState)
         -> Result<(), ControlError>;
-    pub fn begin_shutdown(&mut self, now: Instant) -> Result<(), ControlError>;
+    pub fn begin_shutdown(&mut self, now: Instant);
+    pub fn is_shutdown_complete(&self) -> bool;
 }
 
 /// A connection to realm-session, added with the #41 transport slice.
@@ -521,8 +523,8 @@ and drop every borrow before `service_one`. Raw fds are never connection
 identities.
 
 Bound, active, and server ownership retain a separately opened singleton-lock
-description and the
-no-follow pathname identity used for ownership-safe Drop cleanup. That private
+description and the no-follow pathname identity used for ownership-safe Drop
+cleanup. That private
 lock fd is opened independently with
 `O_RDONLY | O_DIRECTORY | O_CLOEXEC` (or an exact equivalent), is checked for
 `FD_CLOEXEC`, and is never returned by an accessor or `AsFd`. An exec-launched
@@ -539,19 +541,36 @@ display/external-client path, not a shared-crate resolution route.
 relative to it on every single connection attempt; it never rereads
 `XDG_RUNTIME_DIR` or creates the directory. An absent `realm` is the retryable
 `MissingRealm` classification, not `UnsafeRealmDirectory`. `realmctl`, not
-`ClientEndpoint`, owns the exact six-attempt retry schedule. Server methods use
-caller-supplied `std::time::Instant`; no production transport clock trait is
-part of this interface. SPEC 0007 is the complete construction, singleton
-ownership, transport, deadline, and cleanup contract.
+`ClientEndpoint`, owns the six absolute not-before retry targets from one fixed
+driver start. A late retryable attempt skips elapsed sleep; attempts never
+overlap or move backward. Server methods use caller-supplied
+`std::time::Instant`; no production transport clock trait is part of this
+interface. SPEC 0007 is the complete construction, singleton ownership,
+transport, deadline, shutdown, and cleanup contract.
 
 The wire types (`Request`, `Response`, `Event`, `RealmState`) already exist in
 `realm-core::ipc` and `realm-core::state` and remain normative. `ControlAction`
 emits every decoded non-Hello request without implementing session semantics;
 the #38 adapter owns completions and authoritative state. The transport's
-65,536-byte bound includes LF on input and output, and an oversized generated
-frame closes only its peer. The `Client`, `Subscription`, and `ControlServer`
-declarations describe the #41 transport slice, not a claim that #218's endpoint
-slice implements it.
+65,536-byte bound includes LF on input and output. One-peer oversized completion
+closes that peer; oversized `publish_state` encodes once, closes all and only
+current subscribers, and reports their at-most-64 stable ids in ascending
+order. `service_one` applies due deadlines before socket I/O, disables reads
+while application completion or ordinary output is pending, and gives
+simultaneous subscriber readability priority over writability.
+After an ordinary application response drains, including `Response::Error`,
+only a read-open peer returns to `Ready`; a read-half-closed peer closes.
+
+`begin_shutdown` is total and idempotent: its first call fixes the hard 100 ms
+deadline, stops admission/actions, closes every non-subscriber, and leaves only
+bounded subscriber drain. An unstarted initial State is preserved before
+Shutdown; a partial current frame finishes alone. #38 drives interests and
+expiry until `is_shutdown_complete()`, then calls River `exit_session`. No new
+connection or action is admitted after shutdown starts. Later completion or
+publication returns `ShuttingDown` without mutation, although an id already
+stale before shutdown may remain `StaleConnection`. The `Client`,
+`Subscription`, and `ControlServer` declarations describe the #41 transport
+slice, not a claim that #218's endpoint slice implements it.
 
 ---
 

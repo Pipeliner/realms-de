@@ -86,12 +86,13 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 
 - `Request::Hello { version, client }` is the mandatory first complete frame on
   **every** connection, including one-shot shell clients. The server answers
-  `Response::Hello` before any other response. A matching version moves the
-  connection to ready; a mismatch receives the server version and is then
-  closed. A request before `Hello`, a second `Hello`, or `Subscribe` before a
-  successful matching Hello is refused with `Response::Error` and then closed.
-  Shell scriptability remains: a script writes a Hello frame followed by its
-  request, each newline terminated.
+  `Response::Hello` before any other response. A matching version enters
+  `SendingHello` and becomes Ready only after the complete Hello response
+  drains; a mismatch receives the server version and is then closed. A request
+  before `Hello`, a second `Hello`, or `Subscribe` before a successful matching
+  Hello is refused with `Response::Error` and then closed. Shell scriptability
+  remains: a script writes a Hello frame followed by its request, each newline
+  terminated.
 - A ready client may issue ordinary requests. `Subscribe` is a terminal request:
   after a successful Hello it changes the connection into a subscriber, emits
   an immediate `Event::State` snapshot, and accepts no further client frames.
@@ -151,11 +152,15 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 ### Bad
 
 - JSON is not free. Every state push formats a frame, and SPEC 0007 enforces a
-  65,536-byte total-frame ceiling with bounded encoding. An oversized generated
-  response or event therefore closes only that peer with a stable diagnostic.
+  65,536-byte total-frame ceiling with bounded encoding. An oversized one-peer
+  response or initial state closes that peer; an oversized state publication
+  closes the bounded current subscriber set and reports its stable ids in
+  ascending order, without affecting non-subscribers.
 - No service activation. Something must start the session before a client
   connects. `ClientEndpoint` makes one bounded attempt; `realmctl` owns the
-  exact six-attempt startup schedule for the race.
+  exact six-attempt startup schedule for the race. Its targets are absolute
+  not-before offsets, so a slow attempt skips elapsed sleep rather than moving
+  later targets or overlapping another attempt.
 - We are not a D-Bus citizen, so a third-party panel or a desktop integration
   cannot talk to realm without implementing our protocol.
 - A JSON value containing a literal newline inside a string is escaped by serde,
@@ -187,15 +192,16 @@ someone wanting to drive orbits from an existing panel or a global hotkey daemon
 - `ipc::tests::responses_round_trip`.
 - `ipc::tests::unknown_frames_are_an_error_not_a_panic` — an unrecognised
   command or malformed input must be a decode error.
-- *Required before M2 implementation:* SPEC 0007 A1–A11's `realm_control`
-  endpoint capability, singleton ownership, stale-probe, activation, cleanup,
-  single-attempt client, compile-fail, and retry-driver tests; A12 belongs to
-  the #38 session loop.
-- *Required before M2 implementation:* SPEC 0007 A13–A16's admission,
-  state-machine, half-close, stable-token, frame-bound, deadline, retry, and
-  subscriber-coalescing tests.
+- *Required before M2 implementation:* #218 owns SPEC 0007 endpoint/server
+  evidence in A1–A9 and A11; the explicitly separated client half of A2 plus
+  A10 and A13–A16 are #41; A12 is #38.
+  These cover endpoint capability, singleton ownership, stale probing,
+  activation/cleanup, the single-attempt client and retry driver, admission,
+  state/half-close, stable tokens, frame bounds, arbitration, deadlines,
+  shutdown, and subscriber coalescing.
 - *Planned (M2):* a CI job that drives a live session end to end with `socat`
   and `jq` only, so the scriptability claim is tested rather than asserted.
-- *Required before M2 implementation:* SPEC 0007 A17's #41 bounded-transport
-  test, the #38 combined-loop ordering test, and the #40/#65 real Linux
-  key-to-`manage_finish` budget test.
+- *Required before M2 implementation:* SPEC 0007 A17 is split: #41 owns the
+  bounded-transport test, #38 owns combined-loop ordering, #40 supplies real
+  River `manage_finish`, and #65 owns the real Linux key-to-`manage_finish`
+  budget test with #38/#40.

@@ -101,11 +101,15 @@ across SPEC 0007's bounded connect schedule. Every attempt calls
 descriptor-relative connection attempt, reopens and validates `realm` relative
 to the retained runtime fd without rereading `XDG_RUNTIME_DIR`, and completes
 Hello before returning `Client`. `realmctl` owns the retry driver and its
-injected sleeper/time seams. It makes an immediate attempt plus five retries
-after 10, 20, 40, 80, and 160 ms: cumulative attempt times are exactly 0, 10,
-30, 70, 150, and 310 ms, with no sleep after the sixth failure. Only
-`ClientError::MissingRealm` and `ClientError::Refused` advance the schedule;
-version mismatch and every other terminal client error fail immediately.
+injected sleeper/time seams. At driver start it fixes absolute not-before
+offsets of 0, 10, 30, 70, 150, and 310 ms. Attempts run sequentially and never
+overlap. After a retryable completion, it sleeps only until the next target if
+that target remains in the future; if the attempt finished late, the next
+attempt starts immediately without moving backward. Immediate failures
+therefore start exactly at all six targets, and no sleep follows the sixth
+failure. Only `ClientError::MissingRealm` and `ClientError::Refused` advance the
+schedule; version mismatch and every other terminal client error fail
+immediately.
 
 `theme apply`, `theme lint`, and `theme diff` remain session-independent: they
 do not call a runtime resolver, derive a `ClientEndpoint`, or open the control
@@ -464,7 +468,7 @@ Each row is one happy path and becomes one test.
 | B4 | Given a session with windows in orbits 1 and 3, when `orbit list` runs, then it prints six rows carrying rune, name, window count and layout, with orbit 1 marked active | |
 | B5 | Given a running session, when `orbit switch 3` runs, then it sends `Request::SwitchOrbit(3)`, prints the new orbit and exits 0 | |
 | B6 | Given a session whose backend has disconnected, when `orbit switch 2` runs and the session answers `Error { kind: backend-refused }`, then the CLI prints the session's message and exits 5 | |
-| B7 | Given retryable MissingRealm or Refused results and an `XDG_RUNTIME_DIR` change after the first attempt, when `orbit switch 2` runs, then exactly one `RuntimeDir` is resolved, one `ClientEndpoint` is reused for single named-client attempts at cumulative 0, 10, 30, 70, 150, and 310 ms, no sleep follows the sixth failure, and exhaustion exits 3 naming the original capability's display path and suggesting how to start a session | `realm_ctl::tests::startup_retry_uses_exact_attempt_timestamps_and_exit_classes` |
+| B7 | Given immediate retryable MissingRealm or Refused results and an `XDG_RUNTIME_DIR` change after the first attempt, when `orbit switch 2` runs, then exactly one `RuntimeDir` is resolved, one `ClientEndpoint` is reused for sequential named-client attempts at absolute not-before offsets 0, 10, 30, 70, 150, and 310 ms, no sleep follows the sixth failure, and exhaustion exits 3 naming the original capability's display path and suggesting how to start a session. If an attempt completes after the next target, the next starts immediately without overlap or backward time | `realm_ctl::tests::startup_retry_uses_exact_attempt_timestamps_and_exit_classes`, `realm_ctl::tests::late_retryable_attempt_skips_elapsed_sleep_without_overlap` |
 | B8 | Given a session answering `Hello` with a different `version`, when any command runs, then the CLI refuses before sending anything else, prints both versions and exits 4 | |
 | B8a | Given any terminal client path/transport/I/O error other than version mismatch, when a live-session command runs, then it is not retried and exits 6; an application `Response::Error` remains a normal response and maps by its typed kind to exit 5 | `realm_ctl::tests::terminal_transport_errors_exit_six_without_retry` |
 | B9 | Given a session with three windows in orbit 1, when `ledger show 1 --json` runs, then stdout is exactly one object that deserialises as `Response::Ledger` with the windows in ledger order and the focused one marked | |
