@@ -6,6 +6,35 @@
 //! partially written frame can never be mistaken for a complete one.
 
 use serde::{Deserialize, Serialize};
+use std::io::{self, Write};
+
+/// Maximum size in bytes of one serialized frame (including one trailing LF).
+pub const MAX_FRAME_BYTES: usize = 65_536;
+
+#[derive(Default)]
+struct FrameWriter {
+    bytes: Vec<u8>,
+    overflowed: bool,
+}
+
+impl Write for FrameWriter {
+    fn write(&mut self, chunk: &[u8]) -> io::Result<usize> {
+        if self.bytes.len().saturating_add(chunk.len()) > MAX_FRAME_BYTES - 1 {
+            self.overflowed = true;
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "frame exceeds maximum size",
+            ));
+        }
+
+        self.bytes.extend_from_slice(chunk);
+        Ok(chunk.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 use crate::layout::Layout;
 use crate::ledger::{Dir, WinId};
@@ -147,9 +176,23 @@ pub enum Event {
 
 /// Encode a value as one protocol frame (JSON plus a newline).
 pub fn encode<T: Serialize>(value: &T) -> crate::Result<String> {
-    let mut s = serde_json::to_string(value)?;
-    s.push('\n');
-    Ok(s)
+    let mut writer = FrameWriter::default();
+    serde_json::to_writer(&mut writer, value).map_err(|error| {
+        if writer.overflowed
+            && error.is_io()
+            && error.io_error_kind() == Some(io::ErrorKind::WriteZero)
+        {
+            crate::Error::IpcFrameTooLarge {
+                limit: MAX_FRAME_BYTES,
+            }
+        } else {
+            crate::Error::Ipc(error)
+        }
+    })?;
+
+    writer.bytes.push(b'\n');
+    let frame = String::from_utf8(writer.bytes).expect("ipc frames are encoded as UTF-8 JSON text");
+    Ok(frame)
 }
 
 /// Decode one frame.
@@ -181,6 +224,65 @@ mod tests {
             assert_eq!(frame.matches('\n').count(), 1, "frames must be single-line");
             assert_eq!(decode::<Request>(&frame).unwrap(), c);
         }
+    }
+
+    #[derive(Default)]
+    struct ChunkingFixture {
+        successful_chunks: std::cell::Cell<usize>,
+    }
+
+    impl ChunkingFixture {
+        fn successful_chunks(&self) -> usize {
+            self.successful_chunks.get()
+        }
+    }
+
+    impl Serialize for ChunkingFixture {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            use serde::ser::SerializeSeq;
+
+            let mut seq = serializer.serialize_seq(Some(4))?;
+            let chunk = "x".repeat(21_800);
+
+            for _ in 0..4 {
+                seq.serialize_element(&chunk)?;
+                self.successful_chunks
+                    .set(self.successful_chunks.get().saturating_add(1));
+            }
+
+            seq.end()
+        }
+    }
+
+    #[test]
+    fn frame_encoder_accepts_exact_limit_and_rejects_next_byte() {
+        let expected_limit = 65_536;
+        assert_eq!(MAX_FRAME_BYTES, expected_limit);
+
+        let max_payload = "a".repeat(65_533);
+        let frame = encode(&max_payload).unwrap();
+        assert_eq!(frame.len(), MAX_FRAME_BYTES);
+        assert_eq!(frame.matches('\n').count(), 1, "frames must be single-line");
+        assert_eq!(frame.as_bytes().last(), Some(&b'\n'));
+
+        let overflow = format!("{max_payload}a");
+        let err = encode(&overflow).unwrap_err();
+        assert!(
+            matches!(err, crate::Error::IpcFrameTooLarge { limit } if limit == MAX_FRAME_BYTES)
+        );
+    }
+
+    #[test]
+    fn frame_encoder_stops_serialization_at_the_bound() {
+        let fixture = ChunkingFixture::default();
+        let err = encode(&fixture).unwrap_err();
+        assert!(
+            matches!(err, crate::Error::IpcFrameTooLarge { limit } if limit == MAX_FRAME_BYTES)
+        );
+        assert_eq!(fixture.successful_chunks(), 3);
     }
 
     #[test]

@@ -43,7 +43,13 @@ pub enum Error {
     /// A palette value was outside its permitted range.
     #[error("palette value out of range: {0}")]
     PaletteRange(String),
-    /// An IPC frame did not decode.
+    /// A control protocol frame exceeded the wire limit.
+    #[error("ipc frame exceeds {limit} bytes")]
+    IpcFrameTooLarge {
+        /// The maximum allowed frame size in bytes.
+        limit: usize,
+    },
+    /// An IPC frame did not decode or encode.
     #[error("ipc decode error: {0}")]
     Ipc(#[from] serde_json::Error),
 }
