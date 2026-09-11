@@ -269,7 +269,7 @@ Fill SPEC 0007 A13-A16d/A17 transport test cells with the exact passing test pat
 
 - [ ] **Step 5: Run final local gates.**
 
-Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`, `cargo test --workspace --all-features --locked`, `RUSTUP_TOOLCHAIN=1.85 cargo build --workspace --all-features --locked`, `./docs/check-readme-truth-snapshot.sh`, `scripts/check-project-namespace`, `git diff --check`, and `rg -n -i helm --glob '!target/**' --glob '!.git/**' .`. The namespace scan must return no matches.
+Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`, `cargo test --workspace --all-features --locked`, `RUSTUP_TOOLCHAIN=1.85 cargo build --workspace --all-features --locked`, `./docs/check-readme-truth-snapshot.sh`, `scripts/check-project-namespace`, `git diff --check`, and the task brief's exact retired-name scan. The namespace scan must return no matches.
 
 - [ ] **Step 6: Commit.**
 
