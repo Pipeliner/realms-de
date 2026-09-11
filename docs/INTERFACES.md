@@ -374,8 +374,61 @@ pub struct RealmDir(/* retained descriptor; exposes a borrowed fd */);
 pub struct SocketEndpoint(/* exact ctl.sock display path + RealmDir */);
 pub struct BoundControlEndpoint(/* non-listening fd + lock + path identity */);
 pub struct ActiveControlListener(/* listening fd + lock + path identity */);
+pub struct ControlServer(/* consumed listener + bounded connection state */);
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ConnectionId(u64); // private opaque value, never a raw fd
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ControlToken(u64); // private opaque poll-registration identity
+pub struct PollInterest<'a> {
+    pub token: ControlToken,
+    pub fd: BorrowedFd<'a>,
+    pub readable: bool,
+    pub writable: bool,
+}
+pub struct ReadyEvent {
+    pub token: ControlToken,
+    pub readable: bool,
+    pub writable: bool,
+}
+pub enum ControlAction {
+    Request { connection: ConnectionId, request: Request },
+}
+pub enum ControlError {
+    StaleConnection { connection: ConnectionId },
+    ShuttingDown,
+    OutboundFrameTooLarge { connections: Vec<ConnectionId> }, // at most 64, ascending
+    PeerIo { connection: ConnectionId, source: std::io::Error },
+    ListenerIo(std::io::Error),
+    ResourceExhausted(std::io::Error),
+}
 pub struct ClientEndpoint(/* retained RuntimeDir for retry */);
 pub struct Client(/* connected transport wrapper added by #41 */);
+pub struct Subscription(/* consuming event iterator added by #41 */);
+
+pub enum ClientPhase {
+    Connect,
+    HelloWrite,
+    HelloRead,
+    RequestWrite,
+    ResponseRead,
+    SubscribeWrite,
+    InitialState,
+    SubscriptionEvent,
+}
+
+pub enum ClientError {
+    MissingRealm,
+    Refused,
+    Path(IpcPathError),
+    VersionMismatch { client: u32, server: u32 },
+    Timeout { phase: ClientPhase },
+    FrameTooLarge { phase: ClientPhase },
+    InvalidRequest,
+    UnexpectedResponse { phase: ClientPhase },
+    MalformedResponse { phase: ClientPhase },
+    Eof { phase: ClientPhase },
+    Io { phase: ClientPhase, source: std::io::Error },
+}
 
 pub enum IpcPathError {
     MissingRuntimeDir,
@@ -419,22 +472,42 @@ impl BoundControlEndpoint {
 impl ActiveControlListener {
     pub fn endpoint(&self) -> &SocketEndpoint;
     pub fn realm_dir(&self) -> &RealmDir;
+    pub fn into_server(self, now: Instant) -> ControlServer;
 }
 
-impl AsFd for ActiveControlListener { /* poll/accept only */ }
+impl ControlServer {
+    pub fn poll_interests(&self) -> impl Iterator<Item = PollInterest<'_>>;
+    pub fn next_deadline(&self) -> Option<Instant>;
+    pub fn service_one(&mut self, now: Instant, ready: ReadyEvent)
+        -> Result<Option<ControlAction>, ControlError>;
+    pub fn expire(&mut self, now: Instant) -> Result<(), ControlError>;
+    pub fn complete_request(&mut self, now: Instant, connection: ConnectionId,
+        response: Response) -> Result<(), ControlError>;
+    pub fn complete_subscribe(&mut self, now: Instant, connection: ConnectionId,
+        state: RealmState) -> Result<(), ControlError>;
+    pub fn publish_state(&mut self, now: Instant, state: RealmState)
+        -> Result<(), ControlError>;
+    pub fn begin_shutdown(&mut self, now: Instant);
+    pub fn is_shutdown_complete(&self) -> bool;
+}
 
 /// A connection to realm-session, added with the #41 transport slice.
 impl Client {
-    pub fn request(&mut self, req: Request) -> Result<Response>;
+    pub fn request(&mut self, req: Request) -> Result<Response, ClientError>;
     /// Subscribe after a successful Hello; yields an immediate state snapshot
-    /// and every later change until dropped. No further request is valid.
-    pub fn subscribe(self) -> Result<impl Iterator<Item = Result<Event>>>;
+    /// and coalesced later changes until Shutdown/EOF/error. No further request
+    /// is valid.
+    pub fn subscribe(self) -> Result<Subscription, ClientError>;
 }
 
 impl ClientEndpoint {
-    /// Reopen and validate realm relative to the retained runtime capability,
-    /// connect through a generated procfd bridge, and complete Hello.
-    pub fn connect(&self) -> Result<Client>;
+    /// Make exactly one descriptor-relative attempt through a generated procfd
+    /// bridge and complete Hello using the explicit client name.
+    pub fn connect(&self, client: &str) -> Result<Client, ClientError>;
+}
+
+impl Iterator for Subscription {
+    type Item = Result<Event, ClientError>;
 }
 ```
 
@@ -443,14 +516,19 @@ compilation fails explicitly. `realm-core` remains portable and owns only wire
 values plus encode/decode/version. `BoundControlEndpoint` is not `Clone` and
 intentionally has no `AsFd`; `activate(self)` is the only public path to
 `listen(..., 64)`. It verifies `SO_ACCEPTCONN` before returning the not-`Clone`
-active wrapper. That wrapper alone implements `AsFd` for the session poll set.
-Both wrappers retain a separately opened singleton-lock description and the
-no-follow pathname identity used for ownership-safe Drop cleanup. That private
+active wrapper. The active wrapper is then consumed into `ControlServer` and
+does not implement public `AsFd`. `poll_interests` exposes only temporary
+borrowed fds paired with stable `ControlToken`s; callers copy token/readiness
+and drop every borrow before `service_one`. Raw fds are never connection
+identities.
+
+Bound, active, and server ownership retain a separately opened singleton-lock
+description and the no-follow pathname identity used for ownership-safe Drop
+cleanup. That private
 lock fd is opened independently with
 `O_RDONLY | O_DIRECTORY | O_CLOEXEC` (or an exact equivalent), is checked for
-`FD_CLOEXEC`, and is never returned by an accessor or `AsFd`; the active
-wrapper's `AsFd` exposes only its listener. An exec-launched client therefore
-cannot retain singleton ownership after the daemon exits.
+`FD_CLOEXEC`, and is never returned by an accessor or `AsFd`. An exec-launched
+client therefore cannot retain singleton ownership after the daemon exits.
 
 Linux has no `bindat` or `connectat`. Bind, stale-probe connect, and
 shared-client connect use only an internally generated
@@ -460,14 +538,39 @@ NULs, are checked against `sockaddr_un` and procfs accessibility is proved
 before server-side filesystem mutation. The canonical public path is a
 display/external-client path, not a shared-crate resolution route.
 `ClientEndpoint` retains the validated runtime capability and reopens `realm`
-relative to it on every retry; it never rereads `XDG_RUNTIME_DIR` or creates the
-directory. SPEC 0007 is the complete construction, singleton ownership, stale
-reclaim, transition, and cleanup contract.
+relative to it on every single connection attempt; it never rereads
+`XDG_RUNTIME_DIR` or creates the directory. An absent `realm` is the retryable
+`MissingRealm` classification, not `UnsafeRealmDirectory`. `realmctl`, not
+`ClientEndpoint`, owns the six absolute not-before retry targets from one fixed
+driver start. A late retryable attempt skips elapsed sleep; attempts never
+overlap or move backward. Server methods use caller-supplied
+`std::time::Instant`; no production transport clock trait is part of this
+interface. SPEC 0007 is the complete construction, singleton ownership,
+transport, deadline, shutdown, and cleanup contract.
 
 The wire types (`Request`, `Response`, `Event`, `RealmState`) already exist in
-`realm-core::ipc` and `realm-core::state` and remain normative. The `Client`
-declaration and methods above describe the later ergonomic #41 transport
-wrapper, not a claim that the endpoint slice implements it.
+`realm-core::ipc` and `realm-core::state` and remain normative. `ControlAction`
+emits every decoded non-Hello request without implementing session semantics;
+the #38 adapter owns completions and authoritative state. The transport's
+65,536-byte bound includes LF on input and output. One-peer oversized completion
+closes that peer; oversized `publish_state` encodes once, closes all and only
+current subscribers, and reports their at-most-64 stable ids in ascending
+order. `service_one` applies due deadlines before socket I/O, disables reads
+while application completion or ordinary output is pending, and gives
+simultaneous subscriber readability priority over writability.
+After an ordinary application response drains, including `Response::Error`,
+only a read-open peer returns to `Ready`; a read-half-closed peer closes.
+
+`begin_shutdown` is total and idempotent: its first call fixes the hard 100 ms
+deadline, stops admission/actions, closes every non-subscriber, and leaves only
+bounded subscriber drain. An unstarted initial State is preserved before
+Shutdown; a partial current frame finishes alone. #38 drives interests and
+expiry until `is_shutdown_complete()`, then calls River `exit_session`. No new
+connection or action is admitted after shutdown starts. Later completion or
+publication returns `ShuttingDown` without mutation, although an id already
+stale before shutdown may remain `StaleConnection`. The `Client`,
+`Subscription`, and `ControlServer` declarations describe the #41 transport
+slice, not a claim that #218's endpoint slice implements it.
 
 ---
 

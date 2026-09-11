@@ -14,7 +14,7 @@ use rustix::net::{
 };
 
 use crate::sys::{ScopedUmask, CONTROL_SOCKET};
-use crate::{IpcPathError, RealmDir};
+use crate::{ControlServer, IpcPathError, RealmDir};
 
 const REQUIRED_REALM_MODE: u32 = 0o700;
 const REQUIRED_SOCKET_MODE: u32 = 0o600;
@@ -322,10 +322,22 @@ impl ActiveControlListener {
     pub fn realm_dir(&self) -> &RealmDir {
         self.endpoint().realm_dir()
     }
-}
 
-impl AsFd for ActiveControlListener {
-    fn as_fd(&self) -> BorrowedFd<'_> {
+    /// Consumes the public listener capability into its bounded server owner.
+    pub fn into_server(self, now: std::time::Instant) -> ControlServer {
+        ControlServer::new(self, now)
+    }
+
+    #[cfg(test)]
+    pub fn into_server_with_test_credentials(
+        self,
+        now: std::time::Instant,
+        credentials: impl IntoIterator<Item = crate::TestPeerCredential>,
+    ) -> ControlServer {
+        ControlServer::with_test_credentials(self, now, credentials)
+    }
+
+    pub(crate) fn socket_fd(&self) -> BorrowedFd<'_> {
         self.ownership.socket_fd()
     }
 }

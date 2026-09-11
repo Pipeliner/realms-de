@@ -1,0 +1,14 @@
+error[E0433]: cannot find `TestClientOperations` in `realm_control`
+ --> tests/ui/client_test_seams_are_not_public.rs:4:38
+  |
+4 |     let _operations = realm_control::TestClientOperations::new(Instant::now());
+  |                                      ^^^^^^^^^^^^^^^^^^^^ could not find `TestClientOperations` in `realm_control`
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(all(test, target_os = "linux"))]
+  |           ---- the item is gated here
+  | pub use client::{
+  |     TestClientConnect, TestClientOperations, TestClientPoll, TestClientReceive, TestClientSend,
+  |                        ^^^^^^^^^^^^^^^^^^^^

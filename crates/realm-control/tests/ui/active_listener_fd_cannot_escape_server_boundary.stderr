@@ -1,0 +1,18 @@
+error[E0277]: the trait bound `ActiveControlListener: AsFd` is not satisfied
+  --> tests/ui/active_listener_fd_cannot_escape_server_boundary.rs:15:32
+   |
+15 |     let _escaped = AsFd::as_fd(&listener);
+   |                    ----------- ^^^^^^^^^ the trait `AsFd` is not implemented for `ActiveControlListener`
+   |                    |
+   |                    required by a bound introduced by this call
+   |
+   = help: the following other types implement trait `AsFd`:
+             &T
+             &mut T
+             Arc<T>
+             BorrowedFd<'_>
+             Box<T>
+             ChildStderr
+             ChildStdin
+             ChildStdout
+           and $N others

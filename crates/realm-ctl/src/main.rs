@@ -8,6 +8,9 @@ use clap::{error::ErrorKind, Args, Parser, Subcommand};
 use realm_core::Palette;
 use realm_theme::{generation::GenerationPublicationOutcome, ThemeOutputChange};
 
+#[allow(dead_code)]
+mod retry;
+
 #[derive(Parser)]
 #[command(name = "realmctl")]
 struct Cli {
