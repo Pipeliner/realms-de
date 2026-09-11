@@ -1,10 +1,11 @@
 //! Transactional session state and projection coordination.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use realm_core::ipc::Capabilities;
 use realm_core::ipc::PROTOCOL_VERSION;
+use realm_core::ipc::{Capabilities, LedgerEntry, OrbitLedger};
+use realm_core::keys::{Action, Binding, Keymap, Mode};
 use realm_core::layout::{project, Layout, Placement, TriptychParams, Workarea};
 use realm_core::ledger::{Dir, Orbit, ORBIT_COUNT};
 use realm_core::state::{Module, OrbitCell, OrbitDisplay, RealmState};
@@ -14,7 +15,13 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::backend::{
-    BackendContractError, BackendError, BackendEvent, BackendResult, BackendWindowId, WmBackend,
+    BackendBindingId, BackendBindingSpec, BackendBindingState, BackendCapacityResource,
+    BackendContractError, BackendError, BackendEvent, BackendModifier, BackendNextKeyEdge,
+    BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn, BackendPolicyTurnId,
+    BackendResult, BackendSubmission, BackendTicket, BackendWindowId, WmBackend,
+    KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE_HZ, MAX_CONFIGURED_BINDINGS, MAX_MANAGED_WINDOWS,
+    MAX_POLICY_EVENTS, MAX_POLICY_TEXT_BYTES, MAX_REPLAY_POLICY_EVENTS, MAX_STAGED_EFFECTS,
+    MAX_VISIBLE_APP_ID_JSON_BYTES, MAX_VISIBLE_TITLE_JSON_BYTES,
 };
 
 const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
@@ -505,6 +512,10 @@ pub enum RecoveryPhase {
     FinalizingReplay,
     /// The session is authoritative and accepts live events and desired actions.
     Live,
+    /// A finalized Quit has stopped ordinary admission.
+    QuitPending,
+    /// Shutdown has discarded ordinary transaction semantics.
+    ShuttingDown,
 }
 
 #[derive(Debug, Clone)]
@@ -522,30 +533,117 @@ pub struct WindowMetadata {
     pub title: String,
 }
 
+/// Immediate programming edge for the sole key-repeat timer.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum RepeatTimerDirective {
+    /// Preserve the current timer programming.
+    #[default]
+    Preserve,
+    /// Arm or restart the timer with the fixed policy.
+    Arm {
+        /// Delay before the first expiry.
+        delay: Duration,
+        /// Interval between later expiries.
+        interval: Duration,
+    },
+    /// Disarm the timer immediately.
+    Disarm,
+}
+
+/// The completion barrier required after a derived Quit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuitAfter {
+    /// A key-only Quit has no requester.
+    NoRequester,
+    /// Quit shares the original external action's completion.
+    OriginalAction(BackendTicket),
+    /// Direct control Quit owns the current request.
+    CurrentControlRequest,
+}
+
+/// Ordered work released only at a clean transaction boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionEffect {
+    /// Launch one argv vector through the worker owner.
+    Spawn(Vec<String>),
+    /// Open the launcher.
+    Launcher,
+    /// Open the full binding sheet.
+    Grimoire,
+    /// Retained legacy theme action.
+    ReloadTheme,
+    /// Stop admission and apply the matching Quit barrier.
+    QuitPending {
+        /// Barrier owner that must settle before shutdown begins.
+        after: QuitAfter,
+    },
+}
+
+/// Final result for one externally admitted action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionCompletion {
+    /// Original external ticket, never a follow-up response ticket.
+    pub ticket: BackendTicket,
+    /// Final clean result.
+    pub result: Result<(), SessionActionError>,
+}
+
+/// A safely classified nonfatal backend diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionDiagnostic {
+    /// Backend error that did not invalidate the incarnation.
+    pub error: BackendError,
+}
+
 /// Observable result of one in-process session transition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionUpdate {
+    /// Immediate repeat-timer edge, consumed before all delayed fields.
+    pub repeat_timer: RepeatTimerDirective,
+    /// New authoritative persistence value, when one changed.
+    pub persistence: Option<SessionSnapshotV1>,
     /// Whether one projection was successfully submitted to the backend.
     pub projection_applied: bool,
     /// The new visible snapshot, present only when it differs from the last one.
     pub state: Option<RealmState>,
+    /// Original ticket exposed only by successful external admission.
+    pub pending_action: Option<BackendTicket>,
+    /// Original external result exposed only at its clean final boundary.
+    pub action_completion: Option<ActionCompletion>,
+    /// Ordered delayed effects.
+    pub effects: Vec<SessionEffect>,
+    /// One nonfatal diagnostic.
+    pub diagnostic: Option<SessionDiagnostic>,
     /// A valid event intentionally left for a later policy slice.
     pub deferred: Option<BackendEvent>,
 }
 
 impl SessionUpdate {
-    fn unchanged() -> Self {
+    /// Construct the closed no-change result.
+    pub fn unchanged() -> Self {
         Self {
+            repeat_timer: RepeatTimerDirective::Preserve,
+            persistence: None,
             projection_applied: false,
             state: None,
+            pending_action: None,
+            action_completion: None,
+            effects: Vec::new(),
+            diagnostic: None,
             deferred: None,
         }
     }
 
     fn deferred(event: BackendEvent) -> Self {
         Self {
+            repeat_timer: RepeatTimerDirective::Preserve,
+            persistence: None,
             projection_applied: false,
             state: None,
+            pending_action: None,
+            action_completion: None,
+            effects: Vec::new(),
+            diagnostic: None,
             deferred: Some(event),
         }
     }
@@ -563,6 +661,9 @@ pub enum SessionEventError {
     /// Every possible numeric window id has already been allocated.
     #[error("Realm window id space is exhausted")]
     WindowIdExhausted,
+    /// Every nonzero response ticket has been consumed.
+    #[error("backend response ticket space is exhausted")]
+    BackendTicketExhausted,
     /// The one scheduled retry of pending backend work also failed.
     #[error("backend retry exhausted: {0}")]
     BackendRetryExhausted(BackendError),
@@ -575,6 +676,9 @@ pub enum SessionEventError {
     /// The backend emitted an event that cannot exist before replay completes.
     #[error("unexpected event during initial replay: {0:?}")]
     UnexpectedInitialReplayEvent(BackendEvent),
+    /// A policy fact cannot occur in the initial replay batch.
+    #[error("unexpected policy event during initial replay: {0:?}")]
+    UnexpectedInitialReplayPolicyEvent(BackendPolicyEvent),
 }
 
 /// Failure of a caller-requested session action.
@@ -583,6 +687,12 @@ pub enum SessionActionError {
     /// The session is recovering or must repair pending backend work first.
     #[error("session is not ready for actions")]
     NotReady,
+    /// Spawn requires a nonempty argv and program.
+    #[error("spawn command requires a nonempty program")]
+    InvalidSpawnCommand,
+    /// Every nonzero response ticket has been consumed.
+    #[error("backend response ticket space is exhausted")]
+    BackendTicketExhausted,
     /// The action reached the compositor backend and it failed.
     #[error(transparent)]
     Backend(#[from] BackendError),
@@ -590,6 +700,67 @@ pub enum SessionActionError {
 
 /// Result of a caller-requested session action.
 pub type SessionActionResult<T> = Result<T, SessionActionError>;
+
+#[derive(Debug, Clone)]
+struct AuthorityState {
+    ledger: Ledger,
+    windows: BTreeMap<WinId, WindowMetadata>,
+    backend_ids: BTreeMap<BackendWindowId, WinId>,
+    bound_backend_ids: BTreeSet<BackendWindowId>,
+    next_win_id: u64,
+    workarea: Option<Workarea>,
+    exclusive_focus: bool,
+    effective_focus: Option<BackendWindowId>,
+    mode: Mode,
+    chord_echo: String,
+    whichkey: bool,
+    modules: Vec<Module>,
+    active_modifiers: Vec<BackendModifier>,
+    held_bindings: BTreeSet<BackendBindingId>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveTransaction {
+    committed: AuthorityState,
+    visible: RealmState,
+    last_committed_clean_projection: Vec<Placement>,
+    working: AuthorityState,
+    most_recent_private_projection: Vec<Placement>,
+    original_action_result: Option<(BackendTicket, Result<(), SessionActionError>)>,
+    repair_available: bool,
+    response: BackendPolicyResponse,
+    staged_effects: Vec<SessionEffect>,
+    close_target: Option<WinId>,
+    repeat_candidate: Option<BackendBindingId>,
+    repeat_timer: RepeatTimerDirective,
+    projection_required: bool,
+    binding_changed: bool,
+    bootstrap: bool,
+    quit_staged: bool,
+    terminal_result: Option<BackendResult<()>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransactionSubstate {
+    Idle,
+    AwaitingExternalTurn {
+        ticket: BackendTicket,
+    },
+    AwaitingInternalTurn {
+        ticket: BackendTicket,
+    },
+    InFlight {
+        ticket: BackendTicket,
+    },
+    AwaitingDrain {
+        ticket: BackendTicket,
+    },
+    RetryReady,
+    #[allow(dead_code)]
+    AwaitingRepairTurn {
+        ticket: BackendTicket,
+    },
+}
 
 /// The compositor-independent owner of Realm's ledger and visible state.
 pub struct Session<B: WmBackend> {
@@ -607,20 +778,60 @@ pub struct Session<B: WmBackend> {
     phase: RecoveryPhase,
     replay: Vec<ReplayWindow>,
     pending_backend_work: bool,
+    policy_transactions: bool,
+    bindings: BTreeMap<BackendBindingId, Binding>,
+    binding_order: Vec<BackendBindingId>,
+    modifier_label: String,
+    binding_state: BackendBindingState,
+    bound_backend_ids: BTreeSet<BackendWindowId>,
+    workarea_known: bool,
+    exclusive_focus: bool,
+    effective_focus: Option<BackendWindowId>,
+    mode: Mode,
+    chord_echo: String,
+    whichkey: bool,
+    modules: Vec<Module>,
+    active_modifiers: Vec<BackendModifier>,
+    held_bindings: BTreeSet<BackendBindingId>,
+    repeat_target: Option<BackendBindingId>,
+    transaction: TransactionSubstate,
+    active: Option<ActiveTransaction>,
+    last_backend_ticket: u64,
+    last_policy_turn: Option<BackendPolicyTurnId>,
+    published_ledger: Ledger,
+    published_windows: BTreeMap<WinId, WindowMetadata>,
 }
 
 #[allow(deprecated)]
 impl<B: WmBackend> Session<B> {
     /// Connect a backend and seed an empty six-orbit session.
     pub fn connect(backend: B) -> BackendResult<Self> {
-        Self::connect_with_snapshot(backend, None)
+        Self::connect_with_snapshot_and_keymap(backend, None, Keymap::default())
     }
 
     /// Connect a backend and enter initial replay using an optional validated snapshot.
     pub fn connect_with_snapshot(
-        mut backend: B,
+        backend: B,
         snapshot: Option<SessionSnapshotV1>,
     ) -> BackendResult<Self> {
+        Self::connect_with_snapshot_and_keymap(backend, snapshot, Keymap::default())
+    }
+
+    fn connect_with_keymap(backend: B, keymap: Keymap) -> BackendResult<Self> {
+        Self::connect_with_snapshot_and_keymap(backend, None, keymap)
+    }
+
+    fn connect_with_snapshot_and_keymap(
+        mut backend: B,
+        snapshot: Option<SessionSnapshotV1>,
+        keymap: Keymap,
+    ) -> BackendResult<Self> {
+        if keymap.bindings.len() > MAX_CONFIGURED_BINDINGS {
+            return Err(BackendError::Capacity {
+                resource: BackendCapacityResource::ConfiguredBindings,
+                limit: MAX_CONFIGURED_BINDINGS as u64,
+            });
+        }
         let capabilities = backend.connect()?;
         let workarea = backend.workarea();
         let (ledger, backend_ids, next_win_id) = snapshot.map_or_else(
@@ -634,6 +845,33 @@ impl<B: WmBackend> Session<B> {
                 (snapshot.ledger, backend_ids, snapshot.next_win_id)
             },
         );
+        let Keymap {
+            modifier: modifier_label,
+            bindings: keymap_bindings,
+        } = keymap;
+        let mut bindings = BTreeMap::new();
+        let mut binding_order = Vec::with_capacity(keymap_bindings.len());
+        let mut mechanisms = Vec::with_capacity(keymap_bindings.len());
+        for (index, binding) in keymap_bindings.into_iter().enumerate() {
+            let id = BackendBindingId::new(
+                u32::try_from(index + 1).expect("binding capacity fits a u32"),
+            )
+            .expect("configured binding ids start at one");
+            let modifiers = if binding.mode == Mode::Nav {
+                vec![BackendModifier::Super]
+            } else {
+                Vec::new()
+            };
+            mechanisms.push(BackendBindingSpec {
+                id,
+                keysym: binding.key.clone(),
+                modifiers,
+            });
+            binding_order.push(id);
+            bindings.insert(id, binding);
+        }
+        backend.configure_bindings(mechanisms)?;
+        let published_ledger = Ledger::new();
         Ok(Self {
             backend,
             ledger,
@@ -649,6 +887,32 @@ impl<B: WmBackend> Session<B> {
             phase: RecoveryPhase::InitialReplay,
             replay: Vec::new(),
             pending_backend_work: false,
+            policy_transactions: false,
+            bindings,
+            binding_order,
+            modifier_label,
+            binding_state: BackendBindingState {
+                enabled: Vec::new(),
+                watched_modifiers: Vec::new(),
+                next_key_edge: BackendNextKeyEdge::Preserve,
+            },
+            bound_backend_ids: BTreeSet::new(),
+            workarea_known: false,
+            exclusive_focus: false,
+            effective_focus: None,
+            mode: Mode::Nav,
+            chord_echo: String::new(),
+            whichkey: RealmState::default().whichkey,
+            modules: Vec::new(),
+            active_modifiers: Vec::new(),
+            held_bindings: BTreeSet::new(),
+            repeat_target: None,
+            transaction: TransactionSubstate::Idle,
+            active: None,
+            last_backend_ticket: 0,
+            last_policy_turn: None,
+            published_ledger,
+            published_windows: BTreeMap::new(),
         })
     }
 
@@ -659,7 +923,12 @@ impl<B: WmBackend> Session<B> {
 
     /// True when backend repair must run before another event is read.
     pub fn has_pending_backend_work(&self) -> bool {
-        self.pending_backend_work
+        self.pending_backend_work || self.transaction == TransactionSubstate::RetryReady
+    }
+
+    /// True until the current requested/response/drain transaction is final.
+    pub fn has_active_backend_transaction(&self) -> bool {
+        self.transaction != TransactionSubstate::Idle
     }
 
     pub(crate) fn next_backend_event(
@@ -717,6 +986,12 @@ impl<B: WmBackend> Session<B> {
         &self.last_projection
     }
 
+    fn binding_id_for_key(&self, key: &str) -> Option<BackendBindingId> {
+        self.bindings
+            .iter()
+            .find_map(|(id, binding)| (binding.key == key).then_some(*id))
+    }
+
     /// Switch the visible orbit transactionally.
     pub fn switch_orbit(&mut self, orbit: OrbitId) -> SessionActionResult<SessionUpdate> {
         self.stage_ledger_update(|ledger| ledger.switch_orbit(orbit))
@@ -768,30 +1043,73 @@ impl<B: WmBackend> Session<B> {
     }
 
     /// Ask the focused window to close without changing authoritative state.
-    pub fn request_close_focused(&mut self) -> SessionActionResult<Option<WinId>> {
-        if self.phase != RecoveryPhase::Live || self.pending_backend_work {
+    pub fn request_close_focused(&mut self) -> SessionActionResult<SessionUpdate> {
+        if self.phase != RecoveryPhase::Live
+            || self.pending_backend_work
+            || self.has_active_backend_transaction()
+        {
             return Err(SessionActionError::NotReady);
         }
         let Some(win) = self.ledger.focused() else {
-            return Ok(None);
+            return Ok(SessionUpdate::unchanged());
         };
-        self.backend.close(win)?;
-        Ok(Some(win))
+        if !self.policy_transactions {
+            self.backend.close(win)?;
+            return Ok(SessionUpdate::unchanged());
+        }
+        let ticket = self.allocate_action_ticket()?;
+        let mut active = self.new_active_transaction();
+        active.close_target = Some(win);
+        active.original_action_result = Some((ticket, Ok(())));
+        self.active = Some(active);
+        self.transaction = TransactionSubstate::AwaitingExternalTurn { ticket };
+        match self.backend.request_policy_turn() {
+            Ok(()) => Ok(SessionUpdate {
+                pending_action: Some(ticket),
+                ..SessionUpdate::unchanged()
+            }),
+            Err(error) => {
+                self.active = None;
+                self.transaction = TransactionSubstate::Idle;
+                Err(SessionActionError::Backend(error))
+            }
+        }
+    }
+
+    /// Admit an effect-only Spawn without allocating a compositor ticket.
+    pub fn request_spawn(&mut self, argv: Vec<String>) -> SessionActionResult<SessionUpdate> {
+        if self.phase != RecoveryPhase::Live
+            || self.pending_backend_work
+            || self.has_active_backend_transaction()
+        {
+            return Err(SessionActionError::NotReady);
+        }
+        if argv.is_empty() || argv.first().is_none_or(String::is_empty) {
+            return Err(SessionActionError::InvalidSpawnCommand);
+        }
+        Ok(SessionUpdate {
+            effects: vec![SessionEffect::Spawn(argv)],
+            ..SessionUpdate::unchanged()
+        })
     }
 
     /// Toggle the visible which-key strip without applying a projection.
     pub fn toggle_whichkey(&mut self) -> SessionUpdate {
-        if self.phase != RecoveryPhase::Live || self.pending_backend_work {
+        if self.phase != RecoveryPhase::Live
+            || self.pending_backend_work
+            || self.has_active_backend_transaction()
+        {
             return SessionUpdate::unchanged();
         }
         let mut changed = self.state.clone();
         changed.revision = changed.revision.saturating_add(1);
         changed.whichkey = !changed.whichkey;
+        self.whichkey = changed.whichkey;
         self.state = changed.clone();
         SessionUpdate {
             projection_applied: false,
             state: Some(changed),
-            deferred: None,
+            ..SessionUpdate::unchanged()
         }
     }
 
@@ -799,8 +1117,14 @@ impl<B: WmBackend> Session<B> {
         &mut self,
         update: impl FnOnce(&mut Ledger),
     ) -> SessionActionResult<SessionUpdate> {
-        if self.phase != RecoveryPhase::Live || self.pending_backend_work {
+        if self.phase != RecoveryPhase::Live
+            || self.pending_backend_work
+            || self.has_active_backend_transaction()
+        {
             return Err(SessionActionError::NotReady);
+        }
+        if self.policy_transactions {
+            return self.stage_policy_ledger_update(update);
         }
         let mut candidate = self.ledger.clone();
         update(&mut candidate);
@@ -835,6 +1159,25 @@ impl<B: WmBackend> Session<B> {
         &mut self,
         event: BackendEvent,
     ) -> Result<SessionUpdate, SessionEventError> {
+        match event {
+            BackendEvent::PolicyTurn(turn) => {
+                self.policy_transactions = true;
+                return self.handle_policy_turn(turn);
+            }
+            BackendEvent::OperationCompleted { ticket, result } => {
+                return self.handle_operation_completed(ticket, result);
+            }
+            BackendEvent::RetainedObservationsDrained { ticket } => {
+                return self.handle_observations_drained(ticket);
+            }
+            event => return self.handle_legacy_backend_event(event),
+        }
+    }
+
+    fn handle_legacy_backend_event(
+        &mut self,
+        event: BackendEvent,
+    ) -> Result<SessionUpdate, SessionEventError> {
         if self.pending_backend_work {
             return Err(SessionEventError::BackendWorkPending);
         }
@@ -848,6 +1191,9 @@ impl<B: WmBackend> Session<B> {
                 _ => Err(SessionEventError::BackendWorkPending),
             },
             RecoveryPhase::Live => self.handle_live_event(event),
+            RecoveryPhase::QuitPending | RecoveryPhase::ShuttingDown => {
+                Err(SessionEventError::BackendWorkPending)
+            }
         }
     }
 
@@ -958,7 +1304,10 @@ impl<B: WmBackend> Session<B> {
 
     /// Replace bar-module values without issuing a compositor request.
     pub fn update_modules(&mut self, modules: Vec<Module>) -> SessionUpdate {
-        if self.phase != RecoveryPhase::Live || self.pending_backend_work {
+        if self.phase != RecoveryPhase::Live
+            || self.pending_backend_work
+            || self.has_active_backend_transaction()
+        {
             return SessionUpdate::unchanged();
         }
         if self.state.modules == modules {
@@ -967,11 +1316,12 @@ impl<B: WmBackend> Session<B> {
         let mut changed = self.state.clone();
         changed.revision = changed.revision.saturating_add(1);
         changed.modules = modules;
+        self.modules = changed.modules.clone();
         self.state = changed.clone();
         SessionUpdate {
             projection_applied: false,
             state: Some(changed),
-            deferred: None,
+            ..SessionUpdate::unchanged()
         }
     }
 
@@ -1059,12 +1409,14 @@ impl<B: WmBackend> Session<B> {
         Ok(SessionUpdate {
             projection_applied: true,
             state: Some(state),
-            deferred: None,
+            ..SessionUpdate::unchanged()
         })
     }
 
     fn publish_first_visible_state(&mut self) -> RealmState {
         self.state = self.visible_state(1);
+        self.published_ledger = self.ledger.clone();
+        self.published_windows = self.windows.clone();
         self.state.clone()
     }
 
@@ -1076,7 +1428,7 @@ impl<B: WmBackend> Session<B> {
         Ok(SessionUpdate {
             projection_applied,
             state,
-            deferred: None,
+            ..SessionUpdate::unchanged()
         })
     }
 
@@ -1142,7 +1494,7 @@ impl<B: WmBackend> Session<B> {
         Ok(SessionUpdate {
             projection_applied,
             state,
-            deferred: None,
+            ..SessionUpdate::unchanged()
         })
     }
 
@@ -1164,7 +1516,7 @@ impl<B: WmBackend> Session<B> {
         Ok(SessionUpdate {
             projection_applied,
             state,
-            deferred: None,
+            ..SessionUpdate::unchanged()
         })
     }
 
@@ -1174,6 +1526,8 @@ impl<B: WmBackend> Session<B> {
 
     fn commit_visible_state(&mut self) -> SessionUpdate {
         let candidate = self.visible_state(self.state.revision);
+        self.published_ledger = self.ledger.clone();
+        self.published_windows = self.windows.clone();
 
         if self.state.renders_same_as(&candidate) {
             return SessionUpdate::unchanged();
@@ -1185,7 +1539,7 @@ impl<B: WmBackend> Session<B> {
         SessionUpdate {
             projection_applied: false,
             state: Some(changed),
-            deferred: None,
+            ..SessionUpdate::unchanged()
         }
     }
 
@@ -1218,9 +1572,1180 @@ impl<B: WmBackend> Session<B> {
                 .map(|metadata| metadata.title.clone())
                 .unwrap_or_default(),
             chord_echo: self.state.chord_echo.clone(),
+            whichkey: self.whichkey,
+            modules: self.modules.clone(),
+        }
+    }
+
+    fn current_authority(&self) -> AuthorityState {
+        AuthorityState {
+            ledger: self.ledger.clone(),
+            windows: self.windows.clone(),
+            backend_ids: self.backend_ids.clone(),
+            bound_backend_ids: self.bound_backend_ids.clone(),
+            next_win_id: self.next_win_id,
+            workarea: self.workarea_known.then_some(self.workarea),
+            exclusive_focus: self.exclusive_focus,
+            effective_focus: self.effective_focus.clone(),
+            mode: self.mode,
+            chord_echo: self.chord_echo.clone(),
             whichkey: self.state.whichkey,
             modules: self.state.modules.clone(),
+            active_modifiers: self.active_modifiers.clone(),
+            held_bindings: self.held_bindings.clone(),
         }
+    }
+
+    fn install_authority(&mut self, authority: AuthorityState) {
+        self.ledger = authority.ledger;
+        self.windows = authority.windows;
+        self.backend_ids = authority.backend_ids;
+        self.bound_backend_ids = authority.bound_backend_ids;
+        self.next_win_id = authority.next_win_id;
+        if let Some(workarea) = authority.workarea {
+            self.workarea = workarea;
+            self.workarea_known = true;
+        } else {
+            self.workarea_known = false;
+        }
+        self.exclusive_focus = authority.exclusive_focus;
+        self.effective_focus = authority.effective_focus;
+        self.mode = authority.mode;
+        self.chord_echo = authority.chord_echo;
+        self.held_bindings = authority.held_bindings;
+        self.whichkey = authority.whichkey;
+        self.modules = authority.modules;
+        self.active_modifiers = authority.active_modifiers;
+    }
+
+    fn new_active_transaction(&self) -> ActiveTransaction {
+        let committed = self.current_authority();
+        ActiveTransaction {
+            committed: committed.clone(),
+            visible: self.state.clone(),
+            last_committed_clean_projection: self.last_projection.clone(),
+            working: committed,
+            most_recent_private_projection: self.last_projection.clone(),
+            original_action_result: None,
+            repair_available: true,
+            response: BackendPolicyResponse {
+                projection: None,
+                closes: Vec::new(),
+                bindings: self.binding_state.clone(),
+            },
+            staged_effects: Vec::new(),
+            close_target: None,
+            repeat_candidate: None,
+            repeat_timer: RepeatTimerDirective::Preserve,
+            projection_required: false,
+            binding_changed: false,
+            bootstrap: false,
+            quit_staged: false,
+            terminal_result: None,
+        }
+    }
+
+    fn allocate_ticket(&mut self) -> Result<BackendTicket, ()> {
+        let raw = self.last_backend_ticket.checked_add(1).ok_or(())?;
+        let ticket = BackendTicket::new(raw).ok_or(())?;
+        self.last_backend_ticket = raw;
+        Ok(ticket)
+    }
+
+    fn allocate_action_ticket(&mut self) -> SessionActionResult<BackendTicket> {
+        self.allocate_ticket()
+            .map_err(|()| SessionActionError::BackendTicketExhausted)
+    }
+
+    fn allocate_event_ticket(&mut self) -> Result<BackendTicket, SessionEventError> {
+        self.allocate_ticket()
+            .map_err(|()| SessionEventError::BackendTicketExhausted)
+    }
+
+    fn enabled_bindings(&self, mode: Mode) -> Vec<BackendBindingId> {
+        self.binding_order
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.bindings
+                    .get(id)
+                    .is_some_and(|binding| binding.mode == mode)
+            })
+            .collect()
+    }
+
+    fn desired_binding_state(
+        &self,
+        authority: &AuthorityState,
+        next_key_edge: BackendNextKeyEdge,
+    ) -> BackendBindingState {
+        if authority.workarea.is_none() || self.phase == RecoveryPhase::InitialReplay {
+            return BackendBindingState {
+                enabled: Vec::new(),
+                watched_modifiers: Vec::new(),
+                next_key_edge,
+            };
+        }
+        BackendBindingState {
+            enabled: self.enabled_bindings(authority.mode),
+            watched_modifiers: vec![BackendModifier::Super],
+            next_key_edge,
+        }
+    }
+
+    fn pending_chord_echo(&self) -> String {
+        format!("{}+ ▸ awaiting chord…", self.modifier_label)
+    }
+
+    fn project_authority(&self, authority: &AuthorityState) -> Vec<Placement> {
+        let Some(workarea) = authority.workarea else {
+            return Vec::new();
+        };
+        let mut projection = project(
+            authority.ledger.active_orbit(),
+            workarea,
+            TriptychParams::default(),
+        );
+        if authority.exclusive_focus {
+            for placement in &mut projection {
+                placement.focused = false;
+            }
+        }
+        projection
+    }
+
+    fn stage_policy_ledger_update(
+        &mut self,
+        update: impl FnOnce(&mut Ledger),
+    ) -> SessionActionResult<SessionUpdate> {
+        let mut active = self.new_active_transaction();
+        update(&mut active.working.ledger);
+        if active.working.ledger == active.committed.ledger {
+            return Ok(SessionUpdate::unchanged());
+        }
+        active.most_recent_private_projection = self.project_authority(&active.working);
+        active.projection_required =
+            active.most_recent_private_projection != active.last_committed_clean_projection;
+
+        if !active.projection_required {
+            let before = self.snapshot();
+            self.install_authority(active.working);
+            let state = self.publish_current_state(false);
+            let persistence = changed_snapshot(before, self.snapshot());
+            return Ok(SessionUpdate {
+                persistence,
+                state,
+                ..SessionUpdate::unchanged()
+            });
+        }
+
+        let ticket = self.allocate_action_ticket()?;
+        active.original_action_result = Some((ticket, Ok(())));
+        self.active = Some(active);
+        self.transaction = TransactionSubstate::AwaitingExternalTurn { ticket };
+        match self.backend.request_policy_turn() {
+            Ok(()) => Ok(SessionUpdate {
+                pending_action: Some(ticket),
+                ..SessionUpdate::unchanged()
+            }),
+            Err(error) => {
+                self.active = None;
+                self.transaction = TransactionSubstate::Idle;
+                Err(SessionActionError::Backend(error))
+            }
+        }
+    }
+
+    fn handle_policy_turn(
+        &mut self,
+        turn: BackendPolicyTurn,
+    ) -> Result<SessionUpdate, SessionEventError> {
+        self.validate_policy_turn(&turn)?;
+
+        let response_ticket = match self.transaction {
+            TransactionSubstate::Idle => self.allocate_event_ticket()?,
+            TransactionSubstate::AwaitingExternalTurn { ticket }
+            | TransactionSubstate::AwaitingInternalTurn { ticket }
+            | TransactionSubstate::AwaitingRepairTurn { ticket } => ticket,
+            TransactionSubstate::AwaitingDrain { .. } => self.allocate_event_ticket()?,
+            TransactionSubstate::InFlight { .. } | TransactionSubstate::RetryReady => {
+                return Err(BackendContractError::InvalidPolicySequence.into());
+            }
+        };
+
+        let mut active = self
+            .active
+            .take()
+            .unwrap_or_else(|| self.new_active_transaction());
+        active.response.projection = None;
+        active.response.closes.clear();
+        active.response.bindings.next_key_edge = BackendNextKeyEdge::Preserve;
+        active.projection_required = false;
+        active.binding_changed = false;
+        active.terminal_result = None;
+        if let Some(close) = active.close_target {
+            if active.working.windows.contains_key(&close) {
+                push_unique(&mut active.response.closes, close);
+            }
+        }
+
+        if self.phase == RecoveryPhase::InitialReplay {
+            self.reduce_initial_replay(&mut active, &turn.events)?;
+        } else {
+            self.reduce_policy_events(&mut active, &turn.events)?;
+        }
+        self.derive_response(&mut active);
+        let response = active.response.clone();
+        self.last_policy_turn = Some(turn.id);
+        let submission = self
+            .backend
+            .respond_policy_turn(turn.id, response_ticket, response)
+            .map_err(SessionEventError::Backend)?;
+
+        active.close_target = None;
+        match submission {
+            BackendSubmission::Complete => self.finalize_active(active),
+            BackendSubmission::Pending => {
+                let update = SessionUpdate {
+                    repeat_timer: active.repeat_timer.clone(),
+                    ..SessionUpdate::unchanged()
+                };
+                active.repeat_timer = RepeatTimerDirective::Preserve;
+                if active.bootstrap {
+                    self.phase = RecoveryPhase::FinalizingReplay;
+                }
+                self.active = Some(active);
+                self.transaction = TransactionSubstate::InFlight {
+                    ticket: response_ticket,
+                };
+                Ok(update)
+            }
+        }
+    }
+
+    fn validate_policy_turn(&self, turn: &BackendPolicyTurn) -> Result<(), SessionEventError> {
+        if self
+            .last_policy_turn
+            .is_some_and(|last| turn.id.get() <= last.get())
+        {
+            return Err(BackendContractError::InvalidPolicySequence.into());
+        }
+        match self.transaction {
+            TransactionSubstate::Idle
+            | TransactionSubstate::AwaitingExternalTurn { .. }
+            | TransactionSubstate::AwaitingInternalTurn { .. }
+            | TransactionSubstate::AwaitingRepairTurn { .. }
+                if turn.drains.is_none() => {}
+            TransactionSubstate::AwaitingDrain { ticket } if turn.drains == Some(ticket) => {}
+            _ => return Err(BackendContractError::InvalidPolicySequence.into()),
+        }
+
+        let replay = self.phase == RecoveryPhase::InitialReplay;
+        if replay {
+            let barriers = turn
+                .events
+                .iter()
+                .filter(|event| matches!(event, BackendPolicyEvent::InitialReplayComplete))
+                .count();
+            if barriers != 1
+                || !matches!(
+                    turn.events.last(),
+                    Some(BackendPolicyEvent::InitialReplayComplete)
+                )
+            {
+                return Err(BackendContractError::InvalidPolicySequence.into());
+            }
+            let mut focus_events = 0_usize;
+            let mut exclusive_events = 0_usize;
+            for event in &turn.events {
+                match event {
+                    BackendPolicyEvent::WindowOpened { .. }
+                    | BackendPolicyEvent::InitialReplayComplete => {}
+                    BackendPolicyEvent::FocusChanged(_) => {
+                        focus_events += 1;
+                        if focus_events > 1 {
+                            return Err(BackendContractError::InvalidPolicySequence.into());
+                        }
+                    }
+                    BackendPolicyEvent::ExclusiveFocusChanged(_) => {
+                        exclusive_events += 1;
+                        if exclusive_events > 1 {
+                            return Err(BackendContractError::InvalidPolicySequence.into());
+                        }
+                    }
+                    event => {
+                        return Err(SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                            event.clone(),
+                        ));
+                    }
+                }
+            }
+        } else if turn
+            .events
+            .iter()
+            .any(|event| matches!(event, BackendPolicyEvent::InitialReplayComplete))
+        {
+            return Err(SessionEventError::RepeatedInitialReplayComplete);
+        }
+
+        let limit = if replay {
+            MAX_REPLAY_POLICY_EVENTS
+        } else {
+            MAX_POLICY_EVENTS
+        };
+        if turn.events.len() > limit {
+            return Err(capacity_error(BackendCapacityResource::PolicyFacts, limit));
+        }
+
+        let base = self
+            .active
+            .as_ref()
+            .map_or_else(|| self.current_authority(), |active| active.working.clone());
+        let mut known: BTreeSet<_> = if replay {
+            BTreeSet::new()
+        } else {
+            base.backend_ids
+                .iter()
+                .filter_map(|(id, win)| {
+                    (base.bound_backend_ids.contains(id) && base.windows.contains_key(win))
+                        .then(|| id.clone())
+                })
+                .collect()
+        };
+        let mut live = known.clone();
+        let mut mapped = base.backend_ids.keys().cloned().collect::<BTreeSet<_>>();
+        let mut next_win_id = base.next_win_id;
+        let mut text_bytes = 0_usize;
+        let mut effects = self
+            .active
+            .as_ref()
+            .map_or(0, |active| active.staged_effects.len());
+        let mut quit_seen = self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.quit_staged);
+
+        for event in &turn.events {
+            match event {
+                BackendPolicyEvent::WindowOpened {
+                    backend_id,
+                    app_id,
+                    title,
+                } => {
+                    text_bytes = text_bytes
+                        .saturating_add(backend_id.as_str().len())
+                        .saturating_add(app_id.len())
+                        .saturating_add(title.len());
+                    known.insert(backend_id.clone());
+                    live.insert(backend_id.clone());
+                    if mapped.insert(backend_id.clone()) {
+                        if next_win_id == u64::MAX {
+                            return Err(SessionEventError::WindowIdExhausted);
+                        }
+                        next_win_id += 1;
+                    }
+                    if live.len() > MAX_MANAGED_WINDOWS {
+                        return Err(capacity_error(
+                            BackendCapacityResource::ManagedWindows,
+                            MAX_MANAGED_WINDOWS,
+                        ));
+                    }
+                }
+                BackendPolicyEvent::WindowClosed(id) => {
+                    text_bytes = text_bytes.saturating_add(id.as_str().len());
+                    if !known.remove(id) {
+                        return Err(BackendContractError::UnknownWindowReference.into());
+                    }
+                    live.remove(id);
+                    mapped.remove(id);
+                    if replay {
+                        return Err(SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                            event.clone(),
+                        ));
+                    }
+                }
+                BackendPolicyEvent::TitleChanged { backend_id, title } => {
+                    text_bytes = text_bytes
+                        .saturating_add(backend_id.as_str().len())
+                        .saturating_add(title.len());
+                    if replay {
+                        return Err(SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                            event.clone(),
+                        ));
+                    }
+                    if !known.contains(backend_id) {
+                        return Err(BackendContractError::UnknownWindowReference.into());
+                    }
+                }
+                BackendPolicyEvent::FocusChanged(Some(id)) => {
+                    text_bytes = text_bytes.saturating_add(id.as_str().len());
+                    if !known.contains(id) {
+                        return Err(BackendContractError::UnknownWindowReference.into());
+                    }
+                }
+                BackendPolicyEvent::FocusChanged(None)
+                | BackendPolicyEvent::ExclusiveFocusChanged(_) => {}
+                BackendPolicyEvent::WorkareaChanged(_) => {
+                    if replay {
+                        return Err(SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                            event.clone(),
+                        ));
+                    }
+                }
+                BackendPolicyEvent::GeometryDrifted { backend_id, .. } => {
+                    text_bytes = text_bytes.saturating_add(backend_id.as_str().len());
+                    if replay {
+                        return Err(SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                            event.clone(),
+                        ));
+                    }
+                    if !known.contains(backend_id) {
+                        return Err(BackendContractError::UnknownWindowReference.into());
+                    }
+                }
+                BackendPolicyEvent::BindingPressed(id)
+                | BackendPolicyEvent::BindingReleased(id)
+                | BackendPolicyEvent::BindingRepeatStopped(id) => {
+                    let Some(binding) = self.bindings.get(id) else {
+                        return Err(BackendContractError::UnknownBinding { id: *id }.into());
+                    };
+                    if self.phase != RecoveryPhase::Live {
+                        return Err(BackendContractError::InvalidPolicySequence.into());
+                    }
+                    if matches!(event, BackendPolicyEvent::BindingPressed(_)) && !quit_seen {
+                        if action_has_effect(&binding.action) {
+                            effects = effects.saturating_add(1);
+                        }
+                        if matches!(binding.action, Action::Quit) {
+                            quit_seen = true;
+                        }
+                    }
+                }
+                BackendPolicyEvent::UnboundKeyEaten => {
+                    if self.phase != RecoveryPhase::Live {
+                        return Err(BackendContractError::InvalidPolicySequence.into());
+                    }
+                }
+                BackendPolicyEvent::ModifiersChanged { old, new } => {
+                    if !canonical_modifiers(old) || !canonical_modifiers(new) {
+                        return Err(BackendContractError::NonCanonicalModifiers.into());
+                    }
+                }
+                BackendPolicyEvent::InitialReplayComplete => {}
+            }
+        }
+        if text_bytes > MAX_POLICY_TEXT_BYTES {
+            return Err(capacity_error(
+                BackendCapacityResource::PolicyTextBytes,
+                MAX_POLICY_TEXT_BYTES,
+            ));
+        }
+        if effects > MAX_STAGED_EFFECTS {
+            return Err(capacity_error(
+                BackendCapacityResource::PolicyEffects,
+                MAX_STAGED_EFFECTS,
+            ));
+        }
+        Ok(())
+    }
+
+    fn reduce_initial_replay(
+        &mut self,
+        active: &mut ActiveTransaction,
+        events: &[BackendPolicyEvent],
+    ) -> Result<(), SessionEventError> {
+        let mut replayed = Vec::<ReplayWindow>::new();
+        let mut effective_focus = None;
+        let mut exclusive_focus = false;
+        for event in events {
+            match event {
+                BackendPolicyEvent::WindowOpened {
+                    backend_id,
+                    app_id,
+                    title,
+                } => {
+                    let metadata = WindowMetadata {
+                        app_id: normalize_visible(app_id, MAX_VISIBLE_APP_ID_JSON_BYTES),
+                        title: normalize_visible(title, MAX_VISIBLE_TITLE_JSON_BYTES),
+                    };
+                    if let Some(existing) = replayed
+                        .iter_mut()
+                        .find(|window| window.backend_id == *backend_id)
+                    {
+                        existing.metadata = metadata;
+                    } else {
+                        replayed.push(ReplayWindow {
+                            backend_id: backend_id.clone(),
+                            metadata,
+                        });
+                    }
+                }
+                BackendPolicyEvent::FocusChanged(focus) => effective_focus = focus.clone(),
+                BackendPolicyEvent::ExclusiveFocusChanged(exclusive) => {
+                    exclusive_focus = *exclusive
+                }
+                BackendPolicyEvent::InitialReplayComplete => {}
+                event => {
+                    return Err(SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                        event.clone(),
+                    ));
+                }
+            }
+        }
+
+        let replayed_ids: BTreeSet<_> = replayed
+            .iter()
+            .map(|window| window.backend_id.clone())
+            .collect();
+        let unknown = replayed
+            .iter()
+            .filter(|window| !active.working.backend_ids.contains_key(&window.backend_id))
+            .count();
+        if unknown as u128 > u128::from(u64::MAX - active.working.next_win_id) {
+            return Err(SessionEventError::WindowIdExhausted);
+        }
+
+        let persisted_order = active
+            .working
+            .ledger
+            .orbits()
+            .iter()
+            .flat_map(|orbit| orbit.windows.iter().copied())
+            .collect::<Vec<_>>();
+        for win in persisted_order {
+            let backend_id = active
+                .working
+                .backend_ids
+                .iter()
+                .find_map(|(id, assigned)| (*assigned == win).then(|| id.clone()))
+                .expect("validated snapshot covers every ledger window");
+            if !replayed_ids.contains(&backend_id) {
+                active.working.ledger.banish(win);
+                active.working.backend_ids.remove(&backend_id);
+            }
+        }
+        active.working.windows.clear();
+        active.working.bound_backend_ids.clear();
+        for window in replayed {
+            let win = if let Some(win) = active.working.backend_ids.get(&window.backend_id).copied()
+            {
+                win
+            } else {
+                let win = WinId(active.working.next_win_id);
+                active.working.next_win_id = active
+                    .working
+                    .next_win_id
+                    .checked_add(1)
+                    .expect("replay allocation was preflighted");
+                active
+                    .working
+                    .backend_ids
+                    .insert(window.backend_id.clone(), win);
+                active
+                    .working
+                    .ledger
+                    .summon(win, active.working.ledger.active());
+                win
+            };
+            active.working.windows.insert(win, window.metadata);
+            self.backend.assign_window(&window.backend_id, win)?;
+            active.working.bound_backend_ids.insert(window.backend_id);
+        }
+        active.working.ledger.discard_undo_history();
+        active.working.workarea = None;
+        active.working.effective_focus = effective_focus;
+        active.working.exclusive_focus = exclusive_focus;
+        active.bootstrap = true;
+        active.response.projection = None;
+        active.response.closes.clear();
+        Ok(())
+    }
+
+    fn reduce_policy_events(
+        &mut self,
+        active: &mut ActiveTransaction,
+        events: &[BackendPolicyEvent],
+    ) -> Result<(), SessionEventError> {
+        for event in events {
+            match event {
+                BackendPolicyEvent::WindowOpened {
+                    backend_id,
+                    app_id,
+                    title,
+                } => {
+                    let win = if let Some(win) = active.working.backend_ids.get(backend_id).copied()
+                    {
+                        win
+                    } else {
+                        if active.working.next_win_id == u64::MAX {
+                            return Err(SessionEventError::WindowIdExhausted);
+                        }
+                        let win = WinId(active.working.next_win_id);
+                        active.working.next_win_id += 1;
+                        active.working.backend_ids.insert(backend_id.clone(), win);
+                        win
+                    };
+                    active
+                        .working
+                        .ledger
+                        .summon(win, active.working.ledger.active());
+                    active.working.windows.insert(
+                        win,
+                        WindowMetadata {
+                            app_id: normalize_visible(app_id, MAX_VISIBLE_APP_ID_JSON_BYTES),
+                            title: normalize_visible(title, MAX_VISIBLE_TITLE_JSON_BYTES),
+                        },
+                    );
+                    if !active.working.bound_backend_ids.contains(backend_id) {
+                        self.backend.assign_window(backend_id, win)?;
+                        active.working.bound_backend_ids.insert(backend_id.clone());
+                    }
+                    if active.working.workarea.is_some() {
+                        active.projection_required = true;
+                    }
+                }
+                BackendPolicyEvent::WindowClosed(backend_id) => {
+                    let win = active
+                        .working
+                        .backend_ids
+                        .remove(backend_id)
+                        .ok_or(BackendContractError::UnknownWindowReference)?;
+                    active.working.bound_backend_ids.remove(backend_id);
+                    active.working.windows.remove(&win);
+                    active.working.ledger.banish(win);
+                    active.response.closes.retain(|close| *close != win);
+                    if active.working.workarea.is_some() {
+                        active.projection_required = true;
+                    }
+                    if active.close_target == Some(win) {
+                        active.close_target = None;
+                    }
+                }
+                BackendPolicyEvent::TitleChanged { backend_id, title } => {
+                    let win = *active
+                        .working
+                        .backend_ids
+                        .get(backend_id)
+                        .ok_or(BackendContractError::UnknownWindowReference)?;
+                    active
+                        .working
+                        .windows
+                        .get_mut(&win)
+                        .ok_or(BackendContractError::UnknownWindowReference)?
+                        .title = normalize_visible(title, MAX_VISIBLE_TITLE_JSON_BYTES);
+                }
+                BackendPolicyEvent::FocusChanged(focus) => {
+                    active.working.effective_focus = focus.clone();
+                    if !active.working.exclusive_focus {
+                        let observed = focus
+                            .as_ref()
+                            .and_then(|id| active.working.backend_ids.get(id))
+                            .copied();
+                        if observed != active.working.ledger.focused()
+                            && active.working.workarea.is_some()
+                        {
+                            active.projection_required = true;
+                        }
+                    }
+                }
+                BackendPolicyEvent::ExclusiveFocusChanged(exclusive) => {
+                    if active.working.exclusive_focus != *exclusive
+                        && active.working.workarea.is_some()
+                    {
+                        active.projection_required = true;
+                    }
+                    active.working.exclusive_focus = *exclusive;
+                }
+                BackendPolicyEvent::WorkareaChanged(workarea) => {
+                    if active.working.workarea != Some(*workarea) {
+                        active.working.workarea = Some(*workarea);
+                        active.projection_required = true;
+                    }
+                }
+                BackendPolicyEvent::GeometryDrifted { .. } => {}
+                BackendPolicyEvent::BindingPressed(id) => {
+                    active.working.held_bindings.insert(*id);
+                    let binding = self
+                        .bindings
+                        .get(id)
+                        .cloned()
+                        .ok_or(BackendContractError::UnknownBinding { id: *id })?;
+                    self.apply_binding_action(active, *id, &binding);
+                    if active.working.mode != Mode::Nav
+                        && active.response.bindings.next_key_edge == BackendNextKeyEdge::Preserve
+                    {
+                        active.response.bindings.next_key_edge = BackendNextKeyEdge::Ensure;
+                    }
+                }
+                BackendPolicyEvent::BindingReleased(id)
+                | BackendPolicyEvent::BindingRepeatStopped(id) => {
+                    active.working.held_bindings.remove(id);
+                    if active.repeat_candidate == Some(*id) {
+                        active.repeat_candidate = None;
+                    }
+                    if self.repeat_target == Some(*id) {
+                        self.repeat_target = None;
+                        active.repeat_timer = RepeatTimerDirective::Disarm;
+                    }
+                }
+                BackendPolicyEvent::UnboundKeyEaten => {
+                    if active.working.mode != Mode::Nav {
+                        active.working.mode = Mode::Nav;
+                        active.working.chord_echo.clear();
+                        active.binding_changed = true;
+                    }
+                }
+                BackendPolicyEvent::ModifiersChanged { new, .. } => {
+                    active.working.active_modifiers = new.clone();
+                    if active.working.mode == Mode::Nav {
+                        active.working.chord_echo = if new.contains(&BackendModifier::Super) {
+                            self.pending_chord_echo()
+                        } else {
+                            String::new()
+                        };
+                    }
+                }
+                BackendPolicyEvent::InitialReplayComplete => {
+                    return Err(SessionEventError::RepeatedInitialReplayComplete);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_binding_action(
+        &self,
+        active: &mut ActiveTransaction,
+        id: BackendBindingId,
+        binding: &Binding,
+    ) {
+        if active.quit_staged {
+            return;
+        }
+        let before_projection = self.project_authority(&active.working);
+        match &binding.action {
+            Action::Spawn(argv) => active
+                .staged_effects
+                .push(SessionEffect::Spawn(argv.clone())),
+            Action::Launcher => active.staged_effects.push(SessionEffect::Launcher),
+            Action::Focus(direction) => active.working.ledger.focus_step(*direction),
+            Action::Swap(direction) => {
+                active.working.ledger.swap(*direction);
+            }
+            Action::Orbit(number) => {
+                if let Some(orbit) = OrbitId::from_human(*number) {
+                    active.working.ledger.switch_orbit(orbit);
+                }
+            }
+            Action::MoveToOrbit(number) => {
+                if let Some(orbit) = OrbitId::from_human(*number) {
+                    active.working.ledger.move_to_orbit(orbit);
+                }
+            }
+            Action::Stow => {
+                active.working.ledger.toggle_stow();
+            }
+            Action::SetLayout(layout) => {
+                active.working.ledger.set_layout(*layout);
+            }
+            Action::Fullscreen => {
+                active.working.ledger.toggle_fullscreen();
+            }
+            Action::EnterMode(mode) => {
+                active.working.mode = *mode;
+                active.working.chord_echo = if *mode != Mode::Nav
+                    || active
+                        .working
+                        .active_modifiers
+                        .contains(&BackendModifier::Super)
+                {
+                    self.pending_chord_echo()
+                } else {
+                    String::new()
+                };
+                active.binding_changed = true;
+                if *mode != Mode::Nav {
+                    active.response.bindings.next_key_edge = BackendNextKeyEdge::Ensure;
+                }
+            }
+            Action::Banish => {
+                if let Some(win) = active.working.ledger.focused() {
+                    push_unique(&mut active.response.closes, win);
+                }
+            }
+            Action::Undo => {
+                active.working.ledger.undo();
+            }
+            Action::ToggleWhichKey => active.working.whichkey = !active.working.whichkey,
+            Action::Grimoire => active.staged_effects.push(SessionEffect::Grimoire),
+            Action::ReloadTheme => active.staged_effects.push(SessionEffect::ReloadTheme),
+            Action::Quit => {
+                let after = active
+                    .original_action_result
+                    .as_ref()
+                    .map_or(QuitAfter::NoRequester, |(ticket, _)| {
+                        QuitAfter::OriginalAction(*ticket)
+                    });
+                active
+                    .staged_effects
+                    .push(SessionEffect::QuitPending { after });
+                active.quit_staged = true;
+            }
+        }
+        let after_projection = self.project_authority(&active.working);
+        if before_projection != after_projection {
+            active.projection_required = true;
+        }
+        if binding.repeatable {
+            active.repeat_candidate = Some(id);
+        }
+    }
+
+    fn derive_response(&self, active: &mut ActiveTransaction) {
+        active.most_recent_private_projection = self.project_authority(&active.working);
+        if active.projection_required && active.working.workarea.is_some() {
+            active.response.projection = Some(active.most_recent_private_projection.clone());
+        }
+        let edge = active.response.bindings.next_key_edge;
+        active.response.bindings = self.desired_binding_state(&active.working, edge);
+    }
+
+    fn finalize_active(
+        &mut self,
+        mut active: ActiveTransaction,
+    ) -> Result<SessionUpdate, SessionEventError> {
+        debug_assert_eq!(active.visible, self.state);
+        let _repair_available = active.repair_available;
+        let before_snapshot = self.snapshot();
+        let entering_live = self.phase == RecoveryPhase::FinalizingReplay
+            && active.working.workarea.is_some()
+            && active.response.projection.is_some();
+        self.install_authority(active.working.clone());
+        if let Some(projection) = active.response.projection.clone() {
+            self.last_projection = projection;
+            self.projection_dirty = false;
+        }
+        self.binding_state = BackendBindingState {
+            enabled: active.response.bindings.enabled.clone(),
+            watched_modifiers: active.response.bindings.watched_modifiers.clone(),
+            next_key_edge: BackendNextKeyEdge::Preserve,
+        };
+        if entering_live {
+            self.phase = RecoveryPhase::Live;
+        } else if active.bootstrap {
+            self.phase = RecoveryPhase::FinalizingReplay;
+        }
+
+        let mut repeat_timer = active.repeat_timer;
+        if let Some(candidate) = active.repeat_candidate {
+            let can_arm = self.held_bindings.contains(&candidate)
+                && self.binding_state.enabled.contains(&candidate)
+                && self
+                    .bindings
+                    .get(&candidate)
+                    .is_some_and(|binding| binding.repeatable);
+            if can_arm {
+                self.repeat_target = Some(candidate);
+                repeat_timer = RepeatTimerDirective::Arm {
+                    delay: Duration::from_millis(KEY_REPEAT_DELAY_MS),
+                    interval: Duration::from_millis(1_000 / u64::from(KEY_REPEAT_RATE_HZ)),
+                };
+            }
+        }
+        if self
+            .repeat_target
+            .is_some_and(|target| !self.binding_state.enabled.contains(&target))
+        {
+            self.repeat_target = None;
+            repeat_timer = RepeatTimerDirective::Disarm;
+        }
+        if active.quit_staged {
+            self.repeat_target = None;
+            repeat_timer = RepeatTimerDirective::Disarm;
+        }
+
+        let state = if self.phase == RecoveryPhase::Live {
+            self.publish_current_state(entering_live)
+        } else {
+            None
+        };
+        let persistence = changed_snapshot(before_snapshot, self.snapshot());
+        let action_completion = active
+            .original_action_result
+            .take()
+            .map(|(ticket, result)| ActionCompletion { ticket, result });
+        let effects = active.staged_effects;
+        if active.quit_staged {
+            self.phase = RecoveryPhase::QuitPending;
+        }
+        self.active = None;
+        self.transaction = TransactionSubstate::Idle;
+        Ok(SessionUpdate {
+            repeat_timer,
+            persistence,
+            projection_applied: active.response.projection.is_some(),
+            state,
+            pending_action: None,
+            action_completion,
+            effects,
+            diagnostic: None,
+            deferred: None,
+        })
+    }
+
+    fn handle_operation_completed(
+        &mut self,
+        ticket: BackendTicket,
+        result: BackendResult<()>,
+    ) -> Result<SessionUpdate, SessionEventError> {
+        let TransactionSubstate::InFlight { ticket: expected } = self.transaction else {
+            return Err(BackendContractError::InvalidPolicySequence.into());
+        };
+        if ticket != expected {
+            return Err(BackendContractError::InvalidPolicySequence.into());
+        }
+        let active = self
+            .active
+            .as_mut()
+            .ok_or(BackendContractError::InvalidPolicySequence)?;
+        let diagnostic = match &result {
+            Err(error @ (BackendError::Io { .. } | BackendError::Unsupported { .. }))
+                if active.original_action_result.is_none() =>
+            {
+                Some(SessionDiagnostic {
+                    error: error.clone(),
+                })
+            }
+            Err(error @ (BackendError::Io { .. } | BackendError::Unsupported { .. })) => {
+                if let Some((_, original)) = &mut active.original_action_result {
+                    *original = Err(SessionActionError::Backend(error.clone()));
+                }
+                None
+            }
+            Err(error) => return Err(SessionEventError::Backend(error.clone())),
+            Ok(()) => None,
+        };
+        active.terminal_result = Some(result);
+        self.transaction = TransactionSubstate::AwaitingDrain { ticket };
+        Ok(SessionUpdate {
+            diagnostic,
+            ..SessionUpdate::unchanged()
+        })
+    }
+
+    fn handle_observations_drained(
+        &mut self,
+        ticket: BackendTicket,
+    ) -> Result<SessionUpdate, SessionEventError> {
+        let TransactionSubstate::AwaitingDrain { ticket: expected } = self.transaction else {
+            return Err(BackendContractError::InvalidPolicySequence.into());
+        };
+        if ticket != expected {
+            return Err(BackendContractError::InvalidPolicySequence.into());
+        }
+        let active = self
+            .active
+            .take()
+            .ok_or(BackendContractError::InvalidPolicySequence)?;
+        self.finalize_active(active)
+    }
+
+    /// Fire one coalesced repeat tick after rechecking the captured target.
+    pub fn fire_key_repeat(&mut self) -> Result<SessionUpdate, SessionEventError> {
+        if self.phase != RecoveryPhase::Live || self.has_active_backend_transaction() {
+            return Ok(SessionUpdate::unchanged());
+        }
+        let Some(target) = self.repeat_target else {
+            return Ok(SessionUpdate::unchanged());
+        };
+        let Some(binding) = self.bindings.get(&target).cloned() else {
+            return Ok(SessionUpdate::unchanged());
+        };
+        if !binding.repeatable
+            || !self.held_bindings.contains(&target)
+            || !self.binding_state.enabled.contains(&target)
+        {
+            return Ok(SessionUpdate::unchanged());
+        }
+
+        let mut active = self.new_active_transaction();
+        self.apply_binding_action(&mut active, target, &binding);
+        active.repeat_candidate = None;
+        active.most_recent_private_projection = self.project_authority(&active.working);
+        if !active.projection_required
+            && !active.binding_changed
+            && active.response.closes.is_empty()
+        {
+            let before = self.snapshot();
+            self.install_authority(active.working);
+            let state = self.publish_current_state(false);
+            return Ok(SessionUpdate {
+                persistence: changed_snapshot(before, self.snapshot()),
+                state,
+                effects: active.staged_effects,
+                ..SessionUpdate::unchanged()
+            });
+        }
+        let ticket = self.allocate_event_ticket()?;
+        self.active = Some(active);
+        self.transaction = TransactionSubstate::AwaitingInternalTurn { ticket };
+        match self.backend.request_policy_turn() {
+            Ok(()) => Ok(SessionUpdate::unchanged()),
+            Err(error @ (BackendError::Io { .. } | BackendError::Unsupported { .. })) => {
+                self.active = None;
+                self.transaction = TransactionSubstate::Idle;
+                Ok(SessionUpdate {
+                    diagnostic: Some(SessionDiagnostic { error }),
+                    ..SessionUpdate::unchanged()
+                })
+            }
+            Err(error) => {
+                self.active = None;
+                self.transaction = TransactionSubstate::Idle;
+                Err(SessionEventError::Backend(error))
+            }
+        }
+    }
+
+    fn publish_current_state(&mut self, force_first: bool) -> Option<RealmState> {
+        let mut candidate = self.policy_visible_state(self.state.revision);
+        let changed = force_first || !self.state.renders_same_as(&candidate);
+        self.published_ledger = self.ledger.clone();
+        self.published_windows = self.windows.clone();
+        if !changed {
+            return None;
+        }
+        candidate.revision = if force_first {
+            1
+        } else {
+            self.state.revision.saturating_add(1)
+        };
+        self.state = candidate.clone();
+        Some(candidate)
+    }
+
+    fn policy_visible_state(&self, revision: u64) -> RealmState {
+        RealmState {
+            revision,
+            orbits: self
+                .ledger
+                .orbits()
+                .iter()
+                .map(|orbit| OrbitCell {
+                    number: orbit.id.human(),
+                    rune: orbit.id.rune().to_string(),
+                    display: if orbit.id == self.ledger.active() {
+                        OrbitDisplay::Active
+                    } else if orbit.occupied() {
+                        OrbitDisplay::Occupied
+                    } else {
+                        OrbitDisplay::Empty
+                    },
+                    windows: orbit.windows.len(),
+                })
+                .collect(),
+            layout: self.ledger.active_orbit().layout,
+            mode: self.mode,
+            focused_title: if self.exclusive_focus {
+                String::new()
+            } else {
+                self.ledger
+                    .focused()
+                    .and_then(|win| self.windows.get(&win))
+                    .map(|metadata| metadata.title.clone())
+                    .unwrap_or_default()
+            },
+            chord_echo: self.chord_echo.clone(),
+            whichkey: self.whichkey,
+            modules: self.modules.clone(),
+        }
+    }
+
+    /// Return the ledger at the last visible clean boundary.
+    pub fn visible_ledger(&self, selected: Option<OrbitId>) -> Vec<OrbitLedger> {
+        self.published_ledger
+            .orbits()
+            .iter()
+            .filter(|orbit| selected.is_none_or(|selected| orbit.id == selected))
+            .map(|orbit| OrbitLedger {
+                orbit: orbit.id.human(),
+                rune: orbit.id.rune().to_string(),
+                name: orbit.name.clone(),
+                windows: orbit
+                    .windows
+                    .iter()
+                    .filter_map(|win| {
+                        self.published_windows.get(win).map(|metadata| LedgerEntry {
+                            id: *win,
+                            app_id: metadata.app_id.clone(),
+                            title: metadata.title.clone(),
+                            focused: orbit.focused() == Some(*win),
+                            stowed: orbit.stowed.contains(win),
+                        })
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+}
+
+fn capacity_error(resource: BackendCapacityResource, limit: usize) -> SessionEventError {
+    SessionEventError::Backend(BackendError::Capacity {
+        resource,
+        limit: limit as u64,
+    })
+}
+
+fn canonical_modifiers(modifiers: &[BackendModifier]) -> bool {
+    modifiers.len() <= 4 && modifiers.windows(2).all(|pair| pair[0] < pair[1])
+}
+
+fn action_has_effect(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Spawn(_) | Action::Launcher | Action::Grimoire | Action::ReloadTheme | Action::Quit
+    )
+}
+
+fn push_unique(values: &mut Vec<WinId>, value: WinId) {
+    if !values.contains(&value) {
+        values.push(value);
+    }
+}
+
+fn changed_snapshot(
+    before: Option<SessionSnapshotV1>,
+    after: Option<SessionSnapshotV1>,
+) -> Option<SessionSnapshotV1> {
+    (before != after).then_some(after).flatten()
+}
+
+fn normalize_visible(source: &str, cap: usize) -> String {
+    let encoded = source.chars().map(json_content_char_len).sum::<usize>();
+    if encoded <= cap {
+        return source.to_owned();
+    }
+    const ELLIPSIS: char = '…';
+    let ellipsis_len = ELLIPSIS.len_utf8();
+    let mut normalized = String::new();
+    let mut used = 0_usize;
+    for character in source.chars() {
+        let width = json_content_char_len(character);
+        if used.saturating_add(width).saturating_add(ellipsis_len) > cap {
+            break;
+        }
+        normalized.push(character);
+        used += width;
+    }
+    normalized.push(ELLIPSIS);
+    normalized
+}
+
+fn json_content_char_len(character: char) -> usize {
+    match character {
+        '"' | '\\' | '\u{0008}' | '\u{0009}' | '\u{000a}' | '\u{000c}' | '\u{000d}' => 2,
+        '\u{0000}'..='\u{001f}' => 6,
+        character => character.len_utf8(),
     }
 }
 
@@ -1237,26 +2762,33 @@ fn should_retry_desired_repair(error: &BackendError) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, VecDeque};
     use std::fs::File;
     use std::os::fd::{AsFd, BorrowedFd};
-    use std::time::Instant;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
-    use realm_core::ipc::{Capabilities, PROTOCOL_VERSION};
+    use realm_core::ipc::{self, Capabilities, Response, PROTOCOL_VERSION};
+    use realm_core::keys::{Action, Binding, Keymap, Mode};
     use realm_core::layout::{project, Layout, Placement, Rect, TriptychParams, Workarea};
-    use realm_core::ledger::Dir;
+    use realm_core::ledger::{Dir, ORBIT_COUNT};
     use realm_core::state::{Module, RealmState};
     use realm_core::{Ledger, OrbitId, WinId};
 
     use crate::backend::{
-        BackendBindingSpec, BackendContractError, BackendError, BackendEvent, BackendExitPolicy,
-        BackendPolicyResponse, BackendPolicyTurnId, BackendPollInterest, BackendReady,
-        BackendResult, BackendSubmission, BackendTicket, BackendWindowId, WmBackend,
+        BackendBindingId, BackendBindingSpec, BackendCapacityResource, BackendContractError,
+        BackendError, BackendEvent, BackendExitPolicy, BackendModifier, BackendNextKeyEdge,
+        BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn, BackendPolicyTurnId,
+        BackendPollInterest, BackendReady, BackendResult, BackendSubmission, BackendTicket,
+        BackendWindowId, WmBackend, KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE_HZ,
+        MAX_CONFIGURED_BINDINGS, MAX_MANAGED_WINDOWS, MAX_POLICY_EVENTS, MAX_POLICY_TEXT_BYTES,
+        MAX_REPLAY_POLICY_EVENTS, MAX_STAGED_EFFECTS, MAX_VISIBLE_APP_ID_JSON_BYTES,
+        MAX_VISIBLE_TITLE_JSON_BYTES,
     };
 
     use super::{
-        RecoveryPhase, Session, SessionActionError, SessionEventError, SessionSnapshotV1,
-        SessionUpdate, SnapshotBinding,
+        RecoveryPhase, RepeatTimerDirective, Session, SessionActionError, SessionEffect,
+        SessionEventError, SessionSnapshotV1, SessionUpdate, SnapshotBinding,
     };
 
     struct FakeBackend {
@@ -1272,6 +2804,13 @@ mod tests {
         focus_calls: usize,
         close_attempts: Vec<WinId>,
         fail_next_close: Option<BackendError>,
+        configured_bindings: Vec<Vec<BackendBindingSpec>>,
+        configure_calls: Arc<Mutex<usize>>,
+        request_attempts: usize,
+        request_results: VecDeque<BackendResult<()>>,
+        responses: Vec<(BackendPolicyTurnId, BackendTicket, BackendPolicyResponse)>,
+        response_results: VecDeque<BackendResult<BackendSubmission>>,
+        call_order: Vec<String>,
         next_event_calls: usize,
         event_file: File,
     }
@@ -1298,6 +2837,13 @@ mod tests {
                 focus_calls: 0,
                 close_attempts: Vec::new(),
                 fail_next_close: None,
+                configured_bindings: Vec::new(),
+                configure_calls: Arc::new(Mutex::new(0)),
+                request_attempts: 0,
+                request_results: VecDeque::new(),
+                responses: Vec::new(),
+                response_results: VecDeque::new(),
+                call_order: Vec::new(),
                 next_event_calls: 0,
                 event_file: File::open("/dev/null").unwrap(),
             }
@@ -1320,6 +2866,8 @@ mod tests {
             win: WinId,
         ) -> Result<(), BackendContractError> {
             self.assignment_attempts.push((backend_id.clone(), win));
+            self.call_order
+                .push(format!("assign:{}:{}", backend_id.as_str(), win.0));
             if let Some(error) = self.fail_next_assign.take() {
                 return Err(error);
             }
@@ -1333,21 +2881,30 @@ mod tests {
             Ok(())
         }
 
-        fn configure_bindings(&mut self, _bindings: Vec<BackendBindingSpec>) -> BackendResult<()> {
+        fn configure_bindings(&mut self, bindings: Vec<BackendBindingSpec>) -> BackendResult<()> {
+            *self.configure_calls.lock().unwrap() += 1;
+            self.call_order.push("configure".to_owned());
+            self.configured_bindings.push(bindings);
             Ok(())
         }
 
         fn request_policy_turn(&mut self) -> BackendResult<()> {
-            Ok(())
+            self.request_attempts += 1;
+            self.call_order.push("request".to_owned());
+            self.request_results.pop_front().unwrap_or(Ok(()))
         }
 
         fn respond_policy_turn(
             &mut self,
-            _turn: BackendPolicyTurnId,
-            _ticket: BackendTicket,
-            _response: BackendPolicyResponse,
+            turn: BackendPolicyTurnId,
+            ticket: BackendTicket,
+            response: BackendPolicyResponse,
         ) -> BackendResult<BackendSubmission> {
-            Ok(BackendSubmission::Complete)
+            self.call_order.push(format!("respond:{}", turn.get()));
+            self.responses.push((turn, ticket, response));
+            self.response_results
+                .pop_front()
+                .unwrap_or(Ok(BackendSubmission::Complete))
         }
 
         fn begin_exit_session(&mut self, _policy: BackendExitPolicy) -> BackendResult<()> {
@@ -1667,7 +3224,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_replay_is_silent_and_rebinds_each_identity_once() {
+    fn legacy_replay_accumulator_rebinds_each_identity_once() {
         let mut session =
             Session::connect_with_snapshot(FakeBackend::new(), Some(recovery_snapshot())).unwrap();
 
@@ -1715,7 +3272,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_barrier_non_replay_events_are_protocol_errors() {
+    fn legacy_replay_accumulator_rejects_non_replay_events() {
         for event in [
             BackendEvent::TitleChanged {
                 win: WinId(7),
@@ -1958,7 +3515,7 @@ mod tests {
     }
 
     #[test]
-    fn exhausted_watermark_never_allocates_the_sentinel() {
+    fn legacy_replay_accumulator_rejects_exhausted_window_ids() {
         let mut ledger = Ledger::new();
         ledger.summon(WinId(u64::MAX - 1), OrbitId::default());
         let snapshot = SessionSnapshotV1::new(
@@ -2621,7 +4178,10 @@ mod tests {
         let state = session.state().clone();
         let projection = session.last_projection().to_vec();
 
-        assert_eq!(session.request_close_focused().unwrap(), Some(WinId(0)));
+        assert_eq!(
+            session.request_close_focused().unwrap(),
+            SessionUpdate::unchanged()
+        );
         assert_eq!(session.backend.close_attempts, [WinId(0)]);
         assert_eq!(session.ledger(), &ledger);
         assert_eq!(session.state(), &state);
@@ -2643,10 +4203,13 @@ mod tests {
     }
 
     #[test]
-    fn close_request_is_a_no_op_without_a_focused_window() {
+    fn legacy_empty_close_request_is_a_no_op() {
         let mut session = live_session(FakeBackend::new());
 
-        assert_eq!(session.request_close_focused().unwrap(), None);
+        assert_eq!(
+            session.request_close_focused().unwrap(),
+            SessionUpdate::unchanged()
+        );
         assert!(session.backend.close_attempts.is_empty());
         assert_eq!(session.state().revision, 0);
         assert!(session.backend.apply_attempts.is_empty());
@@ -2677,5 +4240,1742 @@ mod tests {
             .unwrap();
         assert!(workarea_update.projection_applied);
         assert_eq!(session.backend.apply_attempts.len(), attempts + 1);
+    }
+
+    fn policy_turn(id: u64, events: Vec<BackendPolicyEvent>) -> BackendEvent {
+        BackendEvent::PolicyTurn(BackendPolicyTurn {
+            id: BackendPolicyTurnId::new(id).unwrap(),
+            drains: None,
+            events,
+        })
+    }
+
+    fn draining_policy_turn(
+        id: u64,
+        ticket: BackendTicket,
+        events: Vec<BackendPolicyEvent>,
+    ) -> BackendEvent {
+        BackendEvent::PolicyTurn(BackendPolicyTurn {
+            id: BackendPolicyTurnId::new(id).unwrap(),
+            drains: Some(ticket),
+            events,
+        })
+    }
+
+    fn policy_window_opened(id: &str, title: &str) -> BackendPolicyEvent {
+        BackendPolicyEvent::WindowOpened {
+            backend_id: BackendWindowId::new(id).unwrap(),
+            app_id: "foot".to_owned(),
+            title: title.to_owned(),
+        }
+    }
+
+    fn selected_workarea() -> Workarea {
+        Workarea::new(1920, 1080, 32, 26)
+    }
+
+    fn finish_policy_bootstrap(session: &mut Session<FakeBackend>) {
+        let replay = session
+            .handle_backend_event(policy_turn(
+                1,
+                vec![BackendPolicyEvent::InitialReplayComplete],
+            ))
+            .unwrap();
+        assert!(replay.state.is_none());
+        assert_eq!(session.phase(), RecoveryPhase::FinalizingReplay);
+        let live = session
+            .handle_backend_event(policy_turn(
+                2,
+                vec![BackendPolicyEvent::WorkareaChanged(selected_workarea())],
+            ))
+            .unwrap();
+        assert_eq!(live.state.as_ref().map(|state| state.revision), Some(1));
+        assert_eq!(session.phase(), RecoveryPhase::Live);
+        session.backend.responses.clear();
+        session.backend.request_attempts = 0;
+        session.backend.call_order.clear();
+    }
+
+    fn policy_live_session(backend: FakeBackend) -> Session<FakeBackend> {
+        let mut session = Session::connect(backend).unwrap();
+        finish_policy_bootstrap(&mut session);
+        session
+    }
+
+    fn policy_live_session_with_keymap(
+        backend: FakeBackend,
+        keymap: Keymap,
+    ) -> Session<FakeBackend> {
+        let mut session = Session::connect_with_keymap(backend, keymap).unwrap();
+        finish_policy_bootstrap(&mut session);
+        session
+    }
+
+    fn binding_id(session: &Session<FakeBackend>, key: &str) -> BackendBindingId {
+        session
+            .binding_id_for_key(key)
+            .expect("test key is configured")
+    }
+
+    fn open_two_policy_windows(session: &mut Session<FakeBackend>) {
+        session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![
+                    policy_window_opened("r1", "one"),
+                    policy_window_opened("r2", "two"),
+                ],
+            ))
+            .unwrap();
+        session.backend.responses.clear();
+        session.backend.call_order.clear();
+    }
+
+    fn test_binding(key: &str, action: Action, mode: Mode, repeatable: bool) -> Binding {
+        Binding {
+            key: key.to_owned(),
+            hint_key: key.to_owned(),
+            label: key.to_owned(),
+            action,
+            mode,
+            repeatable,
+            in_strip: false,
+        }
+    }
+
+    fn spawn_keymap() -> Keymap {
+        Keymap {
+            modifier: "mod".to_owned(),
+            bindings: vec![test_binding(
+                "x",
+                Action::Spawn(vec!["job-x".to_owned()]),
+                Mode::Nav,
+                false,
+            )],
+        }
+    }
+
+    fn json_content_len(value: &str) -> usize {
+        serde_json::to_string(value).unwrap().len() - 2
+    }
+
+    #[test]
+    fn binding_configuration_contains_mechanism_not_policy() {
+        let session = Session::connect(FakeBackend::new()).unwrap();
+        let configured = &session.backend.configured_bindings;
+        let keymap = Keymap::default();
+
+        assert_eq!(configured.len(), 1);
+        assert_eq!(configured[0].len(), keymap.bindings.len());
+        for (index, (mechanism, binding)) in configured[0].iter().zip(&keymap.bindings).enumerate()
+        {
+            assert_eq!(mechanism.id.get(), u32::try_from(index + 1).unwrap());
+            assert_eq!(mechanism.keysym, binding.key);
+            assert_eq!(mechanism.modifiers, [BackendModifier::Super]);
+        }
+        assert_eq!(session.state().mode, Mode::Nav);
+    }
+
+    #[test]
+    fn unknown_binding_id_is_fatal_before_partial_reduction() {
+        let mut session = policy_live_session(FakeBackend::new());
+        let ledger = session.ledger().clone();
+        let assignments = session.backend.assignment_attempts.len();
+
+        let error = session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![
+                    policy_window_opened("never-bound", "private"),
+                    BackendPolicyEvent::BindingPressed(BackendBindingId::new(u32::MAX).unwrap()),
+                ],
+            ))
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::UnknownBinding { .. })
+        ));
+        assert_eq!(session.ledger(), &ledger);
+        assert_eq!(session.backend.assignment_attempts.len(), assignments);
+        assert!(session.backend.responses.is_empty());
+    }
+
+    #[test]
+    fn policy_batch_is_atomic_and_linear() {
+        let mut valid = policy_live_session(FakeBackend::new());
+        let a = BackendWindowId::new("a").unwrap();
+        let b = BackendWindowId::new("b").unwrap();
+        valid
+            .handle_backend_event(policy_turn(
+                3,
+                vec![
+                    policy_window_opened("a", "a-0"),
+                    policy_window_opened("b", "b-0"),
+                    BackendPolicyEvent::TitleChanged {
+                        backend_id: a.clone(),
+                        title: "a-1".to_owned(),
+                    },
+                    BackendPolicyEvent::WindowClosed(b),
+                    BackendPolicyEvent::FocusChanged(Some(a.clone())),
+                ],
+            ))
+            .unwrap();
+        assert_eq!(valid.ledger().active_orbit().windows, [WinId(0)]);
+        assert_eq!(valid.window_metadata(WinId(0)).unwrap().title, "a-1");
+        assert_eq!(valid.backend.responses.len(), 1);
+        let whichkey = binding_id(&valid, "w");
+        let toggled = valid
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(whichkey)],
+            ))
+            .unwrap();
+        assert_eq!(
+            toggled.state.as_ref().map(|state| state.whichkey),
+            Some(false)
+        );
+
+        let mut invalid = policy_live_session(FakeBackend::new());
+        let before = invalid.ledger().clone();
+        let error = invalid
+            .handle_backend_event(policy_turn(
+                3,
+                vec![
+                    policy_window_opened("private", "private"),
+                    BackendPolicyEvent::TitleChanged {
+                        backend_id: BackendWindowId::new("unknown").unwrap(),
+                        title: "invalid".to_owned(),
+                    },
+                ],
+            ))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::UnknownWindowReference)
+        ));
+        assert_eq!(invalid.ledger(), &before);
+        assert!(invalid.backend.assignment_attempts.is_empty());
+        assert!(invalid.backend.responses.is_empty());
+    }
+
+    #[test]
+    fn policy_turn_must_be_answered_exactly_once() {
+        let mut session = policy_live_session(FakeBackend::new());
+        session
+            .handle_backend_event(policy_turn(3, Vec::new()))
+            .unwrap();
+
+        let error = session
+            .handle_backend_event(policy_turn(3, Vec::new()))
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
+        ));
+        assert_eq!(session.backend.responses.len(), 1);
+    }
+
+    #[test]
+    fn resize_binding_is_answered_in_the_same_policy_turn() {
+        let mut session = policy_live_session(FakeBackend::new());
+        let resize = binding_id(&session, "r");
+
+        let update = session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::BindingPressed(resize)],
+            ))
+            .unwrap();
+
+        assert_eq!(session.backend.responses.len(), 1);
+        let response = &session.backend.responses[0].2;
+        assert!(response.bindings.enabled.is_empty());
+        assert_eq!(response.bindings.next_key_edge, BackendNextKeyEdge::Ensure);
+        assert_eq!(update.state.as_ref().unwrap().mode, Mode::Resize);
+
+        let mut keymap = Keymap::default();
+        keymap.bindings.push(test_binding(
+            "Left",
+            Action::Focus(Dir::Prev),
+            Mode::Resize,
+            true,
+        ));
+        let mut submap = policy_live_session_with_keymap(FakeBackend::new(), keymap);
+        let resize = binding_id(&submap, "r");
+        let left = binding_id(&submap, "Left");
+        submap
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::BindingPressed(resize)],
+            ))
+            .unwrap();
+        submap.backend.responses.clear();
+        submap
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(left)],
+            ))
+            .unwrap();
+        assert_eq!(
+            submap.backend.responses[0].2.bindings.next_key_edge,
+            BackendNextKeyEdge::Ensure
+        );
+    }
+
+    #[test]
+    fn eaten_unbound_key_returns_to_nav_in_its_policy_response() {
+        let mut session = policy_live_session(FakeBackend::new());
+        let resize = binding_id(&session, "r");
+        session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::BindingPressed(resize)],
+            ))
+            .unwrap();
+        session.backend.responses.clear();
+
+        let update = session
+            .handle_backend_event(policy_turn(4, vec![BackendPolicyEvent::UnboundKeyEaten]))
+            .unwrap();
+
+        let response = &session.backend.responses[0].2;
+        let expected = Keymap::default().bindings.len();
+        assert_eq!(response.bindings.enabled.len(), expected);
+        assert_eq!(
+            response.bindings.next_key_edge,
+            BackendNextKeyEdge::Preserve
+        );
+        assert_eq!(update.state.as_ref().unwrap().mode, Mode::Nav);
+        assert!(update.state.as_ref().unwrap().chord_echo.is_empty());
+    }
+
+    #[test]
+    fn non_action_policy_turns_are_answered_exactly_once() {
+        let mut session = policy_live_session(FakeBackend::new());
+        let focus = binding_id(&session, "j");
+        session
+            .handle_backend_event(policy_turn(3, Vec::new()))
+            .unwrap();
+        let modifier_update = session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::ModifiersChanged {
+                    old: Vec::new(),
+                    new: vec![BackendModifier::Super],
+                }],
+            ))
+            .unwrap();
+        assert_eq!(
+            modifier_update
+                .state
+                .as_ref()
+                .map(|state| state.chord_echo.as_str()),
+            Some("mod+ ▸ awaiting chord…")
+        );
+        let modifier_update = session
+            .handle_backend_event(policy_turn(
+                5,
+                vec![
+                    BackendPolicyEvent::ModifiersChanged {
+                        old: vec![BackendModifier::Super],
+                        new: Vec::new(),
+                    },
+                    BackendPolicyEvent::ModifiersChanged {
+                        old: Vec::new(),
+                        new: vec![BackendModifier::Super],
+                    },
+                ],
+            ))
+            .unwrap();
+        assert!(modifier_update.state.is_none());
+        assert_eq!(session.state().chord_echo, "mod+ ▸ awaiting chord…");
+        let modifier_update = session
+            .handle_backend_event(policy_turn(
+                6,
+                vec![BackendPolicyEvent::ModifiersChanged {
+                    old: vec![BackendModifier::Super],
+                    new: Vec::new(),
+                }],
+            ))
+            .unwrap();
+        assert_eq!(
+            modifier_update
+                .state
+                .as_ref()
+                .map(|state| state.chord_echo.as_str()),
+            Some("")
+        );
+
+        let cases = [
+            vec![BackendPolicyEvent::BindingReleased(focus)],
+            vec![BackendPolicyEvent::BindingRepeatStopped(focus)],
+            vec![BackendPolicyEvent::ModifiersChanged {
+                old: Vec::new(),
+                new: Vec::new(),
+            }],
+        ];
+
+        for (offset, events) in cases.into_iter().enumerate() {
+            session
+                .handle_backend_event(policy_turn(7 + offset as u64, events))
+                .unwrap();
+        }
+
+        assert_eq!(session.backend.responses.len(), 7);
+        assert_eq!(
+            session
+                .backend
+                .responses
+                .iter()
+                .map(|(turn, _, _)| turn.get())
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5, 6, 7, 8, 9]
+        );
+    }
+
+    #[test]
+    fn clean_projection_equality_commits_without_consuming_a_backend_ticket() {
+        let mut session = policy_live_session(FakeBackend::new());
+
+        let update = session.set_layout(Layout::Mono).unwrap();
+
+        assert_eq!(session.ledger().active_orbit().layout, Layout::Mono);
+        assert_eq!(update.state.as_ref().unwrap().layout, Layout::Mono);
+        assert!(update.pending_action.is_none());
+        assert!(update.action_completion.is_none());
+        assert_eq!(session.backend.request_attempts, 0);
+        assert!(session.backend.responses.is_empty());
+    }
+
+    #[test]
+    fn ticketless_local_update_is_final_without_action_completion() {
+        let mut session = policy_live_session(FakeBackend::new());
+        let second = OrbitId::from_human(2).unwrap();
+
+        let update = session.switch_orbit(second).unwrap();
+
+        assert_eq!(session.ledger().active(), second);
+        assert!(update.pending_action.is_none());
+        assert!(update.action_completion.is_none());
+        assert!(update.effects.is_empty());
+        assert_eq!(session.backend.request_attempts, 0);
+    }
+
+    #[test]
+    fn direct_spawn_is_ticketless_effect_only_and_rejects_invalid_command() {
+        let mut session = policy_live_session(FakeBackend::new());
+        let argv = vec!["realm-term".to_owned(), "--new".to_owned()];
+
+        let update = session.request_spawn(argv.clone()).unwrap();
+
+        assert_eq!(update.effects, [SessionEffect::Spawn(argv)]);
+        assert!(update.pending_action.is_none());
+        assert!(update.action_completion.is_none());
+        assert!(update.state.is_none());
+        assert_eq!(session.backend.request_attempts, 0);
+        assert_eq!(
+            session.request_spawn(Vec::new()).unwrap_err(),
+            SessionActionError::InvalidSpawnCommand
+        );
+        assert_eq!(
+            session.request_spawn(vec![String::new()]).unwrap_err(),
+            SessionActionError::InvalidSpawnCommand
+        );
+    }
+
+    #[test]
+    fn direct_spawn_is_not_ready_during_active_transaction() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let admitted = session.focus_step(Dir::Prev).unwrap();
+        assert!(admitted.pending_action.is_some());
+
+        assert_eq!(
+            session
+                .request_spawn(vec!["blocked".to_owned()])
+                .unwrap_err(),
+            SessionActionError::NotReady
+        );
+        assert!(session.backend.responses.is_empty());
+    }
+
+    #[test]
+    fn visible_metadata_is_json_bounded_at_ingress() {
+        let mut session = policy_live_session(FakeBackend::new());
+        let source = format!("{}{}", "\u{0001}\n\\\"".repeat(40), "界".repeat(80));
+        session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::WindowOpened {
+                    backend_id: BackendWindowId::new("bounded").unwrap(),
+                    app_id: source.clone(),
+                    title: source,
+                }],
+            ))
+            .unwrap();
+
+        let metadata = session.window_metadata(WinId(0)).unwrap();
+        assert!(json_content_len(&metadata.app_id) <= MAX_VISIBLE_APP_ID_JSON_BYTES);
+        assert!(json_content_len(&metadata.title) <= MAX_VISIBLE_TITLE_JSON_BYTES);
+        assert!(metadata.app_id.ends_with('…'));
+        assert!(metadata.title.ends_with('…'));
+    }
+
+    #[test]
+    fn repeated_title_changes_replace_bounded_metadata() {
+        let mut session = policy_live_session(FakeBackend::new());
+        let id = BackendWindowId::new("bounded").unwrap();
+        session
+            .handle_backend_event(policy_turn(3, vec![policy_window_opened("bounded", "old")]))
+            .unwrap();
+        session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::TitleChanged {
+                    backend_id: id.clone(),
+                    title: "x".repeat(20_000),
+                }],
+            ))
+            .unwrap();
+        session
+            .handle_backend_event(policy_turn(
+                5,
+                vec![BackendPolicyEvent::TitleChanged {
+                    backend_id: id,
+                    title: format!("new-{}", "y".repeat(20_000)),
+                }],
+            ))
+            .unwrap();
+
+        let title = &session.window_metadata(WinId(0)).unwrap().title;
+        assert!(title.starts_with("new-"));
+        assert!(!title.contains('x'));
+        assert!(json_content_len(title) <= MAX_VISIBLE_TITLE_JSON_BYTES);
+    }
+
+    #[test]
+    fn maximum_show_ledger_fits_one_control_frame() {
+        let mut ledger = Ledger::new();
+        let mut bindings = Vec::with_capacity(MAX_MANAGED_WINDOWS);
+        let mut events = Vec::with_capacity(MAX_MANAGED_WINDOWS + 1);
+        for index in 0..MAX_MANAGED_WINDOWS {
+            let win = WinId(u64::MAX - 1 - index as u64);
+            let backend_id = BackendWindowId::new(format!("{index:032}")).unwrap();
+            ledger.summon(win, OrbitId::new(index % ORBIT_COUNT).unwrap());
+            bindings.push(SnapshotBinding {
+                win_id: win,
+                backend_id: backend_id.clone(),
+            });
+            events.push(BackendPolicyEvent::WindowOpened {
+                backend_id,
+                app_id: "\n".repeat(MAX_VISIBLE_APP_ID_JSON_BYTES),
+                title: "\n".repeat(MAX_VISIBLE_TITLE_JSON_BYTES),
+            });
+        }
+        bindings.sort_by_key(|binding| binding.win_id);
+        let snapshot = SessionSnapshotV1::new(ledger, bindings, u64::MAX).unwrap();
+        let mut session =
+            Session::connect_with_snapshot(FakeBackend::new(), Some(snapshot)).unwrap();
+        events.push(BackendPolicyEvent::InitialReplayComplete);
+        session
+            .handle_backend_event(policy_turn(1, events))
+            .unwrap();
+        session
+            .handle_backend_event(policy_turn(
+                2,
+                vec![BackendPolicyEvent::WorkareaChanged(selected_workarea())],
+            ))
+            .unwrap();
+
+        let frame = ipc::encode(&Response::Ledger(session.visible_ledger(None))).unwrap();
+        assert!(frame.len() < ipc::MAX_FRAME_BYTES);
+    }
+
+    #[test]
+    fn desired_action_requests_turn_and_returns_pending_origin() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let before = session.ledger().clone();
+
+        let admitted = session.focus_step(Dir::Prev).unwrap();
+        let origin = admitted.pending_action.unwrap();
+
+        assert_eq!(session.backend.request_attempts, 1);
+        assert_eq!(session.ledger(), &before);
+        assert!(admitted.action_completion.is_none());
+        let completed = session
+            .handle_backend_event(policy_turn(4, Vec::new()))
+            .unwrap();
+        assert_eq!(session.backend.responses[0].1, origin);
+        assert_eq!(completed.action_completion.as_ref().unwrap().ticket, origin);
+        assert_eq!(session.ledger().focused(), Some(WinId(0)));
+    }
+
+    #[test]
+    fn failed_turn_request_is_error_atomic() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let ledger = session.ledger().clone();
+        let state = session.state().clone();
+        let projection = session.last_projection().to_vec();
+        session
+            .backend
+            .request_results
+            .push_back(Err(BackendError::Io {
+                message: "request failed".to_owned(),
+            }));
+
+        let error = session.focus_step(Dir::Prev).unwrap_err();
+
+        assert!(matches!(
+            error,
+            SessionActionError::Backend(BackendError::Io { .. })
+        ));
+        assert_eq!(session.ledger(), &ledger);
+        assert_eq!(session.state(), &state);
+        assert_eq!(session.last_projection(), projection);
+        assert!(!session.has_active_backend_transaction());
+        assert!(session.backend.responses.is_empty());
+    }
+
+    #[test]
+    fn failed_turn_request_consumes_origin_ticket() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        session
+            .backend
+            .request_results
+            .push_back(Err(BackendError::Unsupported {
+                capability: "policy-turn".to_owned(),
+            }));
+        session.focus_step(Dir::Prev).unwrap_err();
+
+        let next = session
+            .focus_step(Dir::Prev)
+            .unwrap()
+            .pending_action
+            .unwrap();
+
+        assert_eq!(next.get(), 5);
+        assert_eq!(session.backend.request_attempts, 2);
+    }
+
+    #[test]
+    fn close_target_closed_in_awaited_turn_is_not_replayed() {
+        let mut session = policy_live_session(FakeBackend::new());
+        session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![policy_window_opened("close-me", "one")],
+            ))
+            .unwrap();
+        session.backend.responses.clear();
+        let admitted = session.request_close_focused().unwrap();
+        let origin = admitted.pending_action.unwrap();
+
+        let completed = session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::WindowClosed(
+                    BackendWindowId::new("close-me").unwrap(),
+                )],
+            ))
+            .unwrap();
+
+        assert!(session.backend.responses[0].2.closes.is_empty());
+        assert_eq!(completed.action_completion.as_ref().unwrap().ticket, origin);
+        assert!(completed.action_completion.unwrap().result.is_ok());
+        assert!(session.ledger().is_empty());
+    }
+
+    #[test]
+    fn failed_close_turn_request_is_an_immediate_clean_error() {
+        let mut session = policy_live_session(FakeBackend::new());
+        session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![policy_window_opened("close-me", "one")],
+            ))
+            .unwrap();
+        session.backend.responses.clear();
+        let before = session.ledger().clone();
+        session
+            .backend
+            .request_results
+            .push_back(Err(BackendError::Io {
+                message: "request failed".to_owned(),
+            }));
+
+        let error = session.request_close_focused().unwrap_err();
+
+        assert!(matches!(
+            error,
+            SessionActionError::Backend(BackendError::Io { .. })
+        ));
+        assert_eq!(session.ledger(), &before);
+        assert!(!session.has_active_backend_transaction());
+        assert!(session.backend.responses.is_empty());
+    }
+
+    #[test]
+    fn close_request_is_a_no_op_without_a_focused_window() {
+        let mut session = policy_live_session(FakeBackend::new());
+
+        let update = session.request_close_focused().unwrap();
+
+        assert_eq!(update, SessionUpdate::unchanged());
+        assert_eq!(session.backend.request_attempts, 0);
+        assert!(session.backend.responses.is_empty());
+    }
+
+    #[test]
+    fn duplicate_close_edges_are_unique_and_bounded() {
+        let mut session = policy_live_session(FakeBackend::new());
+        session
+            .handle_backend_event(policy_turn(3, vec![policy_window_opened("victim", "one")]))
+            .unwrap();
+        session.backend.responses.clear();
+        let banish = binding_id(&session, "q");
+
+        session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(banish); MAX_POLICY_EVENTS],
+            ))
+            .unwrap();
+
+        assert_eq!(session.backend.responses[0].2.closes, [WinId(0)]);
+        assert!(session.backend.responses[0].2.closes.len() <= MAX_MANAGED_WINDOWS);
+
+        let mut ordered = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut ordered);
+        ordered.backend.responses.clear();
+        let previous = binding_id(&ordered, "k");
+        let banish = binding_id(&ordered, "q");
+        ordered.request_close_focused().unwrap();
+        ordered
+            .handle_backend_event(policy_turn(
+                4,
+                vec![
+                    BackendPolicyEvent::BindingPressed(previous),
+                    BackendPolicyEvent::BindingPressed(banish),
+                ],
+            ))
+            .unwrap();
+        assert_eq!(ordered.backend.responses[0].2.closes, [WinId(1), WinId(0)]);
+    }
+
+    #[test]
+    fn identity_binding_is_local_idempotent_and_contract_closed() {
+        let mut session = policy_live_session(FakeBackend::new());
+        session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![
+                    policy_window_opened("same", "first"),
+                    policy_window_opened("same", "latest"),
+                ],
+            ))
+            .unwrap();
+        session
+            .handle_backend_event(policy_turn(4, vec![policy_window_opened("same", "again")]))
+            .unwrap();
+        assert_eq!(session.backend.assignment_attempts.len(), 1);
+        assert_eq!(session.ledger().active_orbit().windows, [WinId(0)]);
+
+        let mut failing = policy_live_session(FakeBackend::new());
+        failing.backend.fail_next_assign = Some(BackendContractError::UnknownWindow {
+            backend_id: BackendWindowId::new("bad").unwrap(),
+        });
+        let error = failing
+            .handle_backend_event(policy_turn(3, vec![policy_window_opened("bad", "one")]))
+            .unwrap_err();
+        assert!(matches!(error, SessionEventError::BackendContract(_)));
+        assert!(failing.backend.responses.is_empty());
+    }
+
+    #[test]
+    fn open_then_focus_and_title_in_one_turn_binds_once_in_order() {
+        let mut session = policy_live_session(FakeBackend::new());
+        let id = BackendWindowId::new("ordered").unwrap();
+
+        session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![
+                    policy_window_opened("ordered", "old"),
+                    BackendPolicyEvent::FocusChanged(Some(id.clone())),
+                    BackendPolicyEvent::TitleChanged {
+                        backend_id: id,
+                        title: "new".to_owned(),
+                    },
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(session.window_metadata(WinId(0)).unwrap().title, "new");
+        assert_eq!(session.backend.assignment_attempts.len(), 1);
+        assert!(session.backend.call_order[0].starts_with("assign:ordered:"));
+        assert_eq!(session.backend.call_order[1], "respond:3");
+        assert!(session.backend.responses[0].2.projection.as_ref().unwrap()[0].focused);
+    }
+
+    #[test]
+    fn exclusive_focus_true_then_false_clears_and_restores_ledger_focus() {
+        let mut session = policy_live_session(FakeBackend::new());
+        session
+            .handle_backend_event(policy_turn(3, vec![policy_window_opened("focus", "title")]))
+            .unwrap();
+        session.backend.responses.clear();
+
+        let lost = session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::ExclusiveFocusChanged(true)],
+            ))
+            .unwrap();
+        assert!(session.backend.responses[0]
+            .2
+            .projection
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|placement| !placement.focused));
+        assert!(lost.state.unwrap().focused_title.is_empty());
+        assert_eq!(session.ledger().focused(), Some(WinId(0)));
+        session.backend.responses.clear();
+
+        let restored = session
+            .handle_backend_event(policy_turn(
+                5,
+                vec![BackendPolicyEvent::ExclusiveFocusChanged(false)],
+            ))
+            .unwrap();
+        assert!(session.backend.responses[0].2.projection.as_ref().unwrap()[0].focused);
+        assert_eq!(restored.state.unwrap().focused_title, "title");
+        assert_eq!(session.ledger().focused(), Some(WinId(0)));
+    }
+
+    #[test]
+    fn ordinary_focus_observation_cannot_change_ledger_policy() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let focused = session.ledger().focused();
+
+        session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::FocusChanged(Some(
+                    BackendWindowId::new("r1").unwrap(),
+                ))],
+            ))
+            .unwrap();
+
+        assert_eq!(session.ledger().focused(), focused);
+        let projection = session.backend.responses[0].2.projection.as_ref().unwrap();
+        assert_eq!(
+            projection
+                .iter()
+                .find(|placement| placement.focused)
+                .map(|p| p.win),
+            focused
+        );
+    }
+
+    #[test]
+    fn policy_event_limit_accepts_exact_max_and_rejects_max_plus_one_atomically() {
+        let mut session = policy_live_session(FakeBackend::new());
+        let event = BackendPolicyEvent::ModifiersChanged {
+            old: Vec::new(),
+            new: Vec::new(),
+        };
+        session
+            .handle_backend_event(policy_turn(3, vec![event.clone(); MAX_POLICY_EVENTS]))
+            .unwrap();
+        assert_eq!(session.backend.responses.len(), 1);
+
+        let responses = session.backend.responses.len();
+        let error = session
+            .handle_backend_event(policy_turn(4, vec![event; MAX_POLICY_EVENTS + 1]))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::Backend(BackendError::Capacity {
+                resource: BackendCapacityResource::PolicyFacts,
+                ..
+            })
+        ));
+        assert_eq!(session.backend.responses.len(), responses);
+    }
+
+    #[test]
+    fn combined_effect_limit_rejects_external_plus_batch_overflow_atomically() {
+        let mut session = policy_live_session_with_keymap(FakeBackend::new(), spawn_keymap());
+        let spawn = binding_id(&session, "x");
+        session
+            .backend
+            .response_results
+            .push_back(Ok(BackendSubmission::Pending));
+        session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::BindingPressed(spawn)],
+            ))
+            .unwrap();
+        let ticket = session.backend.responses[0].1;
+        session
+            .handle_backend_event(BackendEvent::OperationCompleted {
+                ticket,
+                result: Ok(()),
+            })
+            .unwrap();
+        let responses = session.backend.responses.len();
+
+        let error = session
+            .handle_backend_event(draining_policy_turn(
+                4,
+                ticket,
+                vec![BackendPolicyEvent::BindingPressed(spawn); MAX_STAGED_EFFECTS],
+            ))
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            SessionEventError::Backend(BackendError::Capacity {
+                resource: BackendCapacityResource::PolicyEffects,
+                ..
+            })
+        ));
+        assert_eq!(session.backend.responses.len(), responses);
+    }
+
+    #[test]
+    fn managed_window_limit_accepts_256_and_rejects_257_before_assignment() {
+        let replay = |count: usize| {
+            let mut events = (0..count)
+                .map(|index| policy_window_opened(&format!("w-{index}"), "title"))
+                .collect::<Vec<_>>();
+            events.push(BackendPolicyEvent::InitialReplayComplete);
+            events
+        };
+
+        let mut accepted = Session::connect(FakeBackend::new()).unwrap();
+        accepted
+            .handle_backend_event(policy_turn(1, replay(MAX_MANAGED_WINDOWS)))
+            .unwrap();
+        assert_eq!(
+            accepted.backend.assignment_attempts.len(),
+            MAX_MANAGED_WINDOWS
+        );
+
+        let mut rejected = Session::connect(FakeBackend::new()).unwrap();
+        let error = rejected
+            .handle_backend_event(policy_turn(1, replay(MAX_MANAGED_WINDOWS + 1)))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::Backend(BackendError::Capacity {
+                resource: BackendCapacityResource::ManagedWindows,
+                ..
+            })
+        ));
+        assert!(rejected.backend.assignment_attempts.is_empty());
+        assert!(rejected.backend.responses.is_empty());
+    }
+
+    #[test]
+    fn binding_limit_accepts_64_and_rejects_65_before_configuration() {
+        let keymap = |count: usize| Keymap {
+            modifier: "mod".to_owned(),
+            bindings: (0..count)
+                .map(|index| {
+                    test_binding(&format!("key-{index}"), Action::Launcher, Mode::Nav, false)
+                })
+                .collect(),
+        };
+        let accepted_backend = FakeBackend::new();
+        let accepted_calls = accepted_backend.configure_calls.clone();
+        Session::connect_with_keymap(accepted_backend, keymap(MAX_CONFIGURED_BINDINGS)).unwrap();
+        assert_eq!(*accepted_calls.lock().unwrap(), 1);
+
+        let rejected_backend = FakeBackend::new();
+        let rejected_calls = rejected_backend.configure_calls.clone();
+        let error = match Session::connect_with_keymap(
+            rejected_backend,
+            keymap(MAX_CONFIGURED_BINDINGS + 1),
+        ) {
+            Ok(_) => panic!("65 bindings must be rejected"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            BackendError::Capacity {
+                resource: BackendCapacityResource::ConfiguredBindings,
+                ..
+            }
+        ));
+        assert_eq!(*rejected_calls.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn replay_barrier_is_single_final_and_forbidden_elsewhere() {
+        let mut not_final = Session::connect(FakeBackend::new()).unwrap();
+        assert!(not_final
+            .handle_backend_event(policy_turn(
+                1,
+                vec![
+                    BackendPolicyEvent::InitialReplayComplete,
+                    policy_window_opened("late", "late"),
+                ],
+            ))
+            .is_err());
+        assert!(not_final.backend.responses.is_empty());
+
+        let mut repeated = Session::connect(FakeBackend::new()).unwrap();
+        assert!(repeated
+            .handle_backend_event(policy_turn(
+                1,
+                vec![
+                    BackendPolicyEvent::InitialReplayComplete,
+                    BackendPolicyEvent::InitialReplayComplete,
+                ],
+            ))
+            .is_err());
+        assert!(repeated.backend.responses.is_empty());
+
+        let mut later = Session::connect(FakeBackend::new()).unwrap();
+        later
+            .handle_backend_event(policy_turn(
+                1,
+                vec![BackendPolicyEvent::InitialReplayComplete],
+            ))
+            .unwrap();
+        assert!(later
+            .handle_backend_event(policy_turn(
+                2,
+                vec![BackendPolicyEvent::InitialReplayComplete],
+            ))
+            .is_err());
+        assert_eq!(later.backend.responses.len(), 1);
+
+        let mut repeated_focus = Session::connect(FakeBackend::new()).unwrap();
+        assert!(repeated_focus
+            .handle_backend_event(policy_turn(
+                1,
+                vec![
+                    policy_window_opened("focus", "focus"),
+                    BackendPolicyEvent::FocusChanged(Some(BackendWindowId::new("focus").unwrap(),)),
+                    BackendPolicyEvent::FocusChanged(None),
+                    BackendPolicyEvent::InitialReplayComplete,
+                ],
+            ))
+            .is_err());
+        assert!(repeated_focus.backend.assignment_attempts.is_empty());
+        assert!(repeated_focus.backend.responses.is_empty());
+    }
+
+    #[test]
+    fn initial_replay_is_silent_and_rebinds_each_identity_once() {
+        let snapshot = recovery_snapshot();
+        let mut session =
+            Session::connect_with_snapshot(FakeBackend::new(), Some(snapshot)).unwrap();
+
+        let update = session
+            .handle_backend_event(policy_turn(
+                1,
+                vec![
+                    policy_window_opened("restored-7", "first"),
+                    policy_window_opened("restored-7", "latest"),
+                    policy_window_opened("new-10", "new"),
+                    BackendPolicyEvent::InitialReplayComplete,
+                ],
+            ))
+            .unwrap();
+
+        assert!(update.state.is_none());
+        assert!(update.persistence.is_none());
+        assert_eq!(session.backend.assignment_attempts.len(), 2);
+        assert_eq!(
+            session.backend.assignment_attempts[0],
+            (BackendWindowId::new("restored-7").unwrap(), WinId(7))
+        );
+        assert_eq!(
+            session.backend.assignment_attempts[1],
+            (BackendWindowId::new("new-10").unwrap(), WinId(10))
+        );
+        assert_eq!(session.window_metadata(WinId(7)).unwrap().title, "latest");
+    }
+
+    #[test]
+    fn initial_replay_is_projection_free_and_stays_unpublished() {
+        let mut session =
+            Session::connect_with_snapshot(FakeBackend::new(), Some(recovery_snapshot())).unwrap();
+
+        let update = session
+            .handle_backend_event(policy_turn(
+                1,
+                vec![
+                    policy_window_opened("restored-7", "restored"),
+                    BackendPolicyEvent::InitialReplayComplete,
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(session.phase(), RecoveryPhase::FinalizingReplay);
+        assert!(session.backend.responses[0].2.projection.is_none());
+        assert!(session.backend.responses[0].2.closes.is_empty());
+        assert!(session.backend.responses[0].2.bindings.enabled.is_empty());
+        assert_eq!(session.state().revision, 0);
+        assert!(session.snapshot().is_none());
+        assert!(session.last_projection().is_empty());
+        assert!(update.state.is_none());
+
+        let mut pending = Session::connect(FakeBackend::new()).unwrap();
+        pending
+            .backend
+            .response_results
+            .push_back(Ok(BackendSubmission::Pending));
+        let update = pending
+            .handle_backend_event(policy_turn(
+                1,
+                vec![BackendPolicyEvent::InitialReplayComplete],
+            ))
+            .unwrap();
+        assert_eq!(pending.phase(), RecoveryPhase::FinalizingReplay);
+        assert!(pending.has_active_backend_transaction());
+        assert!(update.state.is_none());
+        assert!(update.persistence.is_none());
+    }
+
+    #[test]
+    fn replay_barrier_reconciles_without_projection() {
+        let mut session =
+            Session::connect_with_snapshot(FakeBackend::new(), Some(recovery_snapshot())).unwrap();
+
+        session
+            .handle_backend_event(policy_turn(
+                1,
+                vec![
+                    policy_window_opened("restored-7", "restored"),
+                    policy_window_opened("new-10", "new"),
+                    BackendPolicyEvent::InitialReplayComplete,
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(
+            session.ledger().active_orbit().windows,
+            [WinId(7), WinId(10)]
+        );
+        assert_eq!(
+            session.window_id(&BackendWindowId::new("missing-9").unwrap()),
+            None
+        );
+        assert_eq!(
+            session.window_id(&BackendWindowId::new("new-10").unwrap()),
+            Some(WinId(10))
+        );
+        assert_eq!(session.backend.responses[0].2.projection, None);
+    }
+
+    #[test]
+    fn initial_replay_rejects_workarea_before_assignment() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+
+        let error = session
+            .handle_backend_event(policy_turn(
+                1,
+                vec![
+                    policy_window_opened("private", "private"),
+                    BackendPolicyEvent::WorkareaChanged(selected_workarea()),
+                    BackendPolicyEvent::InitialReplayComplete,
+                ],
+            ))
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                BackendPolicyEvent::WorkareaChanged(_)
+            )
+        ));
+        assert!(session.backend.assignment_attempts.is_empty());
+        assert!(session.backend.responses.is_empty());
+        assert!(session.ledger().is_empty());
+        assert_eq!(session.last_backend_ticket, 0);
+
+        let mut precedence = Session::connect(FakeBackend::new()).unwrap();
+        let mut events = (0..=MAX_MANAGED_WINDOWS)
+            .map(|index| policy_window_opened(&format!("w-{index}"), "title"))
+            .collect::<Vec<_>>();
+        events.push(BackendPolicyEvent::WorkareaChanged(selected_workarea()));
+        events.push(BackendPolicyEvent::InitialReplayComplete);
+        let error = precedence
+            .handle_backend_event(policy_turn(1, events))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                BackendPolicyEvent::WorkareaChanged(_)
+            )
+        ));
+        assert!(precedence.backend.assignment_attempts.is_empty());
+        assert!(precedence.backend.responses.is_empty());
+        assert_eq!(precedence.last_backend_ticket, 0);
+    }
+
+    #[test]
+    fn first_selected_workarea_projects_and_publishes_once() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        session
+            .handle_backend_event(policy_turn(
+                1,
+                vec![
+                    policy_window_opened("first", "title"),
+                    BackendPolicyEvent::InitialReplayComplete,
+                ],
+            ))
+            .unwrap();
+
+        let first = session
+            .handle_backend_event(policy_turn(
+                2,
+                vec![BackendPolicyEvent::WorkareaChanged(selected_workarea())],
+            ))
+            .unwrap();
+        let second = session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::WorkareaChanged(selected_workarea())],
+            ))
+            .unwrap();
+
+        assert_eq!(session.phase(), RecoveryPhase::Live);
+        assert_eq!(first.state.as_ref().map(|state| state.revision), Some(1));
+        assert!(first.persistence.is_some());
+        assert!(session.backend.responses[1].2.projection.is_some());
+        assert!(second.state.is_none());
+        assert!(session.backend.responses[2].2.projection.is_none());
+    }
+
+    #[test]
+    fn initial_workarea_projection_with_exclusive_focus_suppresses_window_focus() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let id = BackendWindowId::new("focus").unwrap();
+        session
+            .handle_backend_event(policy_turn(
+                1,
+                vec![
+                    policy_window_opened("focus", "title"),
+                    BackendPolicyEvent::FocusChanged(Some(id)),
+                    BackendPolicyEvent::ExclusiveFocusChanged(true),
+                    BackendPolicyEvent::InitialReplayComplete,
+                ],
+            ))
+            .unwrap();
+
+        let update = session
+            .handle_backend_event(policy_turn(
+                2,
+                vec![BackendPolicyEvent::WorkareaChanged(selected_workarea())],
+            ))
+            .unwrap();
+
+        assert!(session.backend.responses[1]
+            .2
+            .projection
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|placement| !placement.focused));
+        assert!(update.state.unwrap().focused_title.is_empty());
+        assert_eq!(session.ledger().focused(), Some(WinId(0)));
+    }
+
+    #[test]
+    fn initial_workarea_enables_nav_bindings_after_disabled_replay() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        session
+            .handle_backend_event(policy_turn(
+                1,
+                vec![BackendPolicyEvent::InitialReplayComplete],
+            ))
+            .unwrap();
+        let disabled = session.backend.responses[0].2.bindings.clone();
+
+        session
+            .handle_backend_event(policy_turn(
+                2,
+                vec![BackendPolicyEvent::WorkareaChanged(selected_workarea())],
+            ))
+            .unwrap();
+        let enabled = &session.backend.responses[1].2.bindings;
+
+        assert!(disabled.enabled.is_empty());
+        assert_eq!(disabled.next_key_edge, BackendNextKeyEdge::Preserve);
+        assert_eq!(enabled.enabled.len(), Keymap::default().bindings.len());
+        assert_eq!(enabled.watched_modifiers, [BackendModifier::Super]);
+    }
+
+    #[test]
+    fn pre_workarea_authoritative_turns_accumulate_until_revision_one() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        session
+            .handle_backend_event(policy_turn(
+                1,
+                vec![BackendPolicyEvent::InitialReplayComplete],
+            ))
+            .unwrap();
+        let id = BackendWindowId::new("pre-live").unwrap();
+        let accumulated = session
+            .handle_backend_event(policy_turn(
+                2,
+                vec![
+                    policy_window_opened("pre-live", "old"),
+                    BackendPolicyEvent::TitleChanged {
+                        backend_id: id.clone(),
+                        title: "latest".to_owned(),
+                    },
+                    BackendPolicyEvent::FocusChanged(Some(id)),
+                    BackendPolicyEvent::ExclusiveFocusChanged(false),
+                ],
+            ))
+            .unwrap();
+        assert!(accumulated.state.is_none());
+        assert!(session.backend.responses[1].2.projection.is_none());
+
+        let published = session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::WorkareaChanged(selected_workarea())],
+            ))
+            .unwrap();
+        assert_eq!(published.state.as_ref().unwrap().revision, 1);
+        assert_eq!(published.state.as_ref().unwrap().focused_title, "latest");
+        assert_eq!(session.ledger().active_orbit().windows, [WinId(0)]);
+    }
+
+    #[test]
+    fn pre_workarea_binding_input_is_fatal_before_reduction() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        session
+            .handle_backend_event(policy_turn(
+                1,
+                vec![BackendPolicyEvent::InitialReplayComplete],
+            ))
+            .unwrap();
+        let binding = binding_id(&session, "j");
+        let assignments = session.backend.assignment_attempts.len();
+        let responses = session.backend.responses.len();
+
+        let error = session
+            .handle_backend_event(policy_turn(
+                2,
+                vec![
+                    policy_window_opened("private", "private"),
+                    BackendPolicyEvent::BindingPressed(binding),
+                ],
+            ))
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
+        ));
+        assert_eq!(session.backend.assignment_attempts.len(), assignments);
+        assert_eq!(session.backend.responses.len(), responses);
+        assert!(session.ledger().is_empty());
+    }
+
+    #[test]
+    fn pre_barrier_non_replay_events_are_protocol_errors() {
+        let forbidden = [
+            BackendPolicyEvent::TitleChanged {
+                backend_id: BackendWindowId::new("unknown").unwrap(),
+                title: "title".to_owned(),
+            },
+            BackendPolicyEvent::GeometryDrifted {
+                backend_id: BackendWindowId::new("unknown").unwrap(),
+                rect: Rect::new(0, 0, 1, 1),
+            },
+            BackendPolicyEvent::UnboundKeyEaten,
+        ];
+
+        for event in forbidden {
+            let mut session = Session::connect(FakeBackend::new()).unwrap();
+            assert!(session
+                .handle_backend_event(policy_turn(
+                    1,
+                    vec![event, BackendPolicyEvent::InitialReplayComplete],
+                ))
+                .is_err());
+            assert!(session.backend.responses.is_empty());
+        }
+    }
+
+    #[test]
+    fn maximum_replay_with_focus_and_barrier_is_accepted() {
+        assert_eq!(MAX_REPLAY_POLICY_EVENTS, MAX_MANAGED_WINDOWS + 3);
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        let mut events = (0..MAX_MANAGED_WINDOWS)
+            .map(|index| policy_window_opened(&format!("w-{index}"), "title"))
+            .collect::<Vec<_>>();
+        events.push(BackendPolicyEvent::FocusChanged(Some(
+            BackendWindowId::new(format!("w-{}", MAX_MANAGED_WINDOWS - 1)).unwrap(),
+        )));
+        events.push(BackendPolicyEvent::ExclusiveFocusChanged(false));
+        events.push(BackendPolicyEvent::InitialReplayComplete);
+
+        session
+            .handle_backend_event(policy_turn(1, events))
+            .unwrap();
+
+        assert_eq!(
+            session.backend.assignment_attempts.len(),
+            MAX_MANAGED_WINDOWS
+        );
+        assert_eq!(session.backend.responses.len(), 1);
+        assert!(session.backend.responses[0].2.projection.is_none());
+    }
+
+    #[test]
+    fn maximum_policy_batch_preserves_input_order_and_is_bounded() {
+        let keymap = Keymap {
+            modifier: "mod".to_owned(),
+            bindings: vec![
+                test_binding("a", Action::Spawn(vec!["a".to_owned()]), Mode::Nav, false),
+                test_binding("b", Action::Spawn(vec!["b".to_owned()]), Mode::Nav, false),
+            ],
+        };
+        let mut session = policy_live_session_with_keymap(FakeBackend::new(), keymap);
+        let a = binding_id(&session, "a");
+        let b = binding_id(&session, "b");
+        let events = (0..MAX_POLICY_EVENTS)
+            .map(|index| BackendPolicyEvent::BindingPressed(if index % 2 == 0 { a } else { b }))
+            .collect();
+
+        let update = session
+            .handle_backend_event(policy_turn(3, events))
+            .unwrap();
+
+        assert_eq!(update.effects.len(), MAX_STAGED_EFFECTS);
+        for (index, effect) in update.effects.iter().enumerate() {
+            let expected = if index % 2 == 0 { "a" } else { "b" };
+            assert_eq!(effect, &SessionEffect::Spawn(vec![expected.to_owned()]));
+        }
+        assert_eq!(session.backend.responses.len(), 1);
+    }
+
+    #[test]
+    fn policy_text_and_modifier_bounds_are_atomic() {
+        let mut exact = policy_live_session(FakeBackend::new());
+        let exact_id = BackendWindowId::new("exact-text").unwrap();
+        exact
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::WindowOpened {
+                    backend_id: exact_id.clone(),
+                    app_id: String::new(),
+                    title: "x".repeat(MAX_POLICY_TEXT_BYTES - exact_id.as_str().len()),
+                }],
+            ))
+            .unwrap();
+        exact
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::ModifiersChanged {
+                    old: Vec::new(),
+                    new: vec![
+                        BackendModifier::Shift,
+                        BackendModifier::Control,
+                        BackendModifier::Alt,
+                        BackendModifier::Super,
+                    ],
+                }],
+            ))
+            .unwrap();
+        assert_eq!(exact.backend.responses.len(), 2);
+
+        let mut too_long = policy_live_session(FakeBackend::new());
+        let too_long_id = BackendWindowId::new("too-long").unwrap();
+        let error = too_long
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::WindowOpened {
+                    backend_id: too_long_id.clone(),
+                    app_id: String::new(),
+                    title: "x".repeat(MAX_POLICY_TEXT_BYTES + 1 - too_long_id.as_str().len()),
+                }],
+            ))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::Backend(BackendError::Capacity {
+                resource: BackendCapacityResource::PolicyTextBytes,
+                ..
+            })
+        ));
+        assert!(too_long.backend.assignment_attempts.is_empty());
+        assert!(too_long.backend.responses.is_empty());
+
+        let mut noncanonical = policy_live_session(FakeBackend::new());
+        let error = noncanonical
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::ModifiersChanged {
+                    old: Vec::new(),
+                    new: vec![BackendModifier::Super, BackendModifier::Shift],
+                }],
+            ))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::NonCanonicalModifiers)
+        ));
+        assert!(noncanonical.backend.responses.is_empty());
+    }
+
+    #[test]
+    fn exhausted_watermark_never_allocates_the_sentinel() {
+        let snapshot = SessionSnapshotV1::new(Ledger::new(), Vec::new(), u64::MAX).unwrap();
+        let mut session =
+            Session::connect_with_snapshot(FakeBackend::new(), Some(snapshot)).unwrap();
+
+        let error = session
+            .handle_backend_event(policy_turn(
+                1,
+                vec![
+                    policy_window_opened("overflow", "overflow"),
+                    BackendPolicyEvent::InitialReplayComplete,
+                ],
+            ))
+            .unwrap_err();
+
+        assert_eq!(error, SessionEventError::WindowIdExhausted);
+        assert!(session.backend.assignment_attempts.is_empty());
+        assert!(session.backend.responses.is_empty());
+        assert!(session.ledger().is_empty());
+        assert_eq!(session.last_backend_ticket, 0);
+    }
+
+    #[test]
+    fn armed_repeat_requests_internal_turn_without_action_completion() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let focus = binding_id(&session, "j");
+        let pressed = session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(focus)],
+            ))
+            .unwrap();
+        assert!(matches!(
+            pressed.repeat_timer,
+            RepeatTimerDirective::Arm { .. }
+        ));
+        session.backend.responses.clear();
+        let requests = session.backend.request_attempts;
+
+        let fired = session.fire_key_repeat().unwrap();
+
+        assert_eq!(session.backend.request_attempts, requests + 1);
+        assert!(fired.pending_action.is_none());
+        assert!(fired.action_completion.is_none());
+        let completed = session
+            .handle_backend_event(policy_turn(5, Vec::new()))
+            .unwrap();
+        assert!(completed.action_completion.is_none());
+        assert_eq!(session.ledger().focused(), Some(WinId(1)));
+    }
+
+    #[test]
+    fn released_repeat_is_noop_before_request() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let focus = binding_id(&session, "j");
+        session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(focus)],
+            ))
+            .unwrap();
+        let released = session
+            .handle_backend_event(policy_turn(
+                5,
+                vec![BackendPolicyEvent::BindingReleased(focus)],
+            ))
+            .unwrap();
+        assert_eq!(released.repeat_timer, RepeatTimerDirective::Disarm);
+        let requests = session.backend.request_attempts;
+
+        let fired = session.fire_key_repeat().unwrap();
+
+        assert_eq!(fired, SessionUpdate::unchanged());
+        assert_eq!(session.backend.request_attempts, requests);
+    }
+
+    #[test]
+    fn new_repeatable_press_replaces_without_resuming_older_target() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let next = binding_id(&session, "j");
+        let previous = binding_id(&session, "k");
+        session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(next)],
+            ))
+            .unwrap();
+        session
+            .handle_backend_event(policy_turn(
+                5,
+                vec![BackendPolicyEvent::BindingPressed(previous)],
+            ))
+            .unwrap();
+        session
+            .handle_backend_event(policy_turn(
+                6,
+                vec![BackendPolicyEvent::BindingReleased(previous)],
+            ))
+            .unwrap();
+        let requests = session.backend.request_attempts;
+
+        assert_eq!(
+            session.fire_key_repeat().unwrap(),
+            SessionUpdate::unchanged()
+        );
+        assert_eq!(session.backend.request_attempts, requests);
+    }
+
+    #[test]
+    fn mode_change_disables_armed_repeat_target() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let focus = binding_id(&session, "j");
+        let resize = binding_id(&session, "r");
+        session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(focus)],
+            ))
+            .unwrap();
+
+        let changed = session
+            .handle_backend_event(policy_turn(
+                5,
+                vec![BackendPolicyEvent::BindingPressed(resize)],
+            ))
+            .unwrap();
+        let requests = session.backend.request_attempts;
+
+        assert_eq!(changed.repeat_timer, RepeatTimerDirective::Disarm);
+        assert_eq!(
+            session.fire_key_repeat().unwrap(),
+            SessionUpdate::unchanged()
+        );
+        assert_eq!(session.backend.request_attempts, requests);
+    }
+
+    #[test]
+    fn repeat_tick_during_internal_in_flight_is_consumed_without_second_request() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let focus = binding_id(&session, "j");
+        session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(focus)],
+            ))
+            .unwrap();
+        session.fire_key_repeat().unwrap();
+        session
+            .backend
+            .response_results
+            .push_back(Ok(BackendSubmission::Pending));
+        session
+            .handle_backend_event(policy_turn(5, Vec::new()))
+            .unwrap();
+        let requests = session.backend.request_attempts;
+
+        let tick = session.fire_key_repeat().unwrap();
+
+        assert_eq!(tick, SessionUpdate::unchanged());
+        assert_eq!(session.backend.request_attempts, requests);
+        assert!(session.has_active_backend_transaction());
+    }
+
+    #[test]
+    fn repeat_timer_directives_cover_final_press_pending_release_mode_and_quit() {
+        let mut press_release = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut press_release);
+        let focus = binding_id(&press_release, "j");
+        let pressed = press_release
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(focus)],
+            ))
+            .unwrap();
+        assert_eq!(
+            pressed.repeat_timer,
+            RepeatTimerDirective::Arm {
+                delay: Duration::from_millis(KEY_REPEAT_DELAY_MS),
+                interval: Duration::from_millis(1_000 / u64::from(KEY_REPEAT_RATE_HZ)),
+            }
+        );
+        press_release
+            .backend
+            .response_results
+            .push_back(Ok(BackendSubmission::Pending));
+        let pending_release = press_release
+            .handle_backend_event(policy_turn(
+                5,
+                vec![BackendPolicyEvent::BindingReleased(focus)],
+            ))
+            .unwrap();
+        assert_eq!(pending_release.repeat_timer, RepeatTimerDirective::Disarm);
+
+        let mut mode = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut mode);
+        let focus = binding_id(&mode, "j");
+        let resize = binding_id(&mode, "r");
+        mode.handle_backend_event(policy_turn(
+            4,
+            vec![BackendPolicyEvent::BindingPressed(focus)],
+        ))
+        .unwrap();
+        let disabling = mode
+            .handle_backend_event(policy_turn(
+                5,
+                vec![BackendPolicyEvent::BindingPressed(resize)],
+            ))
+            .unwrap();
+        assert_eq!(disabling.repeat_timer, RepeatTimerDirective::Disarm);
+
+        let mut quit_keymap = Keymap::default();
+        quit_keymap
+            .bindings
+            .push(test_binding("x", Action::Quit, Mode::Nav, false));
+        let mut quit = policy_live_session_with_keymap(FakeBackend::new(), quit_keymap);
+        open_two_policy_windows(&mut quit);
+        let focus = binding_id(&quit, "j");
+        let quit_id = binding_id(&quit, "x");
+        quit.handle_backend_event(policy_turn(
+            4,
+            vec![BackendPolicyEvent::BindingPressed(focus)],
+        ))
+        .unwrap();
+        let quitting = quit
+            .handle_backend_event(policy_turn(
+                5,
+                vec![BackendPolicyEvent::BindingPressed(quit_id)],
+            ))
+            .unwrap();
+        assert_eq!(quitting.repeat_timer, RepeatTimerDirective::Disarm);
+        assert!(matches!(
+            quitting.effects.as_slice(),
+            [SessionEffect::QuitPending { .. }]
+        ));
     }
 }
