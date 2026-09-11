@@ -116,6 +116,15 @@ impl SocketEndpoint {
     }
 
     /// Binds and retains the fixed non-listening control endpoint.
+    ///
+    /// # Single-threaded startup requirement
+    ///
+    /// This operation temporarily changes the process-wide umask. The complete
+    /// interval from [`RuntimeDir::prepare_server_endpoint`] through this bind
+    /// and its post-bind verification must run during single-threaded startup.
+    /// Do not start another thread until this method returns.
+    ///
+    /// [`RuntimeDir::prepare_server_endpoint`]: crate::RuntimeDir::prepare_server_endpoint
     pub fn bind(self) -> Result<BoundControlEndpoint, IpcPathError> {
         self.bind_using(&OsBindOperations)
     }
@@ -300,11 +309,6 @@ impl BoundControlEndpoint {
     #[cfg(test)]
     pub(crate) fn lock_fd_for_test(&self) -> BorrowedFd<'_> {
         self.ownership._lock._fd.as_fd()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn bind_address_for_test(&self) -> &SocketAddrUnix {
-        &self.ownership.endpoint.bind_address
     }
 }
 

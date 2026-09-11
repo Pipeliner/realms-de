@@ -206,7 +206,7 @@ NonBlockingLockExclusive. Contention maps to EndpointInUse; other errno remains
 Io. No public fd accessor exists.
 
 Only after the lock is held, stat ctl.sock without following symlinks. Require
-socket type, current euid, and exact mode 0600. Probe through a fresh Unix stream
+socket type, retained daemon euid, and exact mode 0600. Probe through a fresh Unix stream
 socket created atomically NONBLOCK | CLOEXEC. Import socket_error from
 rustix::net::sockopt. Poll POLLOUT for at most 100 ms when required and inspect
 SO_ERROR once. Re-stat all identity/properties immediately before unlinkat.
@@ -355,7 +355,7 @@ Evidence matrix for #218:
 | --- | --- |
 | A1 | runtime_capability_rejects_every_unsafe_input_and_openat2_failure |
 | A2 server half | server_creates_realm_exactly_once_under_scoped_umask |
-| A2a | actual_runtime_procfd_bridge_is_verified_before_mutation; sockaddr_un_overflow_fails_before_mutation_without_fallback |
+| A2a | actual_runtime_procfd_bridge_is_verified_before_mutation; missing_inaccessible_or_mismatched_procfd_fails_before_mutation; sockaddr_un_overflow_fails_before_mutation_without_fallback |
 | A3 | unsafe_realm_and_socket_entries_are_preserved; post_bind_bad_properties_preserve_detected_replacement |
 | A4 | live_listener_is_preserved_and_verified_refusal_is_reclaimed |
 | A5 | linux_stale_probe_completion_table_is_total |

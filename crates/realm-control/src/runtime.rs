@@ -68,6 +68,15 @@ impl RuntimeDir {
     }
 
     /// Prepares the fixed `realm/ctl.sock` server endpoint.
+    ///
+    /// # Single-threaded startup requirement
+    ///
+    /// This operation temporarily changes the process-wide umask. It and the
+    /// subsequent [`SocketEndpoint::bind`] call, including post-bind
+    /// verification, must complete within one single-threaded startup interval.
+    /// Do not start another thread until binding returns.
+    ///
+    /// [`SocketEndpoint::bind`]: crate::SocketEndpoint::bind
     pub fn prepare_server_endpoint(self) -> Result<SocketEndpoint, IpcPathError> {
         self.prepare_server_endpoint_with(&ProcFdRuntimeBridge, SUN_PATH_CAPACITY)
     }

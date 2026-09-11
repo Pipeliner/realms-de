@@ -899,15 +899,22 @@ enum InjectedStat {
 
 enum InjectedVerification {
     Actual,
+    WrongAddress,
     Error(Errno),
     ReplaceWithFileThenError(PathBuf, Errno),
+}
+
+enum InjectedAcceptconn {
+    Actual,
+    True,
+    Error(Errno),
 }
 
 struct InjectedBindOperations {
     bind: InjectedBind,
     stat: InjectedStat,
     getsockname: InjectedVerification,
-    acceptconn_error: Option<Errno>,
+    acceptconn: InjectedAcceptconn,
 }
 
 impl InjectedBindOperations {
@@ -916,7 +923,7 @@ impl InjectedBindOperations {
             bind: InjectedBind::Actual,
             stat: InjectedStat::Actual,
             getsockname: InjectedVerification::Actual,
-            acceptconn_error: None,
+            acceptconn: InjectedAcceptconn::Actual,
         }
     }
 }
@@ -949,6 +956,9 @@ impl crate::endpoint::BindOperations for InjectedBindOperations {
     fn getsockname(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<SocketAddrUnix> {
         match &self.getsockname {
             InjectedVerification::Actual => getsockname(socket)?.try_into(),
+            InjectedVerification::WrongAddress => {
+                SocketAddrUnix::new(Path::new("/tmp/realm-control-wrong-address"))
+            }
             InjectedVerification::Error(error) => Err(*error),
             InjectedVerification::ReplaceWithFileThenError(path, error) => {
                 replace_with_file(path);
@@ -958,9 +968,10 @@ impl crate::endpoint::BindOperations for InjectedBindOperations {
     }
 
     fn socket_acceptconn(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<bool> {
-        match self.acceptconn_error {
-            Some(error) => Err(error),
-            None => socket_acceptconn(socket),
+        match self.acceptconn {
+            InjectedAcceptconn::Actual => socket_acceptconn(socket),
+            InjectedAcceptconn::True => Ok(true),
+            InjectedAcceptconn::Error(error) => Err(error),
         }
     }
 }
@@ -1117,8 +1128,13 @@ fn bound_capability_has_exact_path_fd_and_address_properties() {
     assert!(rustix::io::fcntl_getfd(socket)
         .unwrap()
         .contains(FdFlags::CLOEXEC));
+    let realm_fd = bound.realm_dir().as_fd().as_raw_fd();
+    let expected_address =
+        SocketAddrUnix::new(PathBuf::from(format!("/proc/self/fd/{realm_fd}/ctl.sock"))).unwrap();
+    let display_address = SocketAddrUnix::new(&socket_path).unwrap();
     let actual_address: SocketAddrUnix = getsockname(socket).unwrap().try_into().unwrap();
-    assert_eq!(&actual_address, bound.bind_address_for_test());
+    assert_eq!(actual_address, expected_address);
+    assert_ne!(actual_address, display_address);
     assert!(!socket_acceptconn(socket).unwrap());
 }
 
@@ -1376,10 +1392,42 @@ fn post_bind_verification_failures_use_ownership_safe_cleanup() {
         .unwrap();
     let socket_path = runtime_path.join("realm/ctl.sock");
     let operations = InjectedBindOperations {
-        acceptconn_error: Some(Errno::IO),
+        acceptconn: InjectedAcceptconn::Error(Errno::IO),
         ..InjectedBindOperations::actual()
     };
     assert_io_errno(bind_error(endpoint.bind_with(&operations)), Errno::IO);
+    assert!(!socket_path.exists());
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let operations = InjectedBindOperations {
+        getsockname: InjectedVerification::WrongAddress,
+        ..InjectedBindOperations::actual()
+    };
+    assert!(matches!(
+        bind_error(endpoint.bind_with(&operations)),
+        IpcPathError::UnsafeSocketEntry
+    ));
+    assert!(!socket_path.exists());
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let operations = InjectedBindOperations {
+        acceptconn: InjectedAcceptconn::True,
+        ..InjectedBindOperations::actual()
+    };
+    assert!(matches!(
+        bind_error(endpoint.bind_with(&operations)),
+        IpcPathError::UnsafeSocketEntry
+    ));
     assert!(!socket_path.exists());
 
     let (_temporary, runtime_path) = runtime_fixture();
