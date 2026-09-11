@@ -933,6 +933,102 @@ fn client_subscribe_returns_initial_state_and_yields_shutdown_once() {
     peer.join().unwrap();
 }
 
+/// Catches starting a new two-second budget for InitialState after spending
+/// most of the same Subscribe exchange deadline writing the request.
+#[test]
+fn client_subscribe_write_and_initial_state_share_one_hard_deadline() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    fs::create_dir(runtime_path.join("realm")).unwrap();
+    set_mode(&runtime_path.join("realm"), 0o700);
+    let endpoint = test_runtime_dir(&runtime_path).unwrap().client_endpoint();
+    let base = Instant::now();
+    let operations = TestClientOperations::new(base);
+    operations.push_connect(TestClientConnect::Success);
+    operations.push_receive(TestClientReceive::BytesAfter(
+        realm_core::ipc::encode(&matching_hello())
+            .unwrap()
+            .into_bytes(),
+        Duration::ZERO,
+    ));
+    let client = endpoint
+        .connect_with_test_operations("bar", operations.clone())
+        .unwrap();
+    operations.push_send(TestClientSend::ErrorAfter(
+        Errno::AGAIN,
+        Duration::from_millis(1_500),
+    ));
+    operations.push_poll(TestClientPoll::ReadyAfter(Duration::from_millis(400)));
+    operations.push_receive(TestClientReceive::ErrorAfter(
+        Errno::INTR,
+        Duration::from_millis(100),
+    ));
+
+    assert!(matches!(
+        client.subscribe(),
+        Err(ClientError::Timeout {
+            phase: ClientPhase::InitialState
+        })
+    ));
+    assert_eq!(
+        operations.poll_timeouts(),
+        vec![Some(Duration::from_millis(500))]
+    );
+}
+
+/// Catches consuming complete buffered event B restarting the arrival-time
+/// deadline already fixed for partial event C behind it.
+#[test]
+fn client_complete_buffered_event_does_not_slide_trailing_partial_deadline() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    fs::create_dir(runtime_path.join("realm")).unwrap();
+    set_mode(&runtime_path.join("realm"), 0o700);
+    let endpoint = test_runtime_dir(&runtime_path).unwrap().client_endpoint();
+    let base = Instant::now();
+    let operations = TestClientOperations::new(base);
+    operations.push_connect(TestClientConnect::Success);
+    operations.push_receive(TestClientReceive::BytesAfter(
+        realm_core::ipc::encode(&matching_hello())
+            .unwrap()
+            .into_bytes(),
+        Duration::ZERO,
+    ));
+    let client = endpoint
+        .connect_with_test_operations("bar", operations.clone())
+        .unwrap();
+    let mut buffered = realm_core::ipc::encode(&Event::State(Box::new(protocol_state(1))))
+        .unwrap()
+        .into_bytes();
+    buffered.extend_from_slice(
+        realm_core::ipc::encode(&Event::State(Box::new(protocol_state(2))))
+            .unwrap()
+            .as_bytes(),
+    );
+    buffered.push(b'{');
+    operations.push_receive(TestClientReceive::BytesAfter(buffered, Duration::ZERO));
+    let mut subscription = client.subscribe().unwrap();
+    assert!(matches!(
+        subscription.next(),
+        Some(Ok(Event::State(state))) if state.revision == 1
+    ));
+
+    operations.advance_time(Duration::from_millis(1_500));
+    assert!(matches!(
+        subscription.next(),
+        Some(Ok(Event::State(state))) if state.revision == 2
+    ));
+    operations.advance_time(Duration::from_millis(500));
+    operations.push_receive(TestClientReceive::EofAfter(Duration::ZERO));
+
+    assert!(matches!(
+        subscription.next(),
+        Some(Err(ClientError::Timeout {
+            phase: ClientPhase::SubscriptionEvent
+        }))
+    ));
+}
+
 /// Catches bounding empty subscription idle or sliding the two-second partial
 /// event deadline after the first positive byte.
 #[test]
