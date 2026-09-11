@@ -1,16 +1,18 @@
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use rustix::fs::{
-    flock, fstat, openat2, statat, unlinkat, AtFlags, FileType, FlockOperation, Mode, OFlags,
-    ResolveFlags, Stat,
+    fcntl_getfl, flock, fstat, openat2, statat, unlinkat, AtFlags, FileType, FlockOperation, Mode,
+    OFlags, ResolveFlags, Stat,
 };
 use rustix::io::{fcntl_getfd, Errno, FdFlags};
-use rustix::net::sockopt::socket_error;
-use rustix::net::{connect, socket_with, AddressFamily, SocketAddrUnix, SocketFlags, SocketType};
+use rustix::net::sockopt::{socket_acceptconn, socket_error};
+use rustix::net::{
+    bind, connect, getsockname, socket_with, AddressFamily, SocketAddrUnix, SocketFlags, SocketType,
+};
 
-use crate::sys::CONTROL_SOCKET;
+use crate::sys::{ScopedUmask, CONTROL_SOCKET};
 use crate::{IpcPathError, RealmDir};
 
 const REQUIRED_REALM_MODE: u32 = 0o700;
@@ -20,7 +22,7 @@ const LOCK_OPEN_FLAGS: OFlags = OFlags::RDONLY
     .union(OFlags::CLOEXEC);
 const LOCK_RESOLVE_FLAGS: ResolveFlags =
     ResolveFlags::NO_SYMLINKS.union(ResolveFlags::NO_MAGICLINKS);
-const PROBE_SOCKET_FLAGS: SocketFlags = SocketFlags::NONBLOCK.union(SocketFlags::CLOEXEC);
+const SOCKET_FLAGS: SocketFlags = SocketFlags::NONBLOCK.union(SocketFlags::CLOEXEC);
 const STALE_POLL_TIMEOUT: Timespec = Timespec {
     tv_sec: 0,
     tv_nsec: 100_000_000,
@@ -49,9 +51,24 @@ pub(crate) struct SocketIdentity {
 }
 
 /// A private open-file description retaining singleton endpoint ownership.
-#[allow(dead_code)]
 pub(crate) struct EndpointLock {
-    fd: OwnedFd,
+    _fd: OwnedFd,
+}
+
+pub(crate) trait BindOperations {
+    fn bind(&self, socket: BorrowedFd<'_>, address: &SocketAddrUnix) -> rustix::io::Result<()>;
+    fn post_bind_stat(&self, realm_dir: BorrowedFd<'_>) -> rustix::io::Result<Stat>;
+    fn getsockname(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<SocketAddrUnix>;
+    fn socket_acceptconn(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<bool>;
+}
+
+struct OsBindOperations;
+
+struct EndpointOwnership {
+    endpoint: SocketEndpoint,
+    socket: Option<OwnedFd>,
+    identity: SocketIdentity,
+    _lock: EndpointLock,
 }
 
 /// The exact fixed control-socket descendant and its retained realm capability.
@@ -60,6 +77,11 @@ pub struct SocketEndpoint {
     realm_dir: RealmDir,
     #[allow(dead_code)]
     bind_address: SocketAddrUnix,
+}
+
+/// A retained, verified control endpoint which has not started listening.
+pub struct BoundControlEndpoint {
+    ownership: EndpointOwnership,
 }
 
 impl SocketEndpoint {
@@ -79,6 +101,66 @@ impl SocketEndpoint {
     /// Borrows the retained, validated realm directory capability.
     pub fn realm_dir(&self) -> &RealmDir {
         &self.realm_dir
+    }
+
+    /// Binds and retains the fixed non-listening control endpoint.
+    pub fn bind(self) -> Result<BoundControlEndpoint, IpcPathError> {
+        self.bind_using(&OsBindOperations)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bind_with<O: BindOperations>(
+        self,
+        operations: &O,
+    ) -> Result<BoundControlEndpoint, IpcPathError> {
+        self.bind_using(operations)
+    }
+
+    fn bind_using<O: BindOperations>(
+        self,
+        operations: &O,
+    ) -> Result<BoundControlEndpoint, IpcPathError> {
+        let endpoint_lock = self.acquire_lock_and_reclaim()?;
+        let socket = socket_with(AddressFamily::UNIX, SocketType::STREAM, SOCKET_FLAGS, None)
+            .map_err(IpcPathError::from)?;
+
+        {
+            let _umask = ScopedUmask::new(Mode::from_raw_mode(0o177));
+            operations
+                .bind(socket.as_fd(), &self.bind_address)
+                .map_err(IpcPathError::from)?;
+        }
+
+        let path_stat = operations
+            .post_bind_stat(self.realm_dir.as_fd())
+            .map_err(IpcPathError::from)?;
+        let identity = self.validate_socket_stat(&path_stat)?;
+        let ownership = EndpointOwnership {
+            endpoint: self,
+            socket: Some(socket),
+            identity,
+            _lock: endpoint_lock,
+        };
+
+        let socket = ownership.socket_fd();
+        let status_flags = fcntl_getfl(socket).map_err(IpcPathError::from)?;
+        let descriptor_flags = fcntl_getfd(socket).map_err(IpcPathError::from)?;
+        if !status_flags.contains(OFlags::NONBLOCK) || !descriptor_flags.contains(FdFlags::CLOEXEC)
+        {
+            return Err(IpcPathError::UnsafeSocketEntry);
+        }
+        let actual_address = operations.getsockname(socket).map_err(IpcPathError::from)?;
+        if actual_address != ownership.endpoint.bind_address {
+            return Err(IpcPathError::UnsafeSocketEntry);
+        }
+        let accepting = operations
+            .socket_acceptconn(socket)
+            .map_err(IpcPathError::from)?;
+        if accepting {
+            return Err(IpcPathError::UnsafeSocketEntry);
+        }
+
+        Ok(BoundControlEndpoint { ownership })
     }
 
     #[allow(dead_code)]
@@ -158,6 +240,85 @@ impl SocketEndpoint {
     }
 }
 
+impl BoundControlEndpoint {
+    /// Borrows the exact fixed endpoint retained by this capability.
+    pub fn endpoint(&self) -> &SocketEndpoint {
+        &self.ownership.endpoint
+    }
+
+    /// Borrows the retained, validated realm directory capability.
+    pub fn realm_dir(&self) -> &RealmDir {
+        self.endpoint().realm_dir()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn socket_fd_for_test(&self) -> BorrowedFd<'_> {
+        self.ownership.socket_fd()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lock_fd_for_test(&self) -> BorrowedFd<'_> {
+        self.ownership._lock._fd.as_fd()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bind_address_for_test(&self) -> &SocketAddrUnix {
+        &self.ownership.endpoint.bind_address
+    }
+}
+
+impl BindOperations for OsBindOperations {
+    fn bind(&self, socket: BorrowedFd<'_>, address: &SocketAddrUnix) -> rustix::io::Result<()> {
+        bind(socket, address)
+    }
+
+    fn post_bind_stat(&self, realm_dir: BorrowedFd<'_>) -> rustix::io::Result<Stat> {
+        statat(realm_dir, CONTROL_SOCKET, AtFlags::SYMLINK_NOFOLLOW)
+    }
+
+    fn getsockname(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<SocketAddrUnix> {
+        getsockname(socket)?.try_into()
+    }
+
+    fn socket_acceptconn(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<bool> {
+        socket_acceptconn(socket)
+    }
+}
+
+impl EndpointOwnership {
+    fn socket_fd(&self) -> BorrowedFd<'_> {
+        self.socket
+            .as_ref()
+            .expect("endpoint socket is retained until ownership cleanup")
+            .as_fd()
+    }
+}
+
+impl Drop for EndpointOwnership {
+    fn drop(&mut self) {
+        drop(self.socket.take());
+
+        let Ok(stat) = statat(
+            self.endpoint.realm_dir.as_fd(),
+            CONTROL_SOCKET,
+            AtFlags::SYMLINK_NOFOLLOW,
+        ) else {
+            return;
+        };
+        let Ok(identity) = self.endpoint.validate_socket_stat(&stat) else {
+            return;
+        };
+        if identity != self.identity {
+            return;
+        }
+        let _ = unlinkat(
+            self.endpoint.realm_dir.as_fd(),
+            CONTROL_SOCKET,
+            AtFlags::empty(),
+        );
+    }
+}
+
 impl EndpointLock {
     fn acquire(realm_dir: &RealmDir, retained_euid: u32) -> Result<Self, IpcPathError> {
         let fd = openat2(
@@ -174,7 +335,7 @@ impl EndpointLock {
         validate_lock_stat(&expected, &actual, retained_euid, flags)?;
 
         match flock(fd.as_fd(), FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => Ok(Self { fd }),
+            Ok(()) => Ok(Self { _fd: fd }),
             Err(Errno::AGAIN) => Err(IpcPathError::EndpointInUse),
             Err(error) => Err(IpcPathError::from(error)),
         }
@@ -236,13 +397,8 @@ pub(crate) fn classify_poll_completion(completion: PollCompletion) -> ProbeDecis
 }
 
 fn probe_stale(address: &SocketAddrUnix) -> Result<ProbeDecision, IpcPathError> {
-    let socket = socket_with(
-        AddressFamily::UNIX,
-        SocketType::STREAM,
-        PROBE_SOCKET_FLAGS,
-        None,
-    )
-    .map_err(IpcPathError::from)?;
+    let socket = socket_with(AddressFamily::UNIX, SocketType::STREAM, SOCKET_FLAGS, None)
+        .map_err(IpcPathError::from)?;
     match classify_initial_probe(connect(socket.as_fd(), address)) {
         ProbeDecision::Poll => {
             let mut poll_fds = [PollFd::new(&socket, PollFlags::OUT)];

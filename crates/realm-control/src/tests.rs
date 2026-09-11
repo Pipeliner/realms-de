@@ -1,19 +1,27 @@
 use std::ffi::OsString;
 use std::fs;
-use std::os::fd::{BorrowedFd, OwnedFd};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::process::{Child, Command, Stdio};
+use std::sync::{mpsc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use rustix::fs::{
-    fstat, openat2, statat, AtFlags, FileType, Mode, OFlags, ResolveFlags, Stat, CWD,
+    fcntl_getfl, fstat, openat2, statat, AtFlags, FileType, Mode, OFlags, ResolveFlags, Stat, CWD,
 };
 use rustix::io::{Errno, FdFlags};
+use rustix::net::sockopt::socket_acceptconn;
+use rustix::net::{bind as bind_socket, getsockname, SocketAddrUnix};
 use rustix::process::{geteuid, umask};
 
-use crate::{production_runtime_dir, test_runtime_dir, IpcPathError, RuntimeDir, SocketEndpoint};
+use crate::{
+    production_runtime_dir, test_runtime_dir, BoundControlEndpoint, IpcPathError, RuntimeDir,
+    SocketEndpoint,
+};
 
 fn process_test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -875,4 +883,481 @@ fn endpoint_validation_uses_retained_realm_euid() {
         IpcPathError::UnsafeRealmDirectory
     ));
     assert_eq!(path_identity(&socket_path), before);
+}
+
+enum InjectedBind {
+    Actual,
+    Error(Errno),
+}
+
+enum InjectedStat {
+    Actual,
+    Error(Errno),
+    ReplaceWithFile(PathBuf),
+}
+
+enum InjectedVerification {
+    Actual,
+    Error(Errno),
+    ReplaceWithFileThenError(PathBuf, Errno),
+}
+
+struct InjectedBindOperations {
+    bind: InjectedBind,
+    stat: InjectedStat,
+    getsockname: InjectedVerification,
+    acceptconn_error: Option<Errno>,
+}
+
+impl InjectedBindOperations {
+    fn actual() -> Self {
+        Self {
+            bind: InjectedBind::Actual,
+            stat: InjectedStat::Actual,
+            getsockname: InjectedVerification::Actual,
+            acceptconn_error: None,
+        }
+    }
+}
+
+fn replace_with_file(path: &Path) {
+    fs::remove_file(path).unwrap();
+    fs::write(path, b"replacement must survive").unwrap();
+    set_mode(path, 0o600);
+}
+
+impl crate::endpoint::BindOperations for InjectedBindOperations {
+    fn bind(&self, socket: BorrowedFd<'_>, address: &SocketAddrUnix) -> rustix::io::Result<()> {
+        match self.bind {
+            InjectedBind::Actual => bind_socket(socket, address),
+            InjectedBind::Error(error) => Err(error),
+        }
+    }
+
+    fn post_bind_stat(&self, realm_dir: BorrowedFd<'_>) -> rustix::io::Result<Stat> {
+        match &self.stat {
+            InjectedStat::Actual => statat(realm_dir, "ctl.sock", AtFlags::SYMLINK_NOFOLLOW),
+            InjectedStat::Error(error) => Err(*error),
+            InjectedStat::ReplaceWithFile(path) => {
+                replace_with_file(path);
+                statat(realm_dir, "ctl.sock", AtFlags::SYMLINK_NOFOLLOW)
+            }
+        }
+    }
+
+    fn getsockname(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<SocketAddrUnix> {
+        match &self.getsockname {
+            InjectedVerification::Actual => getsockname(socket)?.try_into(),
+            InjectedVerification::Error(error) => Err(*error),
+            InjectedVerification::ReplaceWithFileThenError(path, error) => {
+                replace_with_file(path);
+                Err(*error)
+            }
+        }
+    }
+
+    fn socket_acceptconn(&self, socket: BorrowedFd<'_>) -> rustix::io::Result<bool> {
+        match self.acceptconn_error {
+            Some(error) => Err(error),
+            None => socket_acceptconn(socket),
+        }
+    }
+}
+
+fn bind_error(result: Result<BoundControlEndpoint, IpcPathError>) -> IpcPathError {
+    match result {
+        Err(error) => error,
+        Ok(_) => panic!("expected bind to fail"),
+    }
+}
+
+fn assert_io_errno(error: IpcPathError, expected: Errno) {
+    match error {
+        IpcPathError::Io(error) => {
+            assert_eq!(error.raw_os_error(), Some(expected.raw_os_error()));
+        }
+        other => panic!("expected Io({expected:?}), got {other:?}"),
+    }
+}
+
+/// Catches a regression where the singleton lock is released before the
+/// non-listening bound capability has completed its ownership lifetime.
+#[test]
+fn singleton_lock_protects_the_prelisten_state() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    let first = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let identity = path_identity(&socket_path);
+
+    let second = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    assert!(matches!(
+        bind_error(second.bind()),
+        IpcPathError::EndpointInUse
+    ));
+    assert_eq!(path_identity(&socket_path), identity);
+    drop(first);
+}
+
+/// Catches regressions that bind through the display path, omit either atomic
+/// fd flag, accept the wrong pathname identity, or listen before activation.
+#[test]
+fn bound_capability_has_exact_path_fd_and_address_properties() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    let bound = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let display_stat = fs::symlink_metadata(&socket_path).unwrap();
+    let relative_stat = statat(
+        bound.realm_dir().as_fd(),
+        "ctl.sock",
+        AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .unwrap();
+
+    assert_eq!(bound.endpoint().path(), socket_path.as_path());
+    assert_eq!(
+        bound.realm_dir().as_fd().as_raw_fd(),
+        bound.endpoint().realm_dir().as_fd().as_raw_fd()
+    );
+    assert_eq!(
+        FileType::from_raw_mode(display_stat.mode()),
+        FileType::Socket
+    );
+    assert_eq!(display_stat.uid(), geteuid().as_raw());
+    assert_eq!(display_stat.mode() & 0o777, 0o600);
+    assert_eq!(display_stat.dev(), relative_stat.st_dev);
+    assert_eq!(display_stat.ino(), relative_stat.st_ino);
+
+    let socket = bound.socket_fd_for_test();
+    assert!(fcntl_getfl(socket).unwrap().contains(OFlags::NONBLOCK));
+    assert!(rustix::io::fcntl_getfd(socket)
+        .unwrap()
+        .contains(FdFlags::CLOEXEC));
+    let actual_address: SocketAddrUnix = getsockname(socket).unwrap().try_into().unwrap();
+    assert_eq!(&actual_address, bound.bind_address_for_test());
+    assert!(!socket_acceptconn(socket).unwrap());
+}
+
+/// Catches a regression where a successfully read unsafe post-bind entry is
+/// cleaned up despite being a detected replacement rather than owned state.
+#[test]
+fn post_bind_bad_properties_preserve_detected_replacement() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let operations = InjectedBindOperations {
+        stat: InjectedStat::ReplaceWithFile(socket_path.clone()),
+        ..InjectedBindOperations::actual()
+    };
+
+    assert!(matches!(
+        bind_error(endpoint.bind_with(&operations)),
+        IpcPathError::UnsafeSocketEntry
+    ));
+    assert_eq!(fs::read(&socket_path).unwrap(), b"replacement must survive");
+    assert_eq!(
+        fs::symlink_metadata(&socket_path).unwrap().mode() & 0o777,
+        0o600
+    );
+}
+
+/// Catches a regression where a post-bind stat syscall error is collapsed or
+/// authorizes cleanup of a pathname whose identity was never retained.
+#[test]
+fn post_bind_stat_error_preserves_errno_and_pathname() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let operations = InjectedBindOperations {
+        stat: InjectedStat::Error(Errno::IO),
+        ..InjectedBindOperations::actual()
+    };
+
+    assert_io_errno(bind_error(endpoint.bind_with(&operations)), Errno::IO);
+    let metadata = fs::symlink_metadata(&socket_path).unwrap();
+    assert_eq!(FileType::from_raw_mode(metadata.mode()), FileType::Socket);
+    assert_eq!(metadata.mode() & 0o777, 0o600);
+}
+
+/// Catches a regression where the bind-specific 0177 umask leaks on either
+/// the successful path or an injected bind syscall error.
+#[test]
+fn bind_scoped_umask_restores_after_success_and_error() {
+    let _lock = process_test_lock();
+    let (_successful_temporary, successful_runtime_path) = runtime_fixture();
+    let (_error_temporary, error_runtime_path) = runtime_fixture();
+    let _restore = ProcessUmaskRestore::replace(0o777);
+
+    let bound = test_runtime_dir(&successful_runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap();
+    assert_eq!(current_umask(), 0o777);
+    assert_eq!(
+        fs::symlink_metadata(successful_runtime_path.join("realm/ctl.sock"))
+            .unwrap()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    drop(bound);
+
+    let endpoint = test_runtime_dir(&error_runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let operations = InjectedBindOperations {
+        bind: InjectedBind::Error(Errno::IO),
+        ..InjectedBindOperations::actual()
+    };
+    assert_io_errno(bind_error(endpoint.bind_with(&operations)), Errno::IO);
+    assert_eq!(current_umask(), 0o777);
+    assert!(!error_runtime_path.join("realm/ctl.sock").exists());
+}
+
+/// Catches regressions where failures after ownership construction either
+/// leak the owned entry or delete a replacement detected during cleanup.
+#[test]
+fn post_bind_verification_failures_use_ownership_safe_cleanup() {
+    let _lock = process_test_lock();
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let operations = InjectedBindOperations {
+        getsockname: InjectedVerification::Error(Errno::IO),
+        ..InjectedBindOperations::actual()
+    };
+    assert_io_errno(bind_error(endpoint.bind_with(&operations)), Errno::IO);
+    assert!(!socket_path.exists());
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let operations = InjectedBindOperations {
+        acceptconn_error: Some(Errno::IO),
+        ..InjectedBindOperations::actual()
+    };
+    assert_io_errno(bind_error(endpoint.bind_with(&operations)), Errno::IO);
+    assert!(!socket_path.exists());
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let endpoint = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let operations = InjectedBindOperations {
+        getsockname: InjectedVerification::ReplaceWithFileThenError(socket_path.clone(), Errno::IO),
+        ..InjectedBindOperations::actual()
+    };
+    assert_io_errno(bind_error(endpoint.bind_with(&operations)), Errno::IO);
+    assert_eq!(fs::read(&socket_path).unwrap(), b"replacement must survive");
+}
+
+/// Catches regressions where Drop leaks an unchanged entry, leaves the socket
+/// fd open, or removes a matching-property replacement with another identity.
+#[test]
+fn bound_drop_closes_and_removes_only_matching_identity() {
+    let _lock = process_test_lock();
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let bound = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let socket_fd_path = PathBuf::from(format!(
+        "/proc/self/fd/{}",
+        bound.socket_fd_for_test().as_raw_fd()
+    ));
+    assert!(socket_fd_path.exists());
+    drop(bound);
+    assert!(!socket_fd_path.exists());
+    assert!(!socket_path.exists());
+
+    let (_temporary, runtime_path) = runtime_fixture();
+    let bound = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap();
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let replacement_path = runtime_path.join("realm/replacement.sock");
+    let _replacement = bind_control_listener(&replacement_path, 0o600);
+    fs::remove_file(&socket_path).unwrap();
+    fs::rename(&replacement_path, &socket_path).unwrap();
+    let replacement_identity = path_identity(&socket_path);
+
+    drop(bound);
+    assert_eq!(path_identity(&socket_path), replacement_identity);
+}
+
+fn kill_and_reap(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn wait_for_exit_or_kill(child: &mut Child, timeout: Duration) -> std::process::ExitStatus {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            kill_and_reap(child);
+            panic!("exec helper did not exit within {timeout:?}");
+        }
+        std::thread::yield_now();
+    }
+}
+
+/// Catches a regression where the private independent singleton-lock fd loses
+/// CLOEXEC and remains locked by a long-lived exec-launched child.
+#[test]
+fn singleton_lock_fd_is_private_directory_cloexec_and_not_inherited_across_exec() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path) = runtime_fixture();
+    let bound = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap();
+    let lock_fd = bound.lock_fd_for_test();
+    let lock_stat = fstat(lock_fd).unwrap();
+    let realm_stat = fstat(bound.realm_dir().as_fd()).unwrap();
+    assert_ne!(lock_fd.as_raw_fd(), bound.realm_dir().as_fd().as_raw_fd());
+    assert_eq!(
+        (lock_stat.st_dev, lock_stat.st_ino),
+        (realm_stat.st_dev, realm_stat.st_ino)
+    );
+    assert_eq!(
+        FileType::from_raw_mode(lock_stat.st_mode),
+        FileType::Directory
+    );
+    assert!(rustix::io::fcntl_getfd(lock_fd)
+        .unwrap()
+        .contains(FdFlags::CLOEXEC));
+
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--ignored",
+            "--exact",
+            "tests::singleton_lock_exec_child",
+            "--nocapture",
+        ])
+        .env("REALM_CONTROL_LOCK_EXEC_CHILD", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    let readiness = std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut observed = String::new();
+        let mut ready_tx = Some(ready_tx);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => {
+                    if let Some(ready_tx) = ready_tx.take() {
+                        let _ = ready_tx.send(Err(observed.clone()));
+                    }
+                    return observed;
+                }
+                Ok(_) => {
+                    observed.push_str(&line);
+                    if line.contains("REALM_CONTROL_LOCK_EXEC_READY") {
+                        if let Some(ready_tx) = ready_tx.take() {
+                            let _ = ready_tx.send(Ok(observed.clone()));
+                        }
+                    }
+                }
+                Err(error) => {
+                    let diagnostic = format!("{observed}\nread error: {error}");
+                    if let Some(ready_tx) = ready_tx.take() {
+                        let _ = ready_tx.send(Err(diagnostic.clone()));
+                    }
+                    return diagnostic;
+                }
+            }
+        }
+    });
+
+    match ready_rx.recv_timeout(Duration::from_secs(3)) {
+        Ok(Ok(_)) => {}
+        Ok(Err(output)) => {
+            kill_and_reap(&mut child);
+            let _ = readiness.join();
+            panic!("exec helper exited before readiness: {output}");
+        }
+        Err(error) => {
+            kill_and_reap(&mut child);
+            let _ = readiness.join();
+            panic!("timed out waiting for exec helper readiness: {error}");
+        }
+    }
+
+    drop(bound);
+    let second = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap();
+    drop(child.stdin.take());
+    let status = wait_for_exit_or_kill(&mut child, Duration::from_secs(3));
+    let output = readiness.join().unwrap();
+    assert!(status.success(), "exec helper failed: {status}");
+    assert!(output.contains("REALM_CONTROL_LOCK_EXEC_READY"));
+    drop(second);
+}
+
+#[test]
+#[ignore = "exec helper for singleton-lock CLOEXEC coverage"]
+fn singleton_lock_exec_child() {
+    let _lock = process_test_lock();
+    if std::env::var_os("REALM_CONTROL_LOCK_EXEC_CHILD").is_none() {
+        return;
+    }
+    println!("REALM_CONTROL_LOCK_EXEC_READY");
+    std::io::stdout().flush().unwrap();
+    let mut input = Vec::new();
+    std::io::stdin().read_to_end(&mut input).unwrap();
 }
