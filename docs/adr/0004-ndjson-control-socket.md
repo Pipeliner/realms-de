@@ -1,6 +1,7 @@
 # ADR 0004 — Newline-delimited JSON over a unix socket
 
-- **Status:** Accepted (2026-08-26; IPC security amendment accepted 2026-08-28)
+- **Status:** Accepted (2026-08-26; IPC security amendment accepted 2026-08-28;
+  transport-liveness correction 2026-09-11)
 - **Deciders:** realm maintainers
 - **Supersedes / Superseded by:** —
 
@@ -11,9 +12,16 @@ properties, in this order of importance:
 
 1. **Scriptable by hand.** realm is a keyboard-first, power-user desktop. A user
    who wants to bind something we did not think of should be able to do it from
-   a shell script, today, without a library. `echo '{"cmd":"switch-orbit",
-   "arg":3}' | socat - $XDG_RUNTIME_DIR/realm/ctl.sock` is the bar we are aiming
-   at.
+   a shell script, today, without a library. The hand-written stream contains a
+   matching Hello followed by one request, with an LF after each JSON value:
+
+   ```text
+   {"cmd":"hello","arg":{"version":1,"client":"shell"}}
+   {"cmd":"switch-orbit","arg":3}
+   ```
+
+   Sending those two frames to `$XDG_RUNTIME_DIR/realm/ctl.sock` with `socat`
+   is the bar we are aiming at.
 2. **Unmisreadable framing.** A half-written frame must never parse as a
    complete one. `docs/PITFALLS.md` lists version skew between components as a
    packaging pitfall; a protocol that silently misinterprets a truncated or
@@ -70,8 +78,9 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 - Before reading any frame, the listener obtains Linux `SO_PEERCRED`. It admits
   only peers whose uid equals the daemon's effective uid. A missing credential,
   credential lookup failure, or different uid closes that connection without a
-  protocol reply and without delaying healthy peers. Directory permissions are
-  defence in depth, not a substitute for peer admission.
+  protocol reply. Directory permissions are defence in depth, not a substitute
+  for peer admission. The 64-slot cap bounds memory and per-turn work but does
+  not promise admission while 64 trusted same-euid peers hold every slot.
 
 ### Connection protocol and liveness
 
@@ -86,17 +95,25 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 - A ready client may issue ordinary requests. `Subscribe` is a terminal request:
   after a successful Hello it changes the connection into a subscriber, emits
   an immediate `Event::State` snapshot, and accepts no further client frames.
-  EOF or a forbidden subsequent frame removes only that subscriber.
+  Positive subsequent input removes only that subscriber. A clean read-half EOF
+  is allowed, so a shell may half-close after Hello plus one request and a
+  subscriber may stop writing while continuing to receive events.
 - The complete state machine, frame/error classification, capacity accounting,
-  queue classes, nonblocking write deadlines, and fake-clock/credential test
-  seams are defined by SPEC 0007. They are intentionally a state machine: NDJSON
+  queue classes, nonblocking write deadlines, caller-chosen test instants, and
+  test-only credential injection are defined by SPEC 0007. They are
+  intentionally a state machine: NDJSON
   removes length-prefix state, not connection, handshake, queue, or deadline
-  state. These limits are liveness guarantees: a local peer cannot turn
-  control-socket I/O into a window-management stall.
+  state. SPEC 0007 uses explicit `Instant` values rather than a production clock
+  trait, consumes the active listener into a server with stable poll tokens,
+  and limits one service quantum to one ready token and at most one socket-I/O
+  syscall. These are bounded-work guarantees for the transport; SPEC 0003/#38,
+  the real River backend in #40, and #65 own the combined-loop
+  key-to-`manage_finish` guarantee.
 
 - One JSON value per line. `ipc::encode` appends the newline and
+  enforces SPEC 0007's total-frame limit while serializing;
   `ipc::tests::requests_round_trip_through_a_frame` asserts every frame contains
-  exactly one.
+  exactly one newline.
 - `Request`, `Response` and `Event` are adjacently-tagged serde enums
   (`tag = "cmd", content = "arg"` and so on), which keeps frames readable and
   keeps the tag stable when a variant gains fields.
@@ -133,11 +150,12 @@ One newline-delimited JSON stream over a `SOCK_STREAM` unix socket.
 
 ### Bad
 
-- JSON is not free. Every state push allocates and formats. It is well inside
-  budget at current sizes, but it puts a ceiling on how large `RealmState` may
-  grow, and nothing enforces that ceiling today.
+- JSON is not free. Every state push formats a frame, and SPEC 0007 enforces a
+  65,536-byte total-frame ceiling with bounded encoding. An oversized generated
+  response or event therefore closes only that peer with a stable diagnostic.
 - No service activation. Something must start the session before a client
-  connects, and clients need a connect-retry loop for the startup race.
+  connects. `ClientEndpoint` makes one bounded attempt; `realmctl` owns the
+  exact six-attempt startup schedule for the race.
 - We are not a D-Bus citizen, so a third-party panel or a desktop integration
   cannot talk to realm without implementing our protocol.
 - A JSON value containing a literal newline inside a string is escaped by serde,
@@ -169,15 +187,15 @@ someone wanting to drive orbits from an existing panel or a global hotkey daemon
 - `ipc::tests::responses_round_trip`.
 - `ipc::tests::unknown_frames_are_an_error_not_a_panic` — an unrecognised
   command or malformed input must be a decode error.
-- *Required before M2 implementation:* SPEC 0007 A1–A12's `realm_control`
+- *Required before M2 implementation:* SPEC 0007 A1–A11's `realm_control`
   endpoint capability, singleton ownership, stale-probe, activation, cleanup,
-  client-retry, compile-fail, and readiness tests.
-- *Required before M2 implementation:* `control_socket::tests::rejects_foreign_uid_before_read`,
-  and `control_socket::tests::rejects_missing_peer_credentials_before_read`.
+  single-attempt client, compile-fail, and retry-driver tests; A12 belongs to
+  the #38 session loop.
+- *Required before M2 implementation:* SPEC 0007 A13–A16's admission,
+  state-machine, half-close, stable-token, frame-bound, deadline, retry, and
+  subscriber-coalescing tests.
 - *Planned (M2):* a CI job that drives a live session end to end with `socat`
   and `jq` only, so the scriptability claim is tested rather than asserted.
-- *Required before M2 implementation:* `control_socket::tests::protocol_state_machine_is_total`,
-  `control_socket::tests::connection_and_queue_limits_preserve_admitted_peers`,
-  `control_socket::tests::all_write_classes_have_bounded_nonblocking_drain`,
-  `control_socket::tests::stalled_peer_preserves_key_path`, and
-  `control_socket::tests::linux_key_path_budget_with_full_socket_buffer`.
+- *Required before M2 implementation:* SPEC 0007 A17's #41 bounded-transport
+  test, the #38 combined-loop ordering test, and the #40/#65 real Linux
+  key-to-`manage_finish` budget test.

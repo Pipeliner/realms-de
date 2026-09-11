@@ -1,6 +1,7 @@
 # SPEC 0003 — realm-session
 
-- **Status:** Accepted (2026-09-10)
+- **Status:** Accepted (2026-09-10; control-transport integration correction
+  2026-09-11)
 - **Milestone:** M2
 - **Issue:** [#36](https://github.com/Pipeliner/realms-de/issues/36)
 - **Decisions:** [ADR 0001](../adr/0001-ledger-as-single-source-of-truth.md),
@@ -140,18 +141,19 @@ refuses to start without `WAYLAND_DISPLAY` (already enforced by the unit's
 7. **Activate, verify, then report ready.** Consume the one
    `BoundControlEndpoint` to call `listen(..., 64)` exactly once. Continue only
    with the returned `ActiveControlListener`, which proves
-   `SO_ACCEPTCONN == true`; activation or verification failure is fatal and
-   sends no readiness. Only then call `sd_notify(READY=1)` and enter the normal
-   poll loop (§4). `realm-wm.service` switches from `Type=exec` to
+   `SO_ACCEPTCONN == true`, then consume that listener into SPEC 0007's
+   `ControlServer`; activation or verification failure is fatal and sends no
+   readiness. Only then call `sd_notify(READY=1)` and enter
+   the normal poll loop (§4). `realm-wm.service` switches from `Type=exec` to
    `Type=notify`, so `realm-bar.service` can order after a session that answers.
 
 The capability-order invariant is therefore exact: prepare/bind endpoint;
 recover and project; transition to `Live`; consume the bound capability to
-activate; verify the listener; only then send `READY=1`. No error path may
-reorder or skip one of these boundaries.
+activate; verify the listener; consume it into `ControlServer`; only then send
+`READY=1`. No error path may reorder or skip one of these boundaries.
 
 **Shutdown.** `Request::Quit` and `Action::Quit` mean the user asked to log out.
-Broadcast `Event::Shutdown` to every subscriber, flush, then make
+Begin SPEC 0007's hard-bounded 100 ms subscriber shutdown drain, then make
 `river_window_manager_v1::exit_session`, which is documented as being for
 user-requested logout only *(verified)*. The compositor exit makes the entry
 freeze admission and stop `realm-session.target`; that target stop is what
@@ -440,6 +442,13 @@ shared mutable state.**
   drops the oldest pending duplicate of the same job.
 - **No locks.** A single owner means the input path cannot contend, which
   matters because a lock held for 40 ms is a stall nobody sees in review.
+
+The #38 combined loop services pending backend repair and backend work first,
+then at most one SPEC 0007 control operation, then performs a zero-time backend
+readiness check before another control operation. It captures one
+`std::time::Instant` per turn for every transport call. The transport never
+drains a ready fd to `EAGAIN`, and the MVP adds no token bucket or audit-only
+rate limiter.
 
 *Why not an async runtime.* It would give the same non-blocking behaviour, and
 is a defensible alternative. It loses on two counts. First, the committed seam
@@ -783,6 +792,12 @@ connection states, malformed frames, queues, replies, deadlines, and test
 seams. This section adds only the integration rule below; it must not be read
 as a second transport state machine.
 
+The #41 transport exposes every decoded non-Hello request unchanged as
+`ControlAction::Request`; #38 owns the authoritative adapter and the combined
+poll loop. For `Request::GetState` and the initial Subscribe snapshot, that
+adapter uses the last visible `Session::state()` accepted for publication.
+`SessionUpdate.state == None` is never published.
+
 **Requests.** A mutating `Request` is validated and staged as one typed desired
 operation, after which the session makes `manage_dirty`. The connection retains
 that single decoded request and reads no second request, as required by SPEC
@@ -805,27 +820,31 @@ this specification does not promise compatibility for that retired message. Deco
 those in SPEC 0007's state/error table; they are not kept open by default merely
 because a decoder can return an error.
 
-**Subscribers.** `Request::Subscribe` turns a connection into a subscriber. Its
-first frame is an immediate `Event::State` snapshot, so a restarted bar draws at
-once without a round trip; thereafter it gets exactly one `Event::State` per
-change (§8).
+**Subscribers.** The #38 adapter completes `Request::Subscribe` with the last
+visible accepted `Session::state()`. The transport makes that immediate
+`Event::State` the subscriber's current frame, so a restarted bar draws at once
+without a round trip; thereafter the subscriber converges on the latest
+published state (§8). A clean read-half EOF is allowed and does not unsubscribe
+it; any positive input byte closes it.
 
 **Back-pressure, and how a slow subscriber does not become a session failure.**
-`Event::State` is a *snapshot*, which makes the correct queue depth one:
+`Event::State` is a *snapshot*. The bounded transport representation is one
+current cursor plus one replaceable latest state:
 
-- Each subscriber has a single pending-frame slot plus a cursor into a
-  partially written frame.
-- On a new state, if a partial write is in flight it is finished first and the
-  new frame replaces whatever is in the pending slot; otherwise the new frame
-  goes straight to the slot. A subscriber that reads slowly therefore skips
-  intermediate states and always converges on the latest one. It never queues.
+- The immediate initial snapshot is current even before its first byte and is
+  never replaced. Once state A is current, publishing B then C delivers A then
+  C whether or not A has started; B is replaced in the latest slot.
+- When current completes, the replaceable latest state becomes current. A slow
+  subscriber skips intermediate states and converges without an unbounded
+  queue.
 - Writes are non-blocking. `EAGAIN` leaves the cursor where it is and waits for
   the fd to become writable in the next `poll`.
-- If a subscriber's cursor has not advanced for `SUBSCRIBER_STALL_LIMIT`
-  (2 seconds), it is closed with a log line naming the client from its `Hello`.
-  A client that cannot read for two seconds is wedged, and the desktop does not
-  wait for it.
-- `Event::Shutdown` uses SPEC 0007's 100 ms total bounded drain and the session
+- Subscriber output has SPEC 0007's two-second no-progress deadline from queue
+  time, reset only by a positive send. A client that makes no progress for two
+  seconds closes without delaying another peer or backend work.
+- Shutdown discards the replaceable latest state. It replaces an unstarted
+  current frame with `Event::Shutdown`, but if current is partial it finishes
+  only that frame. The whole drain has one hard 100 ms deadline and the session
   exits regardless.
 
 ### 8. State derivation
@@ -849,8 +868,10 @@ compares it with the last broadcast one using `RealmState::renders_same_as`,
 which ignores `revision` by construction. If they render the same, **nothing
 happens**: no increment, no encode, no socket write, no wake-up for any
 subscriber. If they differ, `revision += 1` and one `Event::State` goes to every
-subscriber. So `revision` counts *visible* changes, monotonically within one
-daemon incarnation, and `state::tests::revision_alone_does_not_force_a_redraw`
+subscriber's SPEC 0007 current/latest coalescer; an older replaceable state may
+therefore be skipped. So `revision` counts *visible* changes, monotonically
+within one daemon incarnation, and
+`state::tests::revision_alone_does_not_force_a_redraw`
 describes the
 bar's belt-and-braces check rather than the primary gate — the primary gate is
 here, one process upstream, where it also saves the serialisation and the
@@ -921,14 +942,14 @@ Each row is one happy path and becomes one test.
 | A9 | Given `Keymap::default()`, when the first manage sequence completes, then one `river_xkb_binding_v1` exists per binding, each created with the xkbcommon keysym of its `Binding::key`, and exactly the `Mode::Nav` bindings are enabled | |
 | A10 | Given `Mode::Nav` and the binding for `r`, when its `pressed` event arrives, then in that same manage sequence the `Mode::Resize` set is enabled, the `Mode::Nav` set is disabled, and exactly one `ensure_next_key_eaten` request is made | |
 | A11 | Given `Mode::Resize` with `ensure_next_key_eaten` outstanding, when `ate_unbound_key` arrives, then the mode returns to `Mode::Nav`, the Nav set is re-enabled, `chord_echo` is empty and no further `ensure_next_key_eaten` is made | |
-| A12 | Given a subscriber that has stopped reading and whose socket buffer is full, when a bound key is pressed, then `manage_finish` is made within the key-press budget and before any byte is written to that subscriber | |
-| A13 | Given a subscriber whose write cursor has not advanced for `SUBSCRIBER_STALL_LIMIT`, when the next state change occurs, then that subscriber is closed and every remaining subscriber receives exactly one `Event::State` | |
+| A12 | Given a subscriber that has stopped reading and whose socket buffer is full, when a bound key is pressed in the real #38 combined loop with #40's River backend, then backend/pending work precedes bounded control work, backend readiness is rechecked between control operations, and `manage_finish` is made within the key-press budget before any subscriber write | #38 owns loop-order evidence; #40 supplies real `manage_finish`; #65 owns the real Linux budget assertion |
+| A13 | Given subscriber output whose last positive send was two seconds ago, when the #38 loop supplies the exact deadline to SPEC 0007, then that subscriber is closed without waiting for another state change and remaining subscribers continue | Transport deadline evidence belongs to SPEC 0007 A16; #38 owns deadline integration |
 | A14 | Given a client that sends `Request::Hello` with a version other than `PROTOCOL_VERSION`, when the session receives it, then it answers `Response::Hello` carrying its own version and then closes the connection | |
 | A14a | Given `XDG_RUNTIME_DIR` is absent, relative, or not a directory, when `realm-session` starts or a production client resolves the control socket, then it fails with `IpcPathError::MissingRuntimeDir`, never probes `/tmp`, and ignores `REALM_SOCKET` | Delegated to SPEC 0007 A1/A2: `realm_control::tests::runtime_capability_rejects_every_unsafe_input_and_openat2_failure`, `realm_control::tests::server_creates_realm_exactly_once_under_scoped_umask`, and `realm_control::tests::client_never_creates_realm` |
-| A14b | Given a connecting peer with a uid other than the session's effective uid, or no readable credentials, when it is accepted, then the session closes it before consuming a frame and continues serving a same-uid peer | `control_socket::tests::rejects_foreign_uid_before_read`, `control_socket::tests::rejects_missing_peer_credentials_before_read` |
-| A14c | Given every accepted connection state and frame error class, when input is read, then the response, drain deadline, and close/continue result match SPEC 0007's total table without affecting another peer | `control_socket::tests::protocol_state_machine_is_total` |
-| A14d | Given a matching Hello followed by `Subscribe`, when the session accepts it, then it sends an immediate `Event::State`; later input and all queue/write limits follow SPEC 0007 | `control_socket::tests::subscribe_requires_matching_hello_and_emits_snapshot` |
-| A14e | Given 64 admitted peers, a 65th peer, oversized/unterminated input, excess pipeline, a stalled subscriber, or a stalled ordinary client, when a limit/deadline is reached, then only the affected peer is closed and the event loop remains live | `control_socket::tests::connection_and_queue_limits_preserve_admitted_peers`, `control_socket::tests::all_write_classes_have_bounded_nonblocking_drain`, `control_socket::tests::stalled_peer_preserves_key_path` |
+| A14b | Given a connecting peer with a uid other than the session's effective uid, or no readable credentials, when it is accepted, then the transport closes it before consuming a frame and a separately admitted same-uid peer remains intact | Delegated to SPEC 0007 A13 |
+| A14c | Given every accepted connection state and frame error class, when input is read, then the response, exact deadline, and close/continue result match SPEC 0007's total table without affecting another peer | Delegated to SPEC 0007 A14-A16 |
+| A14d | Given matching Hello plus `Subscribe` and optional clean read-half EOF, when the adapter accepts it, then the Hello drains first, the last visible accepted `Session::state()` is the immediate current event, later states use current-plus-latest coalescing, and positive subscriber input closes | Transport evidence belongs to SPEC 0007 A14/A14b/A16a; #38 owns the authoritative-state adapter |
+| A14e | Given 64 admitted peers, a 65th peer, oversized/unterminated input or output, excess pipeline, a stalled subscriber, or a stalled ordinary client, when a SPEC 0007 bound is reached, then only the affected peer closes; #38 still services pending/backend work first and checks backend readiness between bounded control quanta | Transport evidence belongs to SPEC 0007 A14-A17; #38 owns combined-loop evidence |
 | A14f | Given a bound endpoint and incomplete or failed recovery, when startup runs, then the endpoint remains non-listening and no readiness is sent; given successful projection and transition to `Live`, then the bound capability is consumed once, the listener is verified active, and only then is `READY=1` sent; listen failure is fatal and sends no readiness | `realm_session::tests::readiness_follows_live_listener_activation` |
 | A15 | Given an idle session, when the clock module's tick changes the clock text, then exactly one `Event::State` is broadcast and no `manage_dirty` and no other river request is made | `session::tests::module_change_emits_once_without_backend_apply` covers the in-process state effect; socket coverage remains SPEC 0007 |
 | A16 | Given a module that recomputes to the text it already had, when derivation runs, then `revision` does not increment and no `Event::State` is sent | `session::tests::module_change_emits_once_without_backend_apply` |
@@ -943,7 +964,7 @@ Each row is one happy path and becomes one test.
 | A25 | Given a focused window, when `request_close_focused()` succeeds or fails, then it targets exactly that id and does not mutate the ledger, projection, visible state, or revision; the window is removed only when `WindowClosed` is observed | `session::tests::close_request_waits_for_the_observed_close_before_mutating_state` |
 | A26 | Given no focused window, when `request_close_focused()` runs, then it makes no backend request and returns no target | `session::tests::close_request_is_a_no_op_without_a_focused_window` |
 | A27 | Given a stable session, when `toggle_whichkey()` runs, then `whichkey` and the revision change once with no backend apply; only a later observed `WorkareaChanged` may re-project windows | `session::tests::whichkey_toggle_only_emits_state_until_workarea_is_observed` |
-| A28 | Given a staged mutating socket request, when its backend transaction has not completed, then no ordinary reply is queued and the connection reads no second request; backend success commits and queues `Response::Ok`, while backend failure rejects the candidate and queues `Response::Error`, without blocking the event loop or writing before `manage_finish` | Socket adapter coverage belongs to #41 |
+| A28 | Given a staged mutating socket request, when its backend transaction has not completed, then no ordinary reply is queued and the connection reads no second request; backend success commits and queues `Response::Ok`, while backend failure rejects the candidate and queues application `Response::Error` as an ordinary response that returns the peer to Ready after draining, without blocking the event loop or writing before `manage_finish` | Authoritative socket adapter coverage belongs to #38; reusable completion behavior belongs to SPEC 0007/#41 |
 | A29 | Given absent, wrong-version, malformed, semantically invalid, and valid `SessionSnapshotV1` records, when they are classified, then absence and invalid content start fresh without partial state, valid content is accepted, and a non-`NotFound` read error is fatal | `session::tests::snapshot_validation_is_closed_and_total`, `snapshot::tests::classifies_completed_snapshot_reads_without_file_io`; pure classification is covered, while pathname/file-worker coverage remains in the event-loop binary slice |
 | A30 | Given a valid snapshot and an initial replay, when restored, duplicate, and new identities arrive before `InitialReplayComplete`, then the first occurrence retains report order, latest metadata wins, each identity is assigned exactly once after the barrier, no projection/state/snapshot is produced early, and event order deterministically fixes new ids. Any non-replay event forbidden by §6 is a protocol error rather than deferred work | `session::tests::initial_replay_is_silent_and_rebinds_each_identity_once`, `session::tests::pre_barrier_non_replay_events_are_protocol_errors` |
 | A31 | Given snapshotted identities that do not all reappear plus new identities, when `InitialReplayComplete` arrives, then missing windows are removed before new windows are summoned in report order, undo is empty, one forced complete projection succeeds, and exactly one revision-1 state is published before entering `Live` | `session::tests::replay_barrier_reconciles_then_publishes_once` |

@@ -1,7 +1,8 @@
 # SPEC 0006 — realmctl
 
 - **Status:** Accepted (2026-08-26; generation contract reconciled by #159;
-  endpoint capability correction 2026-09-10) —
+  endpoint capability correction 2026-09-10; control-transport correction
+  2026-09-11) —
   `theme apply`, `theme lint`, and `theme diff` implemented; remaining command
   surface not yet implemented
 - **Milestone:** M3, with `theme` and the argument surface in M1 and
@@ -96,12 +97,15 @@ For each ordinary invocation that needs a live session, `realmctl` calls its
 selected `RuntimeDirResolver` exactly once. If resolution succeeds, it consumes
 that one `RuntimeDir` to derive one `ClientEndpoint` and retains that endpoint
 across SPEC 0007's bounded connect schedule. Every attempt calls
-`ClientEndpoint::connect(&self)`; the endpoint reopens and validates `realm`
-relative to its retained runtime fd without rereading `XDG_RUNTIME_DIR`. The
-successful call completes `Hello` before returning `Client`; version mismatch
-and every non-retryable error fail immediately rather than guessing at field
-meanings. Only `ENOENT` and `ECONNREFUSED` advance the unchanged 10, 20, 40, 80,
-and 160 ms bounded retry schedule in SPEC 0007.
+`ClientEndpoint::connect(&self, "realmctl")`; that call makes exactly one
+descriptor-relative connection attempt, reopens and validates `realm` relative
+to the retained runtime fd without rereading `XDG_RUNTIME_DIR`, and completes
+Hello before returning `Client`. `realmctl` owns the retry driver and its
+injected sleeper/time seams. It makes an immediate attempt plus five retries
+after 10, 20, 40, 80, and 160 ms: cumulative attempt times are exactly 0, 10,
+30, 70, 150, and 310 ms, with no sleep after the sixth failure. Only
+`ClientError::MissingRealm` and `ClientError::Refused` advance the schedule;
+version mismatch and every other terminal client error fail immediately.
 
 `theme apply`, `theme lint`, and `theme diff` remain session-independent: they
 do not call a runtime resolver, derive a `ClientEndpoint`, or open the control
@@ -121,6 +125,12 @@ debugging a `.desktop` entry.
 
 Four of these are additions and one is a correction. Each is a revision of
 [SPEC 0001](0001-realm-core-contracts.md) made in the same commit as the change.
+Before the first production `realmctl` control command ships, the typed Error
+kind, complete `OrbitLedger` fields, `GetHealth`/`Health` schema, and a
+corresponding `PROTOCOL_VERSION` bump must land together. The current v1 enum
+may support transport tests, but it is not a final production server/client
+contract. Across that bump, the Hello request/response envelope remains
+decodable in both directions so a mismatch can always report both versions.
 
 Two things worth correcting first, because they are easy to misremember.
 `Response::Ledger` is **not** orphaned: `Request::ShowLedger(Option<usize>)`
@@ -171,7 +181,7 @@ theme for free and no colour is written down twice
 | 3 | No session: the fixed endpoint remains absent or refused after SPEC 0007's bounded startup retry |
 | 4 | Protocol version mismatch at the handshake |
 | 5 | The session refused the command; derived from `Response::Error::kind` |
-| 6 | A filesystem or I/O failure while applying or diffing a theme, including `OutcomeAmbiguous`. An apply not known to have committed is not reported as activated; diff never mutates state (SPEC 0011) |
+| 6 | Any terminal control path/transport/I/O failure other than version mismatch, or a filesystem/I/O failure while applying or diffing a theme, including `OutcomeAmbiguous`. An apply not known to have committed is not reported as activated; diff never mutates state (SPEC 0011) |
 
 Code 1 is deliberately the same for "your palette is unreadable", "a doctor
 check failed" and "the theme is stale": all three mean *the command worked and
@@ -454,8 +464,9 @@ Each row is one happy path and becomes one test.
 | B4 | Given a session with windows in orbits 1 and 3, when `orbit list` runs, then it prints six rows carrying rune, name, window count and layout, with orbit 1 marked active | |
 | B5 | Given a running session, when `orbit switch 3` runs, then it sends `Request::SwitchOrbit(3)`, prints the new orbit and exits 0 | |
 | B6 | Given a session whose backend has disconnected, when `orbit switch 2` runs and the session answers `Error { kind: backend-refused }`, then the CLI prints the session's message and exits 5 | |
-| B7 | Given no listener at SPEC 0007's fixed endpoint and an `XDG_RUNTIME_DIR` change after the first refused attempt, when `orbit switch 2` runs, then exactly one `RuntimeDir` is resolved, one `ClientEndpoint` is reused for every unchanged bounded attempt through `ClientEndpoint::connect`, and exhaustion exits 3, names the original capability's display path, and suggests how to start a session | |
+| B7 | Given retryable MissingRealm or Refused results and an `XDG_RUNTIME_DIR` change after the first attempt, when `orbit switch 2` runs, then exactly one `RuntimeDir` is resolved, one `ClientEndpoint` is reused for single named-client attempts at cumulative 0, 10, 30, 70, 150, and 310 ms, no sleep follows the sixth failure, and exhaustion exits 3 naming the original capability's display path and suggesting how to start a session | `realm_ctl::tests::startup_retry_uses_exact_attempt_timestamps_and_exit_classes` |
 | B8 | Given a session answering `Hello` with a different `version`, when any command runs, then the CLI refuses before sending anything else, prints both versions and exits 4 | |
+| B8a | Given any terminal client path/transport/I/O error other than version mismatch, when a live-session command runs, then it is not retried and exits 6; an application `Response::Error` remains a normal response and maps by its typed kind to exit 5 | `realm_ctl::tests::terminal_transport_errors_exit_six_without_retry` |
 | B9 | Given a session with three windows in orbit 1, when `ledger show 1 --json` runs, then stdout is exactly one object that deserialises as `Response::Ledger` with the windows in ledger order and the focused one marked | |
 | B10 | Given a running session, when `run foot -e yazi` runs, then it sends `Request::Spawn(["foot","-e","yazi"])`, exits 0 without waiting, and reports the argv as accepted rather than launched | |
 | B11 | Given a healthy session, when `doctor` runs, then every check reports `ok` or `warn`, the header names the tool, protocol, distribution, kernel and compositor versions, and it exits 0 | |
