@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -22,7 +22,8 @@ use rustix::process::{geteuid, umask};
 use crate::protocol::{ConnectionMachine, ConnectionPhase, MachineAction, MachineClose};
 use crate::{
     production_runtime_dir, test_runtime_dir, ActiveControlListener, BoundControlEndpoint,
-    IpcPathError, RuntimeDir, SocketEndpoint,
+    ConnectionId, ControlAction, ControlError, ControlServer, ControlToken, IpcPathError,
+    ReadyEvent, RuntimeDir, SocketEndpoint, TestPeerCredential, TestReceive, TestSend,
 };
 use realm_core::ipc::{Event, Request, Response, MAX_FRAME_BYTES};
 use realm_core::state::RealmState;
@@ -356,6 +357,749 @@ fn runtime_fixture() -> (tempfile::TempDir, PathBuf) {
     fs::create_dir(&runtime_path).unwrap();
     set_mode(&runtime_path, 0o700);
     (temporary, runtime_path)
+}
+
+fn active_control_listener() -> (tempfile::TempDir, PathBuf, ActiveControlListener) {
+    let (temporary, runtime_path) = runtime_fixture();
+    let listener = test_runtime_dir(&runtime_path)
+        .unwrap()
+        .prepare_server_endpoint()
+        .unwrap()
+        .bind()
+        .unwrap()
+        .activate()
+        .unwrap();
+    (temporary, runtime_path, listener)
+}
+
+/// Catches accepting without atomic NONBLOCK/CLOEXEC or allocating identity
+/// before successful real same-euid SO_PEERCRED admission.
+#[test]
+fn linux_admission_checks_real_credentials_before_receive() {
+    let _lock = process_test_lock();
+    let (_temporary, runtime_path, listener) = active_control_listener();
+    let mut server = listener.into_server(Instant::now());
+    let listener_token = server.poll_interests().next().unwrap().token;
+    let _client = UnixStream::connect(runtime_path.join("realm/ctl.sock")).unwrap();
+
+    assert_eq!(
+        server
+            .service_one(
+                Instant::now(),
+                ReadyEvent {
+                    token: listener_token,
+                    readable: true,
+                    writable: false,
+                },
+            )
+            .unwrap(),
+        None
+    );
+
+    let accepted = server
+        .poll_interests()
+        .find(|interest| interest.token != listener_token)
+        .expect("same-euid peer is admitted");
+    assert!(fcntl_getfl(accepted.fd).unwrap().contains(OFlags::NONBLOCK));
+    assert!(rustix::io::fcntl_getfd(accepted.fd)
+        .unwrap()
+        .contains(FdFlags::CLOEXEC));
+    assert_eq!(server.receive_calls_for_test(), 0);
+}
+
+/// Catches credential lookup failure, absence, or a foreign uid allocating a
+/// connection record or reaching receive before rejection.
+#[test]
+fn rejected_credentials_close_before_receive_or_identity_allocation() {
+    let _lock = process_test_lock();
+    for outcome in [
+        TestPeerCredential::Error(Errno::IO),
+        TestPeerCredential::Missing,
+        TestPeerCredential::Uid(geteuid().as_raw().wrapping_add(1)),
+    ] {
+        let (_temporary, runtime_path, listener) = active_control_listener();
+        let mut server = listener.into_server_with_test_credentials(Instant::now(), [outcome]);
+        let listener_token = server.poll_interests().next().unwrap().token;
+        let mut client = UnixStream::connect(runtime_path.join("realm/ctl.sock")).unwrap();
+        client.write_all(b"{\"cmd\":\"get-state\"}\n").unwrap();
+
+        assert_eq!(
+            server
+                .service_one(
+                    Instant::now(),
+                    ReadyEvent {
+                        token: listener_token,
+                        readable: true,
+                        writable: false,
+                    },
+                )
+                .unwrap(),
+            None
+        );
+        assert_eq!(server.connection_count_for_test(), 0);
+        assert_eq!(server.receive_calls_for_test(), 0);
+        client.set_nonblocking(true).unwrap();
+        let mut byte = [0_u8; 1];
+        match client.read(&mut byte) {
+            Ok(0) => {}
+            Err(error) if error.raw_os_error() == Some(Errno::CONNRESET.raw_os_error()) => {}
+            other => panic!("rejected peer was not closed: {other:?}"),
+        }
+    }
+}
+
+fn server_fixture(now: Instant) -> (tempfile::TempDir, PathBuf, ControlServer, ControlToken) {
+    let (temporary, runtime_path, listener) = active_control_listener();
+    let server = listener.into_server(now);
+    let listener_token = server.poll_interests().next().unwrap().token;
+    (temporary, runtime_path, server, listener_token)
+}
+
+fn admit_test_peer(
+    server: &mut ControlServer,
+    listener_token: ControlToken,
+    socket_path: &Path,
+    now: Instant,
+) -> (UnixStream, ConnectionId, ControlToken, i32) {
+    let existing_tokens: Vec<_> = server
+        .poll_interests()
+        .filter_map(|interest| (interest.token != listener_token).then_some(interest.token))
+        .collect();
+    let client = UnixStream::connect(socket_path).unwrap();
+    assert_eq!(
+        server
+            .service_one(
+                now,
+                ReadyEvent {
+                    token: listener_token,
+                    readable: true,
+                    writable: false,
+                },
+            )
+            .unwrap(),
+        None
+    );
+    let interest = server
+        .poll_interests()
+        .find(|interest| {
+            interest.token != listener_token && !existing_tokens.contains(&interest.token)
+        })
+        .expect("peer admitted");
+    let token = interest.token;
+    let raw_fd = interest.fd.as_raw_fd();
+    let connection = server.connection_id_for_token_for_test(token).unwrap();
+    (client, connection, token, raw_fd)
+}
+
+fn ready(token: ControlToken, readable: bool, writable: bool) -> ReadyEvent {
+    ReadyEvent {
+        token,
+        readable,
+        writable,
+    }
+}
+
+fn assert_control_errno(error: ControlError, expected: Errno, listener: bool) {
+    let source = match error {
+        ControlError::ListenerIo(source) if listener => source,
+        ControlError::ResourceExhausted(source) if !listener => source,
+        other => panic!("unexpected control error: {other:?}"),
+    };
+    assert_eq!(source.raw_os_error(), Some(expected.raw_os_error()));
+}
+
+/// Catches retryable accept errors becoming fatal, resource exhaustion being
+/// downgraded, or any listener readiness performing more than one accept.
+#[test]
+fn listener_errno_classification_and_one_accept_quantum_are_total() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, _runtime_path, mut server, listener_token) = server_fixture(base);
+
+    for error in [Errno::INTR, Errno::AGAIN, Errno::CONNABORTED] {
+        server.inject_accept_error_for_test(error);
+        let before = server.accept_calls_for_test();
+        assert_eq!(
+            server
+                .service_one(base, ready(listener_token, true, false))
+                .unwrap(),
+            None
+        );
+        assert_eq!(server.accept_calls_for_test(), before + 1);
+    }
+    for error in [Errno::MFILE, Errno::NFILE, Errno::NOBUFS, Errno::NOMEM] {
+        server.inject_accept_error_for_test(error);
+        let failure = server
+            .service_one(base, ready(listener_token, true, false))
+            .unwrap_err();
+        assert_control_errno(failure, error, false);
+    }
+    server.inject_accept_error_for_test(Errno::IO);
+    let failure = server
+        .service_one(base, ready(listener_token, true, false))
+        .unwrap_err();
+    assert_control_errno(failure, Errno::IO, true);
+}
+
+/// Catches connected EINTR/EAGAIN closing a peer, reset/pipe escaping as
+/// diagnostics, or other peer failures leaving the affected record alive.
+#[test]
+fn connected_errno_classification_is_peer_local_and_total() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+
+    for error in [Errno::INTR, Errno::AGAIN] {
+        let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+        let (_client, _connection, token, _fd) = admit_test_peer(
+            &mut server,
+            listener_token,
+            &runtime_path.join("realm/ctl.sock"),
+            base,
+        );
+        server.inject_receive_for_test(TestReceive::Error(error));
+        assert_eq!(
+            server.service_one(base, ready(token, true, false)).unwrap(),
+            None
+        );
+        assert_eq!(server.connection_count_for_test(), 1);
+    }
+
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let (_client, _connection, token, _fd) = admit_test_peer(
+        &mut server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    server.inject_receive_for_test(TestReceive::Error(Errno::CONNRESET));
+    assert_eq!(
+        server.service_one(base, ready(token, true, false)).unwrap(),
+        None
+    );
+    assert_eq!(server.connection_count_for_test(), 0);
+
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    server.inject_receive_for_test(TestReceive::Error(Errno::IO));
+    match server
+        .service_one(base, ready(token, true, false))
+        .unwrap_err()
+    {
+        ControlError::PeerIo {
+            connection: got,
+            source,
+        } => {
+            assert_eq!(got, connection);
+            assert_eq!(source.raw_os_error(), Some(Errno::IO.raw_os_error()));
+        }
+        other => panic!("unexpected receive error: {other:?}"),
+    }
+    assert_eq!(server.connection_count_for_test(), 0);
+
+    for error in [Errno::CONNRESET, Errno::PIPE] {
+        let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+        let (_client, _connection, token, _fd) = admit_test_peer(
+            &mut server,
+            listener_token,
+            &runtime_path.join("realm/ctl.sock"),
+            base,
+        );
+        server.inject_receive_for_test(TestReceive::Bytes(
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+        ));
+        assert_eq!(
+            server.service_one(base, ready(token, true, false)).unwrap(),
+            None
+        );
+        server.inject_send_for_test(TestSend::Error(error));
+        assert_eq!(
+            server.service_one(base, ready(token, false, true)).unwrap(),
+            None
+        );
+        assert_eq!(server.connection_count_for_test(), 0);
+    }
+
+    for error in [Errno::INTR, Errno::AGAIN] {
+        let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+        let (_client, connection, token, _fd) = admit_test_peer(
+            &mut server,
+            listener_token,
+            &runtime_path.join("realm/ctl.sock"),
+            base,
+        );
+        server.inject_receive_for_test(TestReceive::Bytes(
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+        ));
+        server.service_one(base, ready(token, true, false)).unwrap();
+        server.inject_send_for_test(TestSend::Error(error));
+        assert_eq!(
+            server.service_one(base, ready(token, false, true)).unwrap(),
+            None
+        );
+        assert!(server.has_connection_for_test(connection));
+    }
+
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    server.inject_receive_for_test(TestReceive::Bytes(
+        b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+    ));
+    server.service_one(base, ready(token, true, false)).unwrap();
+    server.inject_send_for_test(TestSend::Error(Errno::IO));
+    match server
+        .service_one(base, ready(token, false, true))
+        .unwrap_err()
+    {
+        ControlError::PeerIo {
+            connection: got,
+            source,
+        } => {
+            assert_eq!(got, connection);
+            assert_eq!(source.raw_os_error(), Some(Errno::IO.raw_os_error()));
+        }
+        other => panic!("unexpected send error: {other:?}"),
+    }
+    assert!(!server.has_connection_for_test(connection));
+}
+
+/// Catches output winning over subscriber input, enabled-interest drift, and
+/// multiple connected I/O calls from one copied readiness event.
+#[test]
+fn poll_interest_and_ready_arbitration_is_total() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+
+    server.inject_receive_for_test(TestReceive::Bytes(
+        b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+    ));
+    assert_eq!(
+        server.service_one(base, ready(token, true, false)).unwrap(),
+        None
+    );
+    let hello_interest = server.interest_for_test(token).unwrap();
+    assert_eq!(hello_interest, (false, true));
+    let hello_len = server.output_len_for_test(connection).unwrap();
+    server.inject_send_for_test(TestSend::Count(hello_len));
+    assert_eq!(
+        server.service_one(base, ready(token, false, true)).unwrap(),
+        None
+    );
+
+    server.inject_receive_for_test(TestReceive::Bytes(b"{\"cmd\":\"subscribe\"}\n".to_vec()));
+    assert_eq!(
+        server.service_one(base, ready(token, true, false)).unwrap(),
+        Some(ControlAction::Request {
+            connection,
+            request: Request::Subscribe,
+        })
+    );
+    assert_eq!(server.interest_for_test(token).unwrap(), (false, false));
+    server
+        .complete_subscribe(base, connection, protocol_state(1))
+        .unwrap();
+    assert_eq!(server.interest_for_test(token).unwrap(), (true, true));
+
+    let sends_before = server.send_calls_for_test();
+    let receives_before = server.receive_calls_for_test();
+    server.inject_receive_for_test(TestReceive::Bytes(vec![b'x']));
+    assert_eq!(
+        server.service_one(base, ready(token, true, true)).unwrap(),
+        None
+    );
+    assert_eq!(server.receive_calls_for_test(), receives_before + 1);
+    assert_eq!(server.send_calls_for_test(), sends_before);
+    assert_eq!(server.connection_count_for_test(), 0);
+}
+
+/// Catches exact-deadline expiry occurring after a socket syscall.
+#[test]
+fn service_quantum_expires_before_socket_io() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let (_client, _connection, token, _fd) = admit_test_peer(
+        &mut server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    let calls = server.socket_calls_for_test();
+    assert_eq!(
+        server
+            .service_one(base + Duration::from_secs(1), ready(token, true, true))
+            .unwrap(),
+        None
+    );
+    assert_eq!(server.socket_calls_for_test(), calls);
+    assert_eq!(server.connection_count_for_test(), 0);
+}
+
+/// Catches treating raw fd numbers as identity when the kernel reuses one.
+#[test]
+fn stale_token_and_connection_id_cannot_target_reused_fd() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let (old_client, old_connection, old_token, old_fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    server.inject_receive_for_test(TestReceive::Error(Errno::CONNRESET));
+    server
+        .service_one(base, ready(old_token, true, false))
+        .unwrap();
+    drop(old_client);
+
+    let (_new_client, new_connection, new_token, new_fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    assert_eq!(new_fd, old_fd, "fixture requires actual numeric fd reuse");
+    assert_ne!(new_connection, old_connection);
+    assert_ne!(new_token, old_token);
+
+    let calls = server.socket_calls_for_test();
+    assert_eq!(
+        server
+            .service_one(base, ready(old_token, true, true))
+            .unwrap(),
+        None
+    );
+    assert_eq!(server.socket_calls_for_test(), calls);
+    assert!(matches!(
+        server.complete_request(base, old_connection, Response::Ok),
+        Err(ControlError::StaleConnection { connection }) if connection == old_connection
+    ));
+    assert_eq!(server.connection_count_for_test(), 1);
+}
+
+fn finish_test_handshake(
+    server: &mut ControlServer,
+    connection: ConnectionId,
+    token: ControlToken,
+    now: Instant,
+) {
+    server.inject_receive_for_test(TestReceive::Bytes(
+        b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+    ));
+    assert_eq!(
+        server.service_one(now, ready(token, true, false)).unwrap(),
+        None
+    );
+    let output = server
+        .output_len_for_test(connection)
+        .unwrap_or_else(|| panic!("handshake did not queue output for {connection:?}"));
+    server.inject_send_for_test(TestSend::Count(output));
+    assert_eq!(
+        server.service_one(now, ready(token, false, true)).unwrap(),
+        None
+    );
+}
+
+fn make_test_subscriber(
+    server: &mut ControlServer,
+    connection: ConnectionId,
+    token: ControlToken,
+    now: Instant,
+    revision: u64,
+) {
+    finish_test_handshake(server, connection, token, now);
+    server.inject_receive_for_test(TestReceive::Bytes(b"{\"cmd\":\"subscribe\"}\n".to_vec()));
+    assert_eq!(
+        server.service_one(now, ready(token, true, false)).unwrap(),
+        Some(ControlAction::Request {
+            connection,
+            request: Request::Subscribe,
+        })
+    );
+    server
+        .complete_subscribe(now, connection, protocol_state(revision))
+        .unwrap();
+}
+
+/// Catches oversized per-peer completions mutating a queue, remaining live,
+/// or reporting an unbounded/unstable affected set.
+#[test]
+fn outbound_frame_bound_is_streaming_peer_local_and_stable() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    finish_test_handshake(&mut server, connection, token, base);
+    server.inject_receive_for_test(TestReceive::Bytes(b"{\"cmd\":\"get-state\"}\n".to_vec()));
+    assert!(matches!(
+        server.service_one(base, ready(token, true, false)).unwrap(),
+        Some(ControlAction::Request { connection: got, request: Request::GetState }) if got == connection
+    ));
+    let oversized = Response::Error {
+        message: "x".repeat(MAX_FRAME_BYTES),
+    };
+    assert!(matches!(
+        server.complete_request(base, connection, oversized),
+        Err(ControlError::OutboundFrameTooLarge { connections }) if connections == vec![connection]
+    ));
+    assert_eq!(server.connection_count_for_test(), 0);
+
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    finish_test_handshake(&mut server, connection, token, base);
+    server.inject_receive_for_test(TestReceive::Bytes(b"{\"cmd\":\"subscribe\"}\n".to_vec()));
+    assert!(matches!(
+        server.service_one(base, ready(token, true, false)).unwrap(),
+        Some(ControlAction::Request { connection: got, request: Request::Subscribe }) if got == connection
+    ));
+    let mut oversized_state = protocol_state(1);
+    oversized_state.focused_title = "x".repeat(MAX_FRAME_BYTES);
+    assert!(matches!(
+        server.complete_subscribe(base, connection, oversized_state),
+        Err(ControlError::OutboundFrameTooLarge { connections }) if connections == vec![connection]
+    ));
+    assert_eq!(server.connection_count_for_test(), 0);
+}
+
+/// Catches publication encoding per subscriber, partial queue mutation before
+/// overflow is known, or closing non-subscribers on event overflow.
+#[test]
+fn oversized_publish_closes_sorted_subscriber_set_after_one_encode() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let (_idle_client, idle_id, _idle_token, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    let (_client_a, id_a, token_a, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    let (_client_b, id_b, token_b, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    make_test_subscriber(&mut server, id_a, token_a, base, 1);
+    make_test_subscriber(&mut server, id_b, token_b, base, 1);
+
+    let mut oversized = protocol_state(2);
+    oversized.focused_title = "x".repeat(MAX_FRAME_BYTES);
+    assert!(matches!(
+        server.publish_state(base, oversized),
+        Err(ControlError::OutboundFrameTooLarge { connections })
+            if connections == vec![id_a, id_b]
+    ));
+    assert_eq!(server.connection_count_for_test(), 1);
+    assert!(server.has_connection_for_test(idle_id));
+
+    let mut still_oversized = protocol_state(3);
+    still_oversized.focused_title = "x".repeat(MAX_FRAME_BYTES);
+    server.publish_state(base, still_oversized).unwrap();
+    assert_eq!(server.connection_count_for_test(), 1);
+}
+
+/// Catches a partial shutdown transition, a moving hard deadline, post-start
+/// actions/completions, or completion that is not observable at drain/expiry.
+#[test]
+fn shutdown_transition_is_total_idempotent_and_completion_observable() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let (_ordinary_client, ordinary_id, ordinary_token, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    let (_subscriber_client, subscriber_id, subscriber_token, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    make_test_subscriber(&mut server, subscriber_id, subscriber_token, base, 1);
+    assert_eq!(
+        server.interest_for_test(ordinary_token),
+        Some((true, false))
+    );
+    assert_eq!(
+        server.interest_for_test(subscriber_token),
+        Some((true, true))
+    );
+
+    server.begin_shutdown(base);
+    assert!(!server.has_connection_for_test(ordinary_id));
+    assert!(server.has_connection_for_test(subscriber_id));
+    assert!(!server
+        .poll_interests()
+        .any(|interest| interest.token == listener_token));
+    assert_eq!(
+        server.next_deadline(),
+        Some(base + Duration::from_millis(100))
+    );
+    assert!(!server.is_shutdown_complete());
+
+    server.begin_shutdown(base + Duration::from_secs(1));
+    assert_eq!(
+        server.next_deadline(),
+        Some(base + Duration::from_millis(100))
+    );
+    let calls = server.socket_calls_for_test();
+    assert_eq!(
+        server
+            .service_one(base, ready(ordinary_token, true, true))
+            .unwrap(),
+        None
+    );
+    assert_eq!(server.socket_calls_for_test(), calls);
+    assert!(matches!(
+        server.complete_request(base, ordinary_id, Response::Ok),
+        Err(ControlError::ShuttingDown)
+    ));
+    assert!(matches!(
+        server.publish_state(base, protocol_state(2)),
+        Err(ControlError::ShuttingDown)
+    ));
+    assert!(matches!(
+        server.complete_subscribe(base, ordinary_id, protocol_state(2)),
+        Err(ControlError::ShuttingDown)
+    ));
+
+    let initial = server.output_len_for_test(subscriber_id).unwrap();
+    server.inject_send_for_test(TestSend::Count(initial));
+    assert_eq!(
+        server
+            .service_one(base, ready(subscriber_token, false, true))
+            .unwrap(),
+        None
+    );
+    assert!(!server.is_shutdown_complete());
+    let shutdown = server.output_len_for_test(subscriber_id).unwrap();
+    server.inject_send_for_test(TestSend::Count(shutdown));
+    assert_eq!(
+        server
+            .service_one(base, ready(subscriber_token, false, true))
+            .unwrap(),
+        None
+    );
+    assert!(server.is_shutdown_complete());
+    assert_eq!(server.next_deadline(), None);
+
+    let (_temporary, runtime_path, mut expiring, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut expiring,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    make_test_subscriber(&mut expiring, connection, token, base, 1);
+    expiring.begin_shutdown(base);
+    let calls = expiring.socket_calls_for_test();
+    expiring.expire(base + Duration::from_millis(100)).unwrap();
+    assert_eq!(expiring.socket_calls_for_test(), calls);
+    assert!(expiring.is_shutdown_complete());
+
+    let (_temporary, _runtime_path, mut empty, _listener_token) = server_fixture(base);
+    empty.begin_shutdown(base);
+    assert!(empty.is_shutdown_complete());
+    assert_eq!(empty.next_deadline(), None);
+}
+
+/// Catches refusing capacity without the required one accept/close quantum or
+/// allocating a 65th record and identity.
+#[test]
+fn capacity_refusal_is_one_fd_per_quantum_and_allocates_nothing() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, listener) = active_control_listener();
+    let credentials = std::iter::repeat_n(TestPeerCredential::Uid(geteuid().as_raw()), 64)
+        .chain([TestPeerCredential::Error(Errno::IO)]);
+    let mut server = listener.into_server_with_test_credentials(base, credentials);
+    let listener_token = server.poll_interests().next().unwrap().token;
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let mut clients = Vec::new();
+    for _ in 0..64 {
+        let (client, _id, _token, _fd) =
+            admit_test_peer(&mut server, listener_token, &socket_path, base);
+        clients.push(client);
+    }
+    let ids_before = server.connection_ids_for_test();
+    let accepts_before = server.accept_calls_for_test();
+    let mut excess = UnixStream::connect(&socket_path).unwrap();
+    assert_eq!(
+        server
+            .service_one(base, ready(listener_token, true, false))
+            .unwrap(),
+        None
+    );
+    assert_eq!(server.accept_calls_for_test(), accepts_before + 1);
+    assert_eq!(server.connection_count_for_test(), 64);
+    assert_eq!(server.connection_ids_for_test(), ids_before);
+    assert_eq!(server.credential_outcomes_for_test(), 0);
+    excess.set_nonblocking(true).unwrap();
+    let mut byte = [0_u8; 1];
+    match excess.read(&mut byte) {
+        Ok(0) => {}
+        Err(error) if error.raw_os_error() == Some(Errno::CONNRESET.raw_os_error()) => {}
+        other => panic!("excess peer was not closed: {other:?}"),
+    }
+    drop(clients);
+}
+
+/// Catches any ready-token branch growing into a drain loop or performing both
+/// receive and send in one service quantum.
+#[test]
+fn one_ready_token_performs_at_most_one_socket_io() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+
+    let before = server.socket_calls_for_test();
+    assert_eq!(
+        server
+            .service_one(base, ready(listener_token, false, true))
+            .unwrap(),
+        None
+    );
+    assert_eq!(server.socket_calls_for_test() - before, 0);
+
+    let client = UnixStream::connect(runtime_path.join("realm/ctl.sock")).unwrap();
+    let before = server.socket_calls_for_test();
+    server
+        .service_one(base, ready(listener_token, true, false))
+        .unwrap();
+    assert_eq!(server.socket_calls_for_test() - before, 1);
+    let peer = server
+        .poll_interests()
+        .find(|interest| interest.token != listener_token)
+        .unwrap();
+    let token = peer.token;
+
+    server.inject_receive_for_test(TestReceive::Bytes(
+        b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+    ));
+    let before = server.socket_calls_for_test();
+    server.service_one(base, ready(token, true, true)).unwrap();
+    assert_eq!(server.socket_calls_for_test() - before, 1);
+
+    server.inject_send_for_test(TestSend::Error(Errno::CONNRESET));
+    let before = server.socket_calls_for_test();
+    server.service_one(base, ready(token, true, true)).unwrap();
+    assert_eq!(server.socket_calls_for_test() - before, 1);
+
+    let before = server.socket_calls_for_test();
+    server.service_one(base, ready(token, true, true)).unwrap();
+    assert_eq!(server.socket_calls_for_test() - before, 0);
+    drop(client);
 }
 
 fn endpoint_error(result: Result<SocketEndpoint, IpcPathError>) -> IpcPathError {
@@ -1169,7 +1913,7 @@ fn activation_is_consuming_one_shot_and_listens_with_backlog_64() {
 
     assert_eq!(operations.listen_calls.get(), 1);
     assert_eq!(operations.backlog.get(), Some(64));
-    assert!(socket_acceptconn(active.as_fd()).unwrap());
+    assert!(socket_acceptconn(active.socket_fd()).unwrap());
     UnixStream::connect(&socket_path).unwrap();
     assert_eq!(active.endpoint().path(), socket_path.as_path());
     assert_eq!(

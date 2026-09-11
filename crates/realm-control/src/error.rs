@@ -13,6 +13,24 @@ pub enum IpcPathError {
     Io(std::io::Error),
 }
 
+/// Failure while servicing the bounded control server.
+#[derive(Debug)]
+pub enum ControlError {
+    StaleConnection {
+        connection: crate::ConnectionId,
+    },
+    ShuttingDown,
+    OutboundFrameTooLarge {
+        connections: Vec<crate::ConnectionId>,
+    },
+    PeerIo {
+        connection: crate::ConnectionId,
+        source: std::io::Error,
+    },
+    ListenerIo(std::io::Error),
+    ResourceExhausted(std::io::Error),
+}
+
 impl fmt::Display for IpcPathError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -40,5 +58,43 @@ impl std::error::Error for IpcPathError {
 impl From<Errno> for IpcPathError {
     fn from(error: Errno) -> Self {
         Self::Io(std::io::Error::from(error))
+    }
+}
+
+impl fmt::Display for ControlError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StaleConnection { connection } => {
+                write!(formatter, "stale control connection {connection:?}")
+            }
+            Self::ShuttingDown => formatter.write_str("control server is shutting down"),
+            Self::OutboundFrameTooLarge { connections } => write!(
+                formatter,
+                "outbound control frame exceeded the bound for {connections:?}"
+            ),
+            Self::PeerIo { connection, source } => {
+                write!(
+                    formatter,
+                    "control peer {connection:?} I/O failed: {source}"
+                )
+            }
+            Self::ListenerIo(source) => write!(formatter, "control listener I/O failed: {source}"),
+            Self::ResourceExhausted(source) => {
+                write!(formatter, "control listener resource exhaustion: {source}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ControlError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PeerIo { source, .. }
+            | Self::ListenerIo(source)
+            | Self::ResourceExhausted(source) => Some(source),
+            Self::StaleConnection { .. }
+            | Self::ShuttingDown
+            | Self::OutboundFrameTooLarge { .. } => None,
+        }
     }
 }
