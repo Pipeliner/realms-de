@@ -67,6 +67,12 @@ pub struct ControlServer(/* listener + admitted transports + stable identities *
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ConnectionId(u64); // private opaque value, never a raw fd
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ResponseReceipt {
+    connection: ConnectionId,
+    sequence: std::num::NonZeroU64,
+}
+pub enum ResponseSettlement { Pending, Drained, Closed }
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ControlToken(u64); // private opaque poll-registration identity
 pub struct PollInterest<'a> {
     pub token: ControlToken,
@@ -76,7 +82,10 @@ pub struct PollInterest<'a> {
 }
 pub struct ReadyEvent {
     pub token: ControlToken,
+    /// POLLIN only.
     pub readable: bool,
+    /// POLLERR or POLLHUP, even when readable interest is masked.
+    pub terminal: bool,
     pub writable: bool,
 }
 pub struct ClientEndpoint(/* retained runtime capability for retries */);
@@ -89,11 +98,17 @@ pub enum ControlAction {
 
 pub enum ControlError {
     StaleConnection { connection: ConnectionId },
+    ResponseSequenceExhausted { connection: ConnectionId },
+    ResponseBarrierConflict {
+        active: ResponseReceipt,
+        requested: ResponseReceipt,
+    },
     ShuttingDown,
     OutboundFrameTooLarge { connections: Vec<ConnectionId> }, // at most 64, ascending
     PeerIo { connection: ConnectionId, source: std::io::Error },
     ListenerIo(std::io::Error),
-    ResourceExhausted(std::io::Error),
+    ListenerTerminal,
+    ResourceExhausted(std::io::Error), // fatal process-wide accept/resource exhaustion
 }
 
 pub enum ClientPhase {
@@ -181,7 +196,15 @@ impl ControlServer {
         now: Instant,
         connection: ConnectionId,
         response: Response,
-    ) -> Result<(), ControlError>;
+    ) -> Result<ResponseReceipt, ControlError>;
+    pub fn response_settlement(
+        &self,
+        receipt: ResponseReceipt,
+    ) -> ResponseSettlement;
+    pub fn begin_response_barrier(
+        &mut self,
+        receipt: ResponseReceipt,
+    ) -> Result<ResponseSettlement, ControlError>;
     pub fn complete_subscribe(
         &mut self,
         now: Instant,
@@ -516,6 +539,21 @@ record; at most one excess fd is refused per listener service quantum.
   readiness for queued output selects one send. Readiness not enabled by the
   current state performs no socket I/O.
 
+Terminal readiness makes that arbitration total:
+
+| State/readiness | One-quantum result |
+|---|---|
+| Listener with `terminal`, with or without readable | Fatal `ListenerTerminal`; no accept |
+| Read-enabled `AwaitHello`/`Ready` with readable + terminal | Perform the one receive first so buffered final bytes are not discarded; level terminal readiness is handled on the next poll if the peer remains |
+| Read-enabled `AwaitHello`/`Ready` with terminal only | Close the peer without I/O |
+| Read-disabled application-pending or queued-output peer with terminal | Close without receive/send; any response receipt becomes Closed |
+| Subscriber with readable + terminal | Apply its existing receive-first rule; positive input closes, clean EOF removes read interest, and pending output may remain |
+| Subscriber with terminal only | Close without I/O |
+| Response-barrier peer with terminal, including readable/writable too | Close immediately without receive/send; the exact receipt becomes Closed |
+
+`POLLNVAL` is never represented by these rows; it is an invalid driver
+registration and is fatal outside `service_one`.
+
 For `AwaitHello` and `Ready`, input consists of at most one partial frame and
 one decoded-but-not-completed request, except for the bounded Hello-plus-one
 startup receive above. Output consists of at most one ordinary protocol frame,
@@ -628,6 +666,46 @@ disconnected or stale `ConnectionId` returns a stable rejection and cannot
 touch any reused fd. The shutdown precedence above applies after
 `begin_shutdown`.
 
+Successful `complete_request` returns an opaque `ResponseReceipt` for that
+connection's strictly increasing nonzero response generation.
+`response_settlement` is a read-only, nonblocking query: Pending means that
+exact response frame is queued or partial, Drained means its final byte was
+sent, and Closed means the connection was removed by EOF, reset, output
+deadline, or any other close. A later request never makes an older receipt
+pending again. Sequence exhaustion closes only that connection, returns
+`ResponseSequenceExhausted { connection }` for that peer, and never wraps. If
+response encoding exceeds the bound, `complete_request` closes the requester
+and returns `OutboundFrameTooLarge` without a receipt; the caller may treat
+that proved close as Closed. This receipt is transport state, not an
+application request id or wire field.
+
+The outer poll mapping is exact: `POLLIN` sets `ReadyEvent.readable`, while
+`POLLERR | POLLHUP` sets `ReadyEvent.terminal` even when an interest masks
+ordinary reads. `POLLNVAL` is an invalid registration and is never passed as
+ordinary readability.
+
+`begin_response_barrier(receipt)` is the total pre-shutdown barrier used after
+either requester-bearing Quit response is queued: direct
+`CurrentControlRequest` and derived `OriginalAction` use the same path, while
+`NoRequester` skips it. Pending atomically removes listener and every
+peer readable interest, suppresses all new `ControlAction`s, and makes
+`poll_interests` expose only that exact response connection's writable/terminal
+progress. `service_one` never decodes input in this state: terminal readiness,
+including HUP-only, closes the peer immediately and makes the receipt Closed;
+otherwise simultaneous readable+writable readiness ignores input and advances
+the response, so readable traffic cannot starve its final byte. `next_deadline` exposes only
+that response's existing output deadline. Repeating the same Pending receipt is
+idempotent. A distinct Pending receipt while one is active returns
+`ResponseBarrierConflict` without replacing it. Drained or Closed installs no
+barrier. After the barrier receipt settles, ordinary interests do not reappear;
+#38 observes Drained/Closed and immediately calls `begin_shutdown`, which
+supersedes the barrier.
+
+`ResponseBarrierConflict` is a fatal process/adapter contract failure. It never
+closes or replaces either peer as a recovery strategy; the first barrier remains
+installed and #38 terminates the invalid driver incarnation if this supposedly
+unreachable error is returned.
+
 ### Syscall classification
 
 Socket I/O uses safe `rustix` 1.1.4 operations; every send includes
@@ -636,7 +714,7 @@ Socket I/O uses safe `rustix` 1.1.4 operations; every send includes
 | Operation/result | Classification |
 |---|---|
 | `accept4`: `EINTR`, `EAGAIN`/`EWOULDBLOCK`, or `ECONNABORTED` | End this quantum without a peer; a later readiness turn may retry |
-| `accept4`: `EMFILE`, `ENFILE`, `ENOBUFS`, or `ENOMEM` | Fatal `ControlError`; the process cannot preserve bounded service under resource exhaustion |
+| `accept4`: `EMFILE`, `ENFILE`, `ENOBUFS`, or `ENOMEM` | Fatal `ControlError::ResourceExhausted`; the process cannot preserve bounded service under resource exhaustion |
 | `accept4`: any other error | Fatal listener `ControlError` |
 | `SO_PEERCRED`: any error, missing value, or wrong uid | Close only the accepted peer before receive |
 | receive/send: `EINTR` or `EAGAIN`/`EWOULDBLOCK` | No progress; retain state and deadlines |
@@ -644,11 +722,14 @@ Socket I/O uses safe `rustix` 1.1.4 operations; every send includes
 | receive/send: `ECONNRESET`; send: `EPIPE` | Close only that peer |
 | other connected-stream receive/send error | Close only that peer and return a stable peer-local diagnostic |
 
-`ControlError::ListenerIo` and `ControlError::ResourceExhausted` are fatal.
-`StaleConnection`, `OutboundFrameTooLarge`, and `PeerIo` are stable peer-local
-results after the affected peer has already been isolated or closed;
-`ShuttingDown` is the stable no-mutation rejection after the total shutdown
-transition.
+`ControlError::ListenerIo`, `ListenerTerminal`, and
+`ControlError::ResourceExhausted` are fatal
+process-wide listener/accept failures. `StaleConnection`,
+`ResponseSequenceExhausted`, `OutboundFrameTooLarge`, and `PeerIo` are stable
+peer-local results after the affected peer has already been isolated or
+closed; `ShuttingDown` is the stable no-mutation rejection after the total
+shutdown transition. `ResponseBarrierConflict` is a fatal process/adapter
+contract failure and leaves the already active barrier unchanged.
 
 Global `poll` failures and the decision to restart the session remain #38
 outer-loop responsibilities, not `realm-control` transport policy.
@@ -663,10 +744,19 @@ then performs at most one control operation, then performs a zero-time backend
 readiness check before it may perform another control operation. No token
 bucket or audit-only rate limiter is added for MVP.
 
-For user-requested shutdown, #38 calls `begin_shutdown` once, continues the
-same backend-first bounded-loop ordering while driving subscriber interests and
-`expire`, and invokes River `exit_session` only after
-`is_shutdown_complete()` becomes true.
+For user-requested shutdown, #38 first submits the final snapshot and seals the
+worker when the adapter observes the terminal `QuitPending` boundary, fixing
+the worker's non-sliding 2,000 ms deadline before any barrier wait. It then
+applies the exact response barrier when Quit has a requester, calls
+`begin_shutdown` once that receipt is Drained or Closed, and continues the same
+backend-first bounded-loop ordering while driving subscriber interests and
+`expire`. Only after
+`is_shutdown_complete()` becomes true and the sealed worker fence has either
+acknowledged all pre-Quit work or recorded its explicit 2,000 ms degraded
+deadline does it call
+`Session::begin_exit_session()` exactly once, then drive backend interest
+until the expected post-flush `BackendEvent::Disconnected` produces
+`BackendTurn::ExitComplete`.
 
 Issue #40 supplies the real River `manage_finish`; #65 owns the real combined
 loop key-to-`manage_finish` performance assertion together with #38/#40. The
@@ -784,14 +874,15 @@ interoperability; A12 is #38. The real combined-loop performance budget is
 | A15 (#41) | Given listener readiness below or at the 64-slot cap, when `service_one` runs, then it performs at most one accept; at capacity it closes exactly one excess accepted fd without a record, and admitted peer state is unchanged | `realm_control::tests::one_ready_token_performs_at_most_one_socket_io`, `realm_control::tests::capacity_refusal_is_one_fd_per_quantum_and_allocates_nothing` |
 | A15a (#41) | Given a connection closes and its numeric fd is reused, when stale readiness or completion arrives, then its stable token/`ConnectionId` is rejected without touching the new peer, and no public listener `AsFd` bypass exists | `realm_control::tests::stale_token_and_connection_id_cannot_target_reused_fd`, `realm_control::compile_fail::bound_endpoint_cannot_activate_twice` |
 | A15b (#41) | Given an oversized response, initial state, or published event, when bounded encoding runs, then one-peer completion closes and reports its singleton id; publication with no subscribers performs no encode/mutation; and publication with subscribers encodes once before queue mutation, closes all and only subscribers, and returns their at-most-64 ids in ascending order without untrusted content | `realm_control::tests::outbound_frame_bound_is_streaming_peer_local_and_stable`, `realm_control::tests::oversized_publish_closes_sorted_subscriber_set_after_one_encode` |
-| A15c (#41) | Given every state and simultaneous readiness combination, when interests are built and one token is serviced, then pending application/ordinary output and SendingHello/CloseAfterReply disable reads, a subscriber advertises both when applicable and services readable first, and irrelevant readiness performs no I/O | `realm_control::tests::poll_interest_and_ready_arbitration_is_total` |
+| A15c (#41) | Given every listener, AwaitHello/Ready, application-pending, queued-output, subscriber, and response-barrier state with every simultaneous readiness combination, when interests are built and one token is serviced, then `POLLIN` and `POLLERR | POLLHUP` remain distinct readable/terminal flags; listener terminal is fatal; read-enabled peer readable+terminal performs one receive first while terminal-only closes; read-disabled peer terminal closes without send/read; subscriber readable+terminal follows receive-first while terminal-only closes; barrier terminal closes before send; and irrelevant readiness performs no I/O | `realm_control::tests::poll_interest_and_ready_arbitration_is_total`, `realm_control::tests::terminal_readiness_table_is_closed_for_every_transport_state` |
+| A15d (#41) | Given a successfully queued ordinary response, when queried before send, after partial send, after its final byte, after a later request, or after EOF/reset/deadline removal, then its opaque receipt reports Pending, Pending, Drained, Drained, or Closed without I/O. A Pending response barrier masks listener/all peer reads, exposes only the exact response's writable/terminal progress, cannot decode an action under simultaneous readiness, treats HUP-only as immediate Closed, never restores ordinary interests after settlement, is idempotent for the same receipt, and rejects a distinct Pending barrier without replacement. Receipt sequence exhaustion returns `ResponseSequenceExhausted` carrying that connection, closes only that peer, and never wraps; an oversized completion closes only that peer, and its error proves Closed without a receipt | `realm_control::tests::response_receipt_settlement_is_exact_and_nonblocking`, `realm_control::tests::response_receipt_never_reopens_after_later_request`, `realm_control::tests::response_barrier_masks_reads_and_prioritizes_exact_writer`, `realm_control::tests::response_barrier_hup_only_settles_closed_without_expiry`, `realm_control::tests::response_sequence_exhaustion_is_typed_peer_local_and_never_wraps`, `realm_control::tests::oversized_completion_returns_no_receipt_and_proves_closed` |
 | A16 (#41) | Given queued ordinary, subscriber, terminal, or shutdown output, when positive sends, `EAGAIN`, and exact deadlines occur, then `service_one` expires every applicable `now >= deadline` before socket I/O, only ordinary/subscriber progress resets its two-second deadline, hard 100 ms deadlines never reset, and the first applicable quantum attempts the write | `realm_control::tests::all_output_classes_obey_exact_nonblocking_deadlines`, `realm_control::tests::service_quantum_expires_before_socket_io`, `realm_control::control_socket_linux::a_full_send_buffer_returns_from_one_nonblocking_quantum` |
 | A16a (#41) | Given initial State A and later states B/C, when output drains, then A remains current and A followed by C is sent; when shutdown starts, an unstarted initial A is preserved before Shutdown, a partial initial/current finishes alone, and only a later non-initial unstarted current may be replaced by Shutdown. If initial delivery misses the hard drain, the client Subscribe returns InitialState timeout/EOF rather than success | `realm_control::tests::subscriber_current_and_latest_coalesce_and_shutdown_exactly`, `realm_control::tests::shutdown_preserves_unstarted_initial_state_before_shutdown` |
 | A16b (#41) | Given immediate connect, in-progress connect, every final `SO_ERROR`, or a client exchange/event deadline, when one named-client attempt runs, then phase-specific errors, the 100 ms connect bound, each two-second exchange bound, and the sole retryable MissingRealm/Refused classifications are exact | `realm_control::tests::client_error_preserves_all_phases_versions_and_exact_retryability`, `realm_control::tests::single_attempt_client_immediate_connect_sends_named_hello_on_cloexec_nonblocking_stream`, `realm_control::tests::single_attempt_client_in_progress_so_error_table_is_total_and_connects_once`, `realm_control::tests::single_attempt_client_connect_terminal_errors_and_hard_timeout_are_exact`, `realm_control::tests::client_hello_uses_one_hard_two_second_deadline_and_msg_nosignal`, `realm_control::tests::client_hello_response_errors_are_phase_specific_and_bounded`, `realm_control::tests::client_request_write_and_response_share_one_hard_deadline`, `realm_control::tests::client_subscribe_write_and_initial_state_share_one_hard_deadline`, `realm_control::tests::client_complete_buffered_event_does_not_slide_trailing_partial_deadline`, `realm_control::tests::client_subscription_idle_is_unbounded_but_partial_event_deadline_is_hard` |
 | A16c (#41) | Given immediate retryable failures, when `realmctl` exhausts startup retry, then attempts start at absolute not-before offsets 0, 10, 30, 70, 150, and 310 ms with no final sleep; given a slow attempt finishing after its next target, the following attempt starts immediately but never overlaps or moves backward; exhaustion/version/other transport errors map to exits 3/4/6 | `realm_ctl::control_retry::immediate_retryable_failures_use_exact_absolute_schedule_without_a_final_sleep`, `realm_ctl::control_retry::late_retryable_attempts_start_immediately_when_their_targets_have_elapsed`, `realm_ctl::control_retry::terminal_error_stops_after_its_first_attempt`, `realm_ctl::control_retry::classifier_uses_the_specified_client_exit_codes` |
 | A16d (#41) | Given a shell writes matching Hello and one request as two LF-terminated frames before reading, then it receives a decodable Hello followed by the request response and EOF does not discard either | CI-only remote evidence pending: `realm_control::control_socket_linux::shell_two_frame_interoperability_is_ordered` |
-| A16e (#41 transport; #38 driver) | Given any server state, when shutdown begins once or repeatedly, then the first call fixes the deadline, listener/admission/actions stop, all non-subscribers close, later completions/publication reject as `ShuttingDown` without mutation while ids already stale may remain `StaleConnection`, subscribers obey the initial/current rules, and completion becomes true on empty subscribers or exact expiry; #38 drives interests/expiry before `exit_session` | `realm_control::tests::shutdown_transition_is_total_idempotent_and_completion_observable`; #38 pending: shutdown-driver test |
-| A17 (#41 transport; #38/#40/#65 end to end) | Given adversarial ready control tokens, when the transport is serviced, then each quantum has bounded work, makes at most one socket I/O syscall, and exposes no write before its queued action completion; given the real combined loop, stalled peers, and a key event, #38 services backend/pending repair first and rechecks backend readiness between control operations, while #40/#65 prove real key-to-`manage_finish` remains below 4 ms | `realm_control::tests::one_ready_token_performs_at_most_one_socket_io`, `realm_control::tests::poll_interest_and_ready_arbitration_is_total`, `realm_control::control_socket_linux::a_full_send_buffer_returns_from_one_nonblocking_quantum`, `realm_control::control_socket_linux::a_healthy_peer_completes_beside_a_stalled_partial_frame`; #38/#40/#65 pending: combined-loop order and real key-to-`manage_finish` performance |
+| A16e (#41 transport; #38 driver) | Given any server state, when shutdown begins once or repeatedly, then the first call fixes the deadline, listener/admission/actions stop, all non-subscribers close, later completions/publication reject as `ShuttingDown` without mutation while ids already stale may remain `StaleConnection`, subscribers obey the initial/current rules, and completion becomes true on empty subscribers or exact expiry; #38 drives interests/expiry plus the sealed worker fence, calls `Session::begin_exit_session()` exactly once only after control completion and worker acknowledgement or explicit 2,000 ms degradation, and then drives backend interest until the expected post-flush `BackendEvent::Disconnected` produces one `BackendTurn::ExitComplete` | `realm_control::tests::shutdown_transition_is_total_idempotent_and_completion_observable`; #38 `realm_session::tests::shutdown_driver_calls_session_exit_once_and_stops_on_exit_complete`, `realm_session::tests::shutdown_fence_orders_full_process_queue_then_latest_snapshot_before_exit`, `realm_session::tests::shutdown_fence_timeout_records_degraded_state_then_exits` |
+| A17 (#41 transport; #38/#40/#65 end to end) | Given adversarial ready control tokens, when the transport is serviced, then each quantum has bounded work, makes at most one socket I/O syscall, and exposes no write before its queued action completion; given the real combined loop, stalled peers, and a key event, #38 services backend/pending repair first and rechecks backend readiness between control operations, while #40/#65 prove real key-to-`manage_finish` remains below 4 ms | `realm_control::tests::one_ready_token_performs_at_most_one_socket_io`, `realm_control::tests::poll_interest_and_ready_arbitration_is_total`, `realm_control::control_socket_linux::a_full_send_buffer_returns_from_one_nonblocking_quantum`, `realm_control::control_socket_linux::a_healthy_peer_completes_beside_a_stalled_partial_frame`; #38 `realm_session::tests::combined_loop_orders_all_ready_sources_once`, `realm_session::tests::received_release_crosses_ingress_dispatch_dequeue_before_repeat`, `realm_session::tests::continuous_backend_readability_yields_after_one_admitted_epoch`, `realm_session::tests::repeat_overrun_during_pending_work_is_dropped_without_catchup`, `realm_session::tests::control_quantum_rechecks_backend_before_next_peer`; #40 `backend::tests::policy_response_orders_manage_then_render_and_finishes_once`, `backend::tests::writable_finish_flush_preempts_continuous_readable_ingress`; #65 `realm_session::tests::key_to_manage_finish_meets_four_millisecond_budget_on_reference_linux` |
 
 ## Failure modes
 

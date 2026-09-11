@@ -40,17 +40,50 @@ on, not code in our workspace.
    window manager side of it directly, behind the existing `WmBackend` seam.
 2. `NiriBackend` is dropped. `NativeBackend` against `realm-compositor` (M5) is
    unchanged as the long-term destination.
-3. **Five companion protocols are obligations, not options.** Verification
-   against river's `protocol/` directory found that a usable realm needs all of:
+3. **Five protocol globals are MVP obligations, not options.** Verification
+   against River v0.4.8's `protocol/` directory found that a usable Realm needs
+   the window-manager global plus four companions:
 
    | Protocol | Why realm cannot ship without it |
    |---|---|
    | `river-window-management-v1` (ifaces at v5) | Layout, focus, ordering, borders, fullscreen |
    | `river-layer-shell-v1` (v1) | **The bar does not work at all otherwise.** river supports `wlr-layer-shell` only if the window manager implements this. `realm-bar` and `realm-hecate` stay ordinary `wlr-layer-shell` clients (ADR 0008 is unaffected); `realm-session` must serve the manager half |
    | `river-xkb-bindings-v1` (v3) | The entire keymap, and the chord model specifically |
-   | `river-input-management-v1` (v2) | Seat creation, keyboard repeat rate |
-   | `river-xkb-config-v1` | Keyboard layouts; without it realm freezes the layout river started with |
-   | `river-libinput-config-v1` | Input-device policy such as tap-to-click; without it realm cannot provide laptop input configuration |
+   | `river-input-management-v1` (v2) | Fixed 25 Hz / 600 ms application-key repeat on keyboards; Realm uses the always-present `default` seat and does not create or reassign seats |
+   | `river-libinput-config-v1` (v2) | Enable tap-to-click after complete per-device support/current discovery; preserve every other libinput preference |
+
+   Runtime keyboard-layout switching is deliberately post-MVP. M2 does not
+   bind `river-xkb-config-v1`; it preserves each keyboard's River-created
+   keymap/layout. A later change must specify the keymap source, switching
+   action, state publication, persistence, and UI before adding that protocol.
+   This replaces the earlier unsupported promise of a switchable MVP layout.
+
+   Startup has a mandatory two-turn dependency. Realm binds and settles the
+   input companions before binding the window manager, but it cannot obtain a
+   layer-shell workarea then: `get_output` needs the `river_output_v1` objects
+   River first creates inside the initial window-manager turn. Realm answers
+   that replay without a projection and with bindings disabled, requests one
+   layer-shell output object per reported output, and remains unready. The
+   first complete output in River creation order is the stable selected/default
+   output; only its later `non_exclusive_area` turn can drive the first complete
+   projection and transition to Live. Selected-output removal fails over to the
+   earliest surviving creation ordinal with complete geometry and retained
+   non-exclusive area. If none survives, the backend is unavailable.
+
+   The same replay dependency applies to seats. The first reported
+   `river_seat_v1` is Realm's sole MVP seat. Only it receives xkb-bindings-seat,
+   layer-shell-seat, binding, focus, chord, modifier, and exclusive-focus
+   policy. Binding specs are registered before replay but create no protocol
+   object until that seat appears. No seat at the replay barrier or later
+   selected-seat removal is unavailable; Realm does not invent multi-seat
+   failover policy for M2.
+
+   Backend-local live state is capped independently of exposed turns: 16
+   outputs, 16 seats, 64 input devices, and 64 libinput devices including
+   incomplete pre-`done` objects. Checked nonzero `u64` creation ordinals never
+   wrap or reuse. Overflow is fatal before dependent child/map installation;
+   removal frees a live slot only, and unused device strings/arrays are not
+   retained.
 
 4. Packaging vendors a pinned river 0.4.x. Ubuntu 24.04 and Fedora 41 ship
    0.3.x or river-classic, neither of which speaks the protocol. *(Distro
@@ -75,7 +108,7 @@ the description realm was working from.
 | Mono | Every tile the same rect; `place_top` on the focused window | **Faithful.** `Placement::occluded` becomes a real compositor property |
 | Stow | `river_window_v1::hide` / `show` | **Faithful, natively.** And the semantics match exactly: `hide` is *rendering* state, so a stowed window stays managed and stays in the ledger, which is precisely what `Orbit::stowed` means |
 | Fullscreen (`mod+f`) | `fullscreen(output)` plus `inform_fullscreen` | **Faithful for the window.** Bar visibility over fullscreen is *not* ours to order — see the correction below |
-| Workarea | `river_layer_shell_output_v1::non_exclusive_area` → `Workarea::tiles`; `river_output_v1::position`/`dimensions` → `Workarea::output` | **Faithful, and direct.** This is `Workarea::new(w, h, top, bottom)` arriving as an event |
+| Workarea | `river_layer_shell_output_v1::non_exclusive_area` → `Workarea::tiles`; selected `river_output_v1::position`/`dimensions` → `Workarea::output` | **Faithful, and direct after the projection-free replay.** The free rectangle may reserve any edge, so it is constructed field-wise rather than through the top/bottom-only `Workarea::new` helper |
 | 1px seams | `set_borders(edges, width, r, g, b, a)`, drawn by the compositor, premultiplied RGBA | **Faithful, and better than niri.** The design's seams become real borders. ADR 0005's decision to store alpha beside each colour pays off directly here |
 | Undo | Restore a ledger snapshot, re-project, apply in one render sequence | **Faithful.** This was "lossy by construction" on niri, needing a visible replay. It is now one atomic frame |
 | Chords (`mod` prefix, submaps) | `ensure_next_key_eaten` + `ate_unbound_key` | **Faithful, and purpose-built.** The protocol's own rationale names chorded bindings and submap exit as the reason this request exists |
@@ -216,7 +249,7 @@ is an empirical question for M2.
   exists specifically for users who did not want this change, which is a signal
   about migration friction and about third-party tooling that assumes the old
   model.
-- We implement six protocols including window management, not one — a larger phase-1 surface than ADR 0002
+- We implement five protocols including window management, not one — a larger phase-1 surface than ADR 0002
   scoped, with `river-layer-shell-v1` on the critical path for the bar
   appearing at all.
 - The dimension-quantisation gap above is unresolved and needs an M2 experiment.

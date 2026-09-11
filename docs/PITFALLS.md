@@ -18,7 +18,7 @@ Legend: **Guard** = the thing that would fail loudly if the mitigation regressed
 | Fractional scaling blur | Everything is soft on a 150% display | Integer geometry; buffers allocated at the output's real scale | *planned:* M2 scale test |
 | Focus causes relayout | Windows twitch as you move focus | Focus is a flag on a `Placement`, not an input to geometry | `layout::tests::projection_is_pure_and_focus_only_moves_the_flag` |
 | Redraw on a timer | Idle CPU never reaches zero; laptop fans | The bar owns no timer; `RealmState::renders_same_as` drops no-op frames. The one sampler that must exist lives in `realm-session`, off the input path, and its output still goes through the same equality gate | `state::tests::revision_alone_does_not_force_a_redraw` |
-| A laptop with no tap-to-click | The touchpad taps do nothing and there is no setting anywhere to fix it | Under river 0.4 there is no input config file: realm must serve `river-libinput-config-v1` and `river-xkb-config-v1` | *planned:* M2 |
+| A laptop with no tap-to-click | The touchpad taps do nothing and there is no setting anywhere to fix it | Under River 0.4 Realm binds `river-libinput-config-v1`, waits for each v2 device snapshot, and enables tap only when support is positive; unrelated device preferences remain untouched | *planned:* M2 |
 
 ## Being the window manager (river)
 

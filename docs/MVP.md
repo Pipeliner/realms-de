@@ -38,6 +38,7 @@ does not serve it waits — however good it would look in a screenshot.
 | Kvantum / Qt theming beyond `qt6ct` colours | qt6ct colour scheme only | M6 |
 | Minimal-motion pass | none — v1 is motionless by design | M6 |
 | Multi-monitor beyond "it doesn't break" | single output is the tested path | M6 |
+| Runtime keyboard-layout switching | preserve the keymap/layout River created for each keyboard | Post-MVP input contract |
 
 ---
 
@@ -47,7 +48,7 @@ does not serve it waits — however good it would look in a screenshot.
 |---|---|---|---|
 | **M0** | Foundations | `realm-core`, CI, docs, ADRs, repo furniture | `cargo test` green in CI; architecture reviewed |
 | **M1** | Theming pipeline | `realm-theme`, templates, `realmctl theme apply/lint` | One palette edit publishes a coherent sealed generation selected by future GTK, terminal, yazi and btop launches |
-| **M2** | Session and bar | `realm-session` + `RiverBackend`, and the five protocols realm must *serve* under river (`river-layer-shell-v1`, `river-xkb-bindings-v1`, `river-input-management-v1`, `river-xkb-config-v1`, `river-libinput-config-v1` — the last two are why a laptop has a working touchpad and a switchable keyboard layout), plus `realm-bar` | Bar reflects live orbit/focus/mode changes, and the reference triptych geometry is pixel-exact on river |
+| **M2** | Session and bar | `realm-session` + `RiverBackend`, and the four companion protocols Realm must use under River (`river-layer-shell-v1`, `river-xkb-bindings-v1`, `river-input-management-v1`, `river-libinput-config-v1` — the latter two apply fixed keyboard repeat and support-gated tap-to-click while preserving all other device preferences), plus `realm-bar` | Bar reflects live orbit/focus/mode changes, and the reference triptych geometry is pixel-exact on River |
 | **M3** | **Daily-drivable** | Session entry, portals, packaging, install docs | A fresh NixOS/Ubuntu/Fedora box logs into realm and passes `doctor` |
 | **M4** | Native clients | `realm-hecate`, `realm-odin`, urania, charon portal | The stopgaps are retired |
 | **M5** | realm compositor | `realm-compositor` on Smithay, `NativeBackend` | The ledger runs the screen directly |
