@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+realm-core = { workspace = true }
 rustix = { workspace = true }
 
 [dev-dependencies]

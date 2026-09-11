@@ -8,6 +8,9 @@ compile_error!("realm-control requires Linux");
 mod endpoint;
 #[cfg(target_os = "linux")]
 mod error;
+#[allow(dead_code)]
+#[cfg(target_os = "linux")]
+mod protocol;
 #[cfg(target_os = "linux")]
 mod runtime;
 #[cfg(target_os = "linux")]

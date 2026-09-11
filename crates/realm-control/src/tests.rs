@@ -19,10 +19,13 @@ use rustix::net::sockopt::socket_acceptconn;
 use rustix::net::{bind as bind_socket, getsockname, listen as listen_socket, SocketAddrUnix};
 use rustix::process::{geteuid, umask};
 
+use crate::protocol::{ConnectionMachine, ConnectionPhase, MachineAction, MachineClose};
 use crate::{
     production_runtime_dir, test_runtime_dir, ActiveControlListener, BoundControlEndpoint,
     IpcPathError, RuntimeDir, SocketEndpoint,
 };
+use realm_core::ipc::{Event, Request, Response, MAX_FRAME_BYTES};
+use realm_core::state::RealmState;
 
 fn process_test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1619,4 +1622,676 @@ fn singleton_lock_exec_child() {
     std::io::stdout().flush().unwrap();
     let mut input = Vec::new();
     std::io::stdin().read_to_end(&mut input).unwrap();
+}
+
+#[test]
+fn protocol_state_machine_is_total() {
+    struct Case {
+        name: &'static str,
+        prepare_ready: bool,
+        input: Vec<u8>,
+        expected_action: MachineAction,
+        expected_output: Option<&'static [u8]>,
+        expected_phase: ConnectionPhase,
+        expected_input_enabled: bool,
+    }
+
+    let hello = b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n";
+    let hello_reply =
+        b"{\"reply\":\"hello\",\"data\":{\"version\":1,\"session\":\"test-session\"}}\n";
+    let expected_hello_error = b"{\"reply\":\"error\",\"data\":{\"message\":\"expected Hello\"}}\n";
+    let invalid_request_error =
+        b"{\"reply\":\"error\",\"data\":{\"message\":\"invalid request\"}}\n";
+    let duplicate_hello_error =
+        b"{\"reply\":\"error\",\"data\":{\"message\":\"duplicate Hello\"}}\n";
+
+    let cases = vec![
+        Case {
+            name: "matching Hello waits for its reply",
+            prepare_ready: false,
+            input: hello.to_vec(),
+            expected_action: MachineAction::None,
+            expected_output: Some(hello_reply),
+            expected_phase: ConnectionPhase::SendingHello,
+            expected_input_enabled: false,
+        },
+        Case {
+            name: "mismatched Hello discards its pipeline",
+            prepare_ready: false,
+            input: b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n{\"cmd\":\"get-state\"}\n".to_vec(),
+            expected_action: MachineAction::None,
+            expected_output: Some(hello_reply),
+            expected_phase: ConnectionPhase::CloseAfterReply,
+            expected_input_enabled: false,
+        },
+        Case {
+            name: "ordinary request before Hello is terminal",
+            prepare_ready: false,
+            input: b"{\"cmd\":\"get-state\"}\n".to_vec(),
+            expected_action: MachineAction::None,
+            expected_output: Some(expected_hello_error),
+            expected_phase: ConnectionPhase::CloseAfterReply,
+            expected_input_enabled: false,
+        },
+        Case {
+            name: "invalid UTF-8 closes silently",
+            prepare_ready: false,
+            input: vec![0xff, b'\n'],
+            expected_action: MachineAction::Close(MachineClose::InvalidInput),
+            expected_output: None,
+            expected_phase: ConnectionPhase::Closing,
+            expected_input_enabled: false,
+        },
+        Case {
+            name: "invalid JSON closes silently",
+            prepare_ready: false,
+            input: b"{]\n".to_vec(),
+            expected_action: MachineAction::Close(MachineClose::InvalidInput),
+            expected_output: None,
+            expected_phase: ConnectionPhase::Closing,
+            expected_input_enabled: false,
+        },
+        Case {
+            name: "valid JSON outside Request gets one error",
+            prepare_ready: false,
+            input: b"{\"cmd\":\"detonate\"}\n".to_vec(),
+            expected_action: MachineAction::None,
+            expected_output: Some(invalid_request_error),
+            expected_phase: ConnectionPhase::CloseAfterReply,
+            expected_input_enabled: false,
+        },
+        Case {
+            name: "duplicate Hello is terminal",
+            prepare_ready: true,
+            input: hello.to_vec(),
+            expected_action: MachineAction::None,
+            expected_output: Some(duplicate_hello_error),
+            expected_phase: ConnectionPhase::CloseAfterReply,
+            expected_input_enabled: false,
+        },
+        Case {
+            name: "Subscribe is emitted unchanged",
+            prepare_ready: true,
+            input: b"{\"cmd\":\"subscribe\"}\n".to_vec(),
+            expected_action: MachineAction::Request(Request::Subscribe),
+            expected_output: None,
+            expected_phase: ConnectionPhase::Ready,
+            expected_input_enabled: false,
+        },
+        Case {
+            name: "second ordinary pipeline closes before dispatch",
+            prepare_ready: true,
+            input: b"{\"cmd\":\"get-state\"}\n{\"cmd\":\"quit\"}\n".to_vec(),
+            expected_action: MachineAction::Close(MachineClose::ExcessPipeline),
+            expected_output: None,
+            expected_phase: ConnectionPhase::Closing,
+            expected_input_enabled: false,
+        },
+        Case {
+            name: "third startup frame closes before retained dispatch",
+            prepare_ready: false,
+            input: b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n{\"cmd\":\"get-state\"}\n{\"cmd\":\"quit\"}\n".to_vec(),
+            expected_action: MachineAction::Close(MachineClose::ExcessPipeline),
+            expected_output: None,
+            expected_phase: ConnectionPhase::Closing,
+            expected_input_enabled: false,
+        },
+        Case {
+            name: "exactly full unterminated prefix is impossible",
+            prepare_ready: false,
+            input: vec![b' '; MAX_FRAME_BYTES],
+            expected_action: MachineAction::Close(MachineClose::FrameTooLarge),
+            expected_output: None,
+            expected_phase: ConnectionPhase::Closing,
+            expected_input_enabled: false,
+        },
+    ];
+
+    for case in cases {
+        let now = Instant::now();
+        let mut machine = ConnectionMachine::new(now, "test-session");
+        if case.prepare_ready {
+            assert_eq!(machine.ingest(now, hello), MachineAction::None);
+            assert_eq!(machine.output(), Some(hello_reply.as_slice()));
+            assert_eq!(
+                machine.advance_output(now, hello_reply.len()),
+                MachineAction::None
+            );
+            assert_eq!(machine.phase(), ConnectionPhase::Ready);
+        }
+
+        assert_eq!(
+            machine.ingest(now, &case.input),
+            case.expected_action,
+            "{} action",
+            case.name
+        );
+        assert_eq!(
+            machine.output(),
+            case.expected_output,
+            "{} output",
+            case.name
+        );
+        assert_eq!(machine.phase(), case.expected_phase, "{} phase", case.name);
+        assert_eq!(
+            machine.input_enabled(),
+            case.expected_input_enabled,
+            "{} input interest",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn hello_reply_drains_before_retained_request_dispatch() {
+    let now = Instant::now();
+    let hello_reply =
+        b"{\"reply\":\"hello\",\"data\":{\"version\":1,\"session\":\"test-session\"}}\n";
+    let mut machine = ConnectionMachine::new(now, "test-session");
+
+    assert_eq!(
+        machine.ingest(
+            now,
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"shell\"}}\n{\"cmd\":\"get-state\"}\n"
+        ),
+        MachineAction::None
+    );
+    assert_eq!(machine.phase(), ConnectionPhase::SendingHello);
+    assert!(!machine.input_enabled());
+    assert_eq!(machine.output(), Some(hello_reply.as_slice()));
+
+    assert_eq!(
+        machine.advance_output(now, hello_reply.len() - 1),
+        MachineAction::None
+    );
+    assert_eq!(machine.phase(), ConnectionPhase::SendingHello);
+    assert_eq!(
+        machine.output(),
+        Some(&hello_reply[hello_reply.len() - 1..])
+    );
+
+    assert_eq!(
+        machine.advance_output(now, 1),
+        MachineAction::Request(Request::GetState)
+    );
+    assert_eq!(machine.phase(), ConnectionPhase::Ready);
+    assert_eq!(machine.output(), None);
+    assert!(!machine.input_enabled());
+}
+
+#[test]
+fn mismatched_hello_reply_drains_then_closes() {
+    let now = Instant::now();
+    let mut machine = ConnectionMachine::new(now, "test-session");
+    assert_eq!(
+        machine.ingest(
+            now,
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n{\"cmd\":\"quit\"}\n"
+        ),
+        MachineAction::None
+    );
+    let reply_len = machine.output().unwrap().len();
+    assert_eq!(
+        machine.advance_output(now, reply_len),
+        MachineAction::Close(MachineClose::OutputComplete)
+    );
+    assert_eq!(machine.phase(), ConnectionPhase::Closing);
+    assert!(!machine.input_enabled());
+}
+
+fn ready_protocol_machine(now: Instant) -> ConnectionMachine {
+    let mut machine = ConnectionMachine::new(now, "test-session");
+    assert_eq!(
+        machine.ingest(
+            now,
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n"
+        ),
+        MachineAction::None
+    );
+    let hello_len = machine.output().unwrap().len();
+    assert_eq!(machine.advance_output(now, hello_len), MachineAction::None);
+    machine
+}
+
+fn pending_protocol_machine(
+    now: Instant,
+    request_frame: &[u8],
+) -> (ConnectionMachine, MachineAction) {
+    let mut machine = ready_protocol_machine(now);
+    let action = machine.ingest(now, request_frame);
+    (machine, action)
+}
+
+fn subscriber_protocol_machine(now: Instant, revision: u64) -> ConnectionMachine {
+    let (mut machine, action) = pending_protocol_machine(now, b"{\"cmd\":\"subscribe\"}\n");
+    assert_eq!(action, MachineAction::Request(Request::Subscribe));
+    let state = protocol_state(revision);
+    assert_eq!(machine.complete_subscribe(now, &state), MachineAction::None);
+    machine
+}
+
+fn protocol_state(revision: u64) -> RealmState {
+    RealmState {
+        revision,
+        ..RealmState::default()
+    }
+}
+
+fn output_event(machine: &ConnectionMachine) -> Event {
+    let frame = std::str::from_utf8(machine.output().unwrap()).unwrap();
+    realm_core::ipc::decode(frame).unwrap()
+}
+
+fn publish_protocol_state(
+    machine: &mut ConnectionMachine,
+    now: Instant,
+    state: &RealmState,
+) -> MachineAction {
+    let frame = realm_core::ipc::encode(&Event::State(Box::new(state.clone()))).unwrap();
+    machine.publish_state(now, frame.as_bytes())
+}
+
+#[test]
+fn hard_read_deadlines_and_impossible_full_prefix_close_exactly() {
+    let base = Instant::now();
+    let mut awaiting = ConnectionMachine::new(base, "test-session");
+    assert_eq!(
+        awaiting.next_deadline(),
+        Some(base + Duration::from_secs(1))
+    );
+    assert_eq!(
+        awaiting.expire(base + Duration::from_secs(1) - Duration::from_nanos(1)),
+        MachineAction::None
+    );
+    assert_eq!(
+        awaiting.expire(base + Duration::from_secs(1)),
+        MachineAction::Close(MachineClose::Deadline)
+    );
+
+    // Catches sliding the Ready partial-frame deadline on later input.
+    let mut ready = ready_protocol_machine(base);
+    let first_byte = base + Duration::from_millis(10);
+    assert_eq!(ready.ingest(first_byte, b"{"), MachineAction::None);
+    assert_eq!(
+        ready.next_deadline(),
+        Some(first_byte + Duration::from_secs(2))
+    );
+    assert_eq!(
+        ready.ingest(first_byte + Duration::from_secs(1), b" "),
+        MachineAction::None
+    );
+    assert_eq!(
+        ready.next_deadline(),
+        Some(first_byte + Duration::from_secs(2))
+    );
+    assert_eq!(
+        ready.expire(first_byte + Duration::from_secs(2) - Duration::from_nanos(1)),
+        MachineAction::None
+    );
+    assert_eq!(
+        ready.expire(first_byte + Duration::from_secs(2)),
+        MachineAction::Close(MachineClose::Deadline)
+    );
+
+    let mut retained_partial = ConnectionMachine::new(base, "test-session");
+    assert_eq!(
+        retained_partial.ingest(
+            first_byte,
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n{"
+        ),
+        MachineAction::None
+    );
+    let hello_len = retained_partial.output().unwrap().len();
+    assert_eq!(
+        retained_partial.advance_output(first_byte + Duration::from_secs(1), hello_len),
+        MachineAction::None
+    );
+    assert_eq!(
+        retained_partial.next_deadline(),
+        Some(first_byte + Duration::from_secs(2))
+    );
+}
+
+#[test]
+fn all_output_classes_obey_exact_nonblocking_deadlines() {
+    let base = Instant::now();
+
+    // Catches resetting a two-second output deadline without positive progress.
+    let mut no_progress = ConnectionMachine::new(base, "test-session");
+    assert_eq!(
+        no_progress.ingest(
+            base,
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n"
+        ),
+        MachineAction::None
+    );
+    assert_eq!(
+        no_progress.advance_output(base + Duration::from_secs(1), 0),
+        MachineAction::None
+    );
+    assert_eq!(
+        no_progress.expire(base + Duration::from_secs(2)),
+        MachineAction::Close(MachineClose::Deadline)
+    );
+
+    let mut progress = ConnectionMachine::new(base, "test-session");
+    assert_eq!(
+        progress.ingest(
+            base,
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n"
+        ),
+        MachineAction::None
+    );
+    assert_eq!(
+        progress.advance_output(base + Duration::from_secs(1), 1),
+        MachineAction::None
+    );
+    assert_eq!(
+        progress.next_deadline(),
+        Some(base + Duration::from_secs(3))
+    );
+    assert_eq!(
+        progress.expire(base + Duration::from_secs(2)),
+        MachineAction::None
+    );
+    assert_eq!(
+        progress.expire(base + Duration::from_secs(3)),
+        MachineAction::Close(MachineClose::Deadline)
+    );
+
+    // Catches sliding the hard terminal deadline after positive output.
+    let mut terminal = ConnectionMachine::new(base, "test-session");
+    assert_eq!(
+        terminal.ingest(
+            base,
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n"
+        ),
+        MachineAction::None
+    );
+    assert_eq!(
+        terminal.advance_output(base + Duration::from_millis(50), 1),
+        MachineAction::None
+    );
+    assert_eq!(
+        terminal.next_deadline(),
+        Some(base + Duration::from_millis(100))
+    );
+    assert_eq!(
+        terminal.expire(base + Duration::from_millis(100)),
+        MachineAction::Close(MachineClose::Deadline)
+    );
+
+    let mut subscriber = subscriber_protocol_machine(base, 1);
+    assert_eq!(
+        subscriber.advance_output(base + Duration::from_secs(1), 1),
+        MachineAction::None
+    );
+    assert_eq!(
+        subscriber.next_deadline(),
+        Some(base + Duration::from_secs(3))
+    );
+}
+
+#[test]
+fn half_close_preserves_authorized_two_frame_work_and_subscribers() {
+    let base = Instant::now();
+    let mut ordinary = ConnectionMachine::new(base, "test-session");
+    assert_eq!(
+        ordinary.ingest(
+            base,
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"shell\"}}\n{\"cmd\":\"get-state\"}\n"
+        ),
+        MachineAction::None
+    );
+    assert_eq!(ordinary.read_eof(base), MachineAction::None);
+    let hello_len = ordinary.output().unwrap().len();
+    assert_eq!(
+        ordinary.advance_output(base, hello_len),
+        MachineAction::Request(Request::GetState)
+    );
+    assert_eq!(
+        ordinary.complete_request(base, &Response::Ok),
+        MachineAction::None
+    );
+    assert_eq!(ordinary.output(), Some(b"{\"reply\":\"ok\"}\n".as_slice()));
+    assert_eq!(
+        ordinary.advance_output(base, b"{\"reply\":\"ok\"}\n".len()),
+        MachineAction::Close(MachineClose::PeerClosed)
+    );
+
+    let mut subscriber = ConnectionMachine::new(base, "test-session");
+    assert_eq!(
+        subscriber.ingest(
+            base,
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"bar\"}}\n{\"cmd\":\"subscribe\"}\n"
+        ),
+        MachineAction::None
+    );
+    assert_eq!(subscriber.read_eof(base), MachineAction::None);
+    let hello_len = subscriber.output().unwrap().len();
+    assert_eq!(
+        subscriber.advance_output(base, hello_len),
+        MachineAction::Request(Request::Subscribe)
+    );
+    let initial = protocol_state(7);
+    assert_eq!(
+        subscriber.complete_subscribe(base, &initial),
+        MachineAction::None
+    );
+    let initial_len = subscriber.output().unwrap().len();
+    assert_eq!(
+        subscriber.advance_output(base, initial_len),
+        MachineAction::None
+    );
+    assert_eq!(subscriber.phase(), ConnectionPhase::Subscriber);
+    assert!(!subscriber.input_enabled());
+    let update = RealmState {
+        revision: 8,
+        ..initial
+    };
+    assert_eq!(
+        publish_protocol_state(&mut subscriber, base, &update),
+        MachineAction::None
+    );
+    assert!(matches!(
+        output_event(&subscriber),
+        Event::State(state) if state.revision == 8
+    ));
+
+    let mut before_hello = ConnectionMachine::new(base, "test-session");
+    assert_eq!(
+        before_hello.read_eof(base),
+        MachineAction::Close(MachineClose::PeerClosed)
+    );
+    let mut partial = ready_protocol_machine(base);
+    assert_eq!(partial.ingest(base, b"{"), MachineAction::None);
+    assert_eq!(
+        partial.read_eof(base),
+        MachineAction::Close(MachineClose::PeerClosed)
+    );
+}
+
+#[test]
+fn read_half_closed_application_error_drains_then_closes() {
+    let base = Instant::now();
+    let (mut machine, action) = pending_protocol_machine(base, b"{\"cmd\":\"quit\"}\n");
+    assert_eq!(action, MachineAction::Request(Request::Quit));
+    assert_eq!(machine.read_eof(base), MachineAction::None);
+    assert_eq!(
+        machine.complete_request(
+            base,
+            &Response::Error {
+                message: "application refused".to_owned(),
+            }
+        ),
+        MachineAction::None
+    );
+    let expected = b"{\"reply\":\"error\",\"data\":{\"message\":\"application refused\"}}\n";
+    assert_eq!(machine.output(), Some(expected.as_slice()));
+    assert_eq!(
+        machine.advance_output(base, expected.len()),
+        MachineAction::Close(MachineClose::PeerClosed)
+    );
+}
+
+#[test]
+fn subscriber_current_and_latest_coalesce_and_shutdown_exactly() {
+    let base = Instant::now();
+    for first_progress in [0, 1] {
+        let mut machine = subscriber_protocol_machine(base, 1);
+        let initial = machine.output().unwrap().to_vec();
+        if first_progress == 1 {
+            assert_eq!(machine.advance_output(base, 1), MachineAction::None);
+            assert_eq!(machine.output(), Some(&initial[1..]));
+        }
+        let state = protocol_state(2);
+        assert_eq!(
+            publish_protocol_state(&mut machine, base, &state),
+            MachineAction::None
+        );
+        let state = protocol_state(3);
+        assert_eq!(
+            publish_protocol_state(&mut machine, base, &state),
+            MachineAction::None
+        );
+
+        // Catches replacing initial A or queueing both B and C.
+        assert_eq!(machine.output(), Some(&initial[first_progress..]));
+        assert_eq!(
+            machine.advance_output(base, initial.len() - first_progress),
+            MachineAction::None
+        );
+        assert!(matches!(
+            output_event(&machine),
+            Event::State(state) if state.revision == 3
+        ));
+        let latest_len = machine.output().unwrap().len();
+        assert_eq!(
+            machine.advance_output(base, latest_len),
+            MachineAction::None
+        );
+        assert_eq!(machine.output(), None);
+    }
+
+    let mut positive_input = subscriber_protocol_machine(base, 1);
+    assert_eq!(
+        positive_input.ingest(base, b"x"),
+        MachineAction::Close(MachineClose::SubscriberInput)
+    );
+}
+
+#[test]
+fn shutdown_preserves_unstarted_initial_state_before_shutdown() {
+    let base = Instant::now();
+    let mut machine = subscriber_protocol_machine(base, 11);
+    let initial = machine.output().unwrap().to_vec();
+    let stale_latest = protocol_state(12);
+    assert_eq!(
+        publish_protocol_state(&mut machine, base, &stale_latest),
+        MachineAction::None
+    );
+    assert_eq!(machine.begin_shutdown(base), MachineAction::None);
+    assert_eq!(machine.output(), Some(initial.as_slice()));
+    assert_eq!(
+        machine.advance_output(base, initial.len()),
+        MachineAction::None
+    );
+    assert_eq!(output_event(&machine), Event::Shutdown);
+    let shutdown_len = machine.output().unwrap().len();
+    assert_eq!(
+        machine.advance_output(base, shutdown_len),
+        MachineAction::Close(MachineClose::Shutdown)
+    );
+}
+
+#[test]
+fn shutdown_queue_branches_and_deadline_are_total_and_idempotent() {
+    let base = Instant::now();
+
+    // A partial initial frame finishes alone.
+    let mut partial_initial = subscriber_protocol_machine(base, 1);
+    let discarded = protocol_state(9);
+    assert_eq!(
+        publish_protocol_state(&mut partial_initial, base, &discarded),
+        MachineAction::None
+    );
+    assert_eq!(partial_initial.advance_output(base, 1), MachineAction::None);
+    assert_eq!(partial_initial.begin_shutdown(base), MachineAction::None);
+    let remaining = partial_initial.output().unwrap().len();
+    assert_eq!(
+        partial_initial.advance_output(base, remaining),
+        MachineAction::Close(MachineClose::Shutdown)
+    );
+
+    // An unstarted later current is replaced by Shutdown.
+    let mut unstarted_later = subscriber_protocol_machine(base, 1);
+    let initial_len = unstarted_later.output().unwrap().len();
+    assert_eq!(
+        unstarted_later.advance_output(base, initial_len),
+        MachineAction::None
+    );
+    let update = protocol_state(2);
+    assert_eq!(
+        publish_protocol_state(&mut unstarted_later, base, &update),
+        MachineAction::None
+    );
+    assert_eq!(unstarted_later.begin_shutdown(base), MachineAction::None);
+    assert_eq!(output_event(&unstarted_later), Event::Shutdown);
+
+    // A partial later current finishes alone.
+    let mut partial_later = subscriber_protocol_machine(base, 1);
+    let initial_len = partial_later.output().unwrap().len();
+    assert_eq!(
+        partial_later.advance_output(base, initial_len),
+        MachineAction::None
+    );
+    assert_eq!(
+        publish_protocol_state(&mut partial_later, base, &update),
+        MachineAction::None
+    );
+    assert_eq!(partial_later.advance_output(base, 1), MachineAction::None);
+    let newer_update = protocol_state(3);
+    assert_eq!(
+        publish_protocol_state(&mut partial_later, base, &newer_update),
+        MachineAction::None
+    );
+    assert_eq!(partial_later.begin_shutdown(base), MachineAction::None);
+    let remaining = partial_later.output().unwrap().len();
+    assert_eq!(
+        partial_later.advance_output(base, remaining),
+        MachineAction::Close(MachineClose::Shutdown)
+    );
+
+    // With no current, Shutdown is queued directly.
+    let mut idle = subscriber_protocol_machine(base, 1);
+    let initial_len = idle.output().unwrap().len();
+    assert_eq!(idle.advance_output(base, initial_len), MachineAction::None);
+    assert_eq!(idle.begin_shutdown(base), MachineAction::None);
+    assert_eq!(output_event(&idle), Event::Shutdown);
+
+    // Catches moving the first hard shutdown deadline or rebuilding output.
+    let queued = idle.output().unwrap().to_vec();
+    assert_eq!(
+        idle.begin_shutdown(base + Duration::from_secs(1)),
+        MachineAction::None
+    );
+    assert_eq!(idle.output(), Some(queued.as_slice()));
+    assert_eq!(
+        idle.next_deadline(),
+        Some(base + Duration::from_millis(100))
+    );
+    assert_eq!(
+        idle.expire(base + Duration::from_millis(100) - Duration::from_nanos(1)),
+        MachineAction::None
+    );
+    assert_eq!(
+        idle.expire(base + Duration::from_millis(100)),
+        MachineAction::Close(MachineClose::Deadline)
+    );
+
+    let mut ordinary = ready_protocol_machine(base);
+    assert_eq!(
+        ordinary.begin_shutdown(base),
+        MachineAction::Close(MachineClose::Shutdown)
+    );
 }

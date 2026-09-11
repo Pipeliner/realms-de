@@ -300,6 +300,7 @@ dependencies = [
 name = "realm-control"
 version = "0.1.0"
 dependencies = [
+ "realm-core",
  "rustix",
  "tempfile",
  "trybuild",
