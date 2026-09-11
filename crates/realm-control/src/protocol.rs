@@ -35,6 +35,7 @@ pub(crate) enum MachineClose {
 pub(crate) enum MachineAction {
     None,
     Request(Request),
+    OutboundFrameTooLarge,
     Close(MachineClose),
 }
 
@@ -383,30 +384,26 @@ impl ConnectionMachine {
         if self.shutting_down || !self.request_pending || self.pending_subscribe {
             return MachineAction::None;
         }
+        let Some(bytes) = encode_response(response) else {
+            return MachineAction::OutboundFrameTooLarge;
+        };
         self.request_pending = false;
-        match encode_response(response) {
-            Some(bytes) => {
-                self.set_current(bytes, OutputClass::Ordinary, now);
-                MachineAction::None
-            }
-            None => self.close(MachineClose::FrameTooLarge),
-        }
+        self.set_current(bytes, OutputClass::Ordinary, now);
+        MachineAction::None
     }
 
-    pub(crate) fn complete_subscribe(&mut self, now: Instant, state: &RealmState) -> MachineAction {
+    pub(crate) fn complete_subscribe(&mut self, now: Instant, state: RealmState) -> MachineAction {
         if self.shutting_down || !self.request_pending || !self.pending_subscribe {
             return MachineAction::None;
         }
+        let Some(bytes) = encode_event(&Event::State(Box::new(state))) else {
+            return MachineAction::OutboundFrameTooLarge;
+        };
         self.request_pending = false;
         self.pending_subscribe = false;
-        match encode_event(&Event::State(Box::new(state.clone()))) {
-            Some(bytes) => {
-                self.phase = ConnectionPhase::Subscriber;
-                self.set_current(bytes, OutputClass::InitialState, now);
-                MachineAction::None
-            }
-            None => self.close(MachineClose::FrameTooLarge),
-        }
+        self.phase = ConnectionPhase::Subscriber;
+        self.set_current(bytes, OutputClass::InitialState, now);
+        MachineAction::None
     }
 
     pub(crate) fn publish_state(&mut self, now: Instant, frame: &[u8]) -> MachineAction {

@@ -16,7 +16,9 @@ use rustix::fs::{
 };
 use rustix::io::{Errno, FdFlags};
 use rustix::net::sockopt::socket_acceptconn;
-use rustix::net::{bind as bind_socket, getsockname, listen as listen_socket, SocketAddrUnix};
+use rustix::net::{
+    bind as bind_socket, getsockname, listen as listen_socket, SendFlags, SocketAddrUnix,
+};
 use rustix::process::{geteuid, umask};
 
 use crate::protocol::{ConnectionMachine, ConnectionPhase, MachineAction, MachineClose};
@@ -751,6 +753,42 @@ fn service_quantum_expires_before_socket_io() {
     assert_eq!(server.connection_count_for_test(), 0);
 }
 
+/// Catches resolving even a stale token before the mandatory global expiry
+/// pass has closed every peer at its exact deadline.
+#[test]
+fn stale_readiness_runs_global_expiry_before_token_resolution() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let (stale_client, _stale_connection, stale_token, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    let (_due_client, _due_connection, _due_token, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    server.inject_receive_for_test(TestReceive::Error(Errno::CONNRESET));
+    server
+        .service_one(base, ready(stale_token, true, false))
+        .unwrap();
+    drop(stale_client);
+
+    let socket_calls = server.socket_calls_for_test();
+    assert_eq!(
+        server
+            .service_one(
+                base + Duration::from_secs(1),
+                ready(stale_token, true, true),
+            )
+            .unwrap(),
+        None
+    );
+    assert_eq!(server.connection_count_for_test(), 0);
+    assert_eq!(server.socket_calls_for_test(), socket_calls);
+    assert_eq!(
+        server.connections_at_last_token_resolution_for_test(),
+        Some(0)
+    );
+}
+
 /// Catches treating raw fd numbers as identity when the kernel reuses one.
 #[test]
 fn stale_token_and_connection_id_cannot_target_reused_fd() {
@@ -879,6 +917,48 @@ fn outbound_frame_bound_is_streaming_peer_local_and_stable() {
         Err(ControlError::OutboundFrameTooLarge { connections }) if connections == vec![connection]
     ));
     assert_eq!(server.connection_count_for_test(), 0);
+}
+
+/// Catches clearing pending completion state before bounded encoding succeeds,
+/// and catches retaining the owned subscribe state through a full clone.
+#[test]
+fn completion_encoding_precedes_queue_mutation_and_overflow_is_retriable() {
+    let base = Instant::now();
+    let (mut ordinary, action) = pending_protocol_machine(base, b"{\"cmd\":\"get-state\"}\n");
+    assert_eq!(action, MachineAction::Request(Request::GetState));
+    let oversized_response = Response::Error {
+        message: "x".repeat(MAX_FRAME_BYTES),
+    };
+    assert_eq!(
+        ordinary.complete_request(base, &oversized_response),
+        MachineAction::OutboundFrameTooLarge
+    );
+    assert_eq!(ordinary.phase(), ConnectionPhase::Ready);
+    assert!(!ordinary.input_enabled());
+    assert!(ordinary.output().is_none());
+    assert_eq!(
+        ordinary.complete_request(base, &Response::Ok),
+        MachineAction::None
+    );
+    assert!(ordinary.output().is_some());
+
+    let (mut subscriber, action) = pending_protocol_machine(base, b"{\"cmd\":\"subscribe\"}\n");
+    assert_eq!(action, MachineAction::Request(Request::Subscribe));
+    let mut oversized_state = protocol_state(1);
+    oversized_state.focused_title = "x".repeat(MAX_FRAME_BYTES);
+    assert_eq!(
+        subscriber.complete_subscribe(base, oversized_state),
+        MachineAction::OutboundFrameTooLarge
+    );
+    assert_eq!(subscriber.phase(), ConnectionPhase::Ready);
+    assert!(!subscriber.input_enabled());
+    assert!(subscriber.output().is_none());
+    assert_eq!(
+        subscriber.complete_subscribe(base, protocol_state(2)),
+        MachineAction::None
+    );
+    assert_eq!(subscriber.phase(), ConnectionPhase::Subscriber);
+    assert!(subscriber.output().is_some());
 }
 
 /// Catches publication encoding per subscriber, partial queue mutation before
@@ -1021,8 +1101,7 @@ fn capacity_refusal_is_one_fd_per_quantum_and_allocates_nothing() {
     let _lock = process_test_lock();
     let base = Instant::now();
     let (_temporary, runtime_path, listener) = active_control_listener();
-    let credentials = std::iter::repeat_n(TestPeerCredential::Uid(geteuid().as_raw()), 64)
-        .chain([TestPeerCredential::Error(Errno::IO)]);
+    let credentials = std::iter::repeat_n(TestPeerCredential::Uid(geteuid().as_raw()), 65);
     let mut server = listener.into_server_with_test_credentials(base, credentials);
     let listener_token = server.poll_interests().next().unwrap().token;
     let socket_path = runtime_path.join("realm/ctl.sock");
@@ -1033,6 +1112,7 @@ fn capacity_refusal_is_one_fd_per_quantum_and_allocates_nothing() {
         clients.push(client);
     }
     let ids_before = server.connection_ids_for_test();
+    let next_identities_before = server.next_identities_for_test();
     let accepts_before = server.accept_calls_for_test();
     let mut excess = UnixStream::connect(&socket_path).unwrap();
     assert_eq!(
@@ -1044,6 +1124,7 @@ fn capacity_refusal_is_one_fd_per_quantum_and_allocates_nothing() {
     assert_eq!(server.accept_calls_for_test(), accepts_before + 1);
     assert_eq!(server.connection_count_for_test(), 64);
     assert_eq!(server.connection_ids_for_test(), ids_before);
+    assert_eq!(server.next_identities_for_test(), next_identities_before);
     assert_eq!(server.credential_outcomes_for_test(), 0);
     excess.set_nonblocking(true).unwrap();
     let mut byte = [0_u8; 1];
@@ -1053,6 +1134,40 @@ fn capacity_refusal_is_one_fd_per_quantum_and_allocates_nothing() {
         other => panic!("excess peer was not closed: {other:?}"),
     }
     drop(clients);
+}
+
+/// Catches wrapping, panicking, reusing, or colliding stable identities after
+/// the final monotonic ConnectionId/ControlToken pair has been allocated.
+#[test]
+fn exhausted_monotonic_identities_refuse_without_wrap_or_collision() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    server.set_next_identities_for_test(u64::MAX, u64::MAX);
+
+    let _last_client = UnixStream::connect(&socket_path).unwrap();
+    server
+        .service_one(base, ready(listener_token, true, false))
+        .unwrap();
+    assert_eq!(server.connection_count_for_test(), 1);
+    let identities = server.connection_ids_for_test();
+
+    let mut refused = UnixStream::connect(&socket_path).unwrap();
+    let accepts = server.accept_calls_for_test();
+    server
+        .service_one(base, ready(listener_token, true, false))
+        .unwrap();
+    assert_eq!(server.accept_calls_for_test(), accepts + 1);
+    assert_eq!(server.connection_count_for_test(), 1);
+    assert_eq!(server.connection_ids_for_test(), identities);
+    refused.set_nonblocking(true).unwrap();
+    let mut byte = [0_u8; 1];
+    match refused.read(&mut byte) {
+        Ok(0) => {}
+        Err(error) if error.raw_os_error() == Some(Errno::CONNRESET.raw_os_error()) => {}
+        other => panic!("identity-exhausted peer was not closed: {other:?}"),
+    }
 }
 
 /// Catches any ready-token branch growing into a drain loop or performing both
@@ -1100,6 +1215,30 @@ fn one_ready_token_performs_at_most_one_socket_io() {
     server.service_one(base, ready(token, true, true)).unwrap();
     assert_eq!(server.socket_calls_for_test() - before, 0);
     drop(client);
+}
+
+/// Catches the production send-call boundary omitting MSG_NOSIGNAL even when
+/// its deterministic test syscall result is injected.
+#[test]
+fn production_send_path_supplies_msg_nosignal() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    server.inject_receive_for_test(TestReceive::Bytes(
+        b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+    ));
+    server.service_one(base, ready(token, true, false)).unwrap();
+    let output = server.output_len_for_test(connection).unwrap();
+    server.inject_send_for_test(TestSend::Count(output));
+    server.service_one(base, ready(token, false, true)).unwrap();
+
+    assert_eq!(server.last_send_flags_for_test(), Some(SendFlags::NOSIGNAL));
 }
 
 fn endpoint_error(result: Result<SocketEndpoint, IpcPathError>) -> IpcPathError {
@@ -2610,7 +2749,7 @@ fn subscriber_protocol_machine(now: Instant, revision: u64) -> ConnectionMachine
     let (mut machine, action) = pending_protocol_machine(now, b"{\"cmd\":\"subscribe\"}\n");
     assert_eq!(action, MachineAction::Request(Request::Subscribe));
     let state = protocol_state(revision);
-    assert_eq!(machine.complete_subscribe(now, &state), MachineAction::None);
+    assert_eq!(machine.complete_subscribe(now, state), MachineAction::None);
     machine
 }
 
@@ -2887,8 +3026,12 @@ fn half_close_preserves_authorized_two_frame_work_and_subscribers() {
         MachineAction::Request(Request::Subscribe)
     );
     let initial = protocol_state(7);
+    let update = RealmState {
+        revision: 8,
+        ..initial.clone()
+    };
     assert_eq!(
-        subscriber.complete_subscribe(base, &initial),
+        subscriber.complete_subscribe(base, initial),
         MachineAction::None
     );
     let initial_len = subscriber.output().unwrap().len();
@@ -2898,10 +3041,6 @@ fn half_close_preserves_authorized_two_frame_work_and_subscribers() {
     );
     assert_eq!(subscriber.phase(), ConnectionPhase::Subscriber);
     assert!(!subscriber.input_enabled());
-    let update = RealmState {
-        revision: 8,
-        ..initial
-    };
     assert_eq!(
         publish_protocol_state(&mut subscriber, base, &update),
         MachineAction::None

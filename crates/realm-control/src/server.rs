@@ -14,6 +14,14 @@ use crate::{ActiveControlListener, ControlError};
 const CONNECTION_LIMIT: usize = 64;
 const ACCEPT_FLAGS: SocketFlags = SocketFlags::NONBLOCK.union(SocketFlags::CLOEXEC);
 
+fn send_with_required_flags(
+    fd: BorrowedFd<'_>,
+    bytes: &[u8],
+    operation: impl FnOnce(BorrowedFd<'_>, &[u8], SendFlags) -> rustix::io::Result<usize>,
+) -> rustix::io::Result<usize> {
+    operation(fd, bytes, SendFlags::NOSIGNAL)
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ConnectionId(u64);
 
@@ -52,8 +60,8 @@ pub struct ControlServer {
     listener: ActiveControlListener,
     listener_token: ControlToken,
     connections: BTreeMap<ConnectionId, Connection>,
-    next_connection_id: u64,
-    next_token: u64,
+    next_connection_id: Option<u64>,
+    next_token: Option<u64>,
     shutting_down: bool,
     #[cfg(test)]
     test_credentials: std::collections::VecDeque<TestPeerCredential>,
@@ -69,6 +77,10 @@ pub struct ControlServer {
     test_receives: std::collections::VecDeque<TestReceive>,
     #[cfg(test)]
     test_sends: std::collections::VecDeque<TestSend>,
+    #[cfg(test)]
+    connections_at_last_token_resolution: std::cell::Cell<Option<usize>>,
+    #[cfg(test)]
+    last_send_flags: Option<SendFlags>,
 }
 
 #[cfg(test)]
@@ -100,8 +112,8 @@ impl ControlServer {
             listener,
             listener_token: ControlToken(0),
             connections: BTreeMap::new(),
-            next_connection_id: 1,
-            next_token: 1,
+            next_connection_id: Some(1),
+            next_token: Some(1),
             shutting_down: false,
             #[cfg(test)]
             test_credentials: std::collections::VecDeque::new(),
@@ -117,6 +129,10 @@ impl ControlServer {
             test_receives: std::collections::VecDeque::new(),
             #[cfg(test)]
             test_sends: std::collections::VecDeque::new(),
+            #[cfg(test)]
+            connections_at_last_token_resolution: std::cell::Cell::new(None),
+            #[cfg(test)]
+            last_send_flags: None,
         }
     }
 
@@ -152,8 +168,8 @@ impl ControlServer {
         now: Instant,
         ready: ReadyEvent,
     ) -> Result<Option<ControlAction>, ControlError> {
-        let known_peer = self.connection_id_for_token(ready.token);
         self.expire(now)?;
+        let known_peer = self.connection_id_for_token(ready.token);
 
         if ready.token == self.listener_token {
             if self.shutting_down || !ready.readable {
@@ -196,10 +212,14 @@ impl ControlServer {
             return Ok(());
         }
 
-        let connection_id = ConnectionId(self.next_connection_id);
-        let token = ControlToken(self.next_token);
-        self.next_connection_id += 1;
-        self.next_token += 1;
+        let (Some(raw_connection_id), Some(raw_token)) = (self.next_connection_id, self.next_token)
+        else {
+            return Ok(());
+        };
+        let connection_id = ConnectionId(raw_connection_id);
+        let token = ControlToken(raw_token);
+        self.next_connection_id = raw_connection_id.checked_add(1);
+        self.next_token = raw_token.checked_add(1);
         self.connections.insert(
             connection_id,
             Connection {
@@ -236,6 +256,9 @@ impl ControlServer {
     }
 
     fn connection_id_for_token(&self, token: ControlToken) -> Option<ConnectionId> {
+        #[cfg(test)]
+        self.connections_at_last_token_resolution
+            .set(Some(self.connections.len()));
         self.connections
             .iter()
             .find_map(|(id, connection)| (connection.token == token).then_some(*id))
@@ -336,27 +359,43 @@ impl ControlServer {
 
     fn send_socket(&mut self, connection_id: ConnectionId) -> rustix::io::Result<usize> {
         #[cfg(test)]
-        {
+        let injected = {
             self.send_calls += 1;
-            if let Some(outcome) = self.test_sends.pop_front() {
-                return match outcome {
-                    TestSend::Count(count) => Ok(count),
-                    TestSend::Error(error) => Err(error),
-                };
-            }
+            self.test_sends.pop_front()
+        };
+        #[cfg(test)]
+        let observed_flags = std::cell::Cell::new(None);
+        let result = {
+            let connection = self
+                .connections
+                .get(&connection_id)
+                .expect("selected connection remains present");
+            send_with_required_flags(
+                connection.fd.as_fd(),
+                connection
+                    .machine
+                    .output()
+                    .expect("write selected only with output"),
+                |fd, bytes, flags| {
+                    #[cfg(test)]
+                    {
+                        observed_flags.set(Some(flags));
+                        if let Some(outcome) = injected {
+                            return match outcome {
+                                TestSend::Count(count) => Ok(count),
+                                TestSend::Error(error) => Err(error),
+                            };
+                        }
+                    }
+                    send(fd, bytes, flags)
+                },
+            )
+        };
+        #[cfg(test)]
+        {
+            self.last_send_flags = observed_flags.get();
         }
-        let connection = self
-            .connections
-            .get(&connection_id)
-            .expect("selected connection remains present");
-        send(
-            connection.fd.as_fd(),
-            connection
-                .machine
-                .output()
-                .expect("write selected only with output"),
-            SendFlags::NOSIGNAL,
-        )
+        result
     }
 
     fn apply_machine_action(
@@ -370,6 +409,10 @@ impl ControlServer {
                 connection: connection_id,
                 request,
             }),
+            MachineAction::OutboundFrameTooLarge => {
+                self.connections.remove(&connection_id);
+                None
+            }
             MachineAction::Close(_) => {
                 self.connections.remove(&connection_id);
                 None
@@ -411,7 +454,7 @@ impl ControlServer {
             return Err(ControlError::StaleConnection { connection });
         };
         let action = record.machine.complete_request(now, &response);
-        if matches!(action, MachineAction::Close(_)) {
+        if matches!(action, MachineAction::OutboundFrameTooLarge) {
             self.connections.remove(&connection);
             return Err(ControlError::OutboundFrameTooLarge {
                 connections: vec![connection],
@@ -432,8 +475,8 @@ impl ControlServer {
         let Some(record) = self.connections.get_mut(&connection) else {
             return Err(ControlError::StaleConnection { connection });
         };
-        let action = record.machine.complete_subscribe(now, &state);
-        if matches!(action, MachineAction::Close(_)) {
+        let action = record.machine.complete_subscribe(now, state);
+        if matches!(action, MachineAction::OutboundFrameTooLarge) {
             self.connections.remove(&connection);
             return Err(ControlError::OutboundFrameTooLarge {
                 connections: vec![connection],
@@ -584,5 +627,26 @@ impl ControlServer {
     #[cfg(test)]
     pub(crate) fn credential_outcomes_for_test(&self) -> usize {
         self.test_credentials.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn connections_at_last_token_resolution_for_test(&self) -> Option<usize> {
+        self.connections_at_last_token_resolution.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_next_identities_for_test(&mut self, connection: u64, token: u64) {
+        self.next_connection_id = Some(connection);
+        self.next_token = Some(token);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_send_flags_for_test(&self) -> Option<SendFlags> {
+        self.last_send_flags
+    }
+
+    #[cfg(test)]
+    pub(crate) fn next_identities_for_test(&self) -> (Option<u64>, Option<u64>) {
+        (self.next_connection_id, self.next_token)
     }
 }
