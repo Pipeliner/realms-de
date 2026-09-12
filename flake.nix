@@ -73,6 +73,15 @@
           src = self;
         };
 
+      vmControlHelper =
+        pkgs:
+        import ./packaging/nix/vm-control-helper.nix {
+          inherit pkgs lib support;
+          src = self;
+        };
+
+      sourceRevision = self.rev or self.dirtyRev or "unknown";
+
       nixosModule = import ./packaging/nix/nixos-module.nix { inherit self support; };
       homeManagerModule = import ./packaging/nix/home-manager-module.nix { inherit self support; };
     in
@@ -154,10 +163,11 @@
       checks = forAllSystems (
         pkgs:
         import ./packaging/nix/checks.nix {
-          inherit pkgs lib nixosModule;
+          inherit pkgs lib nixosModule sourceRevision;
           src = self;
           realm = realmPackage pkgs;
           desktopAdmissionVmTest = desktopAdmissionVmTest pkgs;
+          vmControlHelper = vmControlHelper pkgs;
         }
       );
 
