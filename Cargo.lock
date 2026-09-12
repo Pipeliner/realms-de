@@ -372,6 +372,7 @@ dependencies = [
  "bitflags",
  "realm-control",
  "realm-core",
+ "rustix",
  "serde",
  "serde_json",
  "thiserror",

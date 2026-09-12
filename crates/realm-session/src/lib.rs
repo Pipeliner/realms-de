@@ -8,3 +8,4 @@ pub mod persistence;
 pub mod session;
 pub mod snapshot;
 pub mod turn;
+pub mod worker;
