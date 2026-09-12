@@ -1549,6 +1549,7 @@ invent another Session entry point or silently reinterpret a retired request:
 |---|---|---|
 | `Hello` | SPEC 0007 handshake state, never Ready dispatch | server `Hello`, then Ready or close on version mismatch |
 | `GetState` | `Session::state()` | immediate `State` from the last visible boundary |
+| `GetKeymap` | `Session::keymap()` | immediate `Keymap` from the exact binding vocabulary configured for this Session; the adapter never substitutes `Keymap::default()` |
 | `Subscribe` | SPEC 0007 plus `Session::state()` | immediate initial State becomes the subscription's protected current frame |
 | `SwitchOrbit(n)`, `MoveToOrbit(n)` | validate `OrbitId::from_human(n)`, then the matching typed Session desired operation | invalid one-based input is application Error; otherwise synchronous Ok/Error or retained ticket completion |
 | `Focus`, `Swap`, `Banish`, `Stow`, `Fullscreen`, `SetLayout`, `Undo` | the matching typed Session desired operation | synchronous Ok/Error or retained ticket completion |
@@ -1649,6 +1650,7 @@ ledger plus the session's own mode and module state.
 | `focused_title` | The last `river_window_v1::title` for `ledger.focused()`; empty when nothing is focused, when the title is null, or while a layer surface holds exclusive focus |
 | `chord_echo` | Non-empty exactly while a submap is pending or `mod4` is held; cleared on `ate_unbound_key`, on leaving the submap, and on restart |
 | `whichkey` | Toggled by `Action::ToggleWhichKey`. Changing it changes the bar's exclusive zone, so the new `Workarea` arrives from river as a `non_exclusive_area` event rather than being computed here |
+| `grimoire` | Toggled by `Action::Grimoire`; cleared by the same action or `Action::EnterMode(Mode::Nav)` (the `?` and Escape bindings). It remains private through a pending response/drain chain and publishes only at the final clean boundary |
 | `modules` | Owned by the session. Push-driven except for one shared 1 Hz sampler for interval-derived CPU, memory, GPU, and network-rate values; the clock schedules the next minute boundary rather than ticking once a second |
 | `revision` | See below |
 
@@ -1678,9 +1680,13 @@ for each ledger action needed by the M2 keymap and staged control requests:
 `focus_step(Dir)`, `swap(Dir)`, `move_focused_to_orbit(OrbitId)`,
 `toggle_stow()`, `toggle_fullscreen()`, `undo()`, `switch_orbit(OrbitId)`, and
 `set_layout(Layout)`. It does not expose a generic ledger closure or mutable
-ledger access. Mode changes and process-level actions such as spawn, launcher,
-grimoire, theme reload, and quit remain outside this reducer because they have
-different compositor or process-lifecycle contracts.
+ledger access. Mode changes, grimoire visibility, and process-level actions
+such as spawn, launcher, theme reload, and quit remain outside this reducer
+because they have different compositor, visible-state, or process-lifecycle
+contracts. Grimoire visibility is nevertheless part of the private transaction
+that handles its binding press: it is derived from working authority, not
+emitted as a process effect, and commits/publishes only at the final clean
+boundary.
 
 These operations are the compositor-sequence execution boundary, not the
 socket-decoding or acknowledgement boundary. Section 7 stages at most the one
