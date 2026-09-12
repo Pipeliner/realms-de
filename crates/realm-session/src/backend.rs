@@ -1,5 +1,7 @@
 //! Compositor-independent window-management contract.
 
+mod river_protocols;
+
 use std::num::{NonZeroU32, NonZeroU64, TryFromIntError};
 use std::os::fd::BorrowedFd;
 use std::time::Instant;
