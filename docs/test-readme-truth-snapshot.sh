@@ -32,7 +32,9 @@ make_fixture() {
         "$fixture_root/configs/templates" \
         "$fixture_root/crates/realm-theme/src" \
         "$fixture_root/crates/realm-ctl/src" \
-        "$fixture_root/crates/realm-session/src"
+        "$fixture_root/crates/realm-session/src" \
+        "$fixture_root/crates/realm-bar/src" \
+        "$fixture_root/crates/realm-bar/tests"
     cp "$repo_root/README.md" "$fixture_root/README.md"
     cp "$repo_root/docs/ROADMAP.md" "$fixture_root/docs/ROADMAP.md"
     cp "$repo_root/.github/workflows/ci.yml" "$fixture_root/.github/workflows/ci.yml"
@@ -48,6 +50,9 @@ make_fixture() {
     printf '%s\n' 'enum ThemeCommand {}' >"$fixture_root/crates/realm-ctl/src/main.rs"
     : >"$fixture_root/crates/realm-session/Cargo.toml"
     : >"$fixture_root/crates/realm-session/src/lib.rs"
+    : >"$fixture_root/crates/realm-bar/Cargo.toml"
+    : >"$fixture_root/crates/realm-bar/src/main.rs"
+    : >"$fixture_root/crates/realm-bar/tests/render_contract.rs"
     printf '%s\n' 'pub trait WmBackend {}' >"$fixture_root/crates/realm-session/src/backend.rs"
     : >"$fixture_root/packaging/nix/nixos-module.nix"
     : >"$fixture_root/packaging/debian/control"
@@ -96,6 +101,16 @@ expect_fail() {
 
 fixture_root=$(make_fixture canonical)
 expect_pass canonical-snapshot "$fixture_root"
+
+fixture_root=$(make_fixture missing-bar-entrypoint)
+rm "$fixture_root/crates/realm-bar/src/main.rs"
+expect_fail missing-bar-entrypoint "$fixture_root" \
+    'README truth snapshot artifact is missing: crates/realm-bar/src/main.rs'
+
+fixture_root=$(make_fixture stale-bar-status)
+sed '/Live compositor verification pending/d' "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail stale-bar-status "$fixture_root" 'README must distinguish implemented bar from pending live verification'
 
 fixture_root=$(make_fixture missing-blocker)
 sed '/issues\/168/d' "$fixture_root/README.md" >"$fixture_root/README.next"

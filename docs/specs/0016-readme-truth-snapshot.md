@@ -50,14 +50,16 @@ assets exist; `realmctl theme apply`, `theme lint`, and `theme diff` are
 implemented; the `realm-session` crate contains the accepted `WmBackend`
 contract and wire capability type, but none provides a working log-in session
 because the `realm-wm` daemon binary and dispatch loop are not implemented. The
-missing bar also prevents a usable desktop, but it is not the session wrapper’s
-abort condition.
+bar implementation now exists, but live compositor verification is pending.
+Its presence alone does not establish a usable desktop.
 
 For this pre-alpha snapshot, the `crates/realm-session` manifest, library and
 backend contract are checked evidence for the implemented seam. Absence of a
 `realm-wm` binary target, including the conventional `src/bin/realm-wm.rs`, is
-the checked repository evidence for the missing daemon. Absence of the
-`crates/realm-bar` manifest is the checked evidence for the missing bar.
+the checked repository evidence for the missing daemon. For `realm-bar`,
+its manifest, binary entrypoint, and render
+contract tests are required artifacts. README status must call it implemented
+while explicitly retaining the pending live compositor verification boundary.
 The `crates/realm-ctl` manifest and binary source are checked evidence for the
 implemented theme commands; the README must not imply that the full M3 control
 surface or `doctor` exists.
