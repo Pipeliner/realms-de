@@ -36,6 +36,24 @@ pub enum SocketFlushOnce {
     WouldBlock,
 }
 
+fn bounded_syscall<T>(call: impl FnOnce() -> rustix::io::Result<T>) -> rustix::io::Result<T> {
+    call()
+}
+
+#[cfg(feature = "realm_test")]
+pub(crate) fn bounded_syscall_attempts_for_test() -> usize {
+    let attempts = std::cell::Cell::new(0);
+    let _: rustix::io::Result<()> = bounded_syscall(|| {
+        attempts.set(attempts.get() + 1);
+        if attempts.get() == 1 {
+            Err(rustix::io::Errno::INTR)
+        } else {
+            Ok(())
+        }
+    });
+    attempts.get()
+}
+
 /*
  * Socket
  */
@@ -73,6 +91,28 @@ impl Socket {
             })?)
         } else {
             Ok(retry_on_intr(|| send(self, bytes, flags))?)
+        }
+    }
+
+    fn send_msg_once(&self, bytes: &[u8], fds: &[OwnedFd]) -> IoResult<usize> {
+        #[cfg(not(any(target_os = "macos", target_os = "redox")))]
+        let flags = SendFlags::DONTWAIT | SendFlags::NOSIGNAL;
+        #[cfg(any(target_os = "macos", target_os = "redox"))]
+        let flags = SendFlags::DONTWAIT;
+
+        if !fds.is_empty() {
+            let iov = [IoSlice::new(bytes)];
+            let mut cmsg_space =
+                vec![MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(fds.len()))];
+            let mut cmsg_buffer = SendAncillaryBuffer::new(&mut cmsg_space);
+            let fds =
+                unsafe { slice::from_raw_parts(fds.as_ptr() as *const BorrowedFd, fds.len()) };
+            cmsg_buffer.push(SendAncillaryMessage::ScmRights(fds));
+            Ok(bounded_syscall(|| {
+                sendmsg(self, &iov, &mut cmsg_buffer, flags)
+            })?)
+        } else {
+            Ok(bounded_syscall(|| send(self, bytes, flags))?)
         }
     }
 
@@ -129,7 +169,7 @@ impl Socket {
         let mut cmsg_space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(MAX_FDS_IN))];
         let mut cmsg_buffer = RecvAncillaryBuffer::new(&mut cmsg_space);
         let mut iov = [IoSliceMut::new(buffer)];
-        let msg = retry_on_intr(|| recvmsg(&self.stream, &mut iov[..], &mut cmsg_buffer, flags))?;
+        let msg = bounded_syscall(|| recvmsg(&self.stream, &mut iov[..], &mut cmsg_buffer, flags))?;
 
         let received_fds: Vec<_> = cmsg_buffer
             .drain()
@@ -275,7 +315,7 @@ impl BufferedSocket {
         if bytes_to_write.len() > MAX_BYTES_OUT {
             bytes_to_write = &bytes_to_write[..MAX_BYTES_OUT];
         }
-        match self.socket.send_msg(bytes_to_write, fds_to_write) {
+        match self.socket.send_msg_once(bytes_to_write, fds_to_write) {
             Ok(count) => {
                 self.out_data.offset(count);
                 self.out_data.move_to_front();
@@ -382,7 +422,8 @@ impl BufferedSocket {
         let received = {
             let bytes = self.in_data.get_writable_storage();
             let limit = bytes.len().min(MAX_BYTES_IN_ONCE);
-            self.socket.rcv_msg_bounded(&mut bytes[..limit], &mut self.in_fds)
+            self.socket
+                .rcv_msg_bounded(&mut bytes[..limit], &mut self.in_fds)
         };
         let (in_bytes, in_fds) = match received {
             Ok(received) => received,
@@ -449,6 +490,16 @@ impl BufferedSocket {
         self.in_data.offset(read_data);
 
         Ok(msg)
+    }
+
+    pub(crate) fn has_complete_incoming_frame(&self) -> bool {
+        let data = self.in_data.get_contents();
+        if data.len() < 8 {
+            return false;
+        }
+        let word_2 = u32::from_ne_bytes([data[4], data[5], data[6], data[7]]);
+        let len = (word_2 >> 16) as usize;
+        len <= data.len()
     }
 
     pub fn set_max_buffer_size(&mut self, max_buffer_size: Option<usize>) {

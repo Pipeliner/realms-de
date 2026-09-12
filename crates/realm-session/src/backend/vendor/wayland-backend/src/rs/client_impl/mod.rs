@@ -100,6 +100,7 @@ struct ProtocolState {
 #[derive(Debug)]
 struct ReadingState {
     prepared_reads: usize,
+    bounded_active: bool,
     bounded_needs_read: bool,
     read_condvar: Arc<Condvar>,
     read_serial: usize,
@@ -183,6 +184,7 @@ impl InnerBackend {
                 }),
                 read: Mutex::new(ReadingState {
                     prepared_reads: 0,
+                    bounded_active: false,
                     bounded_needs_read: true,
                     read_condvar: Arc::new(Condvar::new()),
                     read_serial: 0,
@@ -223,7 +225,18 @@ impl InnerBackend {
 #[derive(Debug)]
 pub struct InnerReadEventsGuard {
     state: Arc<ConnectionState>,
+    bounded: bool,
     done: bool,
+}
+
+struct BoundedActivity {
+    state: Arc<ConnectionState>,
+}
+
+impl Drop for BoundedActivity {
+    fn drop(&mut self) {
+        self.state.lock_read().bounded_active = false;
+    }
 }
 
 impl InnerReadEventsGuard {
@@ -232,22 +245,30 @@ impl InnerReadEventsGuard {
     /// This call will not block, but event callbacks may be invoked in the process
     /// of preparing the guard.
     pub fn try_new(backend: InnerBackend) -> Option<Self> {
-        backend.state.lock_read().prepared_reads += 1;
+        let mut read = backend.state.lock_read();
+        if read.bounded_active {
+            return None;
+        }
+        read.prepared_reads += 1;
+        drop(read);
         Some(Self {
             state: backend.state,
+            bounded: false,
             done: false,
         })
     }
 
     pub fn try_new_bounded(backend: InnerBackend) -> Option<Self> {
         let mut read = backend.state.lock_read();
-        if read.prepared_reads != 0 || !read.bounded_needs_read {
+        if read.prepared_reads != 0 || read.bounded_active || !read.bounded_needs_read {
             return None;
         }
         read.prepared_reads = 1;
+        read.bounded_active = true;
         drop(read);
         Some(Self {
             state: backend.state,
+            bounded: true,
             done: false,
         })
     }
@@ -294,24 +315,26 @@ impl InnerReadEventsGuard {
     }
 
     pub fn read_once(mut self) -> Result<ReadOnce, WaylandError> {
-        {
-            let mut read = self.state.lock_read();
-            read.prepared_reads -= 1;
-            self.done = true;
-        }
+        let mut read = self.state.lock_read();
         let outcome = {
             let mut protocol = self.state.lock_protocol();
-            protocol.no_last_error()?;
-            match protocol.socket.fill_incoming_buffers_once() {
-                Ok((bytes, fds)) => Ok(ReadOnce::Read { bytes, fds }),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    Ok(ReadOnce::WouldBlock)
-                }
-                Err(error) => Err(protocol.store_and_return_error(error)),
+            match protocol.no_last_error() {
+                Err(error) => Err(error),
+                Ok(()) => match protocol.socket.fill_incoming_buffers_once() {
+                    Ok((bytes, fds)) => Ok(ReadOnce::Read { bytes, fds }),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        Ok(ReadOnce::WouldBlock)
+                    }
+                    Err(error) => Err(protocol.store_and_return_error(error)),
+                },
             }
         };
-        let mut read = self.state.lock_read();
+        read.prepared_reads -= 1;
+        read.bounded_active = false;
         read.bounded_needs_read = !matches!(outcome, Ok(ReadOnce::Read { .. }));
+        read.read_serial = read.read_serial.wrapping_add(1);
+        read.read_condvar.notify_all();
+        self.done = true;
         outcome
     }
 }
@@ -321,6 +344,9 @@ impl Drop for InnerReadEventsGuard {
         if !self.done {
             let mut guard = self.state.lock_read();
             guard.prepared_reads -= 1;
+            if self.bounded {
+                guard.bounded_active = false;
+            }
             if guard.prepared_reads == 0 {
                 // Cancel the read
                 guard.read_serial = guard.read_serial.wrapping_add(1);
@@ -618,9 +644,16 @@ impl InnerBackend {
     }
 
     pub fn dispatch_one_pending(&self) -> Result<DispatchOne, WaylandError> {
-        if self.state.lock_read().prepared_reads != 0 {
-            return Ok(DispatchOne::PreparedReadLive);
+        {
+            let mut read = self.state.lock_read();
+            if read.prepared_reads != 0 || read.bounded_active {
+                return Ok(DispatchOne::PreparedReadLive);
+            }
+            read.bounded_active = true;
         }
+        let _activity = BoundedActivity {
+            state: self.state.clone(),
+        };
         dispatch_events_inner(self.state.clone(), true).map(|(_, outcome)| outcome.unwrap())
     }
 
@@ -755,6 +788,18 @@ fn dispatch_events_inner(
                 .map(|desc| desc.signature)
         }) {
             Ok(msg) => msg,
+            Err(MessageParseError::MissingData)
+                if bounded && socket.has_complete_incoming_frame() =>
+            {
+                guard.socket.discard_incoming();
+                let err = WaylandError::Protocol(ProtocolError {
+                    code: 0,
+                    object_id: 0,
+                    object_interface: "".into(),
+                    message: "Malformed Wayland message.".into(),
+                });
+                return Err(guard.store_and_return_error(err));
+            }
             Err(MessageParseError::MissingData) | Err(MessageParseError::MissingFD) => {
                 if bounded {
                     drop(guard);

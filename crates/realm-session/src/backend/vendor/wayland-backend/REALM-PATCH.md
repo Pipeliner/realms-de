@@ -12,9 +12,11 @@ Realm changes only the pure-Rust client path. `client_api.rs`,
 `rs/client_impl/mod.rs`, and `rs/socket.rs` add the exclusive bounded-read,
 single-message dispatch, and single-send flush primitives specified by Realm
 ADR 0021. `Cargo.toml` adds an empty workspace declaration so the retained
-crate can be inspected independently beneath Realm's workspace. No wire
-format, signature, object-map, or callback implementation is replaced: the
-adaptation continues to use the upstream parser and protocol state.
+crate can be inspected independently beneath Realm's workspace, plus a
+`realm_test` feature used only to expose the structural no-retry regression to
+Realm's integration test. No wire format, signature, object-map, or callback
+implementation is replaced: the adaptation continues to use the upstream
+parser and protocol state.
 
 The workspace pins this directory through `[patch.crates-io]`; the generated
 River bindings continue to use exactly `wayland-client` 0.31.15. Do not update

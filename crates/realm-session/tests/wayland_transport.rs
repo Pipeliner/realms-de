@@ -4,7 +4,10 @@ use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use wayland_backend::client::{Backend, DispatchOne, FlushOnce, ObjectData, ObjectId, ReadOnce};
+use wayland_backend::client::{
+    bounded_syscall_attempts_for_test, Backend, DispatchOne, FlushOnce, ObjectData, ObjectId,
+    ReadOnce,
+};
 use wayland_backend::protocol::{Argument, Message};
 use wayland_backend::smallvec::smallvec;
 
@@ -153,6 +156,41 @@ fn prepared_read_has_exclusive_cancel_or_consume_ownership() {
     let guard = backend.prepare_read_bounded().unwrap();
     assert_eq!(guard.read_once().unwrap(), ReadOnce::WouldBlock);
     assert!(backend.prepare_read_bounded().is_some());
+}
+
+#[test]
+fn bounded_prepared_read_refuses_stock_preparation() {
+    let (backend, _peer) = connection();
+    let guard = backend.prepare_read_bounded().unwrap();
+
+    assert!(backend.prepare_read().is_none());
+
+    drop(guard);
+    assert!(backend.prepare_read().is_some());
+}
+
+#[test]
+fn complete_frame_too_short_for_signature_is_fatal() {
+    let (backend, mut peer) = connection();
+    let callback = new_callback(&backend, Arc::new(Counter::default()));
+    let mut invalid_frame = [0_u8; 8];
+    invalid_frame[..4].copy_from_slice(&callback.protocol_id().to_ne_bytes());
+    invalid_frame[4..].copy_from_slice(&(8_u32 << 16).to_ne_bytes());
+    peer.write_all(&invalid_frame).unwrap();
+
+    assert_eq!(
+        backend.prepare_read_bounded().unwrap().read_once().unwrap(),
+        ReadOnce::Read { bytes: 8, fds: 0 }
+    );
+    assert!(matches!(
+        backend.dispatch_one_pending(),
+        Err(wayland_backend::client::WaylandError::Protocol(_))
+    ));
+}
+
+#[test]
+fn bounded_syscall_does_not_retry_interrupted_operation() {
+    assert_eq!(bounded_syscall_attempts_for_test(), 1);
 }
 
 #[test]

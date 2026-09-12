@@ -40,6 +40,7 @@ rustdoc-args = [
 ]
 
 [features]
+realm_test = []
 client_system = [
     "wayland-sys/client",
     "dep:scoped-tls",

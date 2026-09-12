@@ -17,6 +17,13 @@ use super::client_impl;
 
 pub use crate::types::client::{InvalidId, NoWaylandLib, WaylandError};
 
+/// Exercise the bounded syscall policy for Realm's integration regression.
+#[cfg(all(feature = "realm_test", not(feature = "client_system")))]
+#[doc(hidden)]
+pub fn bounded_syscall_attempts_for_test() -> usize {
+    crate::rs::socket::bounded_syscall_attempts_for_test()
+}
+
 /// Outcome of one bounded socket ingress attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadOnce {
