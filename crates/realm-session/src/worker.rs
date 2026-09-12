@@ -381,12 +381,6 @@ pub fn read_snapshot_bounded(path: &Path) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::with_capacity(MAX_SNAPSHOT_BYTES);
     file.take((MAX_SNAPSHOT_BYTES + 1) as u64)
         .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_SNAPSHOT_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "session snapshot exceeds the accepted byte limit",
-        ));
-    }
     Ok(bytes)
 }
 
@@ -425,7 +419,6 @@ pub fn write_snapshot_atomically(path: &Path, snapshot: &SessionSnapshotV1) -> i
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -465,8 +458,12 @@ mod tests {
         );
 
         fs::write(&path, vec![b'x'; MAX_SNAPSHOT_BYTES + 1]).unwrap();
-        let error = read_snapshot_bounded(&path).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let oversized = read_snapshot_bounded(&path).unwrap();
+        assert_eq!(oversized.len(), MAX_SNAPSHOT_BYTES + 1);
+        assert!(matches!(
+            crate::snapshot::classify_snapshot_read(Ok(oversized)).unwrap(),
+            crate::snapshot::SnapshotLoad::Rejected(_)
+        ));
 
         fs::remove_dir_all(root).unwrap();
     }

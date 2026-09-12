@@ -7,5 +7,6 @@ pub mod backend;
 pub mod persistence;
 pub mod session;
 pub mod snapshot;
+pub mod timers;
 pub mod turn;
 pub mod worker;
