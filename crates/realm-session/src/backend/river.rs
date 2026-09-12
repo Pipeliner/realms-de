@@ -1807,7 +1807,9 @@ impl RiverBackend {
                         })
                         .flatten();
                     if pending.stage == ResponseStage::AwaitCorrectionManage {
-                        let _ = self.apply_render_response(projection.as_deref(), false)?;
+                        // Keep a still-short hidden window hidden while the
+                        // already-requested one-shot correction is pending.
+                        let _ = self.apply_render_response(projection.as_deref(), true)?;
                         self.window_manager
                             .as_ref()
                             .ok_or_else(protocol_error)?
