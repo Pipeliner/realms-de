@@ -47,6 +47,8 @@ use super::{
 };
 
 const INCOMING_CAPACITY: usize = 512;
+type WindowSize = (i32, i32);
+type CorrectionMap = HashMap<ObjectId, (WindowSize, WindowSize)>;
 
 #[derive(Debug)]
 enum Incoming {
@@ -538,7 +540,7 @@ struct PendingResponse {
     response: BackendPolicyResponse,
     stage: ResponseStage,
     terminal_error: Option<BackendError>,
-    corrections: HashMap<ObjectId, ((i32, i32), (i32, i32))>,
+    corrections: CorrectionMap,
     correction_round: bool,
 }
 
@@ -590,7 +592,7 @@ pub struct RiverBackend {
     selected_output_lost: bool,
     terminal_after_response: Option<BackendError>,
     last_projection: Option<Vec<realm_core::layout::Placement>>,
-    deferred_corrections: HashMap<ObjectId, ((i32, i32), (i32, i32))>,
+    deferred_corrections: CorrectionMap,
     read_guard: Option<BoundedReadEventsGuard>,
     flush_pending: bool,
     flush_blocked: bool,
@@ -2001,7 +2003,7 @@ impl RiverBackend {
         &mut self,
         projection: Option<&[realm_core::layout::Placement]>,
         allow_correction: bool,
-    ) -> BackendResult<HashMap<ObjectId, ((i32, i32), (i32, i32))>> {
+    ) -> BackendResult<CorrectionMap> {
         let Some(projection) = projection else {
             return Ok(HashMap::new());
         };
@@ -2062,15 +2064,14 @@ impl RiverBackend {
                         );
                     }
                 }
-                if window
+                if (window
                     .dimensions
                     .is_some_and(|actual| actual.0 >= target.0 && actual.1 >= target.1)
-                    || !allow_correction && window.dimensions.is_some()
+                    || !allow_correction && window.dimensions.is_some())
+                    && window.hidden != Some(false)
                 {
-                    if window.hidden != Some(false) {
-                        window.proxy.show();
-                        window.hidden = Some(false);
-                    }
+                    window.proxy.show();
+                    window.hidden = Some(false);
                 }
                 if raise && placement.focused {
                     window.node.place_top();
