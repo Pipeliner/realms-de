@@ -187,7 +187,7 @@ pub struct RuntimeOwners<B: WmBackend> {
     control: ControlServer,
     worker: Worker,
     timers: SessionTimers,
-    clock: ClockModule,
+    clock: ClockRuntime,
     persistence: PersistenceCoordinator,
     pending_request: Option<(BackendTicket, ConnectionId)>,
     quit_receipt: Option<ResponseReceipt>,
@@ -198,12 +198,12 @@ pub struct RuntimeOwners<B: WmBackend> {
 
 impl<B: WmBackend> RuntimeOwners<B> {
     /// Assemble the owners after recovery reached Live and listener activation succeeded.
-    pub fn new(
+    fn new(
         session: Session<B>,
         control: ControlServer,
         worker: Worker,
         timers: SessionTimers,
-        clock: ClockModule,
+        clock: ClockRuntime,
         persistence: PersistenceCoordinator,
     ) -> Self {
         Self {
@@ -337,6 +337,9 @@ impl<B: WmBackend> RuntimeOwners<B> {
         now: Instant,
         update: SessionUpdate,
     ) -> Result<(), RuntimeError> {
+        let update = self
+            .clock
+            .fold_if_clean(&mut self.session, update, SystemTime::now())?;
         let requester = match &update.action_completion {
             None => None,
             Some(completion) => {
@@ -551,8 +554,7 @@ impl<B: WmBackend> RuntimeOwners<B> {
     /// Consume one coalesced clock expiry and re-arm the next minute boundary.
     pub fn service_clock(&mut self, now: SystemTime) -> Result<(), RuntimeError> {
         if self.timers.consume_clock(now)? {
-            let clock = self.clock.render(now)?;
-            let update = update_clock_module(&mut self.session, clock);
+            let update = self.clock.tick(&mut self.session, now)?;
             self.handle_session_update(Instant::now(), update)?;
         }
         Ok(())
@@ -591,7 +593,7 @@ where
     F: FnOnce() -> Result<B, BackendError>,
     R: FnOnce() -> std::io::Result<()>,
 {
-    let clock = ClockModule::system();
+    let mut clock = ClockRuntime::system();
     let snapshot_path = runtime.path().join("realm/ledger.json");
     let bound = runtime.prepare_server_endpoint()?.bind()?;
 
@@ -602,8 +604,7 @@ where
     let backend = make_backend()?;
     let mut session = Session::connect_with_snapshot(backend, recovered)?;
     recover_until_live(&mut session, &mut persistence)?;
-    let initial_clock = clock.render(SystemTime::now())?;
-    let update = update_clock_module(&mut session, initial_clock);
+    let update = clock.tick(&mut session, SystemTime::now())?;
     persistence.observe(update.persistence, Instant::now());
 
     let control = bound.activate()?.into_server(Instant::now());
@@ -621,6 +622,58 @@ fn update_clock_module<B: WmBackend>(
     modules.retain(|module| module.id != "clock");
     modules.push(clock);
     session.update_modules(modules)
+}
+
+struct ClockRuntime {
+    module: ClockModule,
+    dirty: bool,
+}
+
+impl ClockRuntime {
+    fn system() -> Self {
+        Self {
+            module: ClockModule::system(),
+            dirty: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn utc() -> Self {
+        Self {
+            module: ClockModule::utc(),
+            dirty: false,
+        }
+    }
+
+    fn tick<B: WmBackend>(
+        &mut self,
+        session: &mut Session<B>,
+        now: SystemTime,
+    ) -> Result<SessionUpdate, RuntimeError> {
+        if session.has_active_backend_transaction() {
+            self.dirty = true;
+            return Ok(SessionUpdate::unchanged());
+        }
+        self.dirty = false;
+        Ok(update_clock_module(session, self.module.render(now)?))
+    }
+
+    fn fold_if_clean<B: WmBackend>(
+        &mut self,
+        session: &mut Session<B>,
+        mut update: SessionUpdate,
+        now: SystemTime,
+    ) -> Result<SessionUpdate, RuntimeError> {
+        if !self.dirty || session.has_active_backend_transaction() {
+            return Ok(update);
+        }
+        self.dirty = false;
+        let clock_update = update_clock_module(session, self.module.render(now)?);
+        if clock_update.state.is_some() {
+            update.state = clock_update.state;
+        }
+        Ok(update)
+    }
 }
 
 /// Resolve the sole production runtime input and run a backend incarnation.
@@ -1004,14 +1057,17 @@ mod tests {
     use realm_core::ledger::Dir;
     use realm_core::WinId;
 
-    use super::{dispatch_request, run_daemon_with, RequestDispatch};
+    use super::{dispatch_request, run_daemon_with, ClockRuntime, RequestDispatch};
     use crate::backend::{
         BackendBindingSpec, BackendContractError, BackendEvent, BackendExitPolicy,
         BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn, BackendPolicyTurnId,
         BackendPollInterest, BackendReady, BackendResult, BackendSubmission, BackendTicket,
         BackendWindowId, WmBackend,
     };
-    use crate::session::Session;
+    use crate::persistence::PersistenceCoordinator;
+    use crate::session::{Session, SessionUpdate};
+    use crate::timers::SessionTimers;
+    use crate::worker::Worker;
 
     struct FakeBackend(File);
 
@@ -1093,7 +1149,14 @@ mod tests {
             .handle_backend_event(BackendEvent::PolicyTurn(BackendPolicyTurn {
                 id: BackendPolicyTurnId::new(1).unwrap(),
                 drains: None,
-                events: vec![BackendPolicyEvent::InitialReplayComplete],
+                events: vec![
+                    BackendPolicyEvent::WindowOpened {
+                        backend_id: BackendWindowId::new("fixture-window").unwrap(),
+                        app_id: "fixture".to_owned(),
+                        title: "Fixture".to_owned(),
+                    },
+                    BackendPolicyEvent::InitialReplayComplete,
+                ],
             }))
             .unwrap();
         session
@@ -1111,6 +1174,7 @@ mod tests {
     struct DaemonBackend {
         event_fd: UnixStream,
         events: VecDeque<BackendEvent>,
+        sticky_immediate: bool,
     }
 
     impl DaemonBackend {
@@ -1132,6 +1196,14 @@ mod tests {
                         ))],
                     }),
                 ]),
+                sticky_immediate: false,
+            }
+        }
+
+        fn with_retained_immediate() -> Self {
+            Self {
+                sticky_immediate: true,
+                ..Self::new()
             }
         }
     }
@@ -1188,7 +1260,7 @@ mod tests {
 
         fn poll_interest(&self) -> BackendPollInterest {
             BackendPollInterest {
-                immediate: !self.events.is_empty(),
+                immediate: self.sticky_immediate || !self.events.is_empty(),
                 readable: true,
                 writable: false,
             }
@@ -1341,5 +1413,73 @@ mod tests {
     fn sealed_worker_masks_later_dirty_persistence_deadlines() {
         assert!(!super::snapshot_submission_allowed(true));
         assert!(super::snapshot_submission_allowed(false));
+    }
+
+    #[test]
+    fn retained_immediate_quit_and_due_dirty_snapshot_reach_exit() {
+        let root = fixture_dir("retained-immediate-quit");
+        let runtime = test_runtime_dir(&root).unwrap();
+        let snapshot_path = runtime.path().join("realm/ledger.json");
+        let bound = runtime.prepare_server_endpoint().unwrap().bind().unwrap();
+        let worker = Worker::start(snapshot_path).unwrap();
+        let mut session = Session::connect(DaemonBackend::with_retained_immediate()).unwrap();
+        let mut persistence = PersistenceCoordinator::new(None);
+        super::recover_until_live(&mut session, &mut persistence).unwrap();
+        let control = bound.activate().unwrap().into_server(Instant::now());
+        let timers = SessionTimers::new().unwrap();
+        let clock = ClockRuntime::utc();
+        let mut owners =
+            super::RuntimeOwners::new(session, control, worker, timers, clock, persistence);
+        let started = Instant::now();
+        let quit = owners.session.begin_direct_quit().unwrap();
+        owners.apply_update(started, quit, None).unwrap();
+
+        owners
+            .submit_due_snapshot(started + crate::persistence::SNAPSHOT_DELAY)
+            .expect("a deadline retained after seal must be masked");
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let _ = done_tx.send(super::run_combined_loop(&mut owners));
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("retained backend immediate interest starved shutdown")
+            .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn clock_tick_during_transaction_folds_into_the_next_clean_publication() {
+        let mut session = live_session();
+        let mut clock = ClockRuntime::utc();
+        let fixed = UNIX_EPOCH + Duration::from_secs(1_735_689_600);
+        assert!(session
+            .switch_orbit(realm_core::ledger::OrbitId::from_human(2).unwrap())
+            .unwrap()
+            .pending_action
+            .is_some());
+
+        assert_eq!(
+            clock.tick(&mut session, fixed).unwrap(),
+            SessionUpdate::unchanged()
+        );
+        assert!(clock.dirty);
+
+        let update = session
+            .handle_backend_event(BackendEvent::PolicyTurn(BackendPolicyTurn {
+                id: BackendPolicyTurnId::new(3).unwrap(),
+                drains: None,
+                events: Vec::new(),
+            }))
+            .unwrap();
+        let folded = clock.fold_if_clean(&mut session, update, fixed).unwrap();
+        assert!(folded.action_completion.is_some());
+        assert!(folded.persistence.is_some());
+        let state = folded.state.unwrap();
+        assert!(state
+            .modules
+            .iter()
+            .any(|module| module.id == "clock" && module.text == "00:00"));
+        assert!(!clock.dirty);
     }
 }

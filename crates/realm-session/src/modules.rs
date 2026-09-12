@@ -21,7 +21,7 @@ impl ClockModule {
     }
 
     #[cfg(test)]
-    fn utc() -> Self {
+    pub(crate) fn utc() -> Self {
         Self {
             timezone: TimeZone::UTC,
         }
