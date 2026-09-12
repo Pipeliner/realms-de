@@ -495,6 +495,7 @@ struct Window {
     assigned: Option<realm_core::WinId>,
     dimensions: Option<(i32, i32)>,
     proposed_size: Option<(i32, i32)>,
+    awaiting_dimensions: bool,
     position: Option<(i32, i32)>,
     focused: Option<bool>,
     hidden: Option<bool>,
@@ -527,6 +528,7 @@ struct Binding {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResponseStage {
     AwaitRender,
+    AwaitCorrectionManage,
     FlushingRender,
 }
 
@@ -535,6 +537,9 @@ struct PendingResponse {
     ticket: BackendTicket,
     response: BackendPolicyResponse,
     stage: ResponseStage,
+    terminal_error: Option<BackendError>,
+    corrections: HashMap<ObjectId, (i32, i32)>,
+    correction_round: bool,
 }
 
 /// A live connection to River's Wayland display.
@@ -582,6 +587,9 @@ pub struct RiverBackend {
     focused_window: Option<WinId>,
     exclusive_focus: bool,
     drain_ticket: Option<BackendTicket>,
+    selected_output_lost: bool,
+    terminal_after_response: Option<BackendError>,
+    last_projection: Option<Vec<realm_core::layout::Placement>>,
     read_guard: Option<BoundedReadEventsGuard>,
     flush_pending: bool,
     flush_blocked: bool,
@@ -658,6 +666,9 @@ impl RiverBackend {
             focused_window: None,
             exclusive_focus: false,
             drain_ticket: None,
+            selected_output_lost: false,
+            terminal_after_response: None,
+            last_projection: None,
             read_guard: None,
             flush_pending: false,
             flush_blocked: false,
@@ -770,7 +781,7 @@ impl RiverBackend {
         self.window_manager = Some(bind_global::<RiverWindowManagerV1>(
             &registry,
             globals.window_manager.as_ref().unwrap(),
-            5,
+            globals.window_manager.as_ref().unwrap().version.min(5),
             &self.incoming_tx,
             ObjectKind::WindowManager,
         )?);
@@ -844,18 +855,15 @@ impl RiverBackend {
         if self.open_turn != Some(turn) || self.pending_response.is_some() {
             return Err(protocol_error());
         }
-        if response.closes.len() > super::MAX_STAGED_EFFECTS
-            || response
-                .projection
-                .as_ref()
-                .is_some_and(|projection| projection.len() > super::MAX_STAGED_EFFECTS)
-        {
+        let projection_len = response.projection.as_ref().map_or(0, Vec::len);
+        if response.closes.len().saturating_add(projection_len) > super::MAX_STAGED_EFFECTS {
             return Err(capacity(
                 BackendCapacityResource::PolicyEffects,
                 super::MAX_STAGED_EFFECTS as u64,
             ));
         }
         let mut placed = HashSet::new();
+        let mut closed = HashSet::new();
         for win in response.closes.iter().chain(
             response
                 .projection
@@ -866,6 +874,9 @@ impl RiverBackend {
             if !self.window_ids.contains_key(backend_id) {
                 return Err(protocol_error());
             }
+        }
+        if response.closes.iter().any(|win| !closed.insert(*win)) {
+            return Err(protocol_error());
         }
         if response.projection.as_ref().is_some_and(|projection| {
             projection.iter().any(|placement| {
@@ -881,24 +892,28 @@ impl RiverBackend {
                 .watched_modifiers
                 .windows(2)
                 .all(|pair| pair[0] < pair[1])
-            || response
-                .bindings
-                .enabled
-                .iter()
-                .any(|id| !self.binding_objects.contains_key(id))
+            || self.terminal_after_response.is_none()
+                && response
+                    .bindings
+                    .enabled
+                    .iter()
+                    .any(|id| !self.binding_objects.contains_key(id))
         {
             return Err(protocol_error());
         }
-        for win in &response.closes {
-            let backend_id = self.realm_ids.get(win).ok_or_else(protocol_error)?;
-            let object_id = self.window_ids.get(backend_id).ok_or_else(protocol_error)?;
-            self.windows
-                .get(object_id)
-                .ok_or_else(protocol_error)?
-                .proxy
-                .close();
+        let terminal_error = self.terminal_after_response.take();
+        if terminal_error.is_none() {
+            for win in &response.closes {
+                let backend_id = self.realm_ids.get(win).ok_or_else(protocol_error)?;
+                let object_id = self.window_ids.get(backend_id).ok_or_else(protocol_error)?;
+                self.windows
+                    .get(object_id)
+                    .ok_or_else(protocol_error)?
+                    .proxy
+                    .close();
+            }
+            self.apply_manage_response(&response)?;
         }
-        self.apply_manage_response(&response)?;
         self.window_manager
             .as_ref()
             .ok_or_else(protocol_error)?
@@ -908,13 +923,25 @@ impl RiverBackend {
             ticket,
             response,
             stage: ResponseStage::AwaitRender,
+            terminal_error,
+            corrections: HashMap::new(),
+            correction_round: false,
         });
         self.flush_pending = true;
         Ok(BackendSubmission::Pending)
     }
 
     fn apply_manage_response(&mut self, response: &BackendPolicyResponse) -> BackendResult<()> {
-        let output_id = self.selected_output.clone().ok_or_else(protocol_error)?;
+        let Some(output_id) = self.selected_output.clone() else {
+            if response.projection.is_none()
+                && response.bindings.enabled.is_empty()
+                && response.bindings.watched_modifiers.is_empty()
+                && response.bindings.next_key_edge == BackendNextKeyEdge::Preserve
+            {
+                return Ok(());
+            }
+            return Err(protocol_error());
+        };
         let output = self.outputs.get(&output_id).ok_or_else(protocol_error)?;
         let (ox, oy) = output.position.ok_or_else(protocol_error)?;
         let (ow, oh) = output.dimensions.ok_or_else(protocol_error)?;
@@ -948,17 +975,22 @@ impl RiverBackend {
                         window.proxy.fullscreen(&output_proxy);
                         window.proxy.inform_fullscreen();
                         window.fullscreen = true;
+                        window.awaiting_dimensions = false;
                     }
                 } else {
                     if window.fullscreen {
                         window.proxy.exit_fullscreen();
                         window.proxy.inform_not_fullscreen();
                         window.fullscreen = false;
+                        window.proposed_size = None;
+                        window.awaiting_dimensions = false;
+                        window.position = None;
                     }
                     let size = (placement.rect.w, placement.rect.h);
                     if window.proposed_size != Some(size) {
                         window.proxy.propose_dimensions(size.0, size.1);
                         window.proposed_size = Some(size);
+                        window.awaiting_dimensions = true;
                     }
                 }
             }
@@ -1042,6 +1074,9 @@ impl RiverBackend {
         ready: BackendReady,
         _now: Instant,
     ) -> BackendResult<Option<BackendEvent>> {
+        if self.exit_started && ready.terminal && !self.exit_flushed {
+            return Err(BackendError::Disconnected);
+        }
         if self.flush_pending && (!self.flush_blocked || ready.writable) {
             match self.transport.flush_once().map_err(wayland_error)? {
                 FlushOnce::Complete => {
@@ -1056,12 +1091,21 @@ impl RiverBackend {
                         .is_some_and(|pending| pending.stage == ResponseStage::FlushingRender)
                     {
                         let pending = self.pending_response.take().expect("stage checked above");
+                        let result = pending.terminal_error.map_or(Ok(()), Err);
+                        let successful = result.is_ok();
+                        if successful {
+                            if let Some(projection) = pending.response.projection {
+                                self.last_projection = Some(projection);
+                            }
+                        }
                         self.public_events
                             .push_back(BackendEvent::OperationCompleted {
                                 ticket: pending.ticket,
-                                result: Ok(()),
+                                result,
                             });
-                        self.drain_ticket = Some(pending.ticket);
+                        if successful {
+                            self.drain_ticket = Some(pending.ticket);
+                        }
                     }
                 }
                 FlushOnce::Progress { .. } => self.flush_blocked = false,
@@ -1218,6 +1262,7 @@ impl RiverBackend {
             Incoming::InputDeviceRemoved(proxy) => {
                 self.input_devices.remove(&proxy.id());
                 proxy.destroy();
+                self.flush_pending |= self.connected;
             }
             Incoming::InputDeviceType { device, keyboard } => {
                 self.input_devices
@@ -1234,6 +1279,7 @@ impl RiverBackend {
                     device
                         .proxy
                         .set_repeat_info(KEY_REPEAT_RATE_HZ as i32, KEY_REPEAT_DELAY_MS as i32);
+                    self.flush_pending |= self.connected;
                 }
             }
             Incoming::LibinputDeviceCreated(proxy) => {
@@ -1260,6 +1306,7 @@ impl RiverBackend {
             Incoming::LibinputDeviceRemoved(proxy) => {
                 self.libinput_devices.remove(&proxy.id());
                 proxy.destroy();
+                self.flush_pending |= self.connected;
             }
             Incoming::LibinputTapSupport {
                 device,
@@ -1294,6 +1341,7 @@ impl RiverBackend {
                         )
                         .map_err(invalid_id)?;
                     self.libinput_results.insert(result.id());
+                    self.flush_pending |= self.connected;
                 }
             }
             Incoming::LibinputResult { result, success } => {
@@ -1347,6 +1395,7 @@ impl RiverBackend {
                         assigned: None,
                         dimensions: None,
                         proposed_size: None,
+                        awaiting_dimensions: false,
                         position: None,
                         focused: None,
                         hidden: None,
@@ -1393,17 +1442,45 @@ impl RiverBackend {
                 if width <= 0 || height <= 0 {
                     return Err(protocol_error());
                 }
-                self.windows
+                let record = self
+                    .windows
                     .get_mut(&window.id())
-                    .ok_or_else(protocol_error)?
-                    .dimensions = Some((width, height));
+                    .ok_or_else(protocol_error)?;
+                let changed = record.dimensions != Some((width, height));
+                let was_awaiting = record.awaiting_dimensions;
+                record.awaiting_dimensions = false;
+                record.dimensions = Some((width, height));
+                if changed
+                    && !was_awaiting
+                    && !record.fullscreen
+                    && self.pending_response.is_none()
+                    && !record.pending_open
+                {
+                    if let (Some(backend_id), Some((x, y))) =
+                        (record.backend_id.clone(), record.position)
+                    {
+                        self.policy_events
+                            .push(BackendPolicyEvent::GeometryDrifted {
+                                backend_id,
+                                rect: realm_core::layout::Rect::new(x, y, width, height),
+                            });
+                        record.proposed_size = None;
+                    }
+                }
             }
             Incoming::WindowClosed(proxy) => {
                 let Some(record) = self.windows.remove(&proxy.id()) else {
                     return Err(protocol_error());
                 };
+                record.node.destroy();
                 if let Some(backend_id) = record.backend_id {
                     self.window_ids.remove(&backend_id);
+                    if let Some(win) = record.assigned {
+                        self.realm_ids.remove(&win);
+                        if self.focused_window == Some(win) {
+                            self.focused_window = None;
+                        }
+                    }
                     if !record.pending_open {
                         self.policy_events
                             .push(BackendPolicyEvent::WindowClosed(backend_id));
@@ -1474,6 +1551,16 @@ impl RiverBackend {
                     .ok_or_else(protocol_error)?;
                 if self.selected_output.as_ref() == Some(&proxy.id()) {
                     self.selected_output = None;
+                    self.default_output = None;
+                    self.selected_output_lost = true;
+                    for window in self.windows.values_mut() {
+                        if window.fullscreen {
+                            window.fullscreen = false;
+                            window.proposed_size = None;
+                            window.awaiting_dimensions = false;
+                            window.position = None;
+                        }
+                    }
                 }
                 removed.layer.destroy();
                 proxy.destroy();
@@ -1556,7 +1643,17 @@ impl RiverBackend {
             Incoming::SeatRemoved(proxy) => {
                 self.seats.remove(&proxy.id()).ok_or_else(protocol_error)?;
                 if self.selected_seat.as_ref() == Some(&proxy.id()) {
-                    return Err(BackendError::Unavailable {
+                    self.selected_seat = None;
+                    if let Some(layer_seat) = self.layer_seat.take() {
+                        layer_seat.destroy();
+                    }
+                    if let Some(xkb_seat) = self.xkb_seat.take() {
+                        xkb_seat.destroy();
+                    }
+                    for (_, binding) in std::mem::take(&mut self.binding_objects) {
+                        binding.proxy.destroy();
+                    }
+                    self.terminal_after_response = Some(BackendError::Unavailable {
                         message: "selected River seat was removed".to_owned(),
                     });
                 }
@@ -1601,6 +1698,9 @@ impl RiverBackend {
             }
             Incoming::ExclusiveFocus(exclusive) => {
                 self.exclusive_focus = exclusive;
+                if exclusive {
+                    self.focused_window = None;
+                }
                 self.policy_events
                     .push(BackendPolicyEvent::ExclusiveFocusChanged(exclusive));
             }
@@ -1637,28 +1737,76 @@ impl RiverBackend {
             }
             Incoming::ManageStart => {
                 self.turn_requested = false;
-                self.finish_policy_turn()?;
-            }
-            Incoming::RenderStart => {
-                if self.pending_response.as_ref().map(|pending| pending.stage)
-                    != Some(ResponseStage::AwaitRender)
-                {
-                    return Err(protocol_error());
-                }
-                let projection = self
+                if self
                     .pending_response
                     .as_ref()
-                    .and_then(|pending| pending.response.projection.clone());
-                self.apply_render_response(projection.as_deref())?;
-                self.window_manager
-                    .as_ref()
-                    .ok_or_else(protocol_error)?
-                    .render_finish();
-                self.pending_response
-                    .as_mut()
-                    .ok_or_else(protocol_error)?
-                    .stage = ResponseStage::FlushingRender;
-                self.flush_pending = true;
+                    .is_some_and(|pending| pending.stage == ResponseStage::AwaitCorrectionManage)
+                {
+                    let corrections = std::mem::take(
+                        &mut self
+                            .pending_response
+                            .as_mut()
+                            .ok_or_else(protocol_error)?
+                            .corrections,
+                    );
+                    for (id, size) in corrections {
+                        let window = self.windows.get_mut(&id).ok_or_else(protocol_error)?;
+                        window.proxy.propose_dimensions(size.0, size.1);
+                        window.proposed_size = Some(size);
+                        window.awaiting_dimensions = true;
+                    }
+                    self.window_manager
+                        .as_ref()
+                        .ok_or_else(protocol_error)?
+                        .manage_finish();
+                    self.pending_response
+                        .as_mut()
+                        .ok_or_else(protocol_error)?
+                        .stage = ResponseStage::AwaitRender;
+                    self.flush_pending = true;
+                } else {
+                    self.finish_policy_turn()?;
+                }
+            }
+            Incoming::RenderStart => {
+                if let Some(pending) = self.pending_response.as_ref() {
+                    if pending.stage != ResponseStage::AwaitRender {
+                        return Err(protocol_error());
+                    }
+                    let projection = pending
+                        .terminal_error
+                        .is_none()
+                        .then(|| pending.response.projection.clone())
+                        .flatten();
+                    let allow_correction = !pending.correction_round;
+                    let corrections =
+                        self.apply_render_response(projection.as_deref(), allow_correction)?;
+                    self.window_manager
+                        .as_ref()
+                        .ok_or_else(protocol_error)?
+                        .render_finish();
+                    let pending = self.pending_response.as_mut().ok_or_else(protocol_error)?;
+                    if corrections.is_empty() {
+                        pending.stage = ResponseStage::FlushingRender;
+                    } else {
+                        pending.corrections = corrections;
+                        pending.correction_round = true;
+                        pending.stage = ResponseStage::AwaitCorrectionManage;
+                        self.window_manager
+                            .as_ref()
+                            .ok_or_else(protocol_error)?
+                            .manage_dirty();
+                    }
+                    self.flush_pending = true;
+                } else {
+                    let projection = self.last_projection.clone();
+                    let _ = self.apply_render_response(projection.as_deref(), false)?;
+                    self.window_manager
+                        .as_ref()
+                        .ok_or_else(protocol_error)?
+                        .render_finish();
+                    self.flush_pending = true;
+                }
             }
             incoming @ (Incoming::InputDeviceCreated(_)
             | Incoming::InputDeviceRemoved(_)
@@ -1674,6 +1822,31 @@ impl RiverBackend {
             | Incoming::GlobalRemoved(_)
             | Incoming::SyncDone
             | Incoming::Malformed => return Err(protocol_error()),
+        }
+        self.validate_policy_capacity()?;
+        Ok(())
+    }
+
+    fn validate_policy_capacity(&self) -> BackendResult<()> {
+        let limit = if self.replay {
+            MAX_REPLAY_POLICY_EVENTS
+        } else {
+            MAX_POLICY_EVENTS
+        };
+        if self.policy_events.len() > limit {
+            return Err(capacity(BackendCapacityResource::PolicyFacts, limit as u64));
+        }
+        if self
+            .policy_events
+            .iter()
+            .map(event_text_bytes)
+            .sum::<usize>()
+            > MAX_POLICY_TEXT_BYTES
+        {
+            return Err(capacity(
+                BackendCapacityResource::PolicyTextBytes,
+                MAX_POLICY_TEXT_BYTES as u64,
+            ));
         }
         Ok(())
     }
@@ -1695,17 +1868,52 @@ impl RiverBackend {
             window.pending_open = false;
         }
         if self.selected_output.is_none() {
+            let require_workarea = self.selected_output_lost;
             self.selected_output = self
                 .outputs
                 .iter()
-                .filter(|(_, output)| output.position.is_some() && output.dimensions.is_some())
+                .filter(|(_, output)| {
+                    output.position.is_some()
+                        && output.dimensions.is_some()
+                        && (!require_workarea || output.workarea.is_some())
+                })
                 .min_by_key(|(_, output)| output.ordinal)
                 .map(|(id, _)| id.clone());
+            self.selected_output_lost = false;
+            if require_workarea {
+                if let Some(output) = self
+                    .selected_output
+                    .as_ref()
+                    .and_then(|id| self.outputs.get(id))
+                {
+                    let (x, y) = output.position.ok_or_else(protocol_error)?;
+                    let (w, h) = output.dimensions.ok_or_else(protocol_error)?;
+                    let tiles = output.workarea.ok_or_else(protocol_error)?;
+                    self.policy_events.push(BackendPolicyEvent::WorkareaChanged(
+                        realm_core::layout::Workarea {
+                            output: realm_core::layout::Rect::new(x, y, w, h),
+                            tiles,
+                        },
+                    ));
+                }
+            }
         }
         if self.selected_output.is_none() || self.selected_seat.is_none() {
-            return Err(BackendError::Unavailable {
-                message: "initial River replay has no complete output or seat".to_owned(),
+            self.terminal_after_response = Some(BackendError::Unavailable {
+                message: "River has no complete selected output or seat".to_owned(),
             });
+        } else if let Some(selected) = self
+            .selected_seat
+            .as_ref()
+            .and_then(|id| self.seats.get(id))
+        {
+            if self
+                .seats
+                .values()
+                .any(|seat| seat.ordinal < selected.ordinal)
+            {
+                return Err(protocol_error());
+            }
         }
         if self.replay {
             self.policy_events
@@ -1750,10 +1958,12 @@ impl RiverBackend {
     fn apply_render_response(
         &mut self,
         projection: Option<&[realm_core::layout::Placement]>,
-    ) -> BackendResult<()> {
+        allow_correction: bool,
+    ) -> BackendResult<HashMap<ObjectId, (i32, i32)>> {
         let Some(projection) = projection else {
-            return Ok(());
+            return Ok(HashMap::new());
         };
+        let mut corrections = HashMap::new();
         let visible: HashSet<_> = projection.iter().map(|placement| placement.win).collect();
         for window in self.windows.values_mut() {
             let Some(win) = window.assigned else {
@@ -1797,18 +2007,35 @@ impl RiverBackend {
                         window.proxy.set_content_clip_box(0, 0, target.0, target.1);
                     } else if actual == target {
                         window.proxy.set_content_clip_box(0, 0, 0, 0);
+                    } else if allow_correction {
+                        corrections.insert(
+                            object_id.clone(),
+                            (
+                                target.0 + (target.0 - actual.0).max(0),
+                                target.1 + (target.1 - actual.1).max(0),
+                            ),
+                        );
                     }
                 }
-                if window.dimensions == Some(target) && window.hidden != Some(false) {
-                    window.proxy.show();
-                    window.hidden = Some(false);
+                if window
+                    .dimensions
+                    .is_some_and(|actual| actual.0 >= target.0 && actual.1 >= target.1)
+                    || !allow_correction && window.dimensions.is_some()
+                {
+                    if window.hidden != Some(false) {
+                        window.proxy.show();
+                        window.hidden = Some(false);
+                    }
                 }
                 if raise && placement.focused {
                     window.node.place_top();
                 }
+            } else if window.hidden != Some(false) {
+                window.proxy.show();
+                window.hidden = Some(false);
             }
         }
-        Ok(())
+        Ok(corrections)
     }
 
     fn request_policy_turn_inner(&mut self) -> BackendResult<()> {
@@ -1828,13 +2055,24 @@ impl RiverBackend {
         Ok(())
     }
 
-    fn begin_exit_session_inner(&mut self, _policy: BackendExitPolicy) -> BackendResult<()> {
+    fn begin_exit_session_inner(&mut self, policy: BackendExitPolicy) -> BackendResult<()> {
         if !self.connected || self.exit_started {
             return Err(protocol_error());
         }
         self.read_guard.take();
         self.public_events.clear();
         if self.open_turn.take().is_some() {
+            if self.selected_output.is_some() && self.xkb_seat.is_some() {
+                self.apply_manage_response(&BackendPolicyResponse {
+                    projection: None,
+                    closes: Vec::new(),
+                    bindings: super::BackendBindingState {
+                        enabled: policy.enabled,
+                        watched_modifiers: policy.watched_modifiers,
+                        next_key_edge: BackendNextKeyEdge::Cancel,
+                    },
+                })?;
+            }
             self.window_manager
                 .as_ref()
                 .ok_or_else(protocol_error)?

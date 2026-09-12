@@ -49,7 +49,7 @@ fn new_callback(backend: &Backend, data: Arc<Counter>) -> ObjectId {
 fn callback_done(id: &ObjectId, value: u32) -> [u8; 12] {
     let mut frame = [0; 12];
     frame[0..4].copy_from_slice(&id.protocol_id().to_ne_bytes());
-    frame[4..8].copy_from_slice(&((12_u32 << 16) | 0).to_ne_bytes());
+    frame[4..8].copy_from_slice(&(12_u32 << 16).to_ne_bytes());
     frame[8..12].copy_from_slice(&value.to_ne_bytes());
     frame
 }

@@ -2,8 +2,9 @@ use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use realm_core::layout::{Placement, Rect};
 use realm_core::WinId;
 use realm_session::backend::{
     BackendBindingState, BackendEvent, BackendNextKeyEdge, BackendPolicyEvent,
@@ -199,7 +200,13 @@ fn connect_applies_done_gated_keyboard_and_tap_policy_before_window_management()
     );
 }
 
-fn serve_initial_replay(mut peer: UnixStream, await_response: bool) -> Vec<u16> {
+fn serve_initial_replay(
+    mut peer: UnixStream,
+    await_response: bool,
+    render_dimensions: Option<(i32, i32)>,
+    corrected_dimensions: Option<(i32, i32)>,
+    extra_render: bool,
+) -> Vec<(u32, u16, Vec<u8>)> {
     let mut registry = None;
     let window_manager = loop {
         let (sender, opcode, body) = read_request(&mut peer);
@@ -260,21 +267,71 @@ fn serve_initial_replay(mut peer: UnixStream, await_response: bool) -> Vec<u16> 
         }
         return Vec::new();
     }
-    let manage_finish = loop {
-        let (sender, opcode, _) = read_request(&mut peer);
+    let mut requests = Vec::new();
+    loop {
+        let request @ (sender, opcode, _) = read_request(&mut peer);
+        requests.push(request);
         if sender == window_manager && opcode == 2 {
-            break opcode;
+            break;
         }
-    };
+    }
+    if let Some((width, height)) = render_dimensions {
+        let mut dimensions = Vec::from(width.to_ne_bytes());
+        dimensions.extend_from_slice(&height.to_ne_bytes());
+        peer.write_all(&frame(window, 2, &dimensions)).unwrap();
+    }
     peer.write_all(&frame(window_manager, 3, &[])).unwrap();
-    let (_, render_finish, _) = read_request(&mut peer);
-    vec![manage_finish, render_finish]
+    loop {
+        let request @ (sender, opcode, _) = read_request(&mut peer);
+        requests.push(request);
+        if sender == window_manager && opcode == 4 {
+            break;
+        }
+    }
+    if let Some((width, height)) = corrected_dimensions {
+        loop {
+            let request @ (sender, opcode, _) = read_request(&mut peer);
+            requests.push(request);
+            if sender == window_manager && opcode == 3 {
+                break;
+            }
+        }
+        peer.write_all(&frame(window_manager, 2, &[])).unwrap();
+        loop {
+            let request @ (sender, opcode, _) = read_request(&mut peer);
+            requests.push(request);
+            if sender == window_manager && opcode == 2 {
+                break;
+            }
+        }
+        let mut dimensions = Vec::from(width.to_ne_bytes());
+        dimensions.extend_from_slice(&height.to_ne_bytes());
+        peer.write_all(&frame(window, 2, &dimensions)).unwrap();
+        peer.write_all(&frame(window_manager, 3, &[])).unwrap();
+        loop {
+            let request @ (sender, opcode, _) = read_request(&mut peer);
+            requests.push(request);
+            if sender == window_manager && opcode == 4 {
+                break;
+            }
+        }
+    } else if extra_render {
+        peer.write_all(&frame(window_manager, 3, &[])).unwrap();
+        loop {
+            let request @ (sender, opcode, _) = read_request(&mut peer);
+            requests.push(request);
+            if sender == window_manager && opcode == 4 {
+                break;
+            }
+        }
+    }
+    requests
 }
 
 #[test]
 fn initial_replay_is_one_bounded_report_order_policy_turn() {
     let (client, server) = UnixStream::pair().unwrap();
-    let fixture = thread::spawn(|| serve_initial_replay(server, false));
+    let fixture = thread::spawn(|| serve_initial_replay(server, false, None, None, false));
     let mut backend = RiverBackend::from_socket(client).unwrap();
     backend.connect().unwrap();
     backend.configure_bindings(Vec::new()).unwrap();
@@ -295,6 +352,7 @@ fn initial_replay_is_one_bounded_report_order_policy_turn() {
             observed = Some(event);
             break;
         }
+        thread::sleep(Duration::from_millis(1));
     }
 
     fixture.join().unwrap();
@@ -318,7 +376,7 @@ fn initial_replay_is_one_bounded_report_order_policy_turn() {
 #[test]
 fn replay_response_finishes_manage_then_render_before_completion_and_drain() {
     let (client, server) = UnixStream::pair().unwrap();
-    let fixture = thread::spawn(|| serve_initial_replay(server, true));
+    let fixture = thread::spawn(|| serve_initial_replay(server, true, None, None, false));
     let mut backend = RiverBackend::from_socket(client).unwrap();
     backend.connect().unwrap();
     backend.configure_bindings(Vec::new()).unwrap();
@@ -379,6 +437,7 @@ fn replay_response_finishes_manage_then_render_before_completion_and_drain() {
                 break;
             }
         }
+        thread::sleep(Duration::from_millis(1));
     }
     assert!(matches!(
         events.first(),
@@ -391,5 +450,196 @@ fn replay_response_finishes_manage_then_render_before_completion_and_drain() {
         events.get(1),
         Some(&BackendEvent::RetainedObservationsDrained { ticket })
     );
-    assert_eq!(fixture.join().unwrap(), vec![2, 4]);
+    let requests = fixture.join().unwrap();
+    let manager_requests: Vec<_> = requests
+        .iter()
+        .filter(|(sender, _, _)| *sender != 0)
+        .filter_map(|(_, opcode, body)| body.is_empty().then_some(*opcode))
+        .collect();
+    assert!(manager_requests.ends_with(&[2, 4]));
+}
+
+fn submit_single_window_projection(backend: &mut RiverBackend, ticket: BackendTicket) {
+    let turn = loop {
+        if let Some(BackendEvent::PolicyTurn(turn)) = backend
+            .service(
+                BackendReady {
+                    readable: true,
+                    terminal: false,
+                    writable: true,
+                },
+                Instant::now(),
+            )
+            .unwrap()
+        {
+            break turn;
+        }
+        thread::sleep(Duration::from_millis(1));
+    };
+    backend
+        .assign_window(&BackendWindowId::new("window-1").unwrap(), WinId(1))
+        .unwrap();
+    backend
+        .respond_policy_turn(
+            turn.id,
+            ticket,
+            BackendPolicyResponse {
+                projection: Some(vec![Placement {
+                    win: WinId(1),
+                    rect: Rect::new(40, 50, 800, 600),
+                    focused: true,
+                    occluded: false,
+                }]),
+                closes: Vec::new(),
+                bindings: BackendBindingState {
+                    enabled: Vec::new(),
+                    watched_modifiers: Vec::new(),
+                    next_key_edge: BackendNextKeyEdge::Preserve,
+                },
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn projection_sizes_in_manage_and_positions_only_after_render_start() {
+    let (client, server) = UnixStream::pair().unwrap();
+    let fixture =
+        thread::spawn(|| serve_initial_replay(server, true, Some((800, 600)), None, false));
+    let mut backend = RiverBackend::from_socket(client).unwrap();
+    backend.connect().unwrap();
+    backend.configure_bindings(Vec::new()).unwrap();
+    submit_single_window_projection(&mut backend, BackendTicket::new(10).unwrap());
+    for _ in 0..128 {
+        let event = backend
+            .service(
+                BackendReady {
+                    readable: true,
+                    terminal: false,
+                    writable: true,
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        if matches!(event, Some(BackendEvent::OperationCompleted { .. })) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    let requests = fixture.join().unwrap();
+    let window = 0xff00_0000_u32;
+    let node = requests
+        .iter()
+        .find(|(sender, opcode, body)| *sender == window && *opcode == 2 && body.len() == 4)
+        .map(|(_, _, body)| u32::from_ne_bytes(body[..4].try_into().unwrap()))
+        .unwrap();
+    let proposed = requests
+        .iter()
+        .position(|(sender, opcode, _)| *sender == window && *opcode == 3)
+        .unwrap();
+    let manage_finish = requests
+        .iter()
+        .position(|(_, opcode, body)| *opcode == 2 && body.is_empty())
+        .unwrap();
+    let positioned = requests
+        .iter()
+        .position(|(sender, opcode, _)| *sender == node && *opcode == 1)
+        .unwrap();
+    let render_finish = requests.len() - 1;
+    assert!(proposed < manage_finish);
+    assert!(manage_finish < positioned);
+    assert!(positioned < render_finish);
+    assert_eq!(requests[render_finish].1, 4);
+}
+
+#[test]
+fn short_dimensions_get_one_correction_before_the_response_completes() {
+    let (client, server) = UnixStream::pair().unwrap();
+    let fixture = thread::spawn(|| {
+        serve_initial_replay(server, true, Some((792, 592)), Some((800, 600)), false)
+    });
+    let mut backend = RiverBackend::from_socket(client).unwrap();
+    backend.connect().unwrap();
+    backend.configure_bindings(Vec::new()).unwrap();
+    let ticket = BackendTicket::new(11).unwrap();
+    submit_single_window_projection(&mut backend, ticket);
+
+    let mut completions = 0;
+    for _ in 0..256 {
+        if matches!(
+            backend
+                .service(
+                    BackendReady {
+                        readable: true,
+                        terminal: false,
+                        writable: true,
+                    },
+                    Instant::now(),
+                )
+                .unwrap(),
+            Some(BackendEvent::OperationCompleted { .. })
+        ) {
+            completions += 1;
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(completions, 1);
+
+    let requests = fixture.join().unwrap();
+    let proposals: Vec<_> = requests
+        .iter()
+        .filter(|(sender, opcode, body)| *sender == 0xff00_0000 && *opcode == 3 && body.len() == 8)
+        .map(|(_, _, body)| {
+            (
+                i32::from_ne_bytes(body[..4].try_into().unwrap()),
+                i32::from_ne_bytes(body[4..8].try_into().unwrap()),
+            )
+        })
+        .collect();
+    assert_eq!(proposals, vec![(800, 600), (808, 608)]);
+}
+
+#[test]
+fn later_standalone_render_reuses_projection_without_second_completion() {
+    let (client, server) = UnixStream::pair().unwrap();
+    let fixture =
+        thread::spawn(|| serve_initial_replay(server, true, Some((800, 600)), None, true));
+    let mut backend = RiverBackend::from_socket(client).unwrap();
+    backend.connect().unwrap();
+    backend.configure_bindings(Vec::new()).unwrap();
+    submit_single_window_projection(&mut backend, BackendTicket::new(12).unwrap());
+
+    let mut completions = 0;
+    for _ in 0..256 {
+        if matches!(
+            backend
+                .service(
+                    BackendReady {
+                        readable: true,
+                        terminal: false,
+                        writable: true,
+                    },
+                    Instant::now(),
+                )
+                .unwrap(),
+            Some(BackendEvent::OperationCompleted { .. })
+        ) {
+            completions += 1;
+        }
+        if fixture.is_finished() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    let requests = fixture.join().unwrap();
+    assert_eq!(completions, 1);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|(_, opcode, body)| *opcode == 4 && body.is_empty())
+            .count(),
+        2
+    );
 }
