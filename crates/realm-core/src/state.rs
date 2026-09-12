@@ -64,6 +64,8 @@ pub struct RealmState {
     pub chord_echo: String,
     /// Whether the which-key strip is visible.
     pub whichkey: bool,
+    /// Whether the full keybinding sheet is visible.
+    pub grimoire: bool,
     /// Right-hand modules in draw order.
     pub modules: Vec<Module>,
 }
@@ -89,6 +91,7 @@ impl Default for RealmState {
             focused_title: String::new(),
             chord_echo: String::new(),
             whichkey: true,
+            grimoire: false,
             modules: Vec::new(),
         }
     }
@@ -106,6 +109,7 @@ impl RealmState {
             && self.focused_title == other.focused_title
             && self.chord_echo == other.chord_echo
             && self.whichkey == other.whichkey
+            && self.grimoire == other.grimoire
             && self.modules == other.modules
     }
 }
@@ -138,5 +142,16 @@ mod tests {
         let s = RealmState::default();
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<RealmState>(&json).unwrap(), s);
+    }
+
+    #[test]
+    fn grimoire_visibility_changes_rendered_state_and_round_trips() {
+        let hidden = RealmState::default();
+        let mut visible = hidden.clone();
+        visible.grimoire = true;
+
+        assert!(!hidden.renders_same_as(&visible));
+        let json = serde_json::to_string(&visible).unwrap();
+        assert!(serde_json::from_str::<RealmState>(&json).unwrap().grimoire);
     }
 }

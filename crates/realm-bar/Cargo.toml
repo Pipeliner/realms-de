@@ -1,0 +1,28 @@
+[package]
+name = "realm-bar"
+description = "Realm's CPU-rasterised Wayland layer-shell status surfaces."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+calloop = { workspace = true }
+calloop-wayland-source = { workspace = true }
+cosmic-text = { workspace = true }
+realm-control = { workspace = true }
+realm-core = { workspace = true }
+rustix = { workspace = true }
+smithay-client-toolkit = { workspace = true }
+tiny-skia = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ttf-parser = { workspace = true }
+unicode-script = { workspace = true }
+wayland-client = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

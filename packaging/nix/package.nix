@@ -4,8 +4,8 @@
 # metadata-only local validator are installed. This derivation also
 # installs the session wrapper (wrapped so it can find river, systemctl,
 # dbus-update-activation-environment and gsettings), the wayland-session entry,
-# the systemd user units and the palette. realm-bar and realm-wm remain
-# pending M1–M2 binaries.
+# the systemd user units and the palette. realm-wm remains a pending M1–M2
+# binary.
 {
   pkgs,
   lib,
@@ -52,6 +52,8 @@
   postInstall = ''
     install -Dm755 target/${pkgs.stdenv.targetPlatform.rust.cargoShortTarget}/release/realmctl \
       $out/bin/realmctl
+    install -Dm755 target/${pkgs.stdenv.targetPlatform.rust.cargoShortTarget}/release/realm-bar \
+      $out/bin/realm-bar
     install -Dm755 ${src + "/packaging/session/realm-session"} $out/bin/realm-session
 
     # The desktop entry must point at the store path, not /usr/bin.
