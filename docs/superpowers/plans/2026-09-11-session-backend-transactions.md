@@ -19,6 +19,10 @@ Those remain #38/#40/#65 work.
 `docs/specs/0007-control-socket-security.md`, accepted sections 1 and 4 of
 `docs/INTERFACES.md`, and ADR 0021.
 
+**MVP correction (2026-09-12):** Tasks 3 and 4 implement successful response
+chains plus fatal fail-closed handling only. In-incarnation repair and shutdown
+discard matrices are explicit post-MVP follow-up, not launch prerequisites.
+
 ## Invariants
 
 - A policy turn is one ordered batch plus one mandatory response. No independent
@@ -31,41 +35,32 @@ Those remain #38/#40/#65 work.
   and returns only `pending_action` on request success. Initial request
   `Io`/`Unsupported` returns an immediate Error, but the reserved ticket number
   remains consumed and is never reused.
-- `respond_policy_turn` errors are fatal. `Pending` terminal failures use the
-  closed component-precedence table in SPEC 0003.
+- `respond_policy_turn` errors are fatal. After admission every terminal
+  `Io`/`Unsupported`, protocol/capacity error, and backend loss fails closed,
+  abandons all private state, and terminates without an ordinary completion,
+  publication, persistence value, diagnostic, or effect.
 - A matching successful terminal result is not a commit. The final boundary is
-  either a clean empty marker or `Complete` from the final tagged-turn/repair
+  either a clean empty marker or `Complete` from the final tagged-turn
   response.
-- A dirty empty marker requests a repair turn; it cannot answer a turn that does
-  not exist.
-- Desired/key deltas roll back on nonfatal terminal failure. In a desired,
-  close, or key/effect-mixed transaction all compositor facts remain private W
-  until finalization. An observed-only batch instead promotes every fact to
-  in-memory C when its response safely finishes and exposes only the resulting
-  closed-V1 persistable consequences through `snapshot()`, while V/L wait for
-  the final clean boundary. Process/quit effects are suppressed on failure.
-- Repair dirtiness follows the attempted-component predicate, not a
-  changed-value predicate: `projection: Some(_)` is dirty even when equal, and
-  bindings are dirty when enabled/watch values differed, their cache was
-  already dirty, or any next-key edge was emitted.
-- Next-key policy is `Preserve | Ensure | Cancel`; uncertain failed Ensure is
-  repaired with Cancel and is never replayed.
+- Compositor observations, desired/key deltas, effects, C/snapshot, V, and L
+  all remain private or at the prior final-clean boundary until successful
+  finalization. There is no observed-only early-authority exception in the MVP.
+- Next-key policy is `Preserve | Ensure | Cancel`; the MVP uses ordinary edges
+  only on successful chains and fails fatally if their response later fails.
 - Close target is fixed at admission and its edge is one-shot. If the awaited
   turn already closed it, omit the edge and complete successfully at the clean
-  boundary. Never replay a close edge during repair.
+  boundary. Never replay a close edge in a tagged follow-up.
 - `assign_window` is local, bounded, idempotent, and fallible only with a fatal
   backend-contract error.
 - Initial replay is the sole assignment exception: accumulate identities and
   focus references without allocating or assigning, then preflight and
   reconcile the whole batch at the final barrier before assigning each live
   identity exactly once.
-- One repair allowance belongs to the entire transaction chain.
-- Reserve and exhaustion-check the repair response ticket before requesting its
-  turn; exhaustion issues no request.
 - Ticket zero is invalid; allocation never wraps or reuses an id.
-- Ticket exhaustion is checked at every origin: external desired/close,
-  replay, spontaneous/key, draining follow-up, repair, and shutdown discard.
-  No exhausted path requests or answers a turn.
+- Ticket exhaustion is checked at every MVP-reachable origin: external
+  desired/close, replay, spontaneous/key/internal-repeat, and tagged successful
+  follow-up. No exhausted path requests or answers a turn; direct Quit and
+  shutdown allocate none. Deferred recovery/discard origins are post-MVP.
 - One `service` call is one nonblocking backend quantum and returns at most one
   public event. Real hard-bound evidence belongs to #40 under ADR 0021.
 - The library enforces the Accepted 256-window, 64-binding, and
@@ -82,11 +77,14 @@ Those remain #38/#40/#65 work.
 - The 256-effect cap applies across the entire active transaction and every
   tagged follow-up. Close edges are independently bounded by the window limit,
   retain first-occurrence report order, and are unique per still-live target.
-- During shutdown, every offered turn receives a fresh neutral discard response
-  without Realm reduction; the deadline may abandon pending discard sequencing.
-- `SessionUpdate`'s closed shape orders persistence, state, completion, then
-  effects and carries `pending_action`, final `action_completion`, and nonfatal
-  diagnostics explicitly. A local ticketless completion returns its immediate
+- `begin_shutdown` is a minimal total/idempotent private-state abandonment and
+  repeat Disarm; `begin_exit_session` is exactly-once after #38 externally
+  authorizes it. Session owns no clock or response receipt, allocates no
+  shutdown ticket, and emits no discard response. #38 owns receipts, deadlines,
+  worker fences, and the poll-loop proof; #40 owns the backend cutoff.
+- `SessionUpdate`'s closed shape atomically co-releases persistence, state,
+  completion, effects, and QuitAfter only at the final boundary. A local
+  ticketless completion returns its immediate
   action result with neither pending nor final ticket field populated. Quit
   uses a typed NoRequester/OriginalAction/CurrentControlRequest barrier.
 - A typed action result is closed: application-class `Err` is an immediate
@@ -195,12 +193,11 @@ commit as a delivered interface while `Pending` remains for Tasks 2–3.
 `crates/realm-core/src/keys.rs`, and their tests.
 
 Add transaction substates equivalent to `Idle`, `AwaitingExternalTurn`,
-`AwaitingInternalTurn`, `InFlight`, `AwaitingDrain`, `RetryReady`, and
-`AwaitingRepairTurn`.
+`AwaitingInternalTurn`, `InFlight`, and `AwaitingDrain`.
 The active record retains committed authority C, visible state V,
 last-committed-clean projection L, private working state W, most recently
-completed private projection Q, optional original action result, one repair bit,
-the response contents, and staged effects.
+completed private projection Q, optional original action result, the response
+contents, and staged effects.
 
 ### RED: turn and admission
 
@@ -276,8 +273,7 @@ is already active. A newer finalized target replaces the old one permanently.
   discard staged state, return Error immediately, and retain the consumed ticket
   watermark.
 - Accept state-exact turns: Idle and Awaiting states accept untagged turns;
-  InFlight accepts none; AwaitingDrain accepts only its tagged turn or marker;
-  RetryReady accepts no event.
+  InFlight accepts none; AwaitingDrain accepts only its tagged turn or marker.
 - Fold external candidate first, then turn events in report order. Bind retained
   opens locally, resolve every compositor-origin reference from BackendWindowId
   only after its current-turn/current-incarnation open, and bind before a
@@ -345,34 +341,32 @@ for that RED/GREEN cycle. Do
 not run or claim the whole crate yet: legacy production and fixture paths
 intentionally remain until Task 4.
 
-## Task 3 — Completion, drain, repair, and replay
+## Task 3 — Successful finalization, fail-closed errors, and replay
 
 **Files:** `crates/realm-session/src/session.rs` and its tests.
 
 ### RED: success boundaries
 
-- `desired_projection_commits_only_after_matching_success_and_drain`
-- `projection_changing_drain_completes_original_action_only_after_followup`
-- `complete_followup_finalizes_original_action_without_waiting_for_marker`
-- `empty_observation_drain_clears_the_gate`
-- `retained_policy_turn_replaces_empty_drain_marker`
-- `mismatched_completion_cannot_commit_the_active_candidate`
-- `completion_without_an_active_operation_is_rejected`
-- `unexpected_observation_drain_marker_is_rejected`
-- `complete_bootstrap_response_remains_finalizing`
-- `pending_bootstrap_drain_workarea_projects_before_live`
-- `initial_workarea_projection_enters_live_without_marker`
-- `initial_workarea_projection_waits_for_success`
-- `observed_only_terminal_success_promotes_snapshot_before_drain`
-- `retained_window_open_is_bound_before_followup_projection`
-- `close_request_waits_for_the_observed_close_before_mutating_state`
-- `persistence_exposes_only_authoritative_live_state`
+- `complete_response_finalizes_synchronously_without_pending_artifacts`
+- `pending_response_commits_only_after_matching_ok_and_clean_drain`
+- `tagged_retained_turn_replaces_marker_and_finalizes_only_after_its_response`
+- `policy_turn_and_completion_tags_are_exact`
+- `bootstrap_replay_and_first_workarea_gate_live_until_final_boundary`
+- `tagged_observed_only_authority_is_private_until_its_clean_final_boundary`
+- `final_boundary_coreleases_state_completion_and_ordered_effects`
 
-For desired/close/key-mixed/replay work, prove C/V/L and persistence remain
-unchanged through pending success. Separately prove observed-only terminal
-success promotes its facts into C and `snapshot()` before drain while V/L stay
-old. Prove finalization order is persistence observation, visible state, then
-the original action completion.
+Prove synchronous `Complete` and `Pending -> matching Ok -> tagged retained
+turn or empty clean drain` only. C/snapshot/V/L, action completion, persistence,
+repeat directive, and effects remain unexposed until the clean final boundary.
+For a tagged observed-only turn, its facts are absent from C/snapshot before
+its response finishes; matching `Ok` still leaves V/L/visible ledger old while
+the drain is outstanding; the tagged response's clean final boundary installs
+all views together.
+
+The finalization test asserts atomic co-release/no-early-exposure and the
+closed effect-vector/`QuitAfter` ordering. Temporal persistence, publication,
+socket response, response receipt, and effect consumption are #38 evidence,
+not Task 3 fake-session evidence.
 
 The bootstrap-drain test must make the projection-free replay response return
 Pending, then deliver the first selected-output `WorkareaChanged` inside its
@@ -380,208 +374,118 @@ correctly tagged retained turn. That tagged response carries the first forced
 projection and Nav binding set; Session stays unpublished until the tagged
 response reaches its own clean boundary, then enters Live exactly once.
 
-### RED: failure and repair
+### RED: fatal boundaries and minimal lifecycle
 
-- `desired_projection_failure_drains_then_repairs_authoritative_state`
-- `late_followup_failure_rolls_back_entire_external_transaction`
-- `failed_action_result_waits_for_clean_repair_boundary`
-- `complete_repair_returns_retained_error_at_that_boundary`
-- `mixed_response_failure_retains_facts_and_repairs_state_without_replaying_edges`
-- `failed_mode_response_rolls_back_mode_and_suppresses_effects`
-- `failed_chord_ensure_is_cancelled_not_replayed`
-- `failed_unbound_key_nav_response_rearms_resize_once`
-- `key_policy_only_unsupported_is_diagnostic_then_repairs`
-- `key_origin_desired_failure_reports_diagnostic_and_repairs`
-- `key_origin_close_quit_failure_reports_diagnostic_without_completion`
-- `repeat_internal_failure_reports_diagnostic_and_repairs`
-- `observed_only_io_is_nonfatal_and_waits_for_drain`
-- `observed_projection_failure_retains_fact_until_repair_succeeds`
-- `observed_only_terminal_failure_exposes_authoritative_snapshot_before_repair`
-- `workarea_authority_does_not_expand_snapshot_v1`
-- `show_ledger_waits_with_get_state_during_observed_repair`
-- `observed_only_clean_component_failure_drains_without_repair`
-- `focus_mismatch_equal_projection_failure_requires_repair`
-- `failed_apply_marks_projection_dirty_until_a_complete_repair`
-- `unsupported_apply_rolls_back_and_emits_no_state`
-- `bootstrap_pending_failure_classes_are_phase_correct`
-- `pending_initial_workarea_projection_repairs_before_entering_live`
-- `failed_pending_close_does_not_dirty_projection`
-- `backend_loss_during_close_is_fatal`
-- `protocol_and_capacity_results_are_always_fatal`
-- `second_projection_failure_is_fatal`
-- `fatal_backend_errors_never_schedule_repair`
-- `unsupported_authoritative_projection_is_fatal`
-- `disconnect_during_observation_drain_is_fatal`
-- `close_after_drain_marker_cannot_poison_repair`
-- `repair_ticket_exhaustion_does_not_request_turn`
-- `backend_ticket_exhaustion_never_wraps_or_submits`
-- `backend_work_gets_one_retry_and_gates_event_reads`
-- `pending_backend_work_gates_actions_and_publication`
-- `active_transaction_defers_module_and_whichkey_publication`
-- `shutdown_policy_turn_is_answered_without_reduction`
-- `shutdown_answers_offered_turn_despite_abandoned_drain_tag`
-- `quiescing_completion_result_classes_are_total`
-- `exiting_rejects_non_disconnect_and_accepts_expected_disconnect`
-- `begin_shutdown_abandons_every_state_and_is_idempotent`
-- `begin_exit_session_is_exactly_once_and_rejects_wrong_phase`
-- `begin_exit_session_backend_failure_is_fatal_without_phase_change_or_retry`
-- `direct_quit_transmutes_each_active_transaction_state_without_new_ticket`
-- `direct_quit_is_idempotent_in_quit_pending`
-- `direct_quit_rejects_every_nonlive_phase_without_mutation`
-- `quit_pending_policy_turn_is_answered_without_reduction`
-- `mixed_action_and_quit_enters_quit_pending_after_completion`
-- `spawn_then_quit_preserves_pre_quit_effect_order`
-- `quit_then_spawn_suppresses_post_quit_effect`
-- `quit_barrier_suppresses_effects_in_later_draining_turn`
-- `staged_effect_cap_applies_across_drain_chain`
-- `failed_mixed_release_keeps_repeat_disarmed`
-- `failed_mixed_repeat_stop_keeps_repeat_disarmed`
+- `post_admission_io_and_unsupported_fail_closed_without_completion_or_effects`
+- `protocol_capacity_and_backend_loss_are_fatal_without_completion`
+- `bootstrap_pending_failure_is_fatal_without_publication`
+- `backend_ticket_exhaustion_covers_every_mvp_reachable_origin_without_request_response_or_wrap`
+- `shutdown_and_exit_lifecycle_is_minimal_idempotent_and_exactly_once`
+- `direct_quit_enters_quit_pending_idempotently_without_backend_ticket`
 
-The bootstrap failure table must exercise a Pending projection-free response,
-not the later projection-bearing workarea response. `Io` drains and spends the
-single neutral repair to reassert the backend-private selected default plus the
-disabled/Preserve binding state, then remains FinalizingReplay without
-publication. `Unsupported` is fatal without repair, publication, or Live.
+Make the first failure test table-driven over initial and tagged responses and
+over desired, key/effect, compositor-observation, and replay working state. For
+both `Io` and `Unsupported`, assert fatal termination, no C/V/L/snapshot change,
+no ordinary `ActionCompletion`, persistence, diagnostic, or effect, and no
+new request/response. The second test covers `Protocol`, `Capacity`, response
+call/service failure, `Disconnected`, and `Unavailable` under the same
+no-ordinary-output boundary.
 
-Also prove a dirty empty marker enters RetryReady; the next driver turn first
-reserves the repair ticket, then requests a policy turn without service; the
-next untagged turn receives that ticket. Exhaustion makes no request. Request
-`Io`/`Unsupported`, response error, or later terminal failure exhausts the one
-repair. Loss remains fatal.
+The bootstrap failure row exercises a Pending projection-free replay response
+and a Pending first-workarea response. Each terminal failure stays unpublished
+and never reaches Live. Backend-private selected-default behavior is not
+expressible in `BackendPolicyResponse` and a Session fake must not claim it.
+#40 owns post-MVP real-backend proof
+`backend::tests::failed_selected_default_is_reemitted_by_next_applicable_response`:
+a failed attempted `set_default` remains dirty and a future applicable response,
+including a neutral response, re-emits it. The MVP Session sends no such neutral
+response and terminates.
 
-Exercise `backend_ticket_exhaustion_never_wraps_or_submits` as one table-driven
-matrix covering external desired and close origins, initial replay,
-spontaneous/key and internal-repeat turns, tagged draining follow-ups, repair,
-and shutdown discard. Also retain the separate
-consumed-origin-after-request-failure assertion. Every row proves zero is
-absent, `u64::MAX` is not reused, and no request/response is issued.
+Exercise ticket exhaustion as one table over only MVP-reachable origins:
+external desired/close, initial replay, spontaneous/key/internal-repeat, and a
+tagged successful follow-up. Each row proves no request/response, no zero,
+maximum not reused, and fatal termination. Retain the separate consumed-origin
+assertion from Task 2. Direct Quit and `begin_shutdown` are no-allocation
+controls. Repair and shutdown-discard ticket origins are explicitly post-MVP.
 
-The fresh-Ensure test must distinguish the consumed committed edge after
-`UnboundKeyEaten` from the failed response's uncertain edge: restore Resize
-with one new Ensure, while an uncertain Ensure receives Cancel and is never
-replayed.
+Lifecycle proof is deliberately small. `begin_shutdown` abandons an optional
+private transaction, preserves the ticket watermark, emits only Disarm, and is
+idempotent. `begin_exit_session` is legal exactly once after #38 externally
+authorizes it and enters Exiting only on backend success. Direct Quit abandons
+private state without a fresh ticket, enters QuitPending once, and leaves the
+exact response-before-`begin_shutdown` receipt proof to #38. Session owns no
+clock, response receipt, deadline, worker fence, or shutdown-discard protocol;
+#40 owns the backend cutoff.
 
-Use a state-table fixture for direct Quit across `Idle`,
-`AwaitingExternalTurn`, `AwaitingInternalTurn`, `InFlight`, `AwaitingDrain`,
-`RetryReady`, and `AwaitingRepairTurn`. The first call abandons semantic
-W/origin/effects without completion or a new ticket and returns the
-CurrentControlRequest barrier; a second call in `QuitPending` is unchanged.
-Preserve already-requested external/internal/repair tickets only for neutral
-discard sequencing and drop `RetryReady`, where no request exists.
-Add a lifecycle-phase table proving direct Quit returns the typed invalid-phase
-error without mutation in InitialReplay, FinalizingReplay, ShuttingDown,
-Exiting, and ExitComplete; only Live and QuitPending are successful.
+### Explicit post-MVP follow-up, not active Task 3/4 work
 
-Use a second table for `QuitPending`/`ShuttingDown` discard sequencing: idle
-untagged turn, retained outstanding request, matching completion, tagged drain,
-empty marker, later offered turn, abandoned-work late completion, offered turn
-with an arbitrary old/future drain tag, deadline abandonment, ticket
-exhaustion, and response failure. In `ShuttingDown`, late completions are
-ignored and every offered turn is answered regardless of tag. Every response has no
-projection/closes, committed enabled/watch sets, and Cancel; no Realm fact,
-publication, persistence, action completion, or ordinary effect escapes.
-The begin-exit tests also assert Session constructs exactly one
-`BackendExitPolicy` from its last committed enabled/watch sets; projection,
-closes, and non-Cancel next-key state are unrepresentable in that type.
+Do not implement `RetryReady`, `AwaitingRepairTurn`, a neutral repair turn,
+repair-ticket matrices, second-failure behavior, rollback-to-continue,
+mixed-component recovery, early observed-only promotion, uncertain next-key
+edge recovery, continuing failure diagnostics, exhaustive direct-Quit substate
+transmutation, or QuitPending/ShuttingDown discard permutations before launch.
+
+Any future `Unsupported` recovery uses per-component provenance. An unrelated
+authoritative title observation does not poison a desired-only projection
+failure; an authoritative workarea/default-output or binding obligation does,
+and authoritative provenance wins when a component is jointly desired and
+authoritative. Exact deferred REDs are
+`desired_projection_unsupported_with_unrelated_title_observation_is_repairable`,
+`desired_projection_unsupported_with_authoritative_workarea_need_is_fatal`, and
+`desired_binding_unsupported_with_authoritative_binding_need_is_fatal`.
 
 ### GREEN
 
-Implement exact-ticket terminal handling before ordinary phase dispatch. Store
-one immutable transaction-wide semantic failure base at admission. Any
-repairable failure before the final clean boundary rolls back every reversible
-desired/key/effect delta since that base, including deltas carried through an
-earlier successful response, while retaining every compositor/input-safety fact
-across the chain. Classify mixed
-responses component-wise: fatal > repair > clean close-only. Conservatively
-dirty every attempted uncertain component: projection whenever the recorded
-response contained `Some`, and bindings when enabled/watch values differed,
-their cache was already dirty, or an edge was emitted. Never replay close edges
-or an uncertain next-key Ensure, and emit Cancel for that uncertainty.
+Implement exact-ticket success/failure handling before ordinary phase dispatch.
+On matching `Ok`, keep the complete transaction private through the required
+empty drain or tagged follow-up. On every post-admission error, atomically drop
+W/origin/effects and return the fatal error without constructing an ordinary
+update or recovery request. Do not add dirty/retry state.
 
-Branch authority timing explicitly. When an observed-only response safely
-finishes, install every compositor fact into in-memory C and expose the closed
-V1 `snapshot()` at once, including on repairable terminal `Io`; include only
-persistable close/mapping/watermark/orbit consequences, never workarea/title or
-other metadata absent from V1. Keep V/L old until the final clean boundary.
-Facts in a tagged turn wait for that turn's own response finish.
-Maintain an immutable visible ledger-plus-metadata snapshot at the same final
+Maintain one immutable visible ledger-plus-metadata snapshot at the same final
 boundary as `Session::state()` and expose it only through
-`visible_ledger(Option<OrbitId>) -> Vec<OrbitLedger>` for ShowLedger. Keep the
-existing authoritative accessors out of the control adapter.
-Desired, close, key/effect-mixed, and replay W remains private until finalization.
-If the response attempted no stateful projection/binding component, an
-observed-only failure drains without requesting artificial repair.
+`visible_ledger(Option<OrbitId>) -> Vec<OrbitLedger>`. C and the persistence
+snapshot also stay at their prior final-clean boundary while any response/drain
+chain is active, including observed-only and tagged observed-only work.
 
 Treat startup finalization as two explicit cases. The projection-free replay
 response commits reconciliation and identity bindings but keeps V absent,
 keeps protocol bindings disabled, and remains FinalizingReplay after either a
 synchronous or drained clean boundary. The first later selected-output
-workarea response uses the ordinary pending/drain/repair machinery for a forced
+workarea response uses the ordinary successful pending/drain machinery for a forced
 complete projection and desired bindings; only its clean final boundary derives
 revision 1 and enters Live. Intermediate authoritative turns are answered and
 accumulated without publication, and binding input before Live is a protocol
-error.
+error. Any Pending replay/workarea failure is fatal without Live, persistence,
+publication, completion, or a neutral response.
 
-Finalization performs, as one Session transition:
-
-1. emit the immediate repeat-timer directive implied by retained input/final policy;
-2. install W into committed authority;
-3. install final clean projection/binding state and clear active/dirty/retry;
-4. expose the persistence snapshot;
-5. derive/install V and revision;
-6. return visible state, then the original action result, then ordinary staged
-   effects.
-
-A staged Quit returns a `QuitPending` effect after the original action result
-and stops further admission. The #38 adapter must not call `begin_shutdown`
-until that request frame is fully written or its connection closes. A key-only
-Quit with no requester begins after final-boundary persistence/publication.
-Test the library ordering here; retain the real socket-drain assertion for #38.
+Finalization is one Session transition that installs W/C, the final clean
+projection/binding state, snapshot and V/revision, and co-releases the repeat
+directive, state/persistence values, original completion, bounded effects, and
+`QuitAfter`. Test that nothing is exposed early and that the effect vector
+retains report order through the first Quit barrier. #38, not this task, tests
+when those fields are consumed or a socket response settles.
 
 Derived process effects retain report order through all tagged follow-ups, and
 the 256-effect budget belongs to the whole active chain rather than resetting
 per turn. The first Quit is sticky and terminal for later derived
 actions/effects, though later authoritative facts still reduce.
 
-In `QuitPending` and `ShuttingDown`, do not reduce policy events. QuitPending
-preserves the already reserved response ticket for an
-external/internal/repair request that has not yet received its untagged turn,
-and preserves an in-flight ticket or awaited drain until its matching protocol
-boundary. ShuttingDown forgets abandoned ticket identity and semantic content,
-but inspects result class. QuitPending matching and ShuttingDown late
-`Ok`/`Io`/`Unsupported` completions advance/disappear only as discard protocol;
-`Protocol`/`Capacity` and pre-exit `Disconnected`/`Unavailable` remain fatal.
 `Session::begin_shutdown` is a total idempotent transition into ShuttingDown.
-On first call it abandons all semantic/protocol candidates, origins, tickets,
-closes, effects, and retry-ready repair while preserving the consumed-ticket
-watermark, calls no backend method, and emits only repeat-timer Disarm. Repeated
-calls emit unchanged. ShuttingDown answers every offered turn with a fresh
-no-projection/no-close discard response regardless of its drain tag, carrying
-committed binding state and next-key Cancel. Track a Pending discard only for
-orderly progress; the response barrier or fixed deadline may abandon it.
-Response error or ticket exhaustion is fatal. `Session::begin_exit_session` is
+On first call it abandons all private candidates, origins, tickets, closes, and
+effects while preserving the consumed-ticket watermark, calls no backend
+method, and emits only repeat-timer Disarm. Repeated calls emit unchanged; no
+shutdown ticket, response, or completion is created. `Session::begin_exit_session` is
 legal exactly once in ShuttingDown; it calls the backend exactly once and enters
-Exiting only on success. Wrong-phase/repeated calls are contract errors. #38,
-not Session, proves the external control-drain, worker-fence, and exposed-turn
-preconditions before calling. A backend error is fatal,
-does not enter Exiting, and is never silently retried. Session issues no later
-public request/response and rejects any public event other than the expected
-post-flush Disconnected. The backend's call is the local exit cutoff: it cancels
-any prepared read, stops ingress admission, preserves already emitted/queued
-bytes and finishes any manage/render phase already open or parsed from the
-accepted immutable response without replacement, and suppresses its public
-completion/drain. A Pending response awaiting a kernel-unread future
-`render_start` abandons that later render phase. The backend uses the fixed exit
-policy only for an admitted/open/queued sequence not yet exposed and answered,
-flushes every applicable open-phase finish before queuing and flushing the exit
-request, and
-terminally supersedes kernel-unread bytes and incomplete decoder fragments;
-real River evidence remains #40-owned.
+Exiting only on success. Wrong-phase/repeated calls and backend failure are
+fatal. #38 externally proves response/control/worker/deadline preconditions and
+calls it; #40 proves the local cutoff and expected post-flush disconnect.
 
 Run `cargo test -p realm-session --locked
-desired_projection_commits_only_after_matching_success_and_drain` first, then
+complete_response_finalizes_synchronously_without_pending_artifacts` first, then
 repeat that targeted command separately with each other literal test name
-above. Do not run or claim the whole crate yet; the legacy compatibility seam
+in the active RED lists above. Do not run deferred post-MVP REDs. Do not run or
+claim the whole crate yet; the legacy compatibility seam
 and its unmigrated callers remain until Task 4.
 
 ## Task 4 — Complete migration and one backend service decision
@@ -593,7 +497,7 @@ and its unmigrated callers remain until Task 4.
 
 ### RED
 
-- `backend_turn_drives_active_transaction_but_requests_retry_before_service`
+- `backend_turn_drives_active_success_transaction`
 - `backend_turn_services_immediate_and_writable_work_once`
 - `immediate_none_progress_is_rechecked_before_blocking`
 - `service_error_abandons_pending_operation_fatally`
@@ -602,16 +506,15 @@ and its unmigrated callers remain until Task 4.
 - `legacy_backend_methods_are_absent_after_migration`
 - `expected_exit_disconnect_returns_exit_complete_once`
 
-Prove RetryReady requests its turn with zero service calls. AwaitingExternalTurn,
-AwaitingInternalTurn, AwaitingRepairTurn, InFlight, and AwaitingDrain continue service. No interest or
-readiness is idle; otherwise exactly one service call occurs. `None` is
-Progressed and requires an interest recheck. A backend with no prepared guard
-advertises immediate preparation work; its one `None` preparation quantum must
-run before the helper can return the subsequently idle state to an outer poll.
-Handling one nonfatal event that leaves RetryReady returns
-`RetryScheduled(SessionUpdate)`; it preserves the update, carries no fabricated
-fatal error, and forces the next helper invocation before poll. The API-shape
-test proves the retired `BackendWorkPending` error variant is absent.
+Prove AwaitingExternalTurn, AwaitingInternalTurn, InFlight, and AwaitingDrain
+continue successful service. No interest or readiness is idle; otherwise
+exactly one service call occurs. `None` is Progressed and requires an interest
+recheck. A backend with no prepared guard advertises immediate preparation
+work; its one `None` preparation quantum must run before the helper can return
+the subsequently idle state to an outer poll. One public successful event is
+`Updated`; any backend or Session error returns fatal `Err` and abandons the
+private operation. The API-shape test proves deferred-recovery outcomes and the
+retired `BackendWorkPending` variant are absent.
 The expected Exiting disconnect returns `BackendTurn::ExitComplete` once; the
 helper rejects a later invocation because the outer driver must stop the target.
 
@@ -622,13 +525,13 @@ Implement public read-only `Session::backend_event_fd()` and
 decision, then migrate every caller to
 `backend_turn(&mut Session<_>, BackendReady, Instant)`. The helper
 queries `backend_poll_interest()` itself; an all-false pre-poll readiness still
-services RetryReady/immediate work, while post-poll invocations receive exactly
+services immediate work, while post-poll invocations receive exactly
 one fresh readiness snapshot. Mechanically migrate every remaining production
 caller plus the `turn.rs`, `persistence.rs`, and `session.rs`
 test/fake implementations from `apply`/`focus`/`close`/`next_event`/`workarea`
 to policy turns and bounded service. Explicitly migrate every `SessionUpdate` producer and
 consumer to the accepted fields `repeat_timer`, `persistence`, `state`, `pending_action`,
-`action_completion`, `effects`, and `diagnostic`; remove the old
+`action_completion`, and `effects`; remove the old
 `projection_applied`, deferred-event, and close `Option<WinId>` surfaces.
 Finally remove the temporary legacy methods and out-of-band `workarea` accessor
 from `WmBackend` and make the
@@ -695,7 +598,7 @@ superseded APIs or criteria. For #38 leave these open:
   `realm_session::tests::pre_listener_recovery_pump_reaches_live_before_activation`
   and `realm_session::tests::readiness_follows_live_listener_activation`,
   including delayed snapshot-worker completion before River binding and
-  delayed replay/finalization/repair
+  delayed replay/successful completion/drain
   before listener activation and readiness;
 - #38 A12/A32/A41 combined-loop and poll-set evidence: backend-first and
   zero-poll fairness across backend, repeat timer, clock timer, worker eventfd,
@@ -751,6 +654,10 @@ superseded APIs or criteria. For #38 leave these open:
   `backend::tests::layer_shell_exclusive_zone_maps_to_workarea_without_close`,
   `backend::tests::configured_bindings_create_one_stable_river_object_each`, and
   `backend::tests::corrective_content_clip_converges_once`;
+- post-MVP #40 selected-default cache evidence
+  `backend::tests::failed_selected_default_is_reemitted_by_next_applicable_response`.
+  It proves failed `set_default` remains dirty for a future same-incarnation
+  recovery design and does not gate Task 3, Task 4, or launch;
 - #40 A9a/A9b exact input policy evidence:
   `backend::tests::input_defaults_use_existing_default_seat_and_fixed_keyboard_repeat`,
   `backend::tests::removed_input_device_cancels_unfinished_policy_without_reuse`,
@@ -794,7 +701,7 @@ superseded APIs or criteria. For #38 leave these open:
   drain, and before the out-of-capacity fence,
   new work is sealed out, max-capacity Spawn then Quit cannot overtake the
   fence, exit waits for acknowledgement, and exact 2,000 ms expiry records a
-  degraded diagnostic before exit. First seal fixes `deadline = now + 2,000 ms`,
+  degraded shutdown outcome before exit. First seal fixes `deadline = now + 2,000 ms`,
   repeat seal cannot slide it, and expiry is `now >= deadline`;
 - #38 A14h
   `realm_session::tests::direct_quit_waits_for_exact_response_receipt`;

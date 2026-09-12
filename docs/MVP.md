@@ -39,6 +39,7 @@ does not serve it waits — however good it would look in a screenshot.
 | Minimal-motion pass | none — v1 is motionless by design | M6 |
 | Multi-monitor beyond "it doesn't break" | single output is the tested path | M6 |
 | Runtime keyboard-layout switching | preserve the keymap/layout River created for each keyboard | Post-MVP input contract |
+| In-incarnation recovery after an admitted policy response reports `Io` or `Unsupported` | fail closed, let supervision restart `realm-session`, and relearn compositor authority through River replay; emit no ordinary completion/effect from the failed transaction | Post-MVP transaction-recovery contract |
 
 ---
 
@@ -55,6 +56,11 @@ does not serve it waits — however good it would look in a screenshot.
 | **M6** | Polish | Qt/Kvantum, multi-monitor, a11y, optional minimal motion | Frame budgets held on a 2015-era laptop |
 
 **M3 is the MVP.** M0–M3 is the critical path; nothing in M4+ blocks it.
+
+For the launch slice, bounded fail-closed restart is the recovery mechanism for
+an uncertain post-admission compositor result. Neutral repair turns,
+rollback-to-continue, continuing diagnostics, and exhaustive shutdown-discard
+states are explicitly not M2/M3 gates.
 
 Security checks and security-hardening review are deferred until after the MVP.
 They are tracked as post-MVP work and do not gate the M0–M3 critical path.

@@ -1,7 +1,8 @@
 # Interface contracts
 
-> **Status: Accepted for sections 1 and 4 (2026-09-11); provisional
-> elsewhere.** These are the seams named in [ARCHITECTURE.md](ARCHITECTURE.md).
+> **Status: Accepted for sections 1 and 4 (2026-09-11; MVP fail-closed
+> correction 2026-09-12); provisional elsewhere.** These are the seams named in
+> [ARCHITECTURE.md](ARCHITECTURE.md).
 > They are written down *before* the crates that implement them so that M1 and
 > M2 can be built in parallel without two components inventing the same type
 > twice.
@@ -204,8 +205,8 @@ pub struct BackendBindingState {
     pub enabled: Vec<BackendBindingId>,
     /// Complete canonical sorted unique desired modifier-watch set.
     pub watched_modifiers: Vec<BackendModifier>,
-    /// Explicit one-shot edge for this response. Cancel repairs an Ensure that
-    /// may have reached the compositor before a failed terminal result.
+    /// Explicit one-shot edge for this response. Failed ordinary responses are
+    /// fatal in the MVP and produce no recovery response.
     pub next_key_edge: BackendNextKeyEdge,
 }
 
@@ -293,20 +294,19 @@ pub enum BackendContractError {
 }
 
 pub enum SessionActionError {
-    /// Recovery is incomplete or authoritative backend repair is pending.
+    /// Startup finalization or another successful response chain is active.
     NotReady,
     /// Spawn requires at least one nonempty program string.
     InvalidSpawnCommand,
     /// This backend incarnation has consumed every nonzero ticket.
     BackendTicketExhausted,
-    /// The requested operation reached the compositor backend and failed.
+    /// The error-atomic turn request failed before admission.
     Backend(BackendError),
 }
 
 pub enum SessionEventError {
     BackendTicketExhausted,
     WindowIdExhausted,
-    BackendRetryExhausted(BackendError),
     RepeatedInitialReplayComplete,
     UnexpectedInitialReplayEvent(BackendPolicyEvent),
     InvalidLifecycleOperation {
@@ -334,7 +334,7 @@ pub enum SessionLifecycleOperation {
 }
 
 pub struct ActionCompletion {
-    /// The original external origin ticket, never a follow-up/repair ticket.
+    /// The original external origin ticket, never a tagged follow-up ticket.
     pub ticket: BackendTicket,
     pub result: Result<(), SessionActionError>,
 }
@@ -355,16 +355,6 @@ pub enum SessionEffect {
     ReloadTheme,
     /// Stop admission now and apply the typed response-drain barrier.
     QuitPending { after: QuitAfter },
-}
-
-pub struct SessionDiagnostic {
-    /// A safely classified nonfatal backend operation error. An error-atomic
-    /// internal-repeat request rejection is already boundary-final and leaves
-    /// no transaction. A matching terminal failure for any requesterless key
-    /// origin (including desired, close, process, Quit, and repeat work) keeps
-    /// its transaction active through drain/repair, emits no ActionCompletion,
-    /// and is reported once here. Callers log either case and continue service.
-    pub error: BackendError,
 }
 
 pub enum RepeatTimerDirective {
@@ -395,23 +385,16 @@ pub struct SessionUpdate {
     /// Bounded by MAX_STAGED_EFFECTS across the entire active transaction and
     /// every tagged follow-up, in report order.
     pub effects: Vec<SessionEffect>,
-    /// Does not make the transition fatal and never substitutes for a retained
-    /// final ActionCompletion error.
-    pub diagnostic: Option<SessionDiagnostic>,
 }
 
 /// Result of one bounded backend-work helper invocation.
 pub enum BackendTurn {
-    /// No retry request, immediate work, readiness, or event was consumed.
+    /// No immediate work, readiness, or event was consumed.
     Idle,
     /// One internal backend phase made progress and exposed no public event.
     Progressed,
-    /// A retry request or one public backend event produced a Session update.
+    /// One public backend event produced a successful Session update.
     Updated(SessionUpdate),
-    /// One nonfatal event/update left Session in RetryReady. The outer loop
-    /// processes the update and starts a fresh helper invocation immediately;
-    /// no fatal SessionEventError is fabricated.
-    RetryScheduled(SessionUpdate),
     /// The expected post-flush disconnect completed logout. Emitted once.
     ExitComplete,
 }
@@ -424,7 +407,7 @@ pub fn backend_turn<B: WmBackend>(
 
 /// The helper queries `session.backend_poll_interest()` itself. A caller uses
 /// `BackendReady { readable: false, terminal: false, writable: false }` before poll;
-/// retry-ready or immediate interest still runs one bounded phase. After poll,
+/// immediate interest still runs one bounded phase. After poll,
 /// the caller passes only that fresh readiness snapshot. Consumed readiness is
 /// never inferred or reused inside a later invocation.
 
@@ -454,16 +437,15 @@ pub fn backend_turn<B: WmBackend>(
 /// and allocates or requests nothing. Otherwise a local no-op or effect-only
 /// result finalizes synchronously. Work requiring a policy response enters an
 /// internal-origin transaction, reserves a response ticket, and requests one
-/// turn, but sets neither `pending_action` nor `action_completion`; a safe
-/// nonfatal failure is reported through `diagnostic`. Release or repeat-stop of
+/// turn, but sets neither `pending_action` nor `action_completion`; any request
+/// or post-admission failure is fatal. Release or repeat-stop of
 /// the current target observed before the call makes it an unchanged no-op, and
 /// either event in the response irreversibly disarms that target.
 /// `pub fn begin_direct_quit(&mut self) -> Result<SessionUpdate,
 /// SessionEventError>` is separate. Its first
 /// call in Live needs no
-/// backend ticket or turn, abandons semantic W/origin/effects without
-/// completion, transmutes any already-requested/in-flight/draining backend work
-/// into protocol-only discard sequencing, stops admission, and returns
+/// backend ticket or turn, abandons private W/origin/effects without
+/// completion or backend response, stops admission, and returns
 /// `QuitPending { CurrentControlRequest }`. A later call in QuitPending is
 /// idempotent and returns `SessionUpdate::unchanged()` with no duplicate effect.
 /// Calls in InitialReplay, FinalizingReplay, ShuttingDown, Exiting, or
@@ -473,17 +455,17 @@ pub fn backend_turn<B: WmBackend>(
 /// idempotent Session-side transition used after the applicable control
 /// response barrier settles. Its first call in InitialReplay,
 /// FinalizingReplay, Live, or QuitPending abandons every
-/// semantic and protocol-only candidate, origin, ticket, close, effect, and
-/// retry-ready repair while preserving the consumed-ticket watermark, enters
+/// private candidate, origin, ticket, close, and effect while preserving the
+/// consumed-ticket watermark, enters
 /// ShuttingDown, and returns only an immediate repeat-timer Disarm. It neither
-/// calls the backend nor emits persistence, state, action completion,
-/// diagnostic, or ordinary effects. Later calls in ShuttingDown, Exiting, or
+/// calls the backend and emits no persistence, state, action completion, or
+/// ordinary effect. Later calls in ShuttingDown, Exiting, or
 /// ExitComplete are unchanged.
 /// `pub fn begin_exit_session(&mut self) -> Result<(), SessionEventError>` is
-/// legal exactly once in ShuttingDown. #38 MUST first prove the control drain,
-/// worker fence acknowledgement or explicit 2,000 ms degradation, and that
-/// every already exposed policy turn was answered; those external conditions
-/// are not observable by Session.
+/// legal exactly once in ShuttingDown. #38 MUST first prove its exact response
+/// settlement, control drain, and worker-fence/deadline conditions. Session
+/// owns no response receipt or clock, and those conditions are not observable
+/// by it.
 /// It calls the backend method exactly once with `BackendExitPolicy` built from
 /// the last committed enabled/watch sets and changes Session to Exiting only on success;
 /// a wrong-phase or repeated call is a contract error and a backend failure leaves
@@ -492,7 +474,7 @@ pub fn backend_turn<B: WmBackend>(
 /// the sole ShowLedger adapter seam. It renders the immutable ledger and window
 /// metadata snapshot captured at the same final visible boundary as `state()`;
 /// it never reads the newer authoritative `ledger()` / `window_metadata()`
-/// values while an observed-only drain or repair is active. `None` returns all
+/// values while any successful response/drain chain is active. `None` returns all
 /// orbits; the adapter must validate one-based wire input into `OrbitId` before
 /// calling this typed seam. At observation ingress, app ids and titles are
 /// normalized to the JSON-content byte caps above at a Unicode-scalar boundary;
@@ -697,19 +679,18 @@ request error. Success guarantees that `manage_dirty` is already flushed or
 that `poll_interest().immediate || poll_interest().writable` remains true until
 bounded service flushes it; `poll_interest().readable` then remains true and
 awaits the turn until the terminal exit cutoff.
-The next untagged `PolicyTurn` consumes any outstanding external-action,
-internal-repeat, or repair request. A tagged draining turn consumes only the
-named completion drain and cannot also satisfy a separate outstanding request.
-For an initial external request, error-atomic `Io`/`Unsupported` is an immediate
-application error. For an initial internal-repeat request, either result is one
-nonfatal diagnostic and no action completion. For a transaction's one repair
-request, either result is `BackendRetryExhausted`; backend loss remains fatal.
-Once reserved, an origin ticket remains consumed even if the error-atomic
-request fails. Repair similarly reserves and exhaustion-checks its response
-ticket before requesting the turn; exhaustion issues no request. No path reuses
-a ticket number.
-An external desired action that changes required response state, or whose
-projection cache is dirty, stages its private candidate, reserves its origin
+The next untagged `PolicyTurn` consumes any outstanding external-action or
+internal-repeat request. A tagged draining turn consumes only the named
+successful completion drain and cannot also satisfy a separate outstanding
+request. For an initial external request, error-atomic `Io`/`Unsupported` is an
+immediate application error. For an initial internal-repeat request, any error
+is fatal because no requester can receive an application Error. Once a turn is
+offered or a response accepted, every response-call, completion, or service
+error is fatal under the fail-closed rule below. Once reserved, an origin ticket
+remains consumed even if the error-atomic request fails. No path reuses a ticket
+number.
+An external desired action that changes required response state stages its
+private candidate, reserves its origin
 ticket, and requests a turn; it does not submit projection state or commit. A
 clean projection-equal action with no binding or edge change finalizes locally
 without a ticket or turn. The
@@ -721,10 +702,10 @@ Session allocates strictly increasing nonzero `BackendTicket`s for policy
 responses and permits only one active response transaction. `Complete` is legal
 only when every required finish has been flushed. `Pending` requires exactly
 one later matching `OperationCompleted` unless the backend incarnation
-terminates or Session begins shutdown first. Either transition abandons the
-ticket without committing or completing an action; a terminal event still
-emitted during shutdown is serviced but not reduced. Unknown, stale, duplicate,
-and out-of-order completions are contract failures outside shutdown. Exhausting
+terminates or #38 externally begins shutdown first. Either transition abandons
+the ticket without committing or completing an action; Session emits no
+shutdown discard response, and #40 owns the backend cutoff. Unknown, stale,
+duplicate, and out-of-order completions are fatal contract failures. Exhausting
 `u64` is a typed fatal session error: zero is never submitted, the maximum is
 never reused, and the attempted response is not sent.
 
@@ -740,32 +721,25 @@ before current-incarnation assignment outside that replay exception, is a fatal
 contract error. The backend never invents a Realm `WinId` while building a turn.
 
 Returning an error from `respond_policy_turn` is fatal for every error class:
-River may otherwise remain blocked inside an open manage sequence. Retryable
-operation errors therefore arrive only through a matching terminal event after
-the backend has safely answered the sequence. A terminal error invalidates
-projection whenever the failed response contained `Some`, including an
-equal-valued reassertion; it invalidates binding state when enabled/watch values
-differed, the cache was already dirty, or Ensure/Cancel was emitted. The repair
-carries each complete dirty component even when equal to current authority and
-cancels uncertain Ensure. A close-only or attempted-no-state observation does
-not dirty projection/bindings. Backend
-loss is never downgraded to an application failure.
+River may otherwise remain blocked inside an open manage sequence. After
+admission, matching terminal `Io` or `Unsupported` is also fatal, as are
+`Protocol`, `Capacity`, `Disconnected`, `Unavailable`, and service errors.
+Session abandons all private desired, key, effect, and compositor-observation
+state; it emits no ordinary completion, state, persistence, diagnostic, or
+effect and requests no recovery turn. Supervised restart and River replay are
+the MVP recovery boundary.
 
 An observed-only live turn has no external desired/close origin and no
-key-policy delta or effect. Once its response safely finishes, either directly
-or by matching terminal success/`Io`, all of its compositor facts enter
-committed in-memory authority even if drain or repair remains. `snapshot()` is
-available at once, but its closed V1 schema contains only the persistable
-consequences of those facts: ledger membership, identity bindings, allocation
-watermark, and active orbit. A close can therefore change the snapshot;
-workarea, title, and other non-schema metadata remain authoritative only in
-memory and are relearned during the next backend replay. Visible state and the
-last-clean projection wait for the final clean boundary. Desired, close,
-key/effect-mixed, and replay working state remains private until that boundary.
-Repair follows the attempted-component predicate above; an observation whose
-response attempted no stateful component drains without a synthetic repair.
+key-policy delta or effect. Its compositor facts remain private with every
+other transaction component. For a pending response, even matching `Ok` does
+not install those facts into committed authority or `snapshot()` while the
+drain is outstanding. A tagged observed-only turn likewise remains absent from
+committed authority and snapshot until its own response finishes and chain
+reaches a clean final boundary. That boundary atomically advances committed
+authority, the closed V1 snapshot, visible state, visible ledger, and the
+last-clean projection. A terminal error promotes nothing and is fatal.
 
-After every nonfatal pending completion the backend exposes facts it had
+After every successful pending completion the backend exposes facts it had
 already received behind that operation, then seals them in exactly one of two
 ways: a `PolicyTurn` whose `drains` names the completed ticket, or an empty
 `RetainedObservationsDrained` marker. The two forms are mutually exclusive for
@@ -776,45 +750,53 @@ turn both closes the prior observation drain and
 opens the next mandatory response; Session reduces its batch into the prior
 private working state and responds with a fresh ticket. The single-flight gate
 and any original action result remain active through this chain. A completion
-reporting backend loss, a standalone `Disconnected`, a response/service error,
-or an origin-specific fatal completion terminates the incarnation and abandons
+reporting any terminal error, a standalone `Disconnected`, or a response/service
+error terminates the incarnation and abandons
 the drain.
 
 The retained turn is bounded by managed windows plus fixed focus/workarea/input
 state and may coalesce only when its deterministic report-order reduction is
-equivalent. One immutable semantic failure base is captured at transaction
-admission. Any repairable failure before the final clean boundary rolls back
-all reversible desired/key/effect deltas since that base, even across earlier
-successful response terminals, while retaining authoritative facts; there is
-no response-local semantic checkpoint. A final clean boundary is either an empty marker requiring no more
-turn, or `Complete` from the final policy response. It commits and publishes the
-resulting state before exposing the original action result to the control
-adapter. The adapter applies the immediate repeat-timer directive first, then
-orders persistence, publication, requester response, then
-ordinary process effects. Across one complete transaction chain, process
-effects before the first Quit are emitted in report order, the first Quit emits
-the terminal `QuitPending` barrier, and every later derived action/effect in
-that turn or a tagged follow-up is suppressed. Authoritative compositor and
-physical input facts continue to reduce after the barrier. Quit enters a
-no-admission `QuitPending` state and,
-when an original requester exists, waits for that response frame to drain or
-the connection to close before beginning shutdown; key-only Quit begins after
-final-boundary persistence/publication. Mode changes and process effects
-likewise wait for this boundary, so
-no state publication, process creation, shutdown transition, or subscriber byte
-precedes the finish that makes the triggering key turn effective.
+equivalent. All semantic and observed working state remains private from
+admission through the whole successful chain; there is no response-local
+commit checkpoint. A final clean boundary is either an empty marker requiring
+no more turn, or `Complete` from the final policy response. It atomically
+co-releases the committed authority, visible state, persistence value, original
+action result, repeat directive, bounded effect vector, and any `QuitAfter` in
+one `SessionUpdate`; none is exposed early. Across the vector, effects before
+the first Quit retain report order and later derived effects are suppressed.
+Task 3 proves that closed library result and ordering only. #38 owns temporal
+consumption as repeat directive, persistence, publication, requester response,
+then effects, including the exact response-before-shutdown handoff. Key-only
+Quit has no response receipt and is consumed after the same successful final
+boundary.
 
 `BackendBindingState::next_key_edge` is not a Boolean desired state.
 `Preserve` emits neither edge, `Ensure` emits exactly one
 `ensure_next_key_eaten`, and `Cancel` emits exactly one
-`cancel_ensure_next_key_eaten`. If a terminal failure makes an earlier Ensure
-uncertain, the transaction's repair response uses Cancel and never replays
-that uncertain edge. One different case requires a fresh Ensure:
-`UnboundKeyEaten` proves the previously committed edge was consumed, and if the
-response attempting to leave that submap fails, rollback restores the committed
-submap and repair emits exactly one new Ensure. This is restoration after a
-definitive consume, not replay of the failed response's edge. These rules make
-rollback real in River rather than only in Session memory.
+`cancel_ensure_next_key_eaten`. The MVP emits these edges only in successful
+ordinary responses and the fixed exit policy; any post-admission failure is
+fatal. Deciding whether an uncertain failed Ensure needs Cancel, or whether a
+consumed prior Ensure must be restored after rollback-to-continue, is explicit
+post-MVP recovery work.
+
+**Post-MVP only:** an Accepted recovery amendment may add `RetryReady` /
+`AwaitingRepairTurn`, one bounded repair, repair-ticket exhaustion,
+second-failure handling, rollback-to-continue, early observed-only authority,
+uncertain-edge recovery, continuing failure diagnostics, and shutdown discard
+sequencing. Those states, ticket origins, and outcomes are not part of the MVP
+`SessionUpdate` or `BackendTurn` shapes and Task 4 must not depend on them.
+
+Any such recovery must record provenance per attempted response component. An
+`Unsupported` projection, binding, next-key, or close component is fatal under
+that future design only when replay or an authoritative compositor/default
+obligation required that same component. An unrelated authoritative fact, such
+as a title observation, does not poison a desired-only component failure; if
+desired and authoritative causes jointly require one component, authoritative
+provenance wins for that component. Deferred Session evidence is
+`desired_projection_unsupported_with_unrelated_title_observation_is_repairable`,
+`desired_projection_unsupported_with_authoritative_workarea_need_is_fatal`, and
+`desired_binding_unsupported_with_authoritative_binding_need_is_fatal`. The MVP
+does not branch on provenance: every post-admission `Unsupported` is fatal.
 
 A backend may omit a requested placement only when that exact window identity
 was successfully assigned in the current backend incarnation and was then
@@ -877,24 +859,17 @@ flushed.
 Standalone focus is deliberately absent: projection focus is
 `Placement::focused`. Close edges exist only inside a policy response because
 they are manage-sequence state.
-The outer transition into `ShuttingDown` abandons any retained candidate,
-repair, or ticket before the control drain, without commit or completion. A
-late completion for abandoned work is ignored. If bounded service exposes a
-policy turn while shutting down, Session does not reduce its events and does
-not apply normal stale, future, or drain-tag validation. Regardless of its
-`drains` tag, it allocates a fresh discard ticket and answers immediately with
-no projection or closes, the last committed authoritative enabled/watch sets,
-and `BackendNextKeyEdge::Cancel`. A pending discard response is tracked only
-enough for orderly progress; its later completion or drain may be ignored once
-shutdown abandons that protocol-only chain. No state, persistence, publication,
-action, or effect is created. Ticket exhaustion or response failure is fatal.
-The fixed shutdown deadline may abandon a pending discard chain and permit
-`Session::begin_exit_session`, but Session never leaves an offered turn unanswered
-before doing so.
-`Session::begin_exit_session` is terminal and nonblocking. It calls the backend
-method exactly once only after the control shutdown drain is complete, the
-worker fence has acknowledged or explicitly degraded at its fixed 2,000 ms
-deadline, and every already exposed turn has been answered. Success enters
+The outer #38 driver calls `Session::begin_shutdown` after the applicable exact
+Quit response is Drained or Closed. The total idempotent Session transition
+abandons every private candidate, origin, ticket, and effect without commit or
+completion, preserves the consumed-ticket watermark, emits only repeat Disarm,
+and enters `ShuttingDown`. It allocates no fresh ticket, requests no turn, and
+answers no shutdown-discard turn. #38 owns response receipts, control draining,
+the fixed shutdown deadline, worker fences, and the proof that it is safe to
+authorize exit; Session owns no clock or receipt.
+
+`Session::begin_exit_session` is terminal and nonblocking. #38 calls it exactly
+once after those external conditions settle. Success enters
 backend `Exiting` at one local cutoff: it cancels any prepared read, stops new
 ingress admission, and suppresses public exposure of terminal
 policy/completion events. A sequence whose turn was already consumed by
@@ -916,7 +891,9 @@ exposed public event is a fatal backend-contract violation. The backend may emit
 that success-path `Disconnected` only after
 every applicable open-phase finish and every byte through the exit request has been flushed;
 disconnect or I/O loss before that is a service error and fatal. The post-flush
-disconnect completes logout and is not a restartable backend failure.
+disconnect completes logout and is not a restartable backend failure. The
+backend-cutoff mechanics and evidence are #40-owned; the receipt/deadline/fence
+and poll-loop handoff are #38-owned.
 
 ### Why river fits: realm *is* the window manager
 
@@ -951,6 +928,15 @@ Because River creates output objects inside the initial window-manager turn,
 that turn cannot contain a layer-shell workarea. Session answers it without a
 projection or enabled bindings and remains unready until the selected output's
 later workarea turn has projected successfully.
+
+Selected-default application is backend-private and is not expressible in
+`BackendPolicyResponse`, so a Session fake cannot prove which `set_default`
+request RiverBackend emitted. A failed response that attempted `set_default`
+is fatal to the MVP Session and causes no neutral Session response, but the
+production backend must leave that default dirty. A future same-incarnation
+recovery response, including a neutral response, must therefore re-emit it when
+applicable. This post-MVP cache evidence belongs to #40 as
+`backend::tests::failed_selected_default_is_reemitted_by_next_applicable_response`.
 
 M2 selects the first `river_seat_v1` in River creation order as its only Realm
 seat. It alone receives one xkb-bindings-seat, one layer-shell-seat, all
@@ -1423,6 +1409,13 @@ closes that connection and returns `ResponseSequenceExhausted`; it never wraps. 
 oversized requester completion closes the connection and returns
 `OutboundFrameTooLarge` without a receipt, which is already a Closed outcome for
 the adapter's Quit barrier.
+
+`ResponseReceipt`, response settlement, both fixed shutdown deadlines, and
+abandonment decisions are #38 driver/transport concerns. Session stores no
+receipt, reads no clock, and proves no deadline behavior. Its only MVP handoff
+is the closed effect/result that tells #38 which exact response must settle
+before #38 externally calls `begin_shutdown`; #38 later authorizes
+`begin_exit_session` after its own control and worker conditions settle.
 
 The outer poll mapping keeps input and terminal readiness distinct: `POLLIN`
 sets `ReadyEvent::readable`, while `POLLERR | POLLHUP` sets `terminal` even when
