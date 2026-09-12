@@ -151,10 +151,18 @@ EOF
         desktops = nodes.machine.config.services.displayManager.sessionData.desktops;
       in
       ''
+      import datetime as dt
       import hashlib
       import json
       import shlex
       from pathlib import Path
+      from test_driver.errors import RequestedAssertionFailed
+
+      STARTUP_TIMEOUT = dt.timedelta(seconds=120)
+      STATE_TIMEOUT = dt.timedelta(seconds=60)
+      OCR_TIMEOUT = dt.timedelta(seconds=120)
+      EXIT_TIMEOUT = dt.timedelta(seconds=30)
+      DIAGNOSTIC_TIMEOUT = dt.timedelta(seconds=10)
 
       def as_alice(*argv):
           return shlex.join([
@@ -179,22 +187,55 @@ EOF
               nonlocal observed
               try:
                   observed_raw, response = control("state")
+              except RequestedAssertionFailed as error:
+                  observed = {"control_error": str(error)}
+              else:
                   observed = response
+                  # Keep schema and predicate failures outside the transient
+                  # client retry path: malformed production state must fail now.
                   if predicate(response):
                       return True
-              except Exception as error:
-                  observed = {"error": str(error)}
               if last_try:
                   machine.log(f"last state while waiting for {description}: {observed!r}")
               return False
 
-          retry(matches)
+          retry(matches, timeout=STATE_TIMEOUT)
           return observed_raw, observed
 
       def write_artifact(name, content):
           (Path(machine.out_dir) / name).write_text(content, encoding="utf-8")
 
-      machine.wait_for_unit("multi-user.target")
+      def log_startup_diagnostics():
+          commands = [
+              (
+                  "Realm user unit status",
+                  "systemctl --user --machine=alice@ --no-pager --full status "
+                  "realm-session.target realm-wm.service realm-bar.service",
+              ),
+              (
+                  "Realm user unit journal",
+                  "journalctl --user --machine=alice@ -b --no-pager -n 200 "
+                  "-u realm-session.target -u realm-wm.service -u realm-bar.service",
+              ),
+              (
+                  "display manager journal",
+                  "journalctl -b --no-pager -n 120 -u display-manager.service",
+              ),
+              (
+                  "session log and user processes",
+                  "if test -f /home/alice/.local/state/realm/session.log; then "
+                  "tail -n 120 /home/alice/.local/state/realm/session.log; "
+                  "else echo 'realm session log absent'; fi; ps -fu alice",
+              ),
+          ]
+          for label, command in commands:
+              try:
+                  status, output = machine.execute(command, timeout=DIAGNOSTIC_TIMEOUT)
+                  machine.log(f"{label} (exit {status}):\n{output}")
+              except Exception as error:
+                  machine.log(f"{label} unavailable: {error}")
+
+      machine.wait_for_unit("multi-user.target", timeout=STARTUP_TIMEOUT)
 
       # Task 3's descriptor admission needs a positive proof that is impossible
       # on the host test filesystem. The Nix store itself is group-writable in
@@ -271,9 +312,19 @@ EOF
       # installed daemon. Type=notify makes `active` mean River's management
       # and layer-shell globals, the control listener, and the combined loop
       # are live rather than merely that exec(2) succeeded.
-      machine.wait_for_unit("realm-session.target", user="alice")
-      machine.wait_for_unit("realm-wm.service", user="alice")
-      machine.wait_for_unit("realm-bar.service", user="alice")
+      try:
+          machine.wait_for_unit(
+              "realm-session.target", user="alice", timeout=STARTUP_TIMEOUT
+          )
+          machine.wait_for_unit(
+              "realm-wm.service", user="alice", timeout=STARTUP_TIMEOUT
+          )
+          machine.wait_for_unit(
+              "realm-bar.service", user="alice", timeout=STARTUP_TIMEOUT
+          )
+      except Exception:
+          log_startup_diagnostics()
+          raise
       machine.succeed(
           "test \"$(systemctl --user --machine=alice@ show realm-wm.service -p Type --value)\" = notify"
       )
@@ -323,9 +374,9 @@ EOF
           "three managed demo windows",
       )
       assert tiled["data"]["whichkey"] is True, tiled
-      machine.wait_for_text("Realm VM sample")
+      machine.wait_for_text("Realm VM sample", timeout=OCR_TIMEOUT)
       # The strip has no "which-key" heading; assert its actual prompt.
-      machine.wait_for_text("grimoire.*full spellbook")
+      machine.wait_for_text("grimoire.*full spellbook", timeout=OCR_TIMEOUT)
       write_artifact("control-tiled-state.json", tiled_raw)
       machine.screenshot("realm-tiled-desktop")
 
@@ -347,7 +398,7 @@ EOF
           "grimoire visible",
       )
       assert sum(cell["windows"] for cell in grimoire["data"]["orbits"]) == 3, grimoire
-      machine.wait_for_text("GRIMOIRE")
+      machine.wait_for_text("GRIMOIRE", timeout=OCR_TIMEOUT)
       write_artifact("control-grimoire-state.json", grimoire_raw)
       machine.screenshot("realm-grimoire")
 
@@ -387,7 +438,9 @@ EOF
       quit_raw, quit_response = control("quit")
       assert quit_response == {"reply": "ok"}, quit_response
       write_artifact("control-quit.json", quit_raw)
-      machine.wait_until_succeeds(f"test ! -d /proc/{river_pid}")
+      machine.wait_until_succeeds(
+          f"test ! -d /proc/{river_pid}", timeout=EXIT_TIMEOUT
+      )
     '';
   };
 }
