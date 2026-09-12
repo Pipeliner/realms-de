@@ -28,7 +28,7 @@ pub enum ProcessJob {
 
 #[derive(Debug)]
 struct SnapshotJob {
-    sequence: u64,
+    sequence: Option<u64>,
     snapshot: SessionSnapshotV1,
 }
 
@@ -54,8 +54,8 @@ pub enum WorkerResult {
     },
     /// One immutable persistence sequence reached a terminal write result.
     SnapshotWritten {
-        /// Persistence sequence.
-        sequence: u64,
+        /// Persistence sequence, absent for the final shutdown flush.
+        sequence: Option<u64>,
         /// Atomic write result.
         result: io::Result<()>,
     },
@@ -238,7 +238,30 @@ impl Worker {
                 .try_send(WorkerMessage::SnapshotAvailable)
                 .map_err(|_| WorkerError::Disconnected)?;
         }
-        self.pending_snapshot = Some(SnapshotJob { sequence, snapshot });
+        self.pending_snapshot = Some(SnapshotJob {
+            sequence: Some(sequence),
+            snapshot,
+        });
+        Ok(())
+    }
+
+    /// Replace the pending slot with the final authoritative shutdown value.
+    pub fn submit_shutdown_snapshot(
+        &mut self,
+        snapshot: SessionSnapshotV1,
+    ) -> Result<(), WorkerError> {
+        if self.sealed_at.is_some() {
+            return Err(WorkerError::Sealed);
+        }
+        if self.pending_snapshot.is_none() {
+            self.messages
+                .try_send(WorkerMessage::SnapshotAvailable)
+                .map_err(|_| WorkerError::Disconnected)?;
+        }
+        self.pending_snapshot = Some(SnapshotJob {
+            sequence: None,
+            snapshot,
+        });
         Ok(())
     }
 
@@ -265,9 +288,12 @@ impl Worker {
         if self.pending_result_notifications == 0 {
             self.pending_result_notifications = drain_eventfd(self.event_fd.as_fd())?;
         }
+        if self.pending_result_notifications == 0 {
+            return Ok(None);
+        }
         let result = match self.results.try_recv() {
             Ok(result) => result,
-            Err(TryRecvError::Empty) => return Ok(None),
+            Err(TryRecvError::Empty) => return Err(WorkerError::Disconnected),
             Err(TryRecvError::Disconnected) => return Err(WorkerError::Disconnected),
         };
         self.pending_result_notifications = self.pending_result_notifications.saturating_sub(1);
@@ -302,6 +328,12 @@ impl Worker {
         } else {
             FenceStatus::Pending
         }
+    }
+
+    /// Fixed non-sliding fence deadline after the worker has been sealed.
+    pub fn fence_deadline(&self) -> Option<Instant> {
+        self.sealed_at
+            .map(|sealed| sealed + Duration::from_millis(WORKER_SHUTDOWN_TIMEOUT_MS))
     }
 }
 
@@ -545,6 +577,42 @@ mod tests {
             FenceStatus::TimedOut
         );
         assert!(worker.reserve_process_jobs(1).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shutdown_snapshot_reaches_a_terminal_result_before_the_fence() {
+        let root = fixture_dir("shutdown-snapshot");
+        let path = root.join("ledger.json");
+        let mut worker = Worker::start(path.clone()).unwrap();
+        let snapshot = SessionSnapshotV1::new(Ledger::new(), Vec::new(), 0).unwrap();
+        worker.submit_shutdown_snapshot(snapshot.clone()).unwrap();
+        worker.seal(Instant::now()).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut wrote = false;
+        loop {
+            match worker.try_result().unwrap() {
+                Some(WorkerResult::SnapshotRequested) => {
+                    worker.answer_snapshot_request().unwrap();
+                }
+                Some(WorkerResult::SnapshotWritten {
+                    sequence: None,
+                    result,
+                }) => {
+                    result.unwrap();
+                    wrote = true;
+                }
+                Some(WorkerResult::Fence) => {
+                    assert!(wrote, "the fence overtook the final snapshot");
+                    break;
+                }
+                Some(_) | None => {}
+            }
+            assert!(Instant::now() < deadline, "worker did not settle shutdown");
+            std::thread::yield_now();
+        }
+        assert_eq!(fs::read(path).unwrap(), snapshot.to_json().unwrap());
         fs::remove_dir_all(root).unwrap();
     }
 }
