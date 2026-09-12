@@ -17,7 +17,9 @@ thiserror = { workspace = true }
 rustix = { workspace = true, features = ["time"] }
 bitflags = "=2.13.1"
 wayland-client = "=0.31.15"
+wayland-backend = "=0.3.17"
 wayland-scanner = "=0.31.11"
 
 [dev-dependencies]
 trybuild = "=1.0.119"
+rustix = { workspace = true }
