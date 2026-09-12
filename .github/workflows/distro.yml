@@ -113,7 +113,7 @@ jobs:
       # degrades to a tarball download with no history, and rustup needs curl.
       - name: Prepare Fedora container
         if: matrix.container != ''
-        run: dnf -y install --setopt=install_weak_deps=False git curl gcc findutils
+        run: dnf -y install --setopt=install_weak_deps=False git curl gcc findutils dejavu-sans-fonts dejavu-sans-mono-fonts
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

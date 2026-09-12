@@ -49,6 +49,12 @@
   # WCAG floors fails the build. That is the intended behaviour (ADR 0005).
   doCheck = true;
 
+  # Text shaping tests need actual fonts even in the isolated build sandbox.
+  # This is a check-time input, not a forced user-session font selection.
+  preCheck = ''
+    export FONTCONFIG_FILE=${pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; }}
+  '';
+
   postInstall = ''
     install -Dm755 target/${pkgs.stdenv.targetPlatform.rust.cargoShortTarget}/release/realmctl \
       $out/bin/realmctl
