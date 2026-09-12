@@ -27,7 +27,7 @@ pub fn backend_turn<B: WmBackend>(
 ) -> Result<BackendTurn, SessionEventError> {
     if session.phase() == crate::session::RecoveryPhase::ExitComplete {
         return Err(SessionEventError::InvalidLifecycleOperation {
-            operation: "service_backend",
+            operation: crate::session::SessionLifecycleOperation::ServiceAfterExitComplete,
             phase: crate::session::RecoveryPhase::ExitComplete,
         });
     }
@@ -70,7 +70,9 @@ mod tests {
         BackendPollInterest, BackendReady, BackendResult, BackendSubmission, BackendTicket,
         BackendWindowId, WmBackend,
     };
-    use crate::session::{RecoveryPhase, Session, SessionEventError};
+    use crate::session::{
+        RecoveryPhase, Session, SessionEventError, SessionLifecycleOperation, SessionLifecyclePhase,
+    };
 
     const NOT_READY: BackendReady = BackendReady {
         readable: false,
@@ -399,10 +401,13 @@ mod tests {
             .unwrap(),
             BackendTurn::ExitComplete
         );
-        assert!(matches!(
+        assert_eq!(
             backend_turn(&mut session, NOT_READY, Instant::now()).unwrap_err(),
-            SessionEventError::InvalidLifecycleOperation { .. }
-        ));
+            SessionEventError::InvalidLifecycleOperation {
+                operation: SessionLifecycleOperation::ServiceAfterExitComplete,
+                phase: SessionLifecyclePhase::ExitComplete,
+            }
+        );
         assert_eq!(state.lock().unwrap().service_calls.len(), 1);
     }
 }

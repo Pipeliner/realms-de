@@ -1,4 +1,6 @@
-use realm_session::session::{SessionEventError, SessionUpdate};
+use realm_session::session::{
+    SessionEventError, SessionLifecycleOperation, SessionLifecyclePhase, SessionUpdate,
+};
 
 fn accepted_fields_only(update: SessionUpdate) {
     let SessionUpdate {
@@ -26,8 +28,23 @@ fn accepted_event_errors_only(error: SessionEventError) {
         | SessionEventError::WindowIdExhausted
         | SessionEventError::BackendTicketExhausted
         | SessionEventError::RepeatedInitialReplayComplete
-        | SessionEventError::UnexpectedInitialReplayEvent(_)
-        | SessionEventError::InvalidLifecycleOperation { .. } => {}
+        | SessionEventError::UnexpectedInitialReplayEvent(_) => {}
+        SessionEventError::InvalidLifecycleOperation { operation, phase } => {
+            match operation {
+                SessionLifecycleOperation::BeginDirectQuit
+                | SessionLifecycleOperation::BeginExitSession
+                | SessionLifecycleOperation::ServiceAfterExitComplete => {}
+            }
+            match phase {
+                SessionLifecyclePhase::InitialReplay
+                | SessionLifecyclePhase::FinalizingReplay
+                | SessionLifecyclePhase::Live
+                | SessionLifecyclePhase::QuitPending
+                | SessionLifecyclePhase::ShuttingDown
+                | SessionLifecyclePhase::Exiting
+                | SessionLifecyclePhase::ExitComplete => {}
+            }
+        }
     }
 }
 

@@ -504,9 +504,9 @@ impl SessionSnapshotV1 {
     }
 }
 
-/// Recovery position relative to the backend's explicit replay barrier.
+/// Session position relative to replay, ordinary service, and terminal exit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecoveryPhase {
+pub enum SessionLifecyclePhase {
     /// Initial compositor windows are being accumulated without side effects.
     InitialReplay,
     /// Reconciliation is installed and backend work must finish before events continue.
@@ -521,6 +521,20 @@ pub enum RecoveryPhase {
     Exiting,
     /// The expected post-flush disconnect completed the session.
     ExitComplete,
+}
+
+/// Compatibility name for the session lifecycle phase.
+pub type RecoveryPhase = SessionLifecyclePhase;
+
+/// Closed operation identity for lifecycle misuse errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionLifecycleOperation {
+    /// Enter direct-control QuitPending.
+    BeginDirectQuit,
+    /// Begin the backend's terminal exit sequence.
+    BeginExitSession,
+    /// Service was attempted after the expected disconnect completed exit.
+    ServiceAfterExitComplete,
 }
 
 #[derive(Debug, Clone)]
@@ -646,12 +660,12 @@ pub enum SessionEventError {
     #[error("unexpected policy event during initial replay: {0:?}")]
     UnexpectedInitialReplayEvent(BackendPolicyEvent),
     /// A lifecycle operation was invoked outside its accepted phase.
-    #[error("invalid lifecycle operation {operation} in phase {phase:?}")]
+    #[error("invalid lifecycle operation {operation:?} in phase {phase:?}")]
     InvalidLifecycleOperation {
-        /// Stable operation name.
-        operation: &'static str,
+        /// Closed operation identity.
+        operation: SessionLifecycleOperation,
         /// Phase that rejected the operation.
-        phase: RecoveryPhase,
+        phase: SessionLifecyclePhase,
     },
 }
 
@@ -906,7 +920,7 @@ impl<B: WmBackend> Session<B> {
     pub(crate) fn complete_expected_exit(&mut self) -> Result<(), SessionEventError> {
         if self.phase != RecoveryPhase::Exiting {
             return Err(SessionEventError::InvalidLifecycleOperation {
-                operation: "service_backend",
+                operation: SessionLifecycleOperation::ServiceAfterExitComplete,
                 phase: self.phase,
             });
         }
@@ -954,7 +968,7 @@ impl<B: WmBackend> Session<B> {
             RecoveryPhase::Live => {}
             phase => {
                 return Err(SessionEventError::InvalidLifecycleOperation {
-                    operation: "begin_direct_quit",
+                    operation: SessionLifecycleOperation::BeginDirectQuit,
                     phase,
                 });
             }
@@ -997,7 +1011,7 @@ impl<B: WmBackend> Session<B> {
     pub fn begin_exit_session(&mut self) -> Result<(), SessionEventError> {
         if self.phase != RecoveryPhase::ShuttingDown || self.exit_attempted {
             return Err(SessionEventError::InvalidLifecycleOperation {
-                operation: "begin_exit_session",
+                operation: SessionLifecycleOperation::BeginExitSession,
                 phase: self.phase,
             });
         }
@@ -2401,8 +2415,9 @@ mod tests {
 
     use super::{
         ActionCompletion, QuitAfter, RecoveryPhase, RepeatTimerDirective, Session,
-        SessionActionError, SessionEffect, SessionEventError, SessionSnapshotV1, SessionUpdate,
-        SnapshotBinding, TransactionSubstate,
+        SessionActionError, SessionEffect, SessionEventError, SessionLifecycleOperation,
+        SessionLifecyclePhase, SessionSnapshotV1, SessionUpdate, SnapshotBinding,
+        TransactionSubstate,
     };
 
     struct FakeBackend {
@@ -5917,10 +5932,13 @@ mod tests {
                 watched_modifiers: session.binding_state.watched_modifiers.clone(),
             }
         );
-        assert!(matches!(
+        assert_eq!(
             session.begin_exit_session().unwrap_err(),
-            SessionEventError::InvalidLifecycleOperation { .. }
-        ));
+            SessionEventError::InvalidLifecycleOperation {
+                operation: SessionLifecycleOperation::BeginExitSession,
+                phase: SessionLifecyclePhase::Exiting,
+            }
+        );
         assert_eq!(session.backend.exit_policies.len(), 1);
         assert_eq!(session.begin_shutdown(), SessionUpdate::unchanged());
 
@@ -5942,10 +5960,13 @@ mod tests {
         assert_eq!(failed.backend.exit_policies.len(), 1);
 
         let mut wrong_phase = policy_live_session(FakeBackend::new());
-        assert!(matches!(
+        assert_eq!(
             wrong_phase.begin_exit_session().unwrap_err(),
-            SessionEventError::InvalidLifecycleOperation { .. }
-        ));
+            SessionEventError::InvalidLifecycleOperation {
+                operation: SessionLifecycleOperation::BeginExitSession,
+                phase: SessionLifecyclePhase::Live,
+            }
+        );
         assert!(wrong_phase.backend.exit_policies.is_empty());
     }
 
@@ -5988,10 +6009,13 @@ mod tests {
 
         let mut initial = Session::connect(FakeBackend::new()).unwrap();
         let initial_watermark = initial.last_backend_ticket;
-        assert!(matches!(
+        assert_eq!(
             initial.begin_direct_quit().unwrap_err(),
-            SessionEventError::InvalidLifecycleOperation { .. }
-        ));
+            SessionEventError::InvalidLifecycleOperation {
+                operation: SessionLifecycleOperation::BeginDirectQuit,
+                phase: SessionLifecyclePhase::InitialReplay,
+            }
+        );
         assert_eq!(initial.phase(), RecoveryPhase::InitialReplay);
         assert_eq!(initial.last_backend_ticket, initial_watermark);
 
