@@ -38,6 +38,8 @@ does not serve it waits — however good it would look in a screenshot.
 | Kvantum / Qt theming beyond `qt6ct` colours | qt6ct colour scheme only | M6 |
 | Minimal-motion pass | none — v1 is motionless by design | M6 |
 | Multi-monitor beyond "it doesn't break" | single output is the tested path | M6 |
+| Runtime keyboard-layout switching | preserve the keymap/layout River created for each keyboard | Post-MVP input contract |
+| In-incarnation recovery after an admitted policy response reports `Io` or `Unsupported` | fail closed, let supervision restart `realm-session`, and relearn compositor authority through River replay; emit no ordinary completion/effect from the failed transaction | Post-MVP transaction-recovery contract |
 
 ---
 
@@ -47,13 +49,26 @@ does not serve it waits — however good it would look in a screenshot.
 |---|---|---|---|
 | **M0** | Foundations | `realm-core`, CI, docs, ADRs, repo furniture | `cargo test` green in CI; architecture reviewed |
 | **M1** | Theming pipeline | `realm-theme`, templates, `realmctl theme apply/lint` | One palette edit publishes a coherent sealed generation selected by future GTK, terminal, yazi and btop launches |
-| **M2** | Session and bar | `realm-session` + `RiverBackend`, and the five protocols realm must *serve* under river (`river-layer-shell-v1`, `river-xkb-bindings-v1`, `river-input-management-v1`, `river-xkb-config-v1`, `river-libinput-config-v1` — the last two are why a laptop has a working touchpad and a switchable keyboard layout), plus `realm-bar` | Bar reflects live orbit/focus/mode changes, and the reference triptych geometry is pixel-exact on river |
+| **M2** | Session and bar | `realm-session` + `RiverBackend`, and the four companion protocols Realm must use under River (`river-layer-shell-v1`, `river-xkb-bindings-v1`, `river-input-management-v1`, `river-libinput-config-v1` — the latter two apply fixed keyboard repeat and support-gated tap-to-click while preserving all other device preferences), plus `realm-bar` | Bar reflects live orbit/focus/mode changes, and the reference triptych geometry is pixel-exact on River |
 | **M3** | **Daily-drivable** | Session entry, portals, packaging, install docs | A fresh NixOS/Ubuntu/Fedora box logs into realm and passes `doctor` |
 | **M4** | Native clients | `realm-hecate`, `realm-odin`, urania, charon portal | The stopgaps are retired |
 | **M5** | realm compositor | `realm-compositor` on Smithay, `NativeBackend` | The ledger runs the screen directly |
 | **M6** | Polish | Qt/Kvantum, multi-monitor, a11y, optional minimal motion | Frame budgets held on a 2015-era laptop |
 
 **M3 is the MVP.** M0–M3 is the critical path; nothing in M4+ blocks it.
+
+README launch evidence includes real screenshots captured from a running Realm
+session. Capture the tiled desktop and key-discovery UI with ordinary sample
+applications, inspect each image for working layout, readable text, and visible
+state, and record the source commit and capture environment alongside the assets.
+Replace the README concept hero only after that inspection; captions must state
+what was actually running. A VM or headless compositor capture is acceptable
+when identified as such. Use a clean demo session without personal data.
+
+For the launch slice, bounded fail-closed restart is the recovery mechanism for
+an uncertain post-admission compositor result. Neutral repair turns,
+rollback-to-continue, continuing diagnostics, and exhaustive shutdown-discard
+states are explicitly not M2/M3 gates.
 
 Security checks and security-hardening review are deferred until after the MVP.
 They are tracked as post-MVP work and do not gate the M0–M3 critical path.

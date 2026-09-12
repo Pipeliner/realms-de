@@ -38,6 +38,7 @@ pub use runtime::{
 #[cfg(target_os = "linux")]
 pub use server::{
     ConnectionId, ControlAction, ControlServer, ControlToken, PollInterest, ReadyEvent,
+    ResponseReceipt, ResponseSettlement,
 };
 #[cfg(all(test, target_os = "linux"))]
 pub use server::{TestPeerCredential, TestReceive, TestSend};

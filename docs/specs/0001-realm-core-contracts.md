@@ -6,13 +6,17 @@
   [ADR 0004](../adr/0004-ndjson-control-socket.md),
   [ADR 0005](../adr/0005-palette-toml-single-source.md),
   [ADR 0006](../adr/0006-oklab-contrast-not-filters.md),
+  [ADR 0009](../adr/0009-no-animation-budget.md),
+  [ADR 0013](../adr/0013-river-window-management-backend.md),
   [ADR 0012](../adr/0012-font-fallback-is-a-contract.md)
 
 > **Written after the fact.** `realm-core` was implemented before the spec-first
 > rule (S14) was adopted. This spec is retro-fitted from the code and its tests
 > rather than the other way round, and is recorded as such so the trail is
-> honest. Every acceptance criterion below names a test that exists and passes;
-> nothing here is aspirational. From SPEC 0002 onward the order is spec first.
+> honest. The original acceptance criteria name tests that existed and passed.
+> A12a is the later Accepted M2 repeat-policy amendment and follows the current
+> spec-first order: its named test must be observed failing before implementation
+> in the same change. From SPEC 0002 onward the order is spec first.
 
 ## Purpose
 
@@ -84,7 +88,11 @@ once rather than the first.
 
 ### Keymap, IPC, state, glyphs
 
-One modifier, bindings resolved per mode, conflicts detectable. Wire types are
+One modifier, bindings resolved per mode, conflicts detectable. Each `Binding`
+has an explicit `repeatable: bool`; repeatability is policy data and is never
+inferred from a backend event. In the MVP default only directional Focus and
+Swap bindings repeat. Every toggle, close, launch, mode, orbit, layout, undo,
+theme, grimoire, and Quit binding is non-repeatable. Wire types are
 adjacently-tagged serde enums framed one-per-line as JSON. `RealmState` is a
 plain snapshot with `renders_same_as`, which is how the bar avoids redrawing
 when a module recomputes to the same string. Every glyph realm draws is in an
@@ -108,6 +116,7 @@ inventory with a documented ASCII fallback.
 | A10 | The shipped palette parses, round-trips and passes its own lint across the whole contrast range | `palette::tests::shipped_palette_survives_the_whole_contrast_range` |
 | A11 | An invalid palette is rejected at parse time, not at render time | `palette::tests::out_of_range_values_are_rejected_at_parse_time` |
 | A12 | The which-key strip matches the reference row exactly | `keys::tests::strip_matches_the_reference_which_key_row` |
+| A12a | The default keymap marks only directional Focus and Swap bindings repeatable; all other actions are non-repeatable | `keys::tests::only_directional_focus_and_swap_bindings_repeat` |
 | A13 | Every protocol message survives a round trip through a single-line frame | `ipc::tests::requests_round_trip_through_a_frame` |
 | A14 | An ASCII-only font degrades to documented substitutes instead of tofu | `glyphs::tests::a_bare_ascii_font_degrades_instead_of_drawing_tofu` |
 | A15 | A revision bump alone does not force a bar redraw | `state::tests::revision_alone_does_not_force_a_redraw` |

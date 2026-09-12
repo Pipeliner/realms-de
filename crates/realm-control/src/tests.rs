@@ -25,9 +25,9 @@ use crate::protocol::{ConnectionMachine, ConnectionPhase, MachineAction, Machine
 use crate::{
     production_runtime_dir, test_runtime_dir, ActiveControlListener, BoundControlEndpoint,
     ClientError, ClientPhase, ConnectionId, ControlAction, ControlError, ControlServer,
-    ControlToken, IpcPathError, ReadyEvent, RuntimeDir, SocketEndpoint, TestClientConnect,
-    TestClientOperations, TestClientPoll, TestClientReceive, TestClientSend, TestClientSocketError,
-    TestPeerCredential, TestReceive, TestSend,
+    ControlToken, IpcPathError, ReadyEvent, ResponseSettlement, RuntimeDir, SocketEndpoint,
+    TestClientConnect, TestClientOperations, TestClientPoll, TestClientReceive, TestClientSend,
+    TestClientSocketError, TestPeerCredential, TestReceive, TestSend,
 };
 use realm_core::ipc::{Event, Request, Response, MAX_FRAME_BYTES};
 use realm_core::state::RealmState;
@@ -1114,6 +1114,7 @@ fn linux_admission_checks_real_credentials_before_receive() {
                 ReadyEvent {
                     token: listener_token,
                     readable: true,
+                    terminal: false,
                     writable: false,
                 },
             )
@@ -1155,6 +1156,7 @@ fn rejected_credentials_close_before_receive_or_identity_allocation() {
                     ReadyEvent {
                         token: listener_token,
                         readable: true,
+                        terminal: false,
                         writable: false,
                     },
                 )
@@ -1198,6 +1200,7 @@ fn admit_test_peer(
                 ReadyEvent {
                     token: listener_token,
                     readable: true,
+                    terminal: false,
                     writable: false,
                 },
             )
@@ -1220,8 +1223,501 @@ fn ready(token: ControlToken, readable: bool, writable: bool) -> ReadyEvent {
     ReadyEvent {
         token,
         readable,
+        terminal: false,
         writable,
     }
+}
+
+fn terminal(token: ControlToken, readable: bool, writable: bool) -> ReadyEvent {
+    ReadyEvent {
+        token,
+        readable,
+        terminal: true,
+        writable,
+    }
+}
+
+fn request_test_response(
+    server: &mut ControlServer,
+    connection: ConnectionId,
+    token: ControlToken,
+    now: Instant,
+) {
+    server.inject_receive_for_test(TestReceive::Bytes(b"{\"cmd\":\"get-state\"}\n".to_vec()));
+    assert_eq!(
+        server.service_one(now, ready(token, true, false)).unwrap(),
+        Some(ControlAction::Request {
+            connection,
+            request: Request::GetState,
+        })
+    );
+}
+
+/// Catches settlement queries performing I/O, treating partial output as
+/// drained, or failing to name the exact completed response generation.
+#[test]
+fn response_receipt_settlement_is_exact_and_nonblocking() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    finish_test_handshake(&mut server, connection, token, base);
+    request_test_response(&mut server, connection, token, base);
+
+    let receipt = server
+        .complete_request(base, connection, Response::Ok)
+        .unwrap();
+    let calls = server.socket_calls_for_test();
+    assert_eq!(
+        server.response_settlement(receipt),
+        ResponseSettlement::Pending
+    );
+    assert_eq!(server.socket_calls_for_test(), calls);
+
+    server.inject_send_for_test(TestSend::Count(1));
+    server.service_one(base, ready(token, false, true)).unwrap();
+    assert_eq!(
+        server.response_settlement(receipt),
+        ResponseSettlement::Pending
+    );
+    let remainder = server.output_len_for_test(connection).unwrap();
+    server.inject_send_for_test(TestSend::Count(remainder));
+    server.service_one(base, ready(token, false, true)).unwrap();
+    assert_eq!(
+        server.response_settlement(receipt),
+        ResponseSettlement::Drained
+    );
+    assert_eq!(
+        server.begin_response_barrier(receipt).unwrap(),
+        ResponseSettlement::Drained
+    );
+    assert!(server
+        .poll_interests()
+        .any(|interest| interest.token == listener_token));
+}
+
+/// Catches using a single live-connection pending bit instead of retaining the
+/// exact settled generation across the next request and response.
+#[test]
+fn response_receipt_never_reopens_after_later_request() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    finish_test_handshake(&mut server, connection, token, base);
+
+    request_test_response(&mut server, connection, token, base);
+    let first = server
+        .complete_request(base, connection, Response::Ok)
+        .unwrap();
+    let first_len = server.output_len_for_test(connection).unwrap();
+    server.inject_send_for_test(TestSend::Count(first_len));
+    server.service_one(base, ready(token, false, true)).unwrap();
+    assert_eq!(
+        server.response_settlement(first),
+        ResponseSettlement::Drained
+    );
+
+    request_test_response(&mut server, connection, token, base);
+    assert_eq!(
+        server.response_settlement(first),
+        ResponseSettlement::Drained
+    );
+    let second = server
+        .complete_request(base, connection, Response::Ok)
+        .unwrap();
+    assert_ne!(first, second);
+    assert_eq!(
+        server.response_settlement(first),
+        ResponseSettlement::Drained
+    );
+    assert_eq!(
+        server.response_settlement(second),
+        ResponseSettlement::Pending
+    );
+}
+
+/// Catches a response barrier retaining listener/peer reads, selecting input
+/// before its exact writer, replacing its receipt, or restoring interests.
+#[test]
+fn response_barrier_masks_reads_and_prioritizes_exact_writer() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let (_first_client, first_connection, first_token, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    let (_second_client, second_connection, second_token, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    let (_subscriber_client, subscriber_connection, subscriber_token, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    finish_test_handshake(&mut server, first_connection, first_token, base);
+    finish_test_handshake(&mut server, second_connection, second_token, base);
+    make_test_subscriber(
+        &mut server,
+        subscriber_connection,
+        subscriber_token,
+        base,
+        1,
+    );
+    request_test_response(&mut server, first_connection, first_token, base);
+    request_test_response(&mut server, second_connection, second_token, base);
+    let first = server
+        .complete_request(base, first_connection, Response::Ok)
+        .unwrap();
+    let second = server
+        .complete_request(base, second_connection, Response::Ok)
+        .unwrap();
+
+    assert_eq!(
+        server.begin_response_barrier(first).unwrap(),
+        ResponseSettlement::Pending
+    );
+    assert_eq!(
+        server.begin_response_barrier(first).unwrap(),
+        ResponseSettlement::Pending
+    );
+    assert!(matches!(
+        server.begin_response_barrier(second),
+        Err(ControlError::ResponseBarrierConflict { active, requested })
+            if active == first && requested == second
+    ));
+    let interests: Vec<_> = server
+        .poll_interests()
+        .map(|interest| (interest.token, interest.readable, interest.writable))
+        .collect();
+    assert_eq!(interests, vec![(first_token, false, true)]);
+
+    let receives = server.receive_calls_for_test();
+    let sends = server.send_calls_for_test();
+    server.inject_receive_for_test(TestReceive::Bytes(b"{\"cmd\":\"quit\"}\n".to_vec()));
+    server.inject_send_for_test(TestSend::Count(1));
+    assert_eq!(
+        server
+            .service_one(base, ready(first_token, true, true))
+            .unwrap(),
+        None
+    );
+    assert_eq!(server.receive_calls_for_test(), receives);
+    assert_eq!(server.send_calls_for_test(), sends + 1);
+
+    let remainder = server.output_len_for_test(first_connection).unwrap();
+    server.inject_send_for_test(TestSend::Count(remainder));
+    server
+        .service_one(base, ready(first_token, true, true))
+        .unwrap();
+    assert_eq!(
+        server.response_settlement(first),
+        ResponseSettlement::Drained
+    );
+    assert!(server.poll_interests().next().is_none());
+
+    server.begin_shutdown(base);
+    assert!(server
+        .poll_interests()
+        .any(|interest| interest.token == subscriber_token && interest.writable));
+}
+
+/// Catches waiting for deadline expiry or attempting socket I/O when HUP alone
+/// settles the exact barrier receipt as closed.
+#[test]
+fn response_barrier_hup_only_settles_closed_without_expiry() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    finish_test_handshake(&mut server, connection, token, base);
+    request_test_response(&mut server, connection, token, base);
+    let receipt = server
+        .complete_request(base, connection, Response::Ok)
+        .unwrap();
+    assert_eq!(
+        server.begin_response_barrier(receipt).unwrap(),
+        ResponseSettlement::Pending
+    );
+
+    let calls = server.socket_calls_for_test();
+    assert_eq!(
+        server
+            .service_one(base, terminal(token, false, false))
+            .unwrap(),
+        None
+    );
+    assert_eq!(server.socket_calls_for_test(), calls);
+    assert_eq!(
+        server.response_settlement(receipt),
+        ResponseSettlement::Closed
+    );
+
+    let (_temporary, runtime_path, mut closed_before_barrier, listener_token) =
+        server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut closed_before_barrier,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    finish_test_handshake(&mut closed_before_barrier, connection, token, base);
+    request_test_response(&mut closed_before_barrier, connection, token, base);
+    let closed = closed_before_barrier
+        .complete_request(base, connection, Response::Ok)
+        .unwrap();
+    closed_before_barrier
+        .service_one(base, terminal(token, false, false))
+        .unwrap();
+    assert_eq!(
+        closed_before_barrier
+            .begin_response_barrier(closed)
+            .unwrap(),
+        ResponseSettlement::Closed
+    );
+    assert!(closed_before_barrier
+        .poll_interests()
+        .any(|interest| interest.token == listener_token));
+}
+
+/// Catches any listener, read-enabled peer, read-disabled output/pending peer,
+/// or subscriber falling through the exhaustive terminal-readiness policy.
+#[test]
+fn terminal_readiness_table_is_closed_for_every_transport_state() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+
+    let (_temporary, _runtime_path, mut listener_server, listener_token) = server_fixture(base);
+    let calls = listener_server.socket_calls_for_test();
+    assert!(matches!(
+        listener_server.service_one(base, terminal(listener_token, true, false)),
+        Err(ControlError::ListenerTerminal)
+    ));
+    assert_eq!(listener_server.socket_calls_for_test(), calls);
+
+    let (_temporary, runtime_path, mut await_server, listener_token) = server_fixture(base);
+    let (_client, await_connection, await_token, _fd) = admit_test_peer(
+        &mut await_server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    await_server.inject_receive_for_test(TestReceive::Bytes(
+        b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+    ));
+    let receives = await_server.receive_calls_for_test();
+    await_server
+        .service_one(base, terminal(await_token, true, false))
+        .unwrap();
+    assert_eq!(await_server.receive_calls_for_test(), receives + 1);
+    assert!(await_server.has_connection_for_test(await_connection));
+    let calls = await_server.socket_calls_for_test();
+    await_server
+        .service_one(base, terminal(await_token, false, true))
+        .unwrap();
+    assert_eq!(await_server.socket_calls_for_test(), calls);
+    assert!(!await_server.has_connection_for_test(await_connection));
+
+    let (_temporary, runtime_path, mut ready_server, listener_token) = server_fixture(base);
+    let (_client, ready_connection, ready_token, _fd) = admit_test_peer(
+        &mut ready_server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    finish_test_handshake(&mut ready_server, ready_connection, ready_token, base);
+    ready_server.inject_receive_for_test(TestReceive::Bytes(b"{\"cmd\":\"get-state\"}\n".to_vec()));
+    let receives = ready_server.receive_calls_for_test();
+    assert_eq!(
+        ready_server
+            .service_one(base, terminal(ready_token, true, false))
+            .unwrap(),
+        Some(ControlAction::Request {
+            connection: ready_connection,
+            request: Request::GetState,
+        })
+    );
+    assert_eq!(ready_server.receive_calls_for_test(), receives + 1);
+
+    let (_temporary, runtime_path, mut terminal_only, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut terminal_only,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    let calls = terminal_only.socket_calls_for_test();
+    terminal_only
+        .service_one(base, terminal(token, false, false))
+        .unwrap();
+    assert_eq!(terminal_only.socket_calls_for_test(), calls);
+    assert!(!terminal_only.has_connection_for_test(connection));
+
+    let (_temporary, runtime_path, mut pending_server, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut pending_server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    finish_test_handshake(&mut pending_server, connection, token, base);
+    request_test_response(&mut pending_server, connection, token, base);
+    let calls = pending_server.socket_calls_for_test();
+    pending_server
+        .service_one(base, terminal(token, true, true))
+        .unwrap();
+    assert_eq!(pending_server.socket_calls_for_test(), calls);
+    assert!(!pending_server.has_connection_for_test(connection));
+
+    let (_temporary, runtime_path, mut output_server, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut output_server,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    finish_test_handshake(&mut output_server, connection, token, base);
+    request_test_response(&mut output_server, connection, token, base);
+    let receipt = output_server
+        .complete_request(base, connection, Response::Ok)
+        .unwrap();
+    let calls = output_server.socket_calls_for_test();
+    output_server
+        .service_one(base, terminal(token, true, true))
+        .unwrap();
+    assert_eq!(output_server.socket_calls_for_test(), calls);
+    assert_eq!(
+        output_server.response_settlement(receipt),
+        ResponseSettlement::Closed
+    );
+
+    let (_temporary, runtime_path, mut subscriber, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut subscriber,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    make_test_subscriber(&mut subscriber, connection, token, base, 1);
+    subscriber.inject_receive_for_test(TestReceive::Bytes(vec![b'x']));
+    let receives = subscriber.receive_calls_for_test();
+    subscriber
+        .service_one(base, terminal(token, true, true))
+        .unwrap();
+    assert_eq!(subscriber.receive_calls_for_test(), receives + 1);
+    assert!(!subscriber.has_connection_for_test(connection));
+
+    let (_temporary, runtime_path, mut subscriber, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut subscriber,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    make_test_subscriber(&mut subscriber, connection, token, base, 1);
+    let calls = subscriber.socket_calls_for_test();
+    subscriber
+        .service_one(base, terminal(token, false, false))
+        .unwrap();
+    assert_eq!(subscriber.socket_calls_for_test(), calls);
+    assert!(!subscriber.has_connection_for_test(connection));
+
+    let (_temporary, runtime_path, mut subscriber, listener_token) = server_fixture(base);
+    let (_client, connection, token, _fd) = admit_test_peer(
+        &mut subscriber,
+        listener_token,
+        &runtime_path.join("realm/ctl.sock"),
+        base,
+    );
+    make_test_subscriber(&mut subscriber, connection, token, base, 1);
+    subscriber.inject_receive_for_test(TestReceive::Eof);
+    let receives = subscriber.receive_calls_for_test();
+    subscriber
+        .service_one(base, terminal(token, true, true))
+        .unwrap();
+    assert_eq!(subscriber.receive_calls_for_test(), receives + 1);
+    assert!(subscriber.has_connection_for_test(connection));
+    assert_eq!(subscriber.interest_for_test(token), Some((false, true)));
+}
+
+/// Catches response generation zero/wrap or exhaustion affecting any peer
+/// other than the connection whose sequence space is exhausted.
+#[test]
+fn response_sequence_exhaustion_is_typed_peer_local_and_never_wraps() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let (_client, exhausted, exhausted_token, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    let (_other_client, other, other_token, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    finish_test_handshake(&mut server, exhausted, exhausted_token, base);
+    finish_test_handshake(&mut server, other, other_token, base);
+    server.set_next_response_sequence_for_test(exhausted, u64::MAX);
+
+    request_test_response(&mut server, exhausted, exhausted_token, base);
+    let last = server
+        .complete_request(base, exhausted, Response::Ok)
+        .unwrap();
+    let output = server.output_len_for_test(exhausted).unwrap();
+    server.inject_send_for_test(TestSend::Count(output));
+    server
+        .service_one(base, ready(exhausted_token, false, true))
+        .unwrap();
+    assert_eq!(
+        server.response_settlement(last),
+        ResponseSettlement::Drained
+    );
+
+    request_test_response(&mut server, exhausted, exhausted_token, base);
+    assert!(matches!(
+        server.complete_request(base, exhausted, Response::Ok),
+        Err(ControlError::ResponseSequenceExhausted { connection })
+            if connection == exhausted
+    ));
+    assert_eq!(server.response_settlement(last), ResponseSettlement::Closed);
+    assert!(!server.has_connection_for_test(exhausted));
+    assert!(server.has_connection_for_test(other));
+}
+
+/// Catches oversized completion manufacturing a receipt, leaving its peer
+/// live, or closing an unrelated admitted peer.
+#[test]
+fn oversized_completion_returns_no_receipt_and_proves_closed() {
+    let _lock = process_test_lock();
+    let base = Instant::now();
+    let (_temporary, runtime_path, mut server, listener_token) = server_fixture(base);
+    let socket_path = runtime_path.join("realm/ctl.sock");
+    let (_client, oversized_peer, oversized_token, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    let (_other_client, other, other_token, _fd) =
+        admit_test_peer(&mut server, listener_token, &socket_path, base);
+    finish_test_handshake(&mut server, oversized_peer, oversized_token, base);
+    finish_test_handshake(&mut server, other, other_token, base);
+    request_test_response(&mut server, oversized_peer, oversized_token, base);
+    let oversized = Response::Error {
+        message: "x".repeat(MAX_FRAME_BYTES),
+    };
+
+    assert!(matches!(
+        server.complete_request(base, oversized_peer, oversized),
+        Err(ControlError::OutboundFrameTooLarge { connections })
+            if connections == vec![oversized_peer]
+    ));
+    assert!(!server.has_connection_for_test(oversized_peer));
+    assert!(server.has_connection_for_test(other));
 }
 
 fn assert_control_errno(error: ControlError, expected: Errno, listener: bool) {

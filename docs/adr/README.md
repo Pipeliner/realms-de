@@ -36,6 +36,8 @@ Copy [`template.md`](template.md) to start a new one.
 | [0017](0017-immutable-theme-activation-generations.md) | Theme activation uses sealed immutable generations | Accepted — partially supersedes [0005](0005-palette-toml-single-source.md) | Launches pin a digest-bound sealed tree; pointer commits change future launches only and never reload | Medium — changes #22/#132 launcher and lifecycle seams |
 | [0018](0018-fresh-desktop-exec-only.md) | Desktop launch is fresh-process Exec only | Accepted | Reject D-Bus activation before side effects; plain Exec is a fresh child-only immutable plan | Medium — a future D-Bus path is additive only |
 | [0019](0019-nix-ci-cache-is-optional.md) | Nix CI cache is optional | Accepted | External cache authentication may not prevent the reference build or VM evidence | Low — add only reviewed non-blocking cache support |
+| [0020](0020-bounded-transfer-recovery-descriptors.md) | Transfer recovery bounds retained descriptors per pair | Accepted | Rescan bounded inventory per target while retaining only the exact descriptor pair used for deletion authority | Medium — recovery classifier ownership changes |
+| [0021](0021-bounded-wayland-ingress-and-dispatch.md) | Bound Wayland ingress and dispatch per service quantum | Accepted | A River service call selects one bounded phase; stock drain-all dispatch/read paths are forbidden | Low after upstream exposes equivalent bounded primitives |
 
 All active decisions through 0013 were **ratified by the owner on 2026-08-28**,
 after the correction set tracked by #3. ADR 0015 was authorized by the owner
@@ -79,6 +81,8 @@ decision silently stopped being true:
 | 0009 | `palette::tests::out_of_range_values_are_rejected_at_parse_time` (enforces `metrics.radius == 0`) |
 | 0012 | `glyphs::tests::a_bare_ascii_font_degrades_instead_of_drawing_tofu`; ratification also requires `palette::tests::empty_typography_fallback_is_rejected` to fail for an empty-only fixture and pass for the shipped palette |
 | 0017 | `generation::tests::g1_selected_old_generation_keeps_descriptor_pinned_bytes_after_new_commit`, `generation::tests::g5_invalid_current_refuses_without_creating_a_lease`, `generation::tests::g8_recovery_fails_closed_for_corrupt_missing_mismatched_and_special_pointers` |
+| 0020 | `generation::lifecycle::tests::transfer_stage_classifier_rejects_over_bound_inventory` under the specified low descriptor limit |
+| 0021 | *Planned (#40):* real-socket bounded dispatch, ingress, prepare-read ownership, and blocked-flush tests named in the ADR |
 
 ADRs 0007, 0008, 0010, 0011 and 0013 depend on guards that land with their
 milestones; each names them as *planned* with the milestone attached. 0013's

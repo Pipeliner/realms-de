@@ -19,6 +19,13 @@ pub enum ControlError {
     StaleConnection {
         connection: crate::ConnectionId,
     },
+    ResponseSequenceExhausted {
+        connection: crate::ConnectionId,
+    },
+    ResponseBarrierConflict {
+        active: crate::ResponseReceipt,
+        requested: crate::ResponseReceipt,
+    },
     ShuttingDown,
     OutboundFrameTooLarge {
         connections: Vec<crate::ConnectionId>,
@@ -28,6 +35,7 @@ pub enum ControlError {
         source: std::io::Error,
     },
     ListenerIo(std::io::Error),
+    ListenerTerminal,
     ResourceExhausted(std::io::Error),
 }
 
@@ -119,6 +127,14 @@ impl fmt::Display for ControlError {
             Self::StaleConnection { connection } => {
                 write!(formatter, "stale control connection {connection:?}")
             }
+            Self::ResponseSequenceExhausted { connection } => write!(
+                formatter,
+                "control response sequence exhausted for {connection:?}"
+            ),
+            Self::ResponseBarrierConflict { active, requested } => write!(
+                formatter,
+                "control response barrier conflict: active {active:?}, requested {requested:?}"
+            ),
             Self::ShuttingDown => formatter.write_str("control server is shutting down"),
             Self::OutboundFrameTooLarge { connections } => write!(
                 formatter,
@@ -131,6 +147,7 @@ impl fmt::Display for ControlError {
                 )
             }
             Self::ListenerIo(source) => write!(formatter, "control listener I/O failed: {source}"),
+            Self::ListenerTerminal => formatter.write_str("control listener became terminal"),
             Self::ResourceExhausted(source) => {
                 write!(formatter, "control listener resource exhaustion: {source}")
             }
@@ -145,8 +162,11 @@ impl std::error::Error for ControlError {
             | Self::ListenerIo(source)
             | Self::ResourceExhausted(source) => Some(source),
             Self::StaleConnection { .. }
+            | Self::ResponseSequenceExhausted { .. }
+            | Self::ResponseBarrierConflict { .. }
             | Self::ShuttingDown
-            | Self::OutboundFrameTooLarge { .. } => None,
+            | Self::OutboundFrameTooLarge { .. }
+            | Self::ListenerTerminal => None,
         }
     }
 }

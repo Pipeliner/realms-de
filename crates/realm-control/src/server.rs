@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::time::Instant;
 
@@ -39,7 +40,21 @@ pub struct PollInterest<'a> {
 pub struct ReadyEvent {
     pub token: ControlToken,
     pub readable: bool,
+    pub terminal: bool,
     pub writable: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ResponseReceipt {
+    connection: ConnectionId,
+    sequence: NonZeroU64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResponseSettlement {
+    Pending,
+    Drained,
+    Closed,
 }
 
 #[derive(Debug, PartialEq)]
@@ -54,6 +69,9 @@ struct Connection {
     fd: OwnedFd,
     token: ControlToken,
     machine: ConnectionMachine,
+    next_response_sequence: Option<NonZeroU64>,
+    pending_response: Option<NonZeroU64>,
+    last_drained_response: Option<NonZeroU64>,
 }
 
 pub struct ControlServer {
@@ -62,6 +80,7 @@ pub struct ControlServer {
     connections: BTreeMap<ConnectionId, Connection>,
     next_connection_id: Option<u64>,
     next_token: Option<u64>,
+    response_barrier: Option<ResponseReceipt>,
     shutting_down: bool,
     #[cfg(test)]
     test_credentials: std::collections::VecDeque<TestPeerCredential>,
@@ -114,6 +133,7 @@ impl ControlServer {
             connections: BTreeMap::new(),
             next_connection_id: Some(1),
             next_token: Some(1),
+            response_barrier: None,
             shutting_down: false,
             #[cfg(test)]
             test_credentials: std::collections::VecDeque::new(),
@@ -148,17 +168,30 @@ impl ControlServer {
     }
 
     pub fn poll_interests(&self) -> impl Iterator<Item = PollInterest<'_>> {
-        let listener = (!self.shutting_down).then(|| PollInterest {
-            token: self.listener_token,
-            fd: self.listener.socket_fd(),
-            readable: true,
-            writable: false,
-        });
-        let peers = self.connections.values().map(|connection| PollInterest {
-            token: connection.token,
-            fd: connection.fd.as_fd(),
-            readable: connection.machine.input_enabled(),
-            writable: connection.machine.output().is_some(),
+        let listener =
+            (!self.shutting_down && self.response_barrier.is_none()).then(|| PollInterest {
+                token: self.listener_token,
+                fd: self.listener.socket_fd(),
+                readable: true,
+                writable: false,
+            });
+        let peers = self.connections.iter().filter_map(|(id, connection)| {
+            let readable = match self.response_barrier {
+                Some(receipt)
+                    if receipt.connection == *id
+                        && connection.pending_response == Some(receipt.sequence) =>
+                {
+                    false
+                }
+                Some(_) => return None,
+                None => connection.machine.input_enabled(),
+            };
+            Some(PollInterest {
+                token: connection.token,
+                fd: connection.fd.as_fd(),
+                readable,
+                writable: connection.machine.output().is_some(),
+            })
         });
         listener.into_iter().chain(peers)
     }
@@ -169,14 +202,42 @@ impl ControlServer {
         ready: ReadyEvent,
     ) -> Result<Option<ControlAction>, ControlError> {
         self.expire(now)?;
-        let known_peer = self.connection_id_for_token(ready.token);
+
+        if let Some(receipt) = self.response_barrier {
+            if self.response_settlement(receipt) != ResponseSettlement::Pending {
+                return Ok(None);
+            }
+            let Some(connection) = self.connections.get(&receipt.connection) else {
+                return Ok(None);
+            };
+            if connection.token != ready.token {
+                return Ok(None);
+            }
+            if ready.terminal {
+                self.connections.remove(&receipt.connection);
+                return Ok(None);
+            }
+            return if ready.writable {
+                self.send_one(now, receipt.connection)
+            } else {
+                Ok(None)
+            };
+        }
 
         if ready.token == self.listener_token {
-            if self.shutting_down || !ready.readable {
+            if self.shutting_down {
+                return Ok(None);
+            }
+            if ready.terminal {
+                return Err(ControlError::ListenerTerminal);
+            }
+            if !ready.readable {
                 return Ok(None);
             }
             return self.accept_one(now).map(|()| None);
         }
+
+        let known_peer = self.connection_id_for_token(ready.token);
         let Some(connection_id) = known_peer else {
             return Ok(None);
         };
@@ -187,6 +248,9 @@ impl ControlServer {
         let write_enabled = connection.machine.output().is_some();
         if ready.readable && read_enabled {
             self.receive_one(now, connection_id)
+        } else if ready.terminal {
+            self.connections.remove(&connection_id);
+            Ok(None)
         } else if ready.writable && write_enabled {
             self.send_one(now, connection_id)
         } else {
@@ -226,6 +290,9 @@ impl ControlServer {
                 fd: accepted,
                 token,
                 machine: ConnectionMachine::new(now, env!("CARGO_PKG_VERSION")),
+                next_response_sequence: NonZeroU64::new(1),
+                pending_response: None,
+                last_drained_response: None,
             },
         );
         Ok(())
@@ -354,6 +421,17 @@ impl ControlServer {
             .expect("selected connection remains present")
             .machine
             .advance_output(now, count);
+        if !matches!(action, MachineAction::Close(_)) {
+            let record = self
+                .connections
+                .get_mut(&connection_id)
+                .expect("selected connection remains present");
+            if record.machine.output().is_none() {
+                if let Some(sequence) = record.pending_response.take() {
+                    record.last_drained_response = Some(sequence);
+                }
+            }
+        }
         Ok(self.apply_machine_action(connection_id, action))
     }
 
@@ -421,6 +499,16 @@ impl ControlServer {
     }
 
     pub fn next_deadline(&self) -> Option<Instant> {
+        if let Some(receipt) = self.response_barrier {
+            return self
+                .connections
+                .get(&receipt.connection)
+                .and_then(|connection| {
+                    (connection.pending_response == Some(receipt.sequence))
+                        .then(|| connection.machine.next_deadline())
+                        .flatten()
+                });
+        }
         self.connections
             .values()
             .filter_map(|connection| connection.machine.next_deadline())
@@ -446,12 +534,16 @@ impl ControlServer {
         now: Instant,
         connection: ConnectionId,
         response: Response,
-    ) -> Result<(), ControlError> {
+    ) -> Result<ResponseReceipt, ControlError> {
         if self.shutting_down {
             return Err(ControlError::ShuttingDown);
         }
         let Some(record) = self.connections.get_mut(&connection) else {
             return Err(ControlError::StaleConnection { connection });
+        };
+        let Some(sequence) = record.next_response_sequence else {
+            self.connections.remove(&connection);
+            return Err(ControlError::ResponseSequenceExhausted { connection });
         };
         let action = record.machine.complete_request(now, &response);
         if matches!(action, MachineAction::OutboundFrameTooLarge) {
@@ -460,7 +552,49 @@ impl ControlServer {
                 connections: vec![connection],
             });
         }
-        Ok(())
+        record.pending_response = Some(sequence);
+        record.next_response_sequence = sequence.get().checked_add(1).and_then(NonZeroU64::new);
+        Ok(ResponseReceipt {
+            connection,
+            sequence,
+        })
+    }
+
+    pub fn response_settlement(&self, receipt: ResponseReceipt) -> ResponseSettlement {
+        let Some(connection) = self.connections.get(&receipt.connection) else {
+            return ResponseSettlement::Closed;
+        };
+        if connection.pending_response == Some(receipt.sequence) {
+            return ResponseSettlement::Pending;
+        }
+        if connection
+            .last_drained_response
+            .is_some_and(|drained| receipt.sequence <= drained)
+        {
+            return ResponseSettlement::Drained;
+        }
+        ResponseSettlement::Closed
+    }
+
+    pub fn begin_response_barrier(
+        &mut self,
+        receipt: ResponseReceipt,
+    ) -> Result<ResponseSettlement, ControlError> {
+        let settlement = self.response_settlement(receipt);
+        if settlement != ResponseSettlement::Pending {
+            return Ok(settlement);
+        }
+        match self.response_barrier {
+            Some(active) if active != receipt => Err(ControlError::ResponseBarrierConflict {
+                active,
+                requested: receipt,
+            }),
+            Some(_) => Ok(settlement),
+            None => {
+                self.response_barrier = Some(receipt);
+                Ok(settlement)
+            }
+        }
     }
 
     pub fn complete_subscribe(
@@ -528,6 +662,7 @@ impl ControlServer {
         if self.shutting_down {
             return;
         }
+        self.response_barrier = None;
         self.shutting_down = true;
         let connections: Vec<_> = self.connections.keys().copied().collect();
         for connection in connections {
@@ -648,5 +783,17 @@ impl ControlServer {
     #[cfg(test)]
     pub(crate) fn next_identities_for_test(&self) -> (Option<u64>, Option<u64>) {
         (self.next_connection_id, self.next_token)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_next_response_sequence_for_test(
+        &mut self,
+        connection: ConnectionId,
+        sequence: u64,
+    ) {
+        self.connections
+            .get_mut(&connection)
+            .expect("test connection remains present")
+            .next_response_sequence = NonZeroU64::new(sequence);
     }
 }

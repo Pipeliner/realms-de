@@ -85,6 +85,8 @@ pub struct Binding {
     pub action: Action,
     /// Which mode the binding is live in.
     pub mode: Mode,
+    /// Whether a held press may drive Realm's fixed-rate repeat timer.
+    pub repeatable: bool,
     /// Whether it appears in the 26px which-key strip (the full set always
     /// appears in the grimoire).
     pub in_strip: bool,
@@ -100,12 +102,14 @@ pub struct Keymap {
 }
 
 fn b(key: &str, hint: &str, label: &str, action: Action, in_strip: bool) -> Binding {
+    let repeatable = matches!(action, Action::Focus(_) | Action::Swap(_));
     Binding {
         key: key.into(),
         hint_key: hint.into(),
         label: label.into(),
         action,
         mode: Mode::Nav,
+        repeatable,
         in_strip,
     }
 }
@@ -260,5 +264,19 @@ mod tests {
     fn mode_badges_are_stable() {
         assert_eq!(Mode::Nav.badge(), "NAV");
         assert_eq!(Mode::Resize.badge(), "RESIZE");
+    }
+
+    #[test]
+    fn only_directional_focus_and_swap_bindings_repeat() {
+        let keymap = Keymap::default();
+
+        for binding in &keymap.bindings {
+            let directional = matches!(binding.action, Action::Focus(_) | Action::Swap(_));
+            assert_eq!(
+                binding.repeatable, directional,
+                "unexpected repeat policy for {}",
+                binding.key
+            );
+        }
     }
 }

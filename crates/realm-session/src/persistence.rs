@@ -213,16 +213,22 @@ impl PersistenceCoordinator {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::os::fd::RawFd;
+    use std::fs::File;
+    use std::os::fd::{AsFd, BorrowedFd};
     use std::time::{Duration, Instant};
 
     use realm_core::ipc::Capabilities;
-    use realm_core::layout::{Layout, Placement, Workarea};
+    use realm_core::layout::{Layout, Workarea};
     use realm_core::state::Module;
     use realm_core::{Ledger, WinId};
 
     use super::{PersistCompletion, PersistenceCoordinator, SNAPSHOT_DELAY};
-    use crate::backend::{BackendEvent, BackendResult, BackendWindowId, WmBackend};
+    use crate::backend::{
+        BackendBindingSpec, BackendContractError, BackendEvent, BackendExitPolicy,
+        BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn, BackendPolicyTurnId,
+        BackendPollInterest, BackendReady, BackendResult, BackendSubmission, BackendTicket,
+        BackendWindowId, WmBackend,
+    };
     use crate::session::{Session, SessionSnapshotV1};
 
     fn snapshot_with_layout(layout: Layout) -> SessionSnapshotV1 {
@@ -396,7 +402,19 @@ mod tests {
         assert!(!empty.observe(pre_live.snapshot(), start));
 
         pre_live
-            .handle_backend_event(BackendEvent::InitialReplayComplete)
+            .handle_backend_event(policy_turn(
+                1,
+                vec![BackendPolicyEvent::InitialReplayComplete],
+            ))
+            .unwrap();
+        assert!(pre_live.snapshot().is_none());
+        pre_live
+            .handle_backend_event(policy_turn(
+                2,
+                vec![BackendPolicyEvent::WorkareaChanged(Workarea::new(
+                    1280, 720, 24, 0,
+                ))],
+            ))
             .unwrap();
         let baseline = pre_live.snapshot().unwrap();
         let mut coordinator = PersistenceCoordinator::new(Some(baseline.clone()));
@@ -411,32 +429,46 @@ mod tests {
         }]);
         assert!(!coordinator.observe(pre_live.snapshot(), start));
         pre_live
-            .handle_backend_event(BackendEvent::WorkareaChanged(Workarea::new(
-                1280, 720, 24, 0,
-            )))
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::WorkareaChanged(Workarea::new(
+                    1440, 900, 24, 0,
+                ))],
+            ))
             .unwrap();
         assert!(!coordinator.observe(pre_live.snapshot(), start));
 
         pre_live
-            .handle_backend_event(BackendEvent::WindowOpened {
-                backend_id: BackendWindowId("window-1".to_owned()),
-                app_id: "foot".to_owned(),
-                title: "one".to_owned(),
-            })
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::WindowOpened {
+                    backend_id: BackendWindowId::new("window-1").unwrap(),
+                    app_id: "foot".to_owned(),
+                    title: "one".to_owned(),
+                }],
+            ))
             .unwrap();
         assert!(coordinator.observe(pre_live.snapshot(), start));
         let after_open = pre_live.snapshot().unwrap();
         pre_live
-            .handle_backend_event(BackendEvent::TitleChanged {
-                win: WinId(0),
-                title: "renamed".to_owned(),
-            })
+            .handle_backend_event(policy_turn(
+                5,
+                vec![BackendPolicyEvent::TitleChanged {
+                    backend_id: BackendWindowId::new("window-1").unwrap(),
+                    title: "renamed".to_owned(),
+                }],
+            ))
             .unwrap();
         assert_eq!(pre_live.snapshot(), Some(after_open));
         assert!(!coordinator.observe(pre_live.snapshot(), start));
 
         pre_live
-            .handle_backend_event(BackendEvent::WindowClosed(WinId(0)))
+            .handle_backend_event(policy_turn(
+                6,
+                vec![BackendPolicyEvent::WindowClosed(
+                    BackendWindowId::new("window-1").unwrap(),
+                )],
+            ))
             .unwrap();
         assert!(coordinator.observe(pre_live.snapshot(), start));
         pre_live.set_layout(Layout::Mono).unwrap();
@@ -444,9 +476,26 @@ mod tests {
         assert_ne!(pre_live.snapshot().unwrap(), baseline);
     }
 
-    #[derive(Default)]
+    fn policy_turn(id: u64, events: Vec<BackendPolicyEvent>) -> BackendEvent {
+        BackendEvent::PolicyTurn(BackendPolicyTurn {
+            id: BackendPolicyTurnId::new(id).unwrap(),
+            drains: None,
+            events,
+        })
+    }
+
     struct FakeBackend {
         events: VecDeque<BackendEvent>,
+        event_file: File,
+    }
+
+    impl Default for FakeBackend {
+        fn default() -> Self {
+            Self {
+                events: VecDeque::new(),
+                event_file: File::open("/dev/null").unwrap(),
+            }
+        }
     }
 
     impl WmBackend for FakeBackend {
@@ -469,33 +518,47 @@ mod tests {
             &mut self,
             _backend_id: &BackendWindowId,
             _win: WinId,
-        ) -> BackendResult<()> {
+        ) -> Result<(), BackendContractError> {
             Ok(())
         }
 
-        fn apply(&mut self, _placements: &[Placement]) -> BackendResult<()> {
+        fn configure_bindings(&mut self, _bindings: Vec<BackendBindingSpec>) -> BackendResult<()> {
             Ok(())
         }
 
-        fn focus(&mut self, _win: WinId) -> BackendResult<()> {
+        fn request_policy_turn(&mut self) -> BackendResult<()> {
             Ok(())
         }
 
-        fn close(&mut self, _win: WinId) -> BackendResult<()> {
-            Ok(())
-        }
-
-        fn workarea(&self) -> Workarea {
-            Workarea::new(1920, 1080, 0, 0)
-        }
-
-        fn event_fd(&self) -> RawFd {
-            -1
-        }
-
-        fn next_event(
+        fn respond_policy_turn(
             &mut self,
-            _deadline: Option<Instant>,
+            _turn: BackendPolicyTurnId,
+            _ticket: BackendTicket,
+            _response: BackendPolicyResponse,
+        ) -> BackendResult<BackendSubmission> {
+            Ok(BackendSubmission::Complete)
+        }
+
+        fn begin_exit_session(&mut self, _policy: BackendExitPolicy) -> BackendResult<()> {
+            Ok(())
+        }
+
+        fn event_fd(&self) -> BorrowedFd<'_> {
+            self.event_file.as_fd()
+        }
+
+        fn poll_interest(&self) -> BackendPollInterest {
+            BackendPollInterest {
+                immediate: !self.events.is_empty(),
+                readable: true,
+                writable: false,
+            }
+        }
+
+        fn service(
+            &mut self,
+            _ready: BackendReady,
+            _now: Instant,
         ) -> BackendResult<Option<BackendEvent>> {
             Ok(self.events.pop_front())
         }
