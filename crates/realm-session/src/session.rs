@@ -1857,7 +1857,10 @@ impl<B: WmBackend> Session<B> {
         &mut self,
         turn: BackendPolicyTurn,
     ) -> Result<SessionUpdate, SessionEventError> {
-        self.validate_policy_turn(&turn)?;
+        if let Err(error) = self.validate_policy_turn(&turn) {
+            self.abandon_private_transaction();
+            return Err(error);
+        }
 
         let carries_staged_projection = matches!(
             self.transaction,
@@ -1877,6 +1880,7 @@ impl<B: WmBackend> Session<B> {
                 }
             },
             TransactionSubstate::InFlight { .. } => {
+                self.abandon_private_transaction();
                 return Err(BackendContractError::InvalidPolicySequence.into());
             }
         };
@@ -2616,9 +2620,11 @@ impl<B: WmBackend> Session<B> {
         result: BackendResult<()>,
     ) -> Result<SessionUpdate, SessionEventError> {
         let TransactionSubstate::InFlight { ticket: expected } = self.transaction else {
+            self.abandon_private_transaction();
             return Err(BackendContractError::InvalidPolicySequence.into());
         };
         if ticket != expected {
+            self.abandon_private_transaction();
             return Err(BackendContractError::InvalidPolicySequence.into());
         }
         if let Err(error) = result {
@@ -2637,9 +2643,11 @@ impl<B: WmBackend> Session<B> {
         ticket: BackendTicket,
     ) -> Result<SessionUpdate, SessionEventError> {
         let TransactionSubstate::AwaitingDrain { ticket: expected } = self.transaction else {
+            self.abandon_private_transaction();
             return Err(BackendContractError::InvalidPolicySequence.into());
         };
         if ticket != expected {
+            self.abandon_private_transaction();
             return Err(BackendContractError::InvalidPolicySequence.into());
         }
         let active = self
@@ -4603,7 +4611,7 @@ mod tests {
     #[test]
     fn in_flight_rejects_every_second_untagged_turn_without_response() {
         for events in [Vec::new(), vec![policy_window_opened("private", "private")]] {
-            let (mut session, ticket) = policy_in_flight_session();
+            let (mut session, _ticket) = policy_in_flight_session();
             let responses = session.backend.responses.clone();
             let assignments = session.backend.assignment_attempts.clone();
             let watermark = session.last_backend_ticket;
@@ -4619,17 +4627,14 @@ mod tests {
             assert_eq!(session.backend.responses, responses);
             assert_eq!(session.backend.assignment_attempts, assignments);
             assert_eq!(session.last_backend_ticket, watermark);
-            assert_eq!(
-                session.transaction,
-                TransactionSubstate::InFlight { ticket }
-            );
-            assert!(session.active.is_some());
+            assert_eq!(session.transaction, TransactionSubstate::Idle);
+            assert!(session.active.is_none());
         }
     }
 
     #[test]
     fn awaiting_drain_rejects_untagged_and_wrong_tagged_turns() {
-        let (mut untagged, ticket) = policy_awaiting_drain_session();
+        let (mut untagged, _ticket) = policy_awaiting_drain_session();
         let responses = untagged.backend.responses.clone();
         let watermark = untagged.last_backend_ticket;
         let error = untagged
@@ -4641,10 +4646,8 @@ mod tests {
         ));
         assert_eq!(untagged.backend.responses, responses);
         assert_eq!(untagged.last_backend_ticket, watermark);
-        assert_eq!(
-            untagged.transaction,
-            TransactionSubstate::AwaitingDrain { ticket }
-        );
+        assert_eq!(untagged.transaction, TransactionSubstate::Idle);
+        assert!(untagged.active.is_none());
 
         let (mut wrong_tag, ticket) = policy_awaiting_drain_session();
         let wrong_ticket = BackendTicket::new(ticket.get() + 1).unwrap();
@@ -4659,10 +4662,8 @@ mod tests {
         ));
         assert_eq!(wrong_tag.backend.responses, responses);
         assert_eq!(wrong_tag.last_backend_ticket, watermark);
-        assert_eq!(
-            wrong_tag.transaction,
-            TransactionSubstate::AwaitingDrain { ticket }
-        );
+        assert_eq!(wrong_tag.transaction, TransactionSubstate::Idle);
+        assert!(wrong_tag.active.is_none());
     }
 
     #[test]
@@ -4704,10 +4705,8 @@ mod tests {
             SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
         ));
         assert_eq!(wrong_tag.backend.responses, responses);
-        assert_eq!(
-            wrong_tag.transaction,
-            TransactionSubstate::AwaitingDrain { ticket }
-        );
+        assert_eq!(wrong_tag.transaction, TransactionSubstate::Idle);
+        assert!(wrong_tag.active.is_none());
 
         let (mut session, ticket) = policy_awaiting_drain_session();
         let responses = session.backend.responses.clone();
@@ -6663,6 +6662,24 @@ mod tests {
         ));
         assert_eq!(wrong_completion.backend.responses, responses);
         assert_eq!(wrong_completion.ledger(), &ledger);
+        assert_eq!(wrong_completion.phase(), RecoveryPhase::Live);
+        assert!(!wrong_completion.has_active_backend_transaction());
+
+        let (mut wrong_completion_state, ticket) = policy_awaiting_drain_session();
+        let responses = wrong_completion_state.backend.responses.clone();
+        let error = wrong_completion_state
+            .handle_backend_event(BackendEvent::OperationCompleted {
+                ticket,
+                result: Ok(()),
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
+        ));
+        assert_eq!(wrong_completion_state.backend.responses, responses);
+        assert_eq!(wrong_completion_state.phase(), RecoveryPhase::Live);
+        assert!(!wrong_completion_state.has_active_backend_transaction());
 
         let (mut wrong_drain, ticket) = policy_awaiting_drain_session();
         let wrong = BackendTicket::new(ticket.get() + 1).unwrap();
@@ -6675,19 +6692,35 @@ mod tests {
             SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
         ));
         assert_eq!(wrong_drain.backend.responses, responses);
-        assert_eq!(
-            wrong_drain.transaction,
-            TransactionSubstate::AwaitingDrain { ticket }
-        );
+        assert_eq!(wrong_drain.phase(), RecoveryPhase::Live);
+        assert!(!wrong_drain.has_active_backend_transaction());
 
-        let error = wrong_drain
+        let (mut wrong_marker, ticket) = policy_awaiting_drain_session();
+        let wrong = BackendTicket::new(ticket.get() + 1).unwrap();
+        let responses = wrong_marker.backend.responses.clone();
+        let error = wrong_marker
             .handle_backend_event(BackendEvent::RetainedObservationsDrained { ticket: wrong })
             .unwrap_err();
         assert!(matches!(
             error,
             SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
         ));
-        assert_eq!(wrong_drain.backend.responses, responses);
+        assert_eq!(wrong_marker.backend.responses, responses);
+        assert_eq!(wrong_marker.phase(), RecoveryPhase::Live);
+        assert!(!wrong_marker.has_active_backend_transaction());
+
+        let (mut wrong_marker_state, ticket) = policy_in_flight_session();
+        let responses = wrong_marker_state.backend.responses.clone();
+        let error = wrong_marker_state
+            .handle_backend_event(BackendEvent::RetainedObservationsDrained { ticket })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
+        ));
+        assert_eq!(wrong_marker_state.backend.responses, responses);
+        assert_eq!(wrong_marker_state.phase(), RecoveryPhase::Live);
+        assert!(!wrong_marker_state.has_active_backend_transaction());
     }
 
     #[test]
