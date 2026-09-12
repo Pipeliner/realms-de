@@ -3029,7 +3029,7 @@ fn parse_id(value: &str, field: &str) -> Result<[u8; 16], String> {
         return Err(format!("{field} must be 128-bit lowercase hex"));
     }
     let mut bytes = [0_u8; 16];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         bytes[index] = (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]);
     }
     Ok(bytes)
