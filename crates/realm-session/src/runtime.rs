@@ -243,9 +243,12 @@ impl<B: WmBackend> RuntimeOwners<B> {
 
     /// Nearest fixed control or persistence deadline.
     pub fn next_deadline(&self) -> Option<Instant> {
+        let persistence = (!self.worker_sealed)
+            .then(|| self.persistence.deadline())
+            .flatten();
         [
             self.control.next_deadline(),
-            self.persistence.deadline(),
+            persistence,
             self.worker.fence_deadline(),
         ]
         .into_iter()
@@ -1433,6 +1436,11 @@ mod tests {
         let started = Instant::now();
         let quit = owners.session.begin_direct_quit().unwrap();
         owners.apply_update(started, quit, None).unwrap();
+        assert_eq!(
+            owners.next_deadline(),
+            owners.worker.fence_deadline(),
+            "a sealed worker must mask the retained persistence deadline"
+        );
 
         owners
             .submit_due_snapshot(started + crate::persistence::SNAPSHOT_DELAY)
