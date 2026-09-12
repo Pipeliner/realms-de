@@ -61,6 +61,10 @@ daily-driver acceptance obligations have passed.
 
 ### 1. Exact target identity
 
+Short release tokens are matched as words, not substrings of hexadecimal
+commit hashes or other unrelated identifiers. Artifact-upload action pins do
+not create distribution support claims.
+
 1. With `status = "pre-alpha"`, Fedora 44 is Realm's **only** Fedora packaging
    and CI baseline. With `status = "unsupported"`, Realm has no current Fedora
    target or required Fedora lane.
