@@ -84,6 +84,9 @@ for path in \
     crates/realm-session/Cargo.toml \
     crates/realm-session/src/lib.rs \
     crates/realm-session/src/backend.rs \
+    crates/realm-bar/Cargo.toml \
+    crates/realm-bar/src/main.rs \
+    crates/realm-bar/tests/render_contract.rs \
     packaging/session/realm.desktop \
     packaging/session/realm-session \
     packaging/systemd/realm-session.target \
@@ -108,9 +111,8 @@ require_section "$status_section" "${markdown_tick}realmctl theme${markdown_tick
 require_section "$status_section" "${markdown_tick}WmBackend${markdown_tick} contract" \
     'README status must distinguish the implemented backend seam from the missing daemon'
 
-if [ -e "$root/crates/realm-bar/Cargo.toml" ]; then
-    fail 'README must not say realm-bar is absent after its implementation crate lands'
-fi
+require_section "$status_section" 'Live compositor verification pending' \
+    'README must distinguish implemented bar from pending live verification'
 if find "$root/crates" -type f -path '*/src/bin/realm-wm.rs' -print -quit | grep -q .; then
     fail 'README must not say realm-wm is absent after its binary lands'
 fi
