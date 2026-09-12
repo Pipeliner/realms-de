@@ -1,5 +1,6 @@
 //! Production River v0.4.8 window-management backend.
 
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::os::fd::{BorrowedFd, OwnedFd};
 use std::os::unix::net::UnixStream;
@@ -11,14 +12,22 @@ use rustix::event::{poll, PollFd, PollFlags};
 use wayland_backend::client::{Backend, DispatchOne, FlushOnce, ObjectData, ObjectId, ReadOnce};
 use wayland_backend::protocol::Message;
 use wayland_client::protocol::{wl_callback, wl_display, wl_registry};
-use wayland_client::{Connection, Proxy};
+use wayland_client::{Connection, Proxy, WEnum};
 
 use super::river_protocols::{
-    river_input_manager_v1::RiverInputManagerV1, river_layer_shell_v1::RiverLayerShellV1,
-    river_libinput_config_v1::RiverLibinputConfigV1, river_window_manager_v1::RiverWindowManagerV1,
+    river_input_device_v1::{self, RiverInputDeviceV1},
+    river_input_manager_v1::RiverInputManagerV1,
+    river_layer_shell_v1::RiverLayerShellV1,
+    river_libinput_config_v1::RiverLibinputConfigV1,
+    river_libinput_device_v1::{self, RiverLibinputDeviceV1},
+    river_libinput_result_v1::{self, RiverLibinputResultV1},
+    river_window_manager_v1::RiverWindowManagerV1,
     river_xkb_bindings_v1::RiverXkbBindingsV1,
 };
-use super::{BackendError, BackendResult};
+use super::{
+    BackendCapacityResource, BackendError, BackendResult, KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE_HZ,
+    MAX_BACKEND_INPUT_DEVICES, MAX_BACKEND_LIBINPUT_DEVICES,
+};
 
 const INCOMING_CAPACITY: usize = 512;
 
@@ -31,6 +40,28 @@ enum Incoming {
     },
     GlobalRemoved(u32),
     SyncDone,
+    InputDeviceCreated(RiverInputDeviceV1),
+    InputDeviceRemoved(RiverInputDeviceV1),
+    InputDeviceType {
+        device: RiverInputDeviceV1,
+        keyboard: bool,
+    },
+    InputDeviceDone(RiverInputDeviceV1),
+    LibinputDeviceCreated(RiverLibinputDeviceV1),
+    LibinputDeviceRemoved(RiverLibinputDeviceV1),
+    LibinputTapSupport {
+        device: RiverLibinputDeviceV1,
+        finger_count: i32,
+    },
+    LibinputTapCurrent {
+        device: RiverLibinputDeviceV1,
+        enabled: bool,
+    },
+    LibinputDeviceDone(RiverLibinputDeviceV1),
+    LibinputResult {
+        result: RiverLibinputResultV1,
+        success: bool,
+    },
     Malformed,
 }
 
@@ -38,6 +69,11 @@ enum Incoming {
 enum ObjectKind {
     Registry,
     Callback,
+    InputManager,
+    InputDevice,
+    LibinputConfig,
+    LibinputDevice,
+    LibinputResult,
     NoEvents,
 }
 
@@ -101,6 +137,96 @@ impl ObjectData for DirectData {
                     _ => self.emit(Incoming::Malformed),
                 }
             }
+            ObjectKind::InputManager => {
+                match RiverInputManagerV1::parse_event(&connection, message) {
+                    Ok((
+                        _,
+                        super::river_protocols::river_input_manager_v1::Event::InputDevice { id },
+                    )) => {
+                        self.emit(Incoming::InputDeviceCreated(id));
+                        return Some(DirectData::new(ObjectKind::InputDevice, &self.incoming));
+                    }
+                    _ => self.emit(Incoming::Malformed),
+                }
+            }
+            ObjectKind::InputDevice => {
+                match RiverInputDeviceV1::parse_event(&connection, message) {
+                    Ok((device, river_input_device_v1::Event::Removed)) => {
+                        self.emit(Incoming::InputDeviceRemoved(device));
+                    }
+                    Ok((device, river_input_device_v1::Event::Type { _type })) => match _type {
+                        WEnum::Value(kind) => self.emit(Incoming::InputDeviceType {
+                            device,
+                            keyboard: kind == river_input_device_v1::Type::Keyboard,
+                        }),
+                        WEnum::Unknown(_) => self.emit(Incoming::Malformed),
+                    },
+                    Ok((device, river_input_device_v1::Event::Name { .. })) => drop(device),
+                    Ok((device, river_input_device_v1::Event::Done)) => {
+                        self.emit(Incoming::InputDeviceDone(device));
+                    }
+                    _ => self.emit(Incoming::Malformed),
+                }
+            }
+            ObjectKind::LibinputConfig => {
+                match RiverLibinputConfigV1::parse_event(&connection, message) {
+                    Ok((
+                        _,
+                        super::river_protocols::river_libinput_config_v1::Event::LibinputDevice {
+                            id,
+                        },
+                    )) => {
+                        self.emit(Incoming::LibinputDeviceCreated(id));
+                        return Some(DirectData::new(ObjectKind::LibinputDevice, &self.incoming));
+                    }
+                    _ => self.emit(Incoming::Malformed),
+                }
+            }
+            ObjectKind::LibinputDevice => {
+                match RiverLibinputDeviceV1::parse_event(&connection, message) {
+                    Ok((device, river_libinput_device_v1::Event::Removed)) => {
+                        self.emit(Incoming::LibinputDeviceRemoved(device));
+                    }
+                    Ok((device, river_libinput_device_v1::Event::TapSupport { finger_count })) => {
+                        self.emit(Incoming::LibinputTapSupport {
+                            device,
+                            finger_count,
+                        });
+                    }
+                    Ok((device, river_libinput_device_v1::Event::TapCurrent { state })) => {
+                        match state {
+                            WEnum::Value(state) => self.emit(Incoming::LibinputTapCurrent {
+                                device,
+                                enabled: state == river_libinput_device_v1::TapState::Enabled,
+                            }),
+                            WEnum::Unknown(_) => self.emit(Incoming::Malformed),
+                        }
+                    }
+                    Ok((device, river_libinput_device_v1::Event::Done)) => {
+                        self.emit(Incoming::LibinputDeviceDone(device));
+                    }
+                    Ok(_) => {}
+                    Err(_) => self.emit(Incoming::Malformed),
+                }
+            }
+            ObjectKind::LibinputResult => {
+                match RiverLibinputResultV1::parse_event(&connection, message) {
+                    Ok((result, river_libinput_result_v1::Event::Success)) => {
+                        self.emit(Incoming::LibinputResult {
+                            result,
+                            success: true,
+                        });
+                    }
+                    Ok((result, river_libinput_result_v1::Event::Unsupported))
+                    | Ok((result, river_libinput_result_v1::Event::Invalid)) => {
+                        self.emit(Incoming::LibinputResult {
+                            result,
+                            success: false,
+                        });
+                    }
+                    _ => self.emit(Incoming::Malformed),
+                }
+            }
             ObjectKind::NoEvents => self.emit(Incoming::Malformed),
         }
         None
@@ -124,6 +250,19 @@ struct Globals {
     libinput_config: Option<AdvertisedGlobal>,
 }
 
+#[derive(Debug)]
+struct InputDevice {
+    proxy: RiverInputDeviceV1,
+    keyboard: Option<bool>,
+}
+
+#[derive(Debug)]
+struct LibinputDevice {
+    proxy: RiverLibinputDeviceV1,
+    tap_support: Option<i32>,
+    tap_enabled: Option<bool>,
+}
+
 /// A live connection to River's Wayland display.
 #[derive(Debug)]
 pub struct RiverBackend {
@@ -138,6 +277,11 @@ pub struct RiverBackend {
     input_manager: Option<RiverInputManagerV1>,
     libinput_config: Option<RiverLibinputConfigV1>,
     connected: bool,
+    input_devices: HashMap<ObjectId, InputDevice>,
+    libinput_devices: HashMap<ObjectId, LibinputDevice>,
+    libinput_results: HashSet<ObjectId>,
+    next_input_ordinal: u64,
+    next_libinput_ordinal: u64,
 }
 
 impl RiverBackend {
@@ -177,6 +321,11 @@ impl RiverBackend {
             input_manager: None,
             libinput_config: None,
             connected: false,
+            input_devices: HashMap::new(),
+            libinput_devices: HashMap::new(),
+            libinput_results: HashSet::new(),
+            next_input_ordinal: 0,
+            next_libinput_ordinal: 0,
         }
     }
 
@@ -215,7 +364,7 @@ impl RiverBackend {
             } => globals.record(name, interface, version),
             Incoming::GlobalRemoved(name) => globals.remove(name),
             Incoming::SyncDone => Ok(true),
-            Incoming::Malformed => Err(protocol_error()),
+            _ => Err(protocol_error()),
         })?;
         globals.validate()?;
 
@@ -224,44 +373,68 @@ impl RiverBackend {
             globals.layer_shell.as_ref().unwrap(),
             1,
             &self.incoming_tx,
+            ObjectKind::NoEvents,
         )?);
         self.xkb_bindings = Some(bind_global::<RiverXkbBindingsV1>(
             &registry,
             globals.xkb_bindings.as_ref().unwrap(),
             3,
             &self.incoming_tx,
+            ObjectKind::NoEvents,
         )?);
         self.input_manager = Some(bind_global::<RiverInputManagerV1>(
             &registry,
             globals.input_manager.as_ref().unwrap(),
             2,
             &self.incoming_tx,
+            ObjectKind::InputManager,
         )?);
         self.libinput_config = Some(bind_global::<RiverLibinputConfigV1>(
             &registry,
             globals.libinput_config.as_ref().unwrap(),
             2,
             &self.incoming_tx,
+            ObjectKind::LibinputConfig,
         )?);
 
         let input_discovery = self.sync()?;
+        let mut input_events = Vec::new();
         self.pump_until_sync(input_discovery, |incoming| match incoming {
             Incoming::SyncDone => Ok(true),
             Incoming::Global { .. } | Incoming::GlobalRemoved(_) => Ok(false),
             Incoming::Malformed => Err(protocol_error()),
+            incoming => {
+                input_events.push(incoming);
+                Ok(false)
+            }
         })?;
+        for event in input_events {
+            self.apply_input_event(event)?;
+        }
         let input_results = self.sync()?;
+        let mut result_events = Vec::new();
         self.pump_until_sync(input_results, |incoming| match incoming {
             Incoming::SyncDone => Ok(true),
             Incoming::Global { .. } | Incoming::GlobalRemoved(_) => Ok(false),
             Incoming::Malformed => Err(protocol_error()),
+            incoming => {
+                result_events.push(incoming);
+                Ok(false)
+            }
         })?;
+        for event in result_events {
+            self.apply_input_event(event)?;
+        }
+        if !self.libinput_results.is_empty() {
+            return Err(protocol_error());
+        }
 
         self.window_manager = Some(bind_global::<RiverWindowManagerV1>(
             &registry,
             globals.window_manager.as_ref().unwrap(),
             5,
             &self.incoming_tx,
+            ObjectKind::NoEvents,
         )?);
         self.flush_blocking()?;
         self.connected = true;
@@ -340,6 +513,124 @@ impl RiverBackend {
             }
         }
     }
+
+    fn apply_input_event(&mut self, event: Incoming) -> BackendResult<()> {
+        match event {
+            Incoming::InputDeviceCreated(proxy) => {
+                if self.input_devices.len() == MAX_BACKEND_INPUT_DEVICES {
+                    proxy.destroy();
+                    return Err(capacity(
+                        BackendCapacityResource::InputDevices,
+                        MAX_BACKEND_INPUT_DEVICES as u64,
+                    ));
+                }
+                self.next_input_ordinal = self
+                    .next_input_ordinal
+                    .checked_add(1)
+                    .ok_or_else(|| capacity(BackendCapacityResource::ObjectOrdinals, u64::MAX))?;
+                self.input_devices.insert(
+                    proxy.id(),
+                    InputDevice {
+                        proxy,
+                        keyboard: None,
+                    },
+                );
+            }
+            Incoming::InputDeviceRemoved(proxy) => {
+                self.input_devices.remove(&proxy.id());
+                proxy.destroy();
+            }
+            Incoming::InputDeviceType { device, keyboard } => {
+                self.input_devices
+                    .get_mut(&device.id())
+                    .ok_or_else(protocol_error)?
+                    .keyboard = Some(keyboard);
+            }
+            Incoming::InputDeviceDone(proxy) => {
+                let device = self
+                    .input_devices
+                    .get(&proxy.id())
+                    .ok_or_else(protocol_error)?;
+                if device.keyboard == Some(true) {
+                    device
+                        .proxy
+                        .set_repeat_info(KEY_REPEAT_RATE_HZ as i32, KEY_REPEAT_DELAY_MS as i32);
+                }
+            }
+            Incoming::LibinputDeviceCreated(proxy) => {
+                if self.libinput_devices.len() == MAX_BACKEND_LIBINPUT_DEVICES {
+                    proxy.destroy();
+                    return Err(capacity(
+                        BackendCapacityResource::LibinputDevices,
+                        MAX_BACKEND_LIBINPUT_DEVICES as u64,
+                    ));
+                }
+                self.next_libinput_ordinal = self
+                    .next_libinput_ordinal
+                    .checked_add(1)
+                    .ok_or_else(|| capacity(BackendCapacityResource::ObjectOrdinals, u64::MAX))?;
+                self.libinput_devices.insert(
+                    proxy.id(),
+                    LibinputDevice {
+                        proxy,
+                        tap_support: None,
+                        tap_enabled: None,
+                    },
+                );
+            }
+            Incoming::LibinputDeviceRemoved(proxy) => {
+                self.libinput_devices.remove(&proxy.id());
+                proxy.destroy();
+            }
+            Incoming::LibinputTapSupport {
+                device,
+                finger_count,
+            } => {
+                self.libinput_devices
+                    .get_mut(&device.id())
+                    .ok_or_else(protocol_error)?
+                    .tap_support = Some(finger_count);
+            }
+            Incoming::LibinputTapCurrent { device, enabled } => {
+                self.libinput_devices
+                    .get_mut(&device.id())
+                    .ok_or_else(protocol_error)?
+                    .tap_enabled = Some(enabled);
+            }
+            Incoming::LibinputDeviceDone(proxy) => {
+                let device = self
+                    .libinput_devices
+                    .get(&proxy.id())
+                    .ok_or_else(protocol_error)?;
+                if device.tap_support.is_some_and(|count| count > 0)
+                    && device.tap_enabled == Some(false)
+                {
+                    let result = device
+                        .proxy
+                        .send_constructor::<RiverLibinputResultV1>(
+                            river_libinput_device_v1::Request::SetTap {
+                                state: WEnum::Value(river_libinput_device_v1::TapState::Enabled),
+                            },
+                            DirectData::new(ObjectKind::LibinputResult, &self.incoming_tx),
+                        )
+                        .map_err(invalid_id)?;
+                    self.libinput_results.insert(result.id());
+                }
+            }
+            Incoming::LibinputResult { result, success } => {
+                if !self.libinput_results.remove(&result.id()) || !success {
+                    return Err(BackendError::Unavailable {
+                        message: "River rejected required tap-to-click policy".to_owned(),
+                    });
+                }
+            }
+            Incoming::SyncDone
+            | Incoming::Global { .. }
+            | Incoming::GlobalRemoved(_)
+            | Incoming::Malformed => return Err(protocol_error()),
+        }
+        Ok(())
+    }
 }
 
 impl Globals {
@@ -401,6 +692,7 @@ fn bind_global<I: Proxy + 'static>(
     global: &AdvertisedGlobal,
     version: u32,
     incoming: &SyncSender<Incoming>,
+    kind: ObjectKind,
 ) -> BackendResult<I> {
     registry
         .send_constructor::<I>(
@@ -408,7 +700,7 @@ fn bind_global<I: Proxy + 'static>(
                 name: global.name,
                 id: (I::interface(), version),
             },
-            DirectData::new(ObjectKind::NoEvents, incoming),
+            DirectData::new(kind, incoming),
         )
         .map_err(invalid_id)
 }
@@ -454,4 +746,8 @@ fn protocol_error() -> BackendError {
     BackendError::Protocol {
         kind: super::BackendProtocolErrorKind::InvalidFraming,
     }
+}
+
+fn capacity(resource: BackendCapacityResource, limit: u64) -> BackendError {
+    BackendError::Capacity { resource, limit }
 }

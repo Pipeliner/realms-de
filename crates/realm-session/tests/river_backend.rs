@@ -62,9 +62,18 @@ fn parse_wire_string(body: &[u8], offset: usize) -> (String, usize) {
     (text, end.next_multiple_of(4))
 }
 
-fn serve_bootstrap(mut peer: UnixStream) -> Vec<String> {
+#[derive(Debug, Default)]
+struct BootstrapObserved {
+    bindings: Vec<String>,
+    repeat: Option<(i32, i32)>,
+    tap_enabled: bool,
+}
+
+fn serve_bootstrap(mut peer: UnixStream, with_devices: bool) -> BootstrapObserved {
     let mut registry = None;
-    let mut bindings = Vec::new();
+    let mut observed = BootstrapObserved::default();
+    let mut input_device = None;
+    let mut libinput_device = None;
     loop {
         let (sender, opcode, body) = read_request(&mut peer);
         if sender == 1 && opcode == 1 {
@@ -72,7 +81,7 @@ fn serve_bootstrap(mut peer: UnixStream) -> Vec<String> {
             registry = Some(id);
         } else if sender == 1 && opcode == 0 {
             let callback = u32::from_ne_bytes(body[..4].try_into().unwrap());
-            if bindings.is_empty() {
+            if observed.bindings.is_empty() {
                 let registry = registry.unwrap();
                 for (index, (interface, version)) in REQUIRED_GLOBALS.iter().enumerate() {
                     peer.write_all(&registry_global(
@@ -86,11 +95,41 @@ fn serve_bootstrap(mut peer: UnixStream) -> Vec<String> {
             }
             peer.write_all(&callback_done(callback)).unwrap();
         } else if Some(sender) == registry && opcode == 0 {
-            let (interface, _) = parse_wire_string(&body, 4);
-            bindings.push(interface);
-            if bindings.last().unwrap() == "river_window_manager_v1" {
-                return bindings;
+            let (interface, offset) = parse_wire_string(&body, 4);
+            let object = u32::from_ne_bytes(body[offset + 4..offset + 8].try_into().unwrap());
+            observed.bindings.push(interface.clone());
+            if with_devices && interface == "river_input_manager_v1" {
+                let device = 0xff00_0000_u32;
+                input_device = Some(device);
+                peer.write_all(&frame(object, 1, &device.to_ne_bytes()))
+                    .unwrap();
+                peer.write_all(&frame(device, 1, &0_u32.to_ne_bytes()))
+                    .unwrap();
+                peer.write_all(&frame(device, 3, &[])).unwrap();
             }
+            if with_devices && interface == "river_libinput_config_v1" {
+                let device = 0xff00_0001_u32;
+                libinput_device = Some(device);
+                peer.write_all(&frame(object, 1, &device.to_ne_bytes()))
+                    .unwrap();
+                peer.write_all(&frame(device, 5, &2_i32.to_ne_bytes()))
+                    .unwrap();
+                peer.write_all(&frame(device, 7, &0_u32.to_ne_bytes()))
+                    .unwrap();
+                peer.write_all(&frame(device, 55, &[])).unwrap();
+            }
+            if interface == "river_window_manager_v1" {
+                return observed;
+            }
+        } else if Some(sender) == input_device && opcode == 2 {
+            observed.repeat = Some((
+                i32::from_ne_bytes(body[..4].try_into().unwrap()),
+                i32::from_ne_bytes(body[4..8].try_into().unwrap()),
+            ));
+        } else if Some(sender) == libinput_device && opcode == 2 {
+            let result = u32::from_ne_bytes(body[..4].try_into().unwrap());
+            observed.tap_enabled = u32::from_ne_bytes(body[4..8].try_into().unwrap()) == 1;
+            peer.write_all(&frame(result, 0, &[])).unwrap();
         }
     }
 }
@@ -108,7 +147,7 @@ fn river_backend_owns_the_real_wayland_socket() {
 #[test]
 fn connect_bootstraps_required_globals_in_accepted_order() {
     let (client, server) = UnixStream::pair().unwrap();
-    let fixture = thread::spawn(|| serve_bootstrap(server));
+    let fixture = thread::spawn(|| serve_bootstrap(server, false));
     let mut backend = RiverBackend::from_socket(client).unwrap();
 
     let capabilities = backend.connect().unwrap();
@@ -120,7 +159,7 @@ fn connect_bootstraps_required_globals_in_accepted_order() {
     assert!(capabilities.fullscreen);
     assert!(capabilities.unsupported.is_empty());
     assert_eq!(
-        fixture.join().unwrap(),
+        fixture.join().unwrap().bindings,
         [
             "river_layer_shell_v1",
             "river_xkb_bindings_v1",
@@ -128,5 +167,22 @@ fn connect_bootstraps_required_globals_in_accepted_order() {
             "river_libinput_config_v1",
             "river_window_manager_v1",
         ]
+    );
+}
+
+#[test]
+fn connect_applies_done_gated_keyboard_and_tap_policy_before_window_management() {
+    let (client, server) = UnixStream::pair().unwrap();
+    let fixture = thread::spawn(|| serve_bootstrap(server, true));
+    let mut backend = RiverBackend::from_socket(client).unwrap();
+
+    backend.connect().unwrap();
+
+    let observed = fixture.join().unwrap();
+    assert_eq!(observed.repeat, Some((25, 600)));
+    assert!(observed.tap_enabled);
+    assert_eq!(
+        observed.bindings.last().map(String::as_str),
+        Some("river_window_manager_v1")
     );
 }
