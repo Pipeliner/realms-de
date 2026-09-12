@@ -4,6 +4,7 @@
 #![warn(missing_docs)]
 
 pub mod backend;
+pub mod modules;
 pub mod persistence;
 pub mod runtime;
 pub mod session;

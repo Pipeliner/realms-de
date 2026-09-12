@@ -13,6 +13,7 @@ use realm_core::ipc::{Request, Response};
 use realm_core::ledger::OrbitId;
 
 use crate::backend::{BackendError, BackendReady, BackendTicket, WmBackend, WorkerCapacityError};
+use crate::modules::ClockModule;
 use crate::persistence::{PersistCompletion, PersistCompletionError, PersistenceCoordinator};
 use crate::session::{
     QuitAfter, Session, SessionActionError, SessionEffect, SessionEventError, SessionUpdate,
@@ -186,6 +187,7 @@ pub struct RuntimeOwners<B: WmBackend> {
     control: ControlServer,
     worker: Worker,
     timers: SessionTimers,
+    clock: ClockModule,
     persistence: PersistenceCoordinator,
     pending_request: Option<(BackendTicket, ConnectionId)>,
     quit_receipt: Option<ResponseReceipt>,
@@ -201,6 +203,7 @@ impl<B: WmBackend> RuntimeOwners<B> {
         control: ControlServer,
         worker: Worker,
         timers: SessionTimers,
+        clock: ClockModule,
         persistence: PersistenceCoordinator,
     ) -> Self {
         Self {
@@ -208,6 +211,7 @@ impl<B: WmBackend> RuntimeOwners<B> {
             control,
             worker,
             timers,
+            clock,
             persistence,
             pending_request: None,
             quit_receipt: None,
@@ -482,6 +486,9 @@ impl<B: WmBackend> RuntimeOwners<B> {
 
     /// Submit the latest coalesced live snapshot when its fixed deadline is due.
     pub fn submit_due_snapshot(&mut self, now: Instant) -> Result<(), RuntimeError> {
+        if !snapshot_submission_allowed(self.worker_sealed) {
+            return Ok(());
+        }
         if let Some(request) = self.persistence.take_due(now) {
             self.worker
                 .submit_snapshot(request.sequence(), request.snapshot().clone())?;
@@ -543,7 +550,11 @@ impl<B: WmBackend> RuntimeOwners<B> {
 
     /// Consume one coalesced clock expiry and re-arm the next minute boundary.
     pub fn service_clock(&mut self, now: SystemTime) -> Result<(), RuntimeError> {
-        self.timers.consume_clock(now)?;
+        if self.timers.consume_clock(now)? {
+            let clock = self.clock.render(now)?;
+            let update = update_clock_module(&mut self.session, clock);
+            self.handle_session_update(Instant::now(), update)?;
+        }
         Ok(())
     }
 }
@@ -580,6 +591,7 @@ where
     F: FnOnce() -> Result<B, BackendError>,
     R: FnOnce() -> std::io::Result<()>,
 {
+    let clock = ClockModule::system();
     let snapshot_path = runtime.path().join("realm/ledger.json");
     let bound = runtime.prepare_server_endpoint()?.bind()?;
 
@@ -590,12 +602,25 @@ where
     let backend = make_backend()?;
     let mut session = Session::connect_with_snapshot(backend, recovered)?;
     recover_until_live(&mut session, &mut persistence)?;
+    let initial_clock = clock.render(SystemTime::now())?;
+    let update = update_clock_module(&mut session, initial_clock);
+    persistence.observe(update.persistence, Instant::now());
 
     let control = bound.activate()?.into_server(Instant::now());
     let timers = SessionTimers::new()?;
-    let mut owners = RuntimeOwners::new(session, control, worker, timers, persistence);
+    let mut owners = RuntimeOwners::new(session, control, worker, timers, clock, persistence);
     ready()?;
     run_combined_loop(&mut owners)
+}
+
+fn update_clock_module<B: WmBackend>(
+    session: &mut Session<B>,
+    clock: realm_core::state::Module,
+) -> SessionUpdate {
+    let mut modules = session.state().modules.clone();
+    modules.retain(|module| module.id != "clock");
+    modules.push(clock);
+    session.update_modules(modules)
 }
 
 /// Resolve the sole production runtime input and run a backend incarnation.
@@ -823,11 +848,15 @@ fn run_combined_loop<B: WmBackend>(owners: &mut RuntimeOwners<B>) -> Result<(), 
         } else {
             NOT_READY
         };
-        if backend_interest.immediate || backend_events.is_some() {
+        if backend_quantum_due(
+            backend_enabled,
+            backend_events.is_some(),
+            backend_interest.immediate,
+        ) {
             if owners.service_backend(Instant::now(), backend_ready)? {
                 return Ok(());
             }
-            if owners.session.backend_poll_interest().immediate {
+            if backend_enabled && owners.session.backend_poll_interest().immediate {
                 continue;
             }
         }
@@ -874,6 +903,14 @@ fn ready_for(
         .iter()
         .find(|ready| predicate(ready.source))
         .map(|ready| ready.events)
+}
+
+fn backend_quantum_due(enabled: bool, ready: bool, immediate: bool) -> bool {
+    enabled && (ready || immediate)
+}
+
+fn snapshot_submission_allowed(worker_sealed: bool) -> bool {
+    !worker_sealed
 }
 
 fn backend_ready(events: rustix::event::PollFlags) -> Result<BackendReady, RuntimeError> {
@@ -1279,14 +1316,30 @@ mod tests {
             );
         }
         let mut client = client_endpoint.connect("runtime-fixture").unwrap();
-        assert!(matches!(
-            client.request(Request::GetState).unwrap(),
-            Response::State(_)
-        ));
+        let Response::State(state) = client.request(Request::GetState).unwrap() else {
+            panic!("GetState did not return state");
+        };
+        assert!(state
+            .modules
+            .iter()
+            .any(|module| module.id == "clock" && module.text.len() == 5));
         assert_eq!(client.request(Request::Quit).unwrap(), Response::Ok);
         drop(client);
 
         daemon.join().unwrap().unwrap();
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn quit_masks_retained_backend_immediate_interest_until_exit_is_authorized() {
+        assert!(!super::backend_quantum_due(false, true, true));
+        assert!(!super::backend_quantum_due(false, false, true));
+        assert!(super::backend_quantum_due(true, true, false));
+    }
+
+    #[test]
+    fn sealed_worker_masks_later_dirty_persistence_deadlines() {
+        assert!(!super::snapshot_submission_allowed(true));
+        assert!(super::snapshot_submission_allowed(false));
     }
 }
