@@ -1347,7 +1347,7 @@ mod tests {
             Request::SetLayout(realm_core::layout::Layout::Mono),
             Request::Undo,
             Request::ShowLedger(None),
-            Request::Spawn(vec!["/bin/true".to_owned()]),
+            Request::Spawn(vec!["true".to_owned()]),
         ];
         for request in requests {
             let result = dispatch_request(&mut session, request).unwrap();

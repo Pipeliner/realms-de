@@ -542,16 +542,13 @@ mod tests {
         let mut worker = Worker::start(root.join("ledger.json")).unwrap();
         let reservation = worker.reserve_process_jobs(1).unwrap();
         worker
-            .commit(
-                reservation,
-                vec![ProcessJob::Spawn(vec!["/bin/true".into()])],
-            )
+            .commit(reservation, vec![ProcessJob::Spawn(vec!["true".into()])])
             .unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             if let Some(WorkerResult::Process { result }) = worker.try_result().unwrap() {
-                assert!(result.is_ok());
+                assert!(result.is_ok(), "spawn failed: {result:?}");
                 break;
             }
             assert!(Instant::now() < deadline, "worker did not report spawn");
