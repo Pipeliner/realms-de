@@ -57,6 +57,7 @@ pub fn inventory() -> Vec<Glyph> {
         g('✦', "logo", Bar, Some('*')),
         g('⌗', "layout indicator", Bar, Some('#')),
         g('⌨', "mode badge", Bar, Some(':')),
+        g('…', "elision", Bar, Some('.')),
         g('▸', "chord echo", Bar, Some('>')),
         g('☾', "moon, clock", Bar, Some(')')),
         g('⚡', "battery", Bar, Some('^')),
@@ -202,5 +203,17 @@ mod tests {
         assert!(probe.missing.is_empty());
         assert_eq!(probe.resolve('𓂃'), '𓂃');
         assert!(probe.summary().ends_with("glyphs covered"));
+    }
+
+    #[test]
+    fn elision_is_inventory_backed_and_has_a_fixed_width_ascii_fallback() {
+        let elision = inventory()
+            .into_iter()
+            .find(|glyph| glyph.name == "elision")
+            .expect("elision belongs to the chrome inventory");
+        let ascii_only = Probe::run(|ch| ch.is_ascii());
+
+        assert_eq!(elision.fallback, Some('.'));
+        assert_eq!(ascii_only.resolve(elision.ch), '.');
     }
 }

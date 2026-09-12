@@ -1,6 +1,6 @@
 # SPEC 0004 — realm-bar
 
-- **Status:** Accepted (2026-08-26) — not yet implemented
+- **Status:** Accepted (2026-08-26) — MVP implementation in progress
 - **Milestone:** M2
 - **Decisions:** [ADR 0008](../adr/0008-layer-shell-rendering-stack.md),
   [ADR 0009](../adr/0009-no-animation-budget.md),
@@ -9,10 +9,9 @@
 - **Implements:** [INTERFACES.md §3](../INTERFACES.md)
 - **Supersedes / Superseded by:** —
 
-> Written before the code, as S14 requires. The **Test** column below is
-> deliberately empty: those tests get written next, watched to fail, and only
-> then implemented against. Filling the column in is what moves this spec to
-> Implemented.
+> Written before the code, as S14 requires. Populated **Test** cells below are
+> implemented acceptance coverage; blank cells remain integration validation
+> before this spec can move to Implemented.
 
 ## Purpose
 
@@ -45,6 +44,19 @@ The hecate launcher, which is a separate layer-shell client on the same stack
 client, not by the bar.
 
 ## Behaviour
+
+The implemented bar stack requires Rust 1.89 or newer (cosmic-text 0.19 and
+smol_str 0.3.6). The source workspace declares and CI verifies that floor.
+Retained native source kits remain separate versioned build inputs; their old
+compiler requirements are not evidence that they include the new bar.
+Raster/text-cache tests require a real installed fallback font. Minimal CI
+containers and Nix build sandboxes supply DejaVu explicitly; they must not skip
+font-rendering tests or silently depend on the developer host's font database.
+
+The selected renderer dependencies add BSD-2-Clause, BSD-3-Clause, and Zlib
+licenses to the dependency allowlist; their upstream notices must be retained
+in distributed source bundles. This records the expansion for the accepted
+SCTK/tiny-skia/cosmic-text stack, not a new runtime capability.
 
 ### 1. Surfaces
 
@@ -95,6 +107,13 @@ multiplied by the scale factor, never rounded from a float. Fractional scaling
 bar renders at the next integer scale up and the compositor downscales, which
 is the documented behaviour rather than a surprise (`docs/PITFALLS.md`,
 "fractional scaling blur").
+
+At cold start the palette lookup order is the user's
+`$XDG_CONFIG_HOME/realm/palette.toml` (or
+`$HOME/.config/realm/palette.toml` when `XDG_CONFIG_HOME` is absent), then
+`/etc/realm/palette.toml`, then the embedded shipped palette. An existing
+higher-precedence file that fails to parse is an error; the bar does not hide a
+broken user palette by falling through to a lower-precedence one.
 
 **Fullscreen, and why the strips are on `Bottom`.** When the active orbit has a
 fullscreen window it is placed at `Workarea::output` — the whole output,
@@ -258,7 +277,9 @@ specified here from the vocabulary the rest of the design already uses.
   `border.seam_alpha`.
 - The body lists **one row per binding whose `hint_key` is non-empty**, in
   `Keymap::bindings` order, grouped by `Binding::mode` with the mode's
-  `badge()` as a group heading in `text.dim`. A binding with an empty
+  `badge()` as a group heading in `text.dim`. Groups are ordered by their
+  mode's first appearance and bindings retain their relative keymap order
+  within a group. A binding with an empty
   `hint_key` is already represented by its pair — `k` by `j/k`, `l` by `h/l`,
   orbits 2 to 6 by `1-6` — and must not get a row of its own. Against the
   default keymap that is 17 rows: the 11 in the strip plus `t triptych`,
@@ -330,13 +351,21 @@ reported to `wl_surface::damage_buffer` is this frame's damage alone. Copying
 less than the union leaves a stale strip in the buffer; reporting more than the
 frame's damage costs the compositor a needless upload.
 
+Rendering a candidate does not advance the damage baseline. Only a successful
+buffer attach and surface commit promotes that candidate to `last committed`.
+When both buffers are busy, the surface retains the newest complete candidate;
+a later buffer-release/frame callback submits that candidate rather than
+re-rendering it against an uncommitted baseline. A newer state replaces the
+retained candidate and still computes damage from the last committed frame.
+
 **Every glyph goes through `Probe::resolve`.** A raw `char` from the inventory
 in drawing code bypasses the fallback contract and is how tofu ships
 ([INTERFACES.md §3](../INTERFACES.md), rule 3; ADR 0012). No non-ASCII literal
 may appear in the bar's drawing code at all; every chrome glyph comes from
 `glyphs::inventory()`.
 
-**No timers.** The bar has none to justify; the clock's is the session's (§7).
+**No connected rendering timers.** The clock's timer is the session's; the
+disconnected-only transport retry is specified in §7.
 
 Shaping results for chrome strings — the logo, the runes, the badges, the
 which-key row — are shaped once and cached, and the cache is invalidated only
@@ -389,16 +418,29 @@ substitution the inventory did not specify, and it is unavoidable.
 
 ### 7. Module data sources
 
-**The bar owns no timer at all**, and it holds no module of its own. Every
-`Module` — the clock included — is produced by `realm-session` and arrives in
-`RealmState::modules`; the bar draws them verbatim, in the order they were sent
-([SPEC 0003](0003-realm-session.md) §8). That is the ownership question
-[INTERFACES.md §3](../INTERFACES.md) left open: rule 1 says "no timers except
-the clock" without saying whose it is, and SPEC 0003 settles it in the session,
-where a `timerfd` sits in the event loop beside everything else.
+**The bar owns no frame, animation or module timer**, and it holds no module of
+its own. Every `Module` — the clock included — is produced by `realm-session`
+and arrives in `RealmState::modules`; the bar draws them verbatim, in the order
+they were sent
+([SPEC 0003](0003-realm-session.md) §8). That is the ownership split recorded
+in [INTERFACES.md §3](../INTERFACES.md): SPEC 0003 places the clock's `timerfd`
+in the session event loop beside the other state producers.
 
-Two consequences for this spec. The bar satisfies rule 1 trivially, having no
-timers to justify. And the primary no-op gate is one process upstream — the
+The sole disconnected-state exception is control transport recovery. Before
+each connection attempt the bar arms an inotify watch for `realm/ctl.sock`
+creation or replacement. While disconnected it also arms a 250 ms one-shot
+retry, because SPEC 0003 binds the final socket inode before recovery and calls
+`listen(2)` only after entering `Live`; the listener transition itself has no
+filesystem event. Either wakeup starts one handshake attempt. The retry is
+disarmed after `GetKeymap` and `Subscribe` succeed, never produces a frame, and
+does not exist while the bar is connected. Only `MissingRealm` and `Refused`
+repeat a fresh handshake, matching SPEC 0007. An EOF or connection I/O failure
+on an already established subscription starts one fresh handshake; malformed,
+oversized, timed-out or otherwise permanent subscription errors exit non-zero.
+The explicit `Event::Shutdown` exits cleanly as its wire contract requires.
+
+Two consequences for this spec. The bar satisfies rule 1 without a connected
+render or module timer. And the primary no-op gate is one process upstream — the
 session compares candidate states with `renders_same_as` and does not broadcast
 at all when they render the same — so the bar's own check before drawing is
 belt and braces rather than the only defence. It stays: a subscriber that
@@ -473,7 +515,7 @@ Recorded here rather than resolved in code, so nobody has to re-derive them.
 | Which-key type size | `font-size:11.5px` | 11.5 is not in the type scale. `typography.size_meta` (11.0) |
 | Hecate scrim, reused by the grimoire | `rgba(4,5,10,.6)` — `#04050a` | `background.void` (`#05060c`) at alpha 0.60 |
 | `Module::urgent` | not shown | the module's accent as a 0.14 wash behind it, matching the mode badge and active rune. It does not blink |
-| Clock ownership | "clock 1s tick", owner unstated | settled by [SPEC 0003](0003-realm-session.md) §8 in `realm-session`; ADR 0009 refines the displayed clock to the next minute boundary. The bar has no timer (§7) |
+| Clock ownership | "clock 1s tick", owner unstated | settled by [SPEC 0003](0003-realm-session.md) §8 in `realm-session`; ADR 0009 refines the displayed clock to the next minute boundary. The bar has no clock or render timer (§7) |
 | Bar over a fullscreen window | not drawn; ADR 0013 assumed node ordering would decide | `river-layer-shell-v1` has no node ordering, so the layer decides: both strips sit on `Bottom` and a fullscreen window covers them (§1) |
 | Uncoverable codepoints in titles | not considered | replaced with `?` before shaping (§6) |
 
@@ -485,8 +527,9 @@ nothing at all below about 1100 px. Those numbers must be **measured from the
 resolved face at runtime**, not compiled in: the advance depends on which
 family in the chain actually loaded. Applied in order until the row fits:
 
-1. Elide `focused_title` from its middle with `…`, down to a floor of eight
-   characters plus the elision.
+1. Elide `focused_title` from its middle with `…`, removing only as many
+   characters as needed to fit, down to a floor of eight characters plus the
+   elision.
 2. Below that floor, drop `focused_title` entirely if `chord_echo` is
    non-empty. A pending chord is more urgent than a window title, and the title
    is one glance away in the window's own header.
@@ -507,22 +550,27 @@ Each row is one happy path and becomes one test.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| A1 | Given a 1920×1080 output and the shipped palette, when the bar starts, then it maps a `Bottom` layer surface anchored top/left/right, `metrics.bar_height` tall, with an exclusive zone of `metrics.bar_height` | |
+| A1 | Given a 1920×1080 output and the shipped palette, when the bar starts, then it maps a `Bottom` layer surface anchored top/left/right, `metrics.bar_height` tall, with an exclusive zone of `metrics.bar_height` | `render_contract::layer_surface_contract_uses_bottom_exclusive_strips_and_noninteractive_overlay` |
 | A2 | Given `whichkey` true, when it becomes false, then the strip's surface is destroyed, its exclusive zone is released, and the reported non-exclusive area grows by `metrics.whichkey_height` | |
-| A3 | Given a state with orbit 1 `Active`, 2–3 `Occupied` and 4–6 `Empty`, when a frame is rendered, then cell 1 is drawn in `text.bright` over an `accent.violet` wash at 0.14 with a 2 px `accent.violet` bottom border, cells 2–3 in `text.mid`, cells 4–6 in `text.faint`, each cell 28 logical px wide | |
-| A4 | Given `Layout::Mono` and `Mode::Resize`, when a frame is rendered, then the bar shows `Layout::label()` in `text.dim` after the resolved `⌗`, and `Mode::badge()` in `accent.starlight` on a starlight wash at 0.14 at `typography.size_meta` | |
-| A5 | Given a rendered frame, when a state arrives for which `renders_same_as` is true, then `render` is not called, no buffer is attached and no frame is committed | |
-| A6 | Given a frame differing only in the clock module's text at an unchanged width, when it is rendered, then the returned `Damage` contains the clock module's box and no other module's box | |
-| A7 | Given a module with `urgent` true and accent `gold`, when a frame is rendered, then its box is filled with `accent.gold` at alpha 0.14 and its text drawn in `accent.gold`, with no other module's box changed and nothing blinking | |
+| A3 | Given a state with orbit 1 `Active`, 2–3 `Occupied` and 4–6 `Empty`, when a frame is rendered, then cell 1 is drawn in `text.bright` over an `accent.violet` wash at 0.14 with a 2 px `accent.violet` bottom border, cells 2–3 in `text.mid`, cells 4–6 in `text.faint`, each cell 28 logical px wide | `render_contract::bar_uses_state_semantics_and_palette_treatments` |
+| A4 | Given `Layout::Mono` and `Mode::Resize`, when a frame is rendered, then the bar shows `Layout::label()` in `text.dim` after the resolved `⌗`, and `Mode::badge()` in `accent.starlight` on a starlight wash at 0.14 at `typography.size_meta` | `render_contract::bar_uses_state_semantics_and_palette_treatments` |
+| A5 | Given a rendered frame, when a state arrives for which `renders_same_as` is true, then `render` is not called, no buffer is attached and no frame is committed | `wayland_contract::revision_only_updates_produce_no_surface_work`, `render_contract::unchanged_state_is_gated_and_fixed_width_clock_damages_only_its_box` |
+| A6 | Given a frame differing only in the clock module's text at an unchanged width, when it is rendered, then the returned `Damage` contains the clock module's box and no other module's box | `render_contract::unchanged_state_is_gated_and_fixed_width_clock_damages_only_its_box` |
+| A7 | Given a module with `urgent` true and accent `gold`, when a frame is rendered, then its box is filled with `accent.gold` at alpha 0.14 and its text drawn in `accent.gold`, with no other module's box changed and nothing blinking | `render_contract::urgent_module_uses_its_palette_accent_without_animation` |
 | A8 | Given a `Probe` built from an ASCII-only coverage predicate, when a full frame is rendered, then every chrome glyph drawn is the inventory's documented ASCII fallback, no `.notdef` mask is rasterised, and every segment keeps its width | |
-| A9 | Given a `focused_title` containing a codepoint no configured face covers, when it is rendered, then that codepoint is drawn as `?` and no `.notdef` mask is rasterised | |
-| A10 | Given `whichkey` true on a 1920 px output, when the strip is rendered, then it lists exactly `Keymap::strip()` in order, `hint_key` in `text.bright` and `label` in `text.mid`, followed by `? grimoire — full spellbook` with the `?` in `accent.gold` | |
-| A11 | Given a 640 px output, when the strip is rendered, then it shows the leading hints that fit in `Keymap::strip()` order followed by `…`, drops the grimoire label first, re-orders nothing, and keeps its exclusive zone | |
-| A12 | Given a 1024 px output and a long focused title, when the bar is rendered, then the title is elided from its middle and modules are dropped in the specified priority order until the row fits, while the six runes, the mode badge, the battery and the clock are all still drawn | |
-| A13 | Given `grimoire` true and the default keymap, when the overlay is rendered, then it lists one row per binding with a non-empty `hint_key`, grouped by mode in `Keymap::bindings` order, and no row for a binding whose `hint_key` is empty | |
-| A14 | Given identical `(RealmState, Palette, Probe)` and canvas dimensions, when `render` runs twice into two canvases, then the two pixmaps are byte-identical | |
-| A15 | Given an output at integer scale 2, when the bar is rendered, then the buffer is allocated at twice the logical size and every metric from `palette.toml` appears at exactly twice its logical value, with no fractional geometry | |
+| A9 | Given a `focused_title` containing a codepoint no configured face covers, when it is rendered, then that codepoint is drawn as `?` and no `.notdef` mask is rasterised | `render_contract::chrome_uses_probe_fallbacks_and_dynamic_text_is_sanitized_before_shaping` |
+| A10 | Given `whichkey` true on a 1920 px output, when the strip is rendered, then it lists exactly `Keymap::strip()` in order, `hint_key` in `text.bright` and `label` in `text.mid`, followed by `? grimoire — full spellbook` with the `?` in `accent.gold` | `render_contract::which_key_preserves_order_and_elides_only_from_the_right` |
+| A11 | Given a 640 px output, when the strip is rendered, then it shows the leading hints that fit in `Keymap::strip()` order followed by `…`, drops the grimoire label first, re-orders nothing, and keeps its exclusive zone | `render_contract::which_key_preserves_order_and_elides_only_from_the_right` |
+| A12 | Given a 1024 px output and a long focused title, when the bar is rendered, then the title is elided from its middle and modules are dropped in the specified priority order until the row fits, while the six runes, the mode badge, the battery and the clock are all still drawn | `render_contract::narrow_bar_keeps_critical_elements_and_drops_modules_in_priority_order`, `render_contract::title_elision_removes_only_enough_characters_to_fit` |
+| A13 | Given `grimoire` true and the default keymap, when the overlay is rendered, then it lists one row per binding with a non-empty `hint_key`, grouped by mode in `Keymap::bindings` order, and no row for a binding whose `hint_key` is empty | `render_contract::grimoire_lists_only_nonempty_hints_in_binding_order_and_is_deterministic` |
+| A14 | Given identical `(RealmState, Palette, Probe)` and canvas dimensions, when `render` runs twice into two canvases, then the two pixmaps are byte-identical | `render_contract::grimoire_lists_only_nonempty_hints_in_binding_order_and_is_deterministic` |
+| A15 | Given an output at integer scale 2, when the bar is rendered, then the buffer is allocated at twice the logical size and every metric from `palette.toml` appears at exactly twice its logical value, with no fractional geometry | `render_contract::scale_two_raster_has_exact_device_dimensions` |
 | A16 | Given a window taking the whole output as fullscreen, when it is mapped, then both strips stay mapped on the `Bottom` layer with unchanged exclusive zones and the window covers them, and leaving fullscreen produces no relayout | |
+| A17 | Given `ctl.sock` is already bound but not accepting, when the session calls `listen(2)` on that same inode without a filesystem change, then the disconnected-only retry wakes and the next connection succeeds | `wayland::tests::retry_wakes_when_a_prebound_socket_starts_listening_on_the_same_inode` |
+| A18 | Given a changed bar candidate cannot attach because both buffers are busy, when it is retried and committed and a later fixed-width clock update arrives, then the candidate remains damaged until commit and the later update damages only the clock | `render_contract::uncommitted_candidate_remains_damaged_until_commit_then_later_clock_update_is_local` |
+| A19 | Given both user and system palettes exist, when the bar starts, then it loads the user palette; if that user palette is malformed it reports the error rather than falling back | `tests::user_palette_precedes_system_and_a_broken_user_palette_is_not_hidden` |
+| A20 | Given an unchanged chrome or dynamic string is measured and drawn repeatedly, when frames render, then its existing shaped cosmic-text buffer is reused | `text::tests::chrome_and_unchanged_dynamic_text_reuse_shaped_buffers` |
+| A21 | Given a fresh handshake failure or an established subscription failure, when retry is classified, then only fresh `MissingRealm`/`Refused` and established EOF/connection-I/O are retried | `wayland::tests::fresh_handshake_retries_only_missing_or_refused_endpoints`, `wayland::tests::established_subscription_reconnects_only_on_disconnect` |
 
 ## Budgets
 
@@ -531,7 +579,7 @@ From [ARCHITECTURE.md §4](../ARCHITECTURE.md); no new numbers are invented here
 | Path | Budget | How it is held |
 |---|---|---|
 | State change → bar redraw | **< 8 ms** | `renders_same_as` gates before any drawing; damage-tracked CPU rasterising at 1920×32; chrome shaping cached |
-| Bar idle CPU | **~0 %** | the bar has no timers at all; every module, the clock included, is pushed by the session, which drops no-op states before broadcasting. With minute resolution the clock commits about one frame per minute |
+| Bar idle CPU | **~0 %** | while connected the bar has no timer; every module, the clock included, is pushed by the session, which drops no-op states before broadcasting. The disconnected-only 250 ms control retry never renders. With minute resolution the clock commits about one frame per minute |
 | Cold session start → usable | **< 900 ms** (whole session) | no GPU context (ADR 0008); the font probe is 37 database lookups, once; no icon cache, no thumbnailer |
 
 Measured in release on the reference runner, against the same `RealmState`

@@ -36,6 +36,7 @@ impl Write for FrameWriter {
     }
 }
 
+use crate::keys::Keymap;
 use crate::layout::Layout;
 use crate::ledger::{Dir, WinId};
 use crate::state::RealmState;
@@ -77,6 +78,8 @@ pub enum Request {
     },
     /// Ask for the current state once.
     GetState,
+    /// Ask for the session-owned keymap once.
+    GetKeymap,
     /// Stream a [`Event::State`] on every change until the connection closes.
     Subscribe,
     /// Show an orbit (one-based).
@@ -127,6 +130,8 @@ pub enum Response {
     Ok,
     /// Full state snapshot.
     State(Box<RealmState>),
+    /// Full session-owned keymap.
+    Keymap(Box<Keymap>),
     /// Window order for one or more orbits.
     Ledger(Vec<OrbitLedger>),
     /// Command refused.
@@ -222,6 +227,7 @@ mod tests {
                 version: PROTOCOL_VERSION,
                 client: "bar".into(),
             },
+            Request::GetKeymap,
             Request::SwitchOrbit(3),
             Request::Focus(Dir::Next),
             Request::SetLayout(Layout::Mono),
@@ -311,6 +317,13 @@ mod tests {
             }],
         }]);
         assert_eq!(decode::<Response>(&encode(&r).unwrap()).unwrap(), r);
+    }
+
+    #[test]
+    fn keymap_response_round_trips_through_a_frame() {
+        let response = Response::Keymap(Box::default());
+        let frame = encode(&response).unwrap();
+        assert_eq!(decode::<Response>(&frame).unwrap(), response);
     }
 
     #[test]

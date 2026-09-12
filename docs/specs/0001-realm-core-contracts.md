@@ -95,8 +95,13 @@ Swap bindings repeat. Every toggle, close, launch, mode, orbit, layout, undo,
 theme, grimoire, and Quit binding is non-repeatable. Wire types are
 adjacently-tagged serde enums framed one-per-line as JSON. `RealmState` is a
 plain snapshot with `renders_same_as`, which is how the bar avoids redrawing
-when a module recomputes to the same string. Every glyph realm draws is in an
-inventory with a documented ASCII fallback.
+when a module recomputes to the same string. The snapshot carries both
+`whichkey` and `grimoire` visibility; both fields participate in
+`renders_same_as`. The bar obtains the session-owned `Keymap` once with
+`Request::GetKeymap` and `Response::Keymap(Box<Keymap>)` rather than copying it
+into every state broadcast. Every glyph realm draws is in an inventory with a
+documented ASCII fallback, including the bar's `elision` glyph used by narrow
+layouts.
 
 ## Acceptance criteria
 
@@ -117,8 +122,11 @@ inventory with a documented ASCII fallback.
 | A11 | An invalid palette is rejected at parse time, not at render time | `palette::tests::out_of_range_values_are_rejected_at_parse_time` |
 | A12 | The which-key strip matches the reference row exactly | `keys::tests::strip_matches_the_reference_which_key_row` |
 | A12a | The default keymap marks only directional Focus and Swap bindings repeatable; all other actions are non-repeatable | `keys::tests::only_directional_focus_and_swap_bindings_repeat` |
+| A12b | The grimoire visibility bit changes rendered state and survives a state JSON round trip | `state::tests::grimoire_visibility_changes_rendered_state_and_round_trips` |
 | A13 | Every protocol message survives a round trip through a single-line frame | `ipc::tests::requests_round_trip_through_a_frame` |
+| A13a | The bar can request the session-owned keymap and the response survives a protocol frame round trip | `ipc::tests::keymap_response_round_trips_through_a_frame` |
 | A14 | An ASCII-only font degrades to documented substitutes instead of tofu | `glyphs::tests::a_bare_ascii_font_degrades_instead_of_drawing_tofu` |
+| A14a | The elision glyph is inventory-backed and degrades to one ASCII character | `glyphs::tests::elision_is_inventory_backed_and_has_a_fixed_width_ascii_fallback` |
 | A15 | A revision bump alone does not force a bar redraw | `state::tests::revision_alone_does_not_force_a_redraw` |
 
 ## Budgets

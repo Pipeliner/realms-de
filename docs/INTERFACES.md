@@ -351,7 +351,6 @@ pub enum QuitAfter {
 pub enum SessionEffect {
     Spawn(Vec<String>),
     Launcher,
-    Grimoire,
     ReloadTheme,
     /// Stop admission now and apply the typed response-drain barrier.
     QuitPending { after: QuitAfter },
@@ -482,6 +481,9 @@ pub fn backend_turn<B: WmBackend>(
 /// 256-window all-orbit result must bounded-encode inside one
 /// `realm_core::ipc::MAX_FRAME_BYTES` frame, so this clone cannot grow with
 /// repeated adversarial title changes.
+/// `pub fn keymap(&self) -> &Keymap` exposes the exact immutable keymap whose
+/// mechanisms were configured on this Session. `GetKeymap` clones that value
+/// for `Response::Keymap`; the adapter must not substitute `Keymap::default()`.
 /// `pub fn backend_event_fd(&self) -> BorrowedFd<'_>` and
 /// `pub fn backend_poll_interest(&self) -> BackendPollInterest` are the sole
 /// read-only registration seams for #38. Session retains exclusive mutable
@@ -1157,15 +1159,17 @@ pub struct Damage(Option<Rect>);
 
 Rules, enforced by review and by the budgets in ARCHITECTURE.md §4:
 
-1. **The bar owns no timer at all.** Every value it draws arrives in
-   `RealmState`. Four of the mockup's modules — cpu, mem, gpu temperature and the
+1. **The bar owns no connected render, animation or module timer.** Every value
+   it draws arrives in `RealmState`. Four of the mockup's modules — cpu, mem, gpu temperature and the
    `↑ 18k ↓ 1.2M` throughput half of net — are *rates over counters*, and the
    kernel exposes no event for those; no bar on any platform gets them without
    sampling. So the sampling lives in **one shared sampler in `realm-session`**,
    off the window-management event loop, and is the single documented exception
    to ADR 0009's no-timers rule. The bar stays a pure function of state, which
    is the property that actually mattered.
-   The clock ticks to the next **minute** boundary, not every second: the design
+   SPEC 0004's disconnected-only control retry is a transport-liveness wakeup,
+   is disarmed after subscription and never renders. The clock ticks to the
+   next **minute** boundary, not every second: the design
    shows `14:32`, so 59 of every 60 wakeups would redraw nothing.
 2. **No redraw when nothing changed.** `RealmState::renders_same_as` gates the
    frame before any drawing happens.
