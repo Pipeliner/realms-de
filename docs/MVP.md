@@ -57,6 +57,14 @@ does not serve it waits — however good it would look in a screenshot.
 
 **M3 is the MVP.** M0–M3 is the critical path; nothing in M4+ blocks it.
 
+README launch evidence includes real screenshots captured from a running Realm
+session. Capture the tiled desktop and key-discovery UI with ordinary sample
+applications, inspect each image for working layout, readable text, and visible
+state, and record the source commit and capture environment alongside the assets.
+Replace the README concept hero only after that inspection; captions must state
+what was actually running. A VM or headless compositor capture is acceptable
+when identified as such. Use a clean demo session without personal data.
+
 For the launch slice, bounded fail-closed restart is the recovery mechanism for
 an uncertain post-admission compositor result. Neutral repair turns,
 rollback-to-continue, continuing diagnostics, and exhaustive shutdown-discard
