@@ -2,44 +2,53 @@
 
 use std::time::Instant;
 
-use crate::backend::WmBackend;
+use crate::backend::{BackendReady, WmBackend};
 use crate::session::{Session, SessionEventError, SessionUpdate};
 
 /// Result of one backend-work invocation.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)] // The Accepted interface carries SessionUpdate directly.
 pub enum BackendTurn {
-    /// No pending work existed and no ready complete event was available.
+    /// No immediate work or fresh readiness was available.
     Idle,
-    /// Pending repair or one backend event produced this session update.
+    /// One internal backend phase made progress without a public event.
+    Progressed,
+    /// One public backend event produced this successful update.
     Updated(SessionUpdate),
-    /// One event was retained and scheduled backend repair for a later turn.
-    RetryScheduled(SessionEventError),
+    /// The expected post-flush disconnect completed logout.
+    ExitComplete,
 }
 
-/// Retry pending work before a future blocking poll, or consume at most one
-/// backend event after readiness was reported.
+/// Service at most one backend quantum from immediate work or fresh readiness.
 pub fn backend_turn<B: WmBackend>(
     session: &mut Session<B>,
-    backend_ready: bool,
+    ready: BackendReady,
     now: Instant,
 ) -> Result<BackendTurn, SessionEventError> {
-    if session.has_pending_backend_work() {
-        return session
-            .retry_pending_backend_work()
-            .map(BackendTurn::Updated);
+    if session.phase() == crate::session::RecoveryPhase::ExitComplete {
+        return Err(SessionEventError::InvalidLifecycleOperation {
+            operation: "service_backend",
+            phase: crate::session::RecoveryPhase::ExitComplete,
+        });
     }
-    if !backend_ready {
+
+    let interest = session.backend_poll_interest();
+    if !interest.immediate && !ready.readable && !ready.terminal && !ready.writable {
         return Ok(BackendTurn::Idle);
     }
 
-    let Some(event) = session.next_backend_event(now)? else {
-        return Ok(BackendTurn::Idle);
+    let Some(event) = session.service_backend(ready, now)? else {
+        return Ok(BackendTurn::Progressed);
     };
-    match session.handle_backend_event(event) {
-        Ok(update) => Ok(BackendTurn::Updated(update)),
-        Err(error) if session.has_pending_backend_work() => Ok(BackendTurn::RetryScheduled(error)),
-        Err(error) => Err(error),
+    if event == crate::backend::BackendEvent::Disconnected
+        && session.phase() == crate::session::RecoveryPhase::Exiting
+    {
+        session.complete_expected_exit()?;
+        return Ok(BackendTurn::ExitComplete);
     }
+    session
+        .handle_backend_event(event)
+        .map(BackendTurn::Updated)
 }
 
 #[cfg(test)]
@@ -47,181 +56,62 @@ mod tests {
     use std::collections::VecDeque;
     use std::fs::File;
     use std::os::fd::{AsFd, BorrowedFd};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     use realm_core::ipc::Capabilities;
-    use realm_core::layout::{Placement, Workarea};
+    use realm_core::layout::Workarea;
     use realm_core::WinId;
 
     use super::{backend_turn, BackendTurn};
     use crate::backend::{
         BackendBindingSpec, BackendContractError, BackendError, BackendEvent, BackendExitPolicy,
-        BackendPolicyResponse, BackendPolicyTurnId, BackendPollInterest, BackendReady,
-        BackendResult, BackendSubmission, BackendTicket, BackendWindowId, WmBackend,
+        BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn, BackendPolicyTurnId,
+        BackendPollInterest, BackendReady, BackendResult, BackendSubmission, BackendTicket,
+        BackendWindowId, WmBackend,
     };
-    use crate::session::{Session, SessionEventError};
+    use crate::session::{RecoveryPhase, Session, SessionEventError};
 
-    #[test]
-    fn backend_turn_retries_pending_work_without_readiness_before_a_later_read() {
-        let reads = Arc::new(AtomicUsize::new(0));
-        let deadlines = Arc::new(Mutex::new(Vec::new()));
-        let mut backend = FakeBackend::with_reads(reads.clone(), deadlines.clone());
-        backend
-            .apply_results
-            .extend([Ok(()), Ok(()), Err(io_failure("desired apply")), Ok(())]);
-        backend
-            .events
-            .push_back(Ok(Some(BackendEvent::WorkareaChanged(Workarea::new(
-                1280, 720, 24, 0,
-            )))));
-        let mut session = live_session(backend);
-        open_window(&mut session);
-        session.toggle_stow().unwrap_err();
+    const NOT_READY: BackendReady = BackendReady {
+        readable: false,
+        terminal: false,
+        writable: false,
+    };
 
-        assert!(matches!(
-            backend_turn(&mut session, false, Instant::now()).unwrap(),
-            BackendTurn::Updated(_)
-        ));
-        assert_eq!(reads.load(Ordering::SeqCst), 0);
-        assert!(deadlines.lock().unwrap().is_empty());
-
-        let fixed_now = Instant::now();
-        assert!(matches!(
-            backend_turn(&mut session, true, fixed_now).unwrap(),
-            BackendTurn::Updated(_)
-        ));
-        assert_eq!(reads.load(Ordering::SeqCst), 1);
-        assert_eq!(*deadlines.lock().unwrap(), vec![Some(fixed_now)]);
-    }
-
-    #[test]
-    fn failed_pending_retry_is_fatal_without_a_read() {
-        let reads = Arc::new(AtomicUsize::new(0));
-        let deadlines = Arc::new(Mutex::new(Vec::new()));
-        let mut backend = FakeBackend::with_reads(reads.clone(), deadlines.clone());
-        backend.apply_results.extend([
-            Ok(()),
-            Ok(()),
-            Err(io_failure("desired apply")),
-            Err(io_failure("repair retry")),
-        ]);
-        let mut session = live_session(backend);
-        open_window(&mut session);
-        session.toggle_stow().unwrap_err();
-
-        let error = backend_turn(&mut session, false, Instant::now()).unwrap_err();
-
-        assert!(matches!(
-            error,
-            SessionEventError::BackendRetryExhausted(BackendError::Io { ref message })
-                if message == "repair retry"
-        ));
-        assert_eq!(reads.load(Ordering::SeqCst), 0);
-        assert!(deadlines.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn event_that_schedules_repair_returns_without_a_second_read() {
-        let reads = Arc::new(AtomicUsize::new(0));
-        let deadlines = Arc::new(Mutex::new(Vec::new()));
-        let mut backend = FakeBackend::with_reads(reads.clone(), deadlines.clone());
-        backend
-            .apply_results
-            .extend([Ok(()), Err(io_failure("observed apply"))]);
-        backend
-            .events
-            .push_back(Ok(Some(BackendEvent::WindowOpened {
-                backend_id: BackendWindowId::new("window-1").unwrap(),
-                app_id: "foot".to_owned(),
-                title: "one".to_owned(),
-            })));
-        backend
-            .events
-            .push_back(Ok(Some(BackendEvent::Disconnected)));
-        let mut session = live_session(backend);
-
-        let fixed_now = Instant::now();
-        let turn = backend_turn(&mut session, true, fixed_now).unwrap();
-
-        assert!(matches!(
-            turn,
-            BackendTurn::RetryScheduled(SessionEventError::Backend(
-                BackendError::Io { ref message }
-            )) if message == "observed apply"
-        ));
-        assert!(session.has_pending_backend_work());
-        assert_eq!(reads.load(Ordering::SeqCst), 1);
-        assert_eq!(*deadlines.lock().unwrap(), vec![Some(fixed_now)]);
-
-        assert!(matches!(
-            backend_turn(&mut session, false, Instant::now()).unwrap(),
-            BackendTurn::Updated(_)
-        ));
-        assert_eq!(reads.load(Ordering::SeqCst), 1);
-        assert_eq!(*deadlines.lock().unwrap(), vec![Some(fixed_now)]);
-    }
-
-    #[test]
-    fn non_ready_turn_without_pending_work_is_idle_without_a_read() {
-        let reads = Arc::new(AtomicUsize::new(0));
-        let deadlines = Arc::new(Mutex::new(Vec::new()));
-        let backend = FakeBackend::with_reads(reads.clone(), deadlines.clone());
-        let mut session = live_session(backend);
-
-        assert_eq!(
-            backend_turn(&mut session, false, Instant::now()).unwrap(),
-            BackendTurn::Idle
-        );
-        assert_eq!(reads.load(Ordering::SeqCst), 0);
-        assert!(deadlines.lock().unwrap().is_empty());
-    }
-
-    fn live_session(backend: FakeBackend) -> Session<FakeBackend> {
-        let mut session = Session::connect(backend).unwrap();
-        session
-            .handle_backend_event(BackendEvent::InitialReplayComplete)
-            .unwrap();
-        session
-    }
-
-    fn open_window(session: &mut Session<FakeBackend>) {
-        session
-            .handle_backend_event(BackendEvent::WindowOpened {
-                backend_id: BackendWindowId::new("existing").unwrap(),
-                app_id: "foot".to_owned(),
-                title: "existing".to_owned(),
-            })
-            .unwrap();
-    }
-
-    fn io_failure(message: &str) -> BackendError {
-        BackendError::Io {
-            message: message.to_owned(),
-        }
+    #[derive(Debug)]
+    struct FakeState {
+        interest: BackendPollInterest,
+        service_results: VecDeque<BackendResult<Option<BackendEvent>>>,
+        response_results: VecDeque<BackendResult<BackendSubmission>>,
+        service_calls: Vec<BackendReady>,
+        configured: Vec<BackendBindingSpec>,
     }
 
     struct FakeBackend {
-        reads: Arc<AtomicUsize>,
-        deadlines: Arc<Mutex<Vec<Option<Instant>>>>,
-        events: VecDeque<BackendResult<Option<BackendEvent>>>,
-        apply_results: VecDeque<BackendResult<()>>,
+        state: Arc<Mutex<FakeState>>,
         event_file: File,
     }
 
     impl FakeBackend {
-        fn with_reads(
-            reads: Arc<AtomicUsize>,
-            deadlines: Arc<Mutex<Vec<Option<Instant>>>>,
-        ) -> Self {
-            Self {
-                reads,
-                deadlines,
-                events: VecDeque::new(),
-                apply_results: VecDeque::new(),
-                event_file: File::open("/dev/null").unwrap(),
-            }
+        fn new() -> (Self, Arc<Mutex<FakeState>>) {
+            let state = Arc::new(Mutex::new(FakeState {
+                interest: BackendPollInterest {
+                    immediate: false,
+                    readable: true,
+                    writable: false,
+                },
+                service_results: VecDeque::new(),
+                response_results: VecDeque::new(),
+                service_calls: Vec::new(),
+                configured: Vec::new(),
+            }));
+            (
+                Self {
+                    state: state.clone(),
+                    event_file: File::open("/dev/null").unwrap(),
+                },
+                state,
+            )
         }
     }
 
@@ -249,7 +139,8 @@ mod tests {
             Ok(())
         }
 
-        fn configure_bindings(&mut self, _bindings: Vec<BackendBindingSpec>) -> BackendResult<()> {
+        fn configure_bindings(&mut self, bindings: Vec<BackendBindingSpec>) -> BackendResult<()> {
+            self.state.lock().unwrap().configured = bindings;
             Ok(())
         }
 
@@ -263,27 +154,16 @@ mod tests {
             _ticket: BackendTicket,
             _response: BackendPolicyResponse,
         ) -> BackendResult<BackendSubmission> {
-            Ok(BackendSubmission::Complete)
+            self.state
+                .lock()
+                .unwrap()
+                .response_results
+                .pop_front()
+                .unwrap_or(Ok(BackendSubmission::Complete))
         }
 
         fn begin_exit_session(&mut self, _policy: BackendExitPolicy) -> BackendResult<()> {
             Ok(())
-        }
-
-        fn apply(&mut self, _placements: &[Placement]) -> BackendResult<()> {
-            self.apply_results.pop_front().unwrap_or(Ok(()))
-        }
-
-        fn focus(&mut self, _win: WinId) -> BackendResult<()> {
-            Ok(())
-        }
-
-        fn close(&mut self, _win: WinId) -> BackendResult<()> {
-            Ok(())
-        }
-
-        fn workarea(&self) -> Workarea {
-            Workarea::new(1920, 1080, 0, 0)
         }
 
         fn event_fd(&self) -> BorrowedFd<'_> {
@@ -291,25 +171,238 @@ mod tests {
         }
 
         fn poll_interest(&self) -> BackendPollInterest {
-            BackendPollInterest {
-                immediate: !self.events.is_empty(),
-                readable: true,
-                writable: false,
-            }
+            self.state.lock().unwrap().interest
         }
 
         fn service(
             &mut self,
-            _ready: BackendReady,
+            ready: BackendReady,
             _now: Instant,
         ) -> BackendResult<Option<BackendEvent>> {
-            self.events.pop_front().unwrap_or(Ok(None))
+            let mut state = self.state.lock().unwrap();
+            state.service_calls.push(ready);
+            state.service_results.pop_front().unwrap_or(Ok(None))
         }
+    }
 
-        fn next_event(&mut self, deadline: Option<Instant>) -> BackendResult<Option<BackendEvent>> {
-            self.reads.fetch_add(1, Ordering::SeqCst);
-            self.deadlines.lock().unwrap().push(deadline);
-            self.events.pop_front().unwrap_or(Ok(None))
+    fn policy_turn(id: u64, events: Vec<BackendPolicyEvent>) -> BackendEvent {
+        BackendEvent::PolicyTurn(BackendPolicyTurn {
+            id: BackendPolicyTurnId::new(id).unwrap(),
+            drains: None,
+            events,
+        })
+    }
+
+    fn live_session() -> (Session<FakeBackend>, Arc<Mutex<FakeState>>) {
+        let (backend, state) = FakeBackend::new();
+        let mut session = Session::connect(backend).unwrap();
+        session
+            .handle_backend_event(policy_turn(
+                1,
+                vec![BackendPolicyEvent::InitialReplayComplete],
+            ))
+            .unwrap();
+        session
+            .handle_backend_event(policy_turn(
+                2,
+                vec![BackendPolicyEvent::WorkareaChanged(Workarea::new(
+                    1920, 1080, 32, 26,
+                ))],
+            ))
+            .unwrap();
+        assert_eq!(session.phase(), RecoveryPhase::Live);
+        (session, state)
+    }
+
+    fn open_two_windows(session: &mut Session<FakeBackend>) {
+        session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![
+                    BackendPolicyEvent::WindowOpened {
+                        backend_id: BackendWindowId::new("one").unwrap(),
+                        app_id: "foot".to_owned(),
+                        title: "one".to_owned(),
+                    },
+                    BackendPolicyEvent::WindowOpened {
+                        backend_id: BackendWindowId::new("two").unwrap(),
+                        app_id: "foot".to_owned(),
+                        title: "two".to_owned(),
+                    },
+                ],
+            ))
+            .unwrap();
+    }
+
+    fn enqueue(state: &Arc<Mutex<FakeState>>, event: BackendResult<Option<BackendEvent>>) {
+        let mut state = state.lock().unwrap();
+        state.interest.immediate = true;
+        state.service_results.push_back(event);
+    }
+
+    #[test]
+    fn backend_turn_drives_active_success_transaction() {
+        let (mut session, state) = live_session();
+        open_two_windows(&mut session);
+        state
+            .lock()
+            .unwrap()
+            .response_results
+            .push_back(Ok(BackendSubmission::Pending));
+        let origin = session
+            .focus_step(realm_core::ledger::Dir::Prev)
+            .unwrap()
+            .pending_action
+            .unwrap();
+
+        enqueue(&state, Ok(Some(policy_turn(4, Vec::new()))));
+        assert!(matches!(
+            backend_turn(&mut session, NOT_READY, Instant::now()).unwrap(),
+            BackendTurn::Updated(_)
+        ));
+        assert!(session.has_active_backend_transaction());
+
+        enqueue(
+            &state,
+            Ok(Some(BackendEvent::OperationCompleted {
+                ticket: origin,
+                result: Ok(()),
+            })),
+        );
+        assert!(matches!(
+            backend_turn(&mut session, NOT_READY, Instant::now()).unwrap(),
+            BackendTurn::Updated(_)
+        ));
+        assert!(session.has_active_backend_transaction());
+
+        enqueue(
+            &state,
+            Ok(Some(BackendEvent::RetainedObservationsDrained {
+                ticket: origin,
+            })),
+        );
+        let BackendTurn::Updated(finalized) =
+            backend_turn(&mut session, NOT_READY, Instant::now()).unwrap()
+        else {
+            panic!("drain must produce the final update");
+        };
+        assert_eq!(finalized.action_completion.unwrap().ticket, origin);
+        assert!(!session.has_active_backend_transaction());
+
+        let repeat_id = state
+            .lock()
+            .unwrap()
+            .configured
+            .iter()
+            .find(|binding| binding.keysym == "j")
+            .map(|binding| binding.id)
+            .unwrap();
+        enqueue(
+            &state,
+            Ok(Some(policy_turn(
+                5,
+                vec![BackendPolicyEvent::BindingPressed(repeat_id)],
+            ))),
+        );
+        backend_turn(&mut session, NOT_READY, Instant::now()).unwrap();
+        session.fire_key_repeat().unwrap();
+        assert!(session.has_active_backend_transaction());
+        enqueue(&state, Ok(Some(policy_turn(6, Vec::new()))));
+        assert!(matches!(
+            backend_turn(&mut session, NOT_READY, Instant::now()).unwrap(),
+            BackendTurn::Updated(_)
+        ));
+        assert!(!session.has_active_backend_transaction());
+    }
+
+    #[test]
+    fn backend_turn_services_immediate_and_writable_work_once() {
+        let (mut session, state) = live_session();
+        enqueue(&state, Ok(None));
+
+        assert_eq!(
+            backend_turn(&mut session, NOT_READY, Instant::now()).unwrap(),
+            BackendTurn::Progressed
+        );
+        assert_eq!(state.lock().unwrap().service_calls, [NOT_READY]);
+
+        {
+            let mut state = state.lock().unwrap();
+            state.interest.immediate = false;
+            state.interest.writable = true;
+            state.service_results.push_back(Ok(None));
         }
+        let writable = BackendReady {
+            writable: true,
+            ..NOT_READY
+        };
+        assert_eq!(
+            backend_turn(&mut session, writable, Instant::now()).unwrap(),
+            BackendTurn::Progressed
+        );
+        assert_eq!(state.lock().unwrap().service_calls, [NOT_READY, writable]);
+    }
+
+    #[test]
+    fn immediate_none_progress_is_rechecked_before_blocking() {
+        let (mut session, state) = live_session();
+        enqueue(&state, Ok(None));
+
+        assert_eq!(
+            backend_turn(&mut session, NOT_READY, Instant::now()).unwrap(),
+            BackendTurn::Progressed
+        );
+        state.lock().unwrap().interest.immediate = false;
+        assert_eq!(
+            backend_turn(&mut session, NOT_READY, Instant::now()).unwrap(),
+            BackendTurn::Idle
+        );
+        assert_eq!(state.lock().unwrap().service_calls.len(), 1);
+    }
+
+    #[test]
+    fn service_error_abandons_pending_operation_fatally() {
+        let (mut session, state) = live_session();
+        open_two_windows(&mut session);
+        session.focus_step(realm_core::ledger::Dir::Prev).unwrap();
+        enqueue(
+            &state,
+            Err(BackendError::Io {
+                message: "service failed".to_owned(),
+            }),
+        );
+
+        assert!(matches!(
+            backend_turn(&mut session, NOT_READY, Instant::now()).unwrap_err(),
+            SessionEventError::Backend(BackendError::Io { ref message })
+                if message == "service failed"
+        ));
+        assert!(!session.has_active_backend_transaction());
+    }
+
+    #[test]
+    fn expected_exit_disconnect_returns_exit_complete_once() {
+        let (mut session, state) = live_session();
+        session.begin_shutdown();
+        session.begin_exit_session().unwrap();
+        enqueue(&state, Ok(Some(BackendEvent::Disconnected)));
+
+        assert_eq!(
+            backend_turn(
+                &mut session,
+                BackendReady {
+                    terminal: true,
+                    ..NOT_READY
+                },
+                Instant::now(),
+            )
+            .unwrap(),
+            BackendTurn::ExitComplete
+        );
+        assert!(matches!(
+            backend_turn(&mut session, NOT_READY, Instant::now()).unwrap_err(),
+            SessionEventError::InvalidLifecycleOperation { .. }
+        ));
+        assert_eq!(state.lock().unwrap().service_calls.len(), 1);
     }
 }

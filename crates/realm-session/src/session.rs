@@ -1,6 +1,7 @@
 //! Transactional session state and projection coordination.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::os::fd::BorrowedFd;
 use std::time::{Duration, Instant};
 
 use realm_core::ipc::PROTOCOL_VERSION;
@@ -518,6 +519,8 @@ pub enum RecoveryPhase {
     ShuttingDown,
     /// The backend accepted the one terminal exit request.
     Exiting,
+    /// The expected post-flush disconnect completed the session.
+    ExitComplete,
 }
 
 #[derive(Debug, Clone)]
@@ -590,13 +593,6 @@ pub struct ActionCompletion {
     pub result: Result<(), SessionActionError>,
 }
 
-/// A safely classified nonfatal backend diagnostic.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionDiagnostic {
-    /// Backend error that did not invalidate the incarnation.
-    pub error: BackendError,
-}
-
 /// Observable result of one in-process session transition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionUpdate {
@@ -604,8 +600,6 @@ pub struct SessionUpdate {
     pub repeat_timer: RepeatTimerDirective,
     /// New authoritative persistence value, when one changed.
     pub persistence: Option<SessionSnapshotV1>,
-    /// Whether one projection was successfully submitted to the backend.
-    pub projection_applied: bool,
     /// The new visible snapshot, present only when it differs from the last one.
     pub state: Option<RealmState>,
     /// Original ticket exposed only by successful external admission.
@@ -614,10 +608,6 @@ pub struct SessionUpdate {
     pub action_completion: Option<ActionCompletion>,
     /// Ordered delayed effects.
     pub effects: Vec<SessionEffect>,
-    /// One nonfatal diagnostic.
-    pub diagnostic: Option<SessionDiagnostic>,
-    /// A valid event intentionally left for a later policy slice.
-    pub deferred: Option<BackendEvent>,
 }
 
 impl SessionUpdate {
@@ -626,27 +616,10 @@ impl SessionUpdate {
         Self {
             repeat_timer: RepeatTimerDirective::Preserve,
             persistence: None,
-            projection_applied: false,
             state: None,
             pending_action: None,
             action_completion: None,
             effects: Vec::new(),
-            diagnostic: None,
-            deferred: None,
-        }
-    }
-
-    fn deferred(event: BackendEvent) -> Self {
-        Self {
-            repeat_timer: RepeatTimerDirective::Preserve,
-            persistence: None,
-            projection_applied: false,
-            state: None,
-            pending_action: None,
-            action_completion: None,
-            effects: Vec::new(),
-            diagnostic: None,
-            deferred: Some(event),
         }
     }
 }
@@ -666,21 +639,12 @@ pub enum SessionEventError {
     /// Every nonzero response ticket has been consumed.
     #[error("backend response ticket space is exhausted")]
     BackendTicketExhausted,
-    /// The one scheduled retry of pending backend work also failed.
-    #[error("backend retry exhausted: {0}")]
-    BackendRetryExhausted(BackendError),
-    /// A backend event arrived while recovery or repair work was pending.
-    #[error("backend event received while backend work is pending")]
-    BackendWorkPending,
     /// The backend emitted its one-shot replay barrier more than once.
     #[error("initial replay completion barrier was repeated")]
     RepeatedInitialReplayComplete,
-    /// The backend emitted an event that cannot exist before replay completes.
-    #[error("unexpected event during initial replay: {0:?}")]
-    UnexpectedInitialReplayEvent(BackendEvent),
     /// A policy fact cannot occur in the initial replay batch.
     #[error("unexpected policy event during initial replay: {0:?}")]
-    UnexpectedInitialReplayPolicyEvent(BackendPolicyEvent),
+    UnexpectedInitialReplayEvent(BackendPolicyEvent),
     /// A lifecycle operation was invoked outside its accepted phase.
     #[error("invalid lifecycle operation {operation} in phase {phase:?}")]
     InvalidLifecycleOperation {
@@ -694,7 +658,7 @@ pub enum SessionEventError {
 /// Failure of a caller-requested session action.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SessionActionError {
-    /// The session is recovering or must repair pending backend work first.
+    /// The session is not live or another backend transaction is active.
     #[error("session is not ready for actions")]
     NotReady,
     /// Spawn requires a nonempty argv and program.
@@ -766,15 +730,10 @@ pub struct Session<B: WmBackend> {
     workarea: Workarea,
     windows: BTreeMap<WinId, WindowMetadata>,
     backend_ids: BTreeMap<BackendWindowId, WinId>,
-    pending_assignments: BTreeMap<BackendWindowId, WinId>,
     next_win_id: u64,
     last_projection: Vec<Placement>,
-    projection_dirty: bool,
     state: RealmState,
     phase: RecoveryPhase,
-    replay: Vec<ReplayWindow>,
-    pending_backend_work: bool,
-    policy_transactions: bool,
     bindings: BTreeMap<BackendBindingId, Binding>,
     binding_order: Vec<BackendBindingId>,
     modifier_label: String,
@@ -799,7 +758,6 @@ pub struct Session<B: WmBackend> {
     exit_attempted: bool,
 }
 
-#[allow(deprecated)]
 impl<B: WmBackend> Session<B> {
     /// Connect a backend and seed an empty six-orbit session.
     pub fn connect(backend: B) -> BackendResult<Self> {
@@ -814,6 +772,7 @@ impl<B: WmBackend> Session<B> {
         Self::connect_with_snapshot_and_keymap(backend, snapshot, Keymap::default())
     }
 
+    #[cfg(test)]
     fn connect_with_keymap(backend: B, keymap: Keymap) -> BackendResult<Self> {
         Self::connect_with_snapshot_and_keymap(backend, None, keymap)
     }
@@ -830,7 +789,7 @@ impl<B: WmBackend> Session<B> {
             });
         }
         let capabilities = backend.connect()?;
-        let workarea = backend.workarea();
+        let workarea = Workarea::new(0, 0, 0, 0);
         let (ledger, backend_ids, next_win_id) = snapshot.map_or_else(
             || (Ledger::new(), BTreeMap::new(), 0),
             |snapshot| {
@@ -876,15 +835,10 @@ impl<B: WmBackend> Session<B> {
             workarea,
             windows: BTreeMap::new(),
             backend_ids,
-            pending_assignments: BTreeMap::new(),
             next_win_id,
             last_projection: Vec::new(),
-            projection_dirty: true,
             state: RealmState::default(),
             phase: RecoveryPhase::InitialReplay,
-            replay: Vec::new(),
-            pending_backend_work: false,
-            policy_transactions: false,
             bindings,
             binding_order,
             modifier_label,
@@ -919,31 +873,12 @@ impl<B: WmBackend> Session<B> {
         self.phase
     }
 
-    /// True when backend repair must run before another event is read.
-    pub fn has_pending_backend_work(&self) -> bool {
-        self.pending_backend_work
-    }
-
     /// True until the current requested/response/drain transaction is final.
     pub fn has_active_backend_transaction(&self) -> bool {
         self.transaction != TransactionSubstate::Idle
     }
 
-    pub(crate) fn next_backend_event(
-        &mut self,
-        now: Instant,
-    ) -> BackendResult<Option<BackendEvent>> {
-        match self.backend.next_event(Some(now)) {
-            Ok(event) => Ok(event),
-            Err(error) => {
-                self.abandon_private_transaction();
-                Err(error)
-            }
-        }
-    }
-
     /// Service one backend quantum, abandoning any private transaction on failure.
-    #[allow(dead_code)] // Task 4 wires the accepted readiness helper to this boundary.
     pub(crate) fn service_backend(
         &mut self,
         ready: crate::backend::BackendReady,
@@ -956,6 +891,27 @@ impl<B: WmBackend> Session<B> {
                 Err(SessionEventError::Backend(error))
             }
         }
+    }
+
+    /// Borrow the backend descriptor without exposing mutable backend ownership.
+    pub fn backend_event_fd(&self) -> BorrowedFd<'_> {
+        self.backend.event_fd()
+    }
+
+    /// Read the backend's current dynamic poll interest without side effects.
+    pub fn backend_poll_interest(&self) -> crate::backend::BackendPollInterest {
+        self.backend.poll_interest()
+    }
+
+    pub(crate) fn complete_expected_exit(&mut self) -> Result<(), SessionEventError> {
+        if self.phase != RecoveryPhase::Exiting {
+            return Err(SessionEventError::InvalidLifecycleOperation {
+                operation: "service_backend",
+                phase: self.phase,
+            });
+        }
+        self.phase = RecoveryPhase::ExitComplete;
+        Ok(())
     }
 
     /// A validated persistence snapshot, exposed only in authoritative live state.
@@ -1019,7 +975,7 @@ impl<B: WmBackend> Session<B> {
     /// Abandon private work and enter the externally coordinated shutdown phase.
     pub fn begin_shutdown(&mut self) -> SessionUpdate {
         match self.phase {
-            RecoveryPhase::ShuttingDown | RecoveryPhase::Exiting => {
+            RecoveryPhase::ShuttingDown | RecoveryPhase::Exiting | RecoveryPhase::ExitComplete => {
                 return SessionUpdate::unchanged();
             }
             RecoveryPhase::InitialReplay
@@ -1029,8 +985,6 @@ impl<B: WmBackend> Session<B> {
         }
 
         self.abandon_private_transaction();
-        self.pending_assignments.clear();
-        self.replay.clear();
         self.repeat_target = None;
         self.phase = RecoveryPhase::ShuttingDown;
         SessionUpdate {
@@ -1074,6 +1028,7 @@ impl<B: WmBackend> Session<B> {
         &self.last_projection
     }
 
+    #[cfg(test)]
     fn binding_id_for_key(&self, key: &str) -> Option<BackendBindingId> {
         self.bindings
             .iter()
@@ -1132,19 +1087,12 @@ impl<B: WmBackend> Session<B> {
 
     /// Ask the focused window to close without changing authoritative state.
     pub fn request_close_focused(&mut self) -> SessionActionResult<SessionUpdate> {
-        if self.phase != RecoveryPhase::Live
-            || self.pending_backend_work
-            || self.has_active_backend_transaction()
-        {
+        if self.phase != RecoveryPhase::Live || self.has_active_backend_transaction() {
             return Err(SessionActionError::NotReady);
         }
         let Some(win) = self.ledger.focused() else {
             return Ok(SessionUpdate::unchanged());
         };
-        if !self.policy_transactions {
-            self.backend.close(win)?;
-            return Ok(SessionUpdate::unchanged());
-        }
         let ticket = self.allocate_action_ticket()?;
         let mut active = self.new_active_transaction();
         active.close_target = Some(win);
@@ -1166,10 +1114,7 @@ impl<B: WmBackend> Session<B> {
 
     /// Admit an effect-only Spawn without allocating a compositor ticket.
     pub fn request_spawn(&mut self, argv: Vec<String>) -> SessionActionResult<SessionUpdate> {
-        if self.phase != RecoveryPhase::Live
-            || self.pending_backend_work
-            || self.has_active_backend_transaction()
-        {
+        if self.phase != RecoveryPhase::Live || self.has_active_backend_transaction() {
             return Err(SessionActionError::NotReady);
         }
         if argv.is_empty() || argv.first().is_none_or(String::is_empty) {
@@ -1183,10 +1128,7 @@ impl<B: WmBackend> Session<B> {
 
     /// Toggle the visible which-key strip without applying a projection.
     pub fn toggle_whichkey(&mut self) -> SessionUpdate {
-        if self.phase != RecoveryPhase::Live
-            || self.pending_backend_work
-            || self.has_active_backend_transaction()
-        {
+        if self.phase != RecoveryPhase::Live || self.has_active_backend_transaction() {
             return SessionUpdate::unchanged();
         }
         let mut changed = self.state.clone();
@@ -1195,7 +1137,6 @@ impl<B: WmBackend> Session<B> {
         self.whichkey = changed.whichkey;
         self.state = changed.clone();
         SessionUpdate {
-            projection_applied: false,
             state: Some(changed),
             ..SessionUpdate::unchanged()
         }
@@ -1205,201 +1146,45 @@ impl<B: WmBackend> Session<B> {
         &mut self,
         update: impl FnOnce(&mut Ledger),
     ) -> SessionActionResult<SessionUpdate> {
-        if self.phase != RecoveryPhase::Live
-            || self.pending_backend_work
-            || self.has_active_backend_transaction()
-        {
+        if self.phase != RecoveryPhase::Live || self.has_active_backend_transaction() {
             return Err(SessionActionError::NotReady);
         }
-        if self.policy_transactions {
-            return self.stage_policy_ledger_update(update);
-        }
-        let mut candidate = self.ledger.clone();
-        update(&mut candidate);
-        match self.commit_desired(candidate, self.windows.clone(), self.workarea) {
-            Ok(update) => Ok(update),
-            Err(error) => {
-                self.pending_backend_work = should_retry_desired_repair(&error);
-                Err(error.into())
-            }
-        }
+        self.stage_policy_ledger_update(update)
     }
 
-    /// Run the one permitted retry of currently pending backend work.
-    pub fn retry_pending_backend_work(&mut self) -> Result<SessionUpdate, SessionEventError> {
-        if !self.pending_backend_work {
-            return Ok(SessionUpdate::unchanged());
-        }
-        self.pending_backend_work = false;
-        let result = if self.phase == RecoveryPhase::FinalizingReplay {
-            self.finish_replay()
-        } else {
-            self.repair_authoritative_projection()
-        };
-        result.map_err(|error| match error {
-            SessionEventError::Backend(error) => SessionEventError::BackendRetryExhausted(error),
-            error => error,
-        })
-    }
-
-    /// Apply one compositor event that has compositor-independent semantics.
+    /// Reduce one accepted public backend event.
     pub fn handle_backend_event(
         &mut self,
         event: BackendEvent,
     ) -> Result<SessionUpdate, SessionEventError> {
-        if event == BackendEvent::Disconnected {
+        if matches!(
+            self.phase,
+            RecoveryPhase::QuitPending
+                | RecoveryPhase::ShuttingDown
+                | RecoveryPhase::Exiting
+                | RecoveryPhase::ExitComplete
+        ) {
             self.abandon_private_transaction();
-            return Err(SessionEventError::Backend(BackendError::Disconnected));
+            return Err(BackendContractError::InvalidPolicySequence.into());
         }
         match event {
-            BackendEvent::PolicyTurn(turn) => {
-                self.policy_transactions = true;
-                return self.handle_policy_turn(turn);
-            }
+            BackendEvent::PolicyTurn(turn) => self.handle_policy_turn(turn),
             BackendEvent::OperationCompleted { ticket, result } => {
-                return self.handle_operation_completed(ticket, result);
+                self.handle_operation_completed(ticket, result)
             }
             BackendEvent::RetainedObservationsDrained { ticket } => {
-                return self.handle_observations_drained(ticket);
+                self.handle_observations_drained(ticket)
             }
-            event => return self.handle_legacy_backend_event(event),
-        }
-    }
-
-    fn handle_legacy_backend_event(
-        &mut self,
-        event: BackendEvent,
-    ) -> Result<SessionUpdate, SessionEventError> {
-        if self.pending_backend_work {
-            return Err(SessionEventError::BackendWorkPending);
-        }
-        match self.phase {
-            RecoveryPhase::InitialReplay => self.handle_initial_replay_event(event),
-            RecoveryPhase::FinalizingReplay => match event {
-                BackendEvent::Disconnected => Err(BackendError::Disconnected.into()),
-                BackendEvent::InitialReplayComplete => {
-                    Err(SessionEventError::RepeatedInitialReplayComplete)
-                }
-                _ => Err(SessionEventError::BackendWorkPending),
-            },
-            RecoveryPhase::Live => self.handle_live_event(event),
-            RecoveryPhase::QuitPending | RecoveryPhase::ShuttingDown | RecoveryPhase::Exiting => {
-                Err(SessionEventError::BackendWorkPending)
-            }
-        }
-    }
-
-    fn handle_initial_replay_event(
-        &mut self,
-        event: BackendEvent,
-    ) -> Result<SessionUpdate, SessionEventError> {
-        match event {
-            BackendEvent::WindowOpened {
-                backend_id,
-                app_id,
-                title,
-            } => {
-                let metadata = WindowMetadata { app_id, title };
-                if let Some(replayed) = self
-                    .replay
-                    .iter_mut()
-                    .find(|window| window.backend_id == backend_id)
-                {
-                    replayed.metadata = metadata;
-                } else {
-                    self.replay.push(ReplayWindow {
-                        backend_id,
-                        metadata,
-                    });
-                }
-                Ok(SessionUpdate::unchanged())
-            }
-            BackendEvent::InitialReplayComplete => self.finalize_initial_replay(),
-            BackendEvent::WorkareaChanged(workarea) => {
-                self.workarea = workarea;
-                Ok(SessionUpdate::unchanged())
-            }
-            BackendEvent::Disconnected => Err(BackendError::Disconnected.into()),
-            event @ (BackendEvent::FocusChanged(_)
-            | BackendEvent::ExclusiveFocusChanged(_)
-            | BackendEvent::GeometryDrifted { .. }
-            | BackendEvent::TitleChanged { .. }
-            | BackendEvent::WindowClosed(_)
-            | BackendEvent::PolicyTurn(_)
-            | BackendEvent::OperationCompleted { .. }
-            | BackendEvent::RetainedObservationsDrained { .. }) => {
-                Err(SessionEventError::UnexpectedInitialReplayEvent(event))
-            }
-        }
-    }
-
-    fn handle_live_event(
-        &mut self,
-        event: BackendEvent,
-    ) -> Result<SessionUpdate, SessionEventError> {
-        let result = match event {
-            BackendEvent::InitialReplayComplete => {
-                return Err(SessionEventError::RepeatedInitialReplayComplete);
-            }
-            BackendEvent::WindowOpened {
-                backend_id,
-                app_id,
-                title,
-            } => {
-                let win = self.record_window_identity(backend_id)?;
-                self.ledger.summon(win, self.ledger.active());
-                self.windows.insert(win, WindowMetadata { app_id, title });
-                self.repair_authoritative_projection()
-            }
-            BackendEvent::WindowClosed(win) => {
-                let mut ledger = self.ledger.clone();
-                ledger.banish(win);
-                let mut windows = self.windows.clone();
-                windows.remove(&win);
-                self.backend_ids.retain(|_, assigned| *assigned != win);
-                self.pending_assignments
-                    .retain(|_, assigned| *assigned != win);
-                self.commit_observed(ledger, windows, self.workarea)
-            }
-            BackendEvent::TitleChanged { win, title } => {
-                let Some(metadata) = self.windows.get_mut(&win) else {
-                    return Ok(SessionUpdate::unchanged());
-                };
-                metadata.title = title;
-                self.repair_authoritative_projection()
-            }
-            BackendEvent::WorkareaChanged(workarea) => {
-                self.commit_observed(self.ledger.clone(), self.windows.clone(), workarea)
-            }
-            BackendEvent::GeometryDrifted { .. } => Ok(SessionUpdate::unchanged()),
-            BackendEvent::Disconnected => Err(BackendError::Disconnected.into()),
-            BackendEvent::PolicyTurn(_)
-            | BackendEvent::OperationCompleted { .. }
-            | BackendEvent::RetainedObservationsDrained { .. } => {
-                Err(SessionEventError::BackendWorkPending)
-            }
-            event @ (BackendEvent::FocusChanged(_) | BackendEvent::ExclusiveFocusChanged(_)) => {
-                Ok(SessionUpdate::deferred(event))
-            }
-        };
-        match result {
-            Ok(update) => Ok(update),
-            Err(error) => {
-                self.pending_backend_work = matches!(
-                    &error,
-                    SessionEventError::Backend(error) if should_retry_authoritative(error)
-                );
-                Err(error)
+            BackendEvent::Disconnected => {
+                self.abandon_private_transaction();
+                Err(SessionEventError::Backend(BackendError::Disconnected))
             }
         }
     }
 
     /// Replace bar-module values without issuing a compositor request.
     pub fn update_modules(&mut self, modules: Vec<Module>) -> SessionUpdate {
-        if self.phase != RecoveryPhase::Live
-            || self.pending_backend_work
-            || self.has_active_backend_transaction()
-        {
+        if self.phase != RecoveryPhase::Live || self.has_active_backend_transaction() {
             return SessionUpdate::unchanged();
         }
         if self.state.modules == modules {
@@ -1411,261 +1196,8 @@ impl<B: WmBackend> Session<B> {
         self.modules = changed.modules.clone();
         self.state = changed.clone();
         SessionUpdate {
-            projection_applied: false,
             state: Some(changed),
             ..SessionUpdate::unchanged()
-        }
-    }
-
-    fn finalize_initial_replay(&mut self) -> Result<SessionUpdate, SessionEventError> {
-        let replayed_ids: BTreeSet<_> = self
-            .replay
-            .iter()
-            .map(|window| window.backend_id.clone())
-            .collect();
-        let unknown_count = self
-            .replay
-            .iter()
-            .filter(|window| !self.backend_ids.contains_key(&window.backend_id))
-            .count() as u128;
-        let available = u128::from(u64::MAX - self.next_win_id);
-        if unknown_count > available {
-            return Err(SessionEventError::WindowIdExhausted);
-        }
-
-        let mut ledger = self.ledger.clone();
-        let mut backend_ids = self.backend_ids.clone();
-        let mut windows = BTreeMap::new();
-        let mut pending_assignments = BTreeMap::new();
-        let mut next_win_id = self.next_win_id;
-
-        let persisted_order: Vec<_> = ledger
-            .orbits()
-            .iter()
-            .flat_map(|orbit| orbit.windows.iter().copied())
-            .collect();
-        for win in persisted_order {
-            let backend_id = backend_ids
-                .iter()
-                .find_map(|(backend_id, assigned)| (*assigned == win).then(|| backend_id.clone()))
-                .expect("validated snapshot binds every ledger window");
-            if !replayed_ids.contains(&backend_id) {
-                ledger.banish(win);
-                backend_ids.remove(&backend_id);
-            }
-        }
-
-        for replayed in &self.replay {
-            let win = if let Some(win) = backend_ids.get(&replayed.backend_id).copied() {
-                win
-            } else {
-                let win = WinId(next_win_id);
-                next_win_id = next_win_id
-                    .checked_add(1)
-                    .expect("id availability was preflighted");
-                backend_ids.insert(replayed.backend_id.clone(), win);
-                ledger.summon(win, ledger.active());
-                win
-            };
-            windows.insert(win, replayed.metadata.clone());
-            pending_assignments.insert(replayed.backend_id.clone(), win);
-        }
-        ledger.discard_undo_history();
-
-        self.ledger = ledger;
-        self.backend_ids = backend_ids;
-        self.windows = windows;
-        self.pending_assignments = pending_assignments;
-        self.next_win_id = next_win_id;
-        self.phase = RecoveryPhase::FinalizingReplay;
-        self.projection_dirty = true;
-
-        match self.finish_replay() {
-            Ok(update) => Ok(update),
-            Err(error) => {
-                self.pending_backend_work = matches!(
-                    &error,
-                    SessionEventError::Backend(error) if should_retry_authoritative(error)
-                );
-                Err(error)
-            }
-        }
-    }
-
-    fn finish_replay(&mut self) -> Result<SessionUpdate, SessionEventError> {
-        self.bind_pending_windows()?;
-        let projection = self.project(&self.ledger, self.workarea);
-        self.apply_projection_if_needed(projection)?;
-        self.phase = RecoveryPhase::Live;
-        let state = self.publish_first_visible_state();
-        Ok(SessionUpdate {
-            projection_applied: true,
-            state: Some(state),
-            ..SessionUpdate::unchanged()
-        })
-    }
-
-    fn publish_first_visible_state(&mut self) -> RealmState {
-        self.state = self.visible_state(1);
-        self.published_ledger = self.ledger.clone();
-        self.published_windows = self.windows.clone();
-        self.state.clone()
-    }
-
-    fn repair_authoritative_projection(&mut self) -> Result<SessionUpdate, SessionEventError> {
-        self.bind_pending_windows()?;
-        let projection = self.project(&self.ledger, self.workarea);
-        let projection_applied = self.apply_projection_if_needed(projection)?;
-        let state = self.commit_visible_state().state;
-        Ok(SessionUpdate {
-            projection_applied,
-            state,
-            ..SessionUpdate::unchanged()
-        })
-    }
-
-    fn record_window_identity(
-        &mut self,
-        backend_id: BackendWindowId,
-    ) -> Result<WinId, SessionEventError> {
-        if let Some(win) = self.backend_ids.get(&backend_id).copied() {
-            return Ok(win);
-        }
-
-        let win = WinId(self.next_win_id);
-        self.next_win_id = self
-            .next_win_id
-            .checked_add(1)
-            .ok_or(SessionEventError::WindowIdExhausted)?;
-        self.backend_ids.insert(backend_id.clone(), win);
-        self.pending_assignments.insert(backend_id, win);
-        Ok(win)
-    }
-
-    fn bind_pending_windows(&mut self) -> Result<(), BackendContractError> {
-        let pending: Vec<_> = self
-            .pending_assignments
-            .iter()
-            .map(|(backend_id, win)| (backend_id.clone(), *win))
-            .collect();
-        for (backend_id, win) in pending {
-            self.backend.assign_window(&backend_id, win)?;
-            self.pending_assignments.remove(&backend_id);
-        }
-        Ok(())
-    }
-
-    fn apply_projection_if_needed(&mut self, projection: Vec<Placement>) -> BackendResult<bool> {
-        if !self.projection_dirty && projection == self.last_projection {
-            return Ok(false);
-        }
-
-        if let Err(error) = self.backend.apply(&projection) {
-            self.projection_dirty = true;
-            return Err(error);
-        }
-        self.last_projection = projection;
-        self.projection_dirty = false;
-        Ok(true)
-    }
-
-    fn commit_desired(
-        &mut self,
-        ledger: Ledger,
-        windows: BTreeMap<WinId, WindowMetadata>,
-        workarea: Workarea,
-    ) -> BackendResult<SessionUpdate> {
-        debug_assert!(self.pending_assignments.is_empty());
-        let projection = self.project(&ledger, workarea);
-        let projection_applied = self.apply_projection_if_needed(projection)?;
-
-        self.ledger = ledger;
-        self.windows = windows;
-        self.workarea = workarea;
-        let state = self.commit_visible_state().state;
-        Ok(SessionUpdate {
-            projection_applied,
-            state,
-            ..SessionUpdate::unchanged()
-        })
-    }
-
-    fn commit_observed(
-        &mut self,
-        ledger: Ledger,
-        windows: BTreeMap<WinId, WindowMetadata>,
-        workarea: Workarea,
-    ) -> Result<SessionUpdate, SessionEventError> {
-        let projection = self.project(&ledger, workarea);
-
-        self.ledger = ledger;
-        self.windows = windows;
-        self.workarea = workarea;
-
-        self.bind_pending_windows()?;
-        let projection_applied = self.apply_projection_if_needed(projection)?;
-        let state = self.commit_visible_state().state;
-        Ok(SessionUpdate {
-            projection_applied,
-            state,
-            ..SessionUpdate::unchanged()
-        })
-    }
-
-    fn project(&self, ledger: &Ledger, workarea: Workarea) -> Vec<Placement> {
-        project(ledger.active_orbit(), workarea, TriptychParams::default())
-    }
-
-    fn commit_visible_state(&mut self) -> SessionUpdate {
-        let candidate = self.visible_state(self.state.revision);
-        self.published_ledger = self.ledger.clone();
-        self.published_windows = self.windows.clone();
-
-        if self.state.renders_same_as(&candidate) {
-            return SessionUpdate::unchanged();
-        }
-
-        let mut changed = candidate;
-        changed.revision = self.state.revision.saturating_add(1);
-        self.state = changed.clone();
-        SessionUpdate {
-            projection_applied: false,
-            state: Some(changed),
-            ..SessionUpdate::unchanged()
-        }
-    }
-
-    fn visible_state(&self, revision: u64) -> RealmState {
-        RealmState {
-            revision,
-            orbits: self
-                .ledger
-                .orbits()
-                .iter()
-                .map(|orbit| OrbitCell {
-                    number: orbit.id.human(),
-                    rune: orbit.id.rune().to_string(),
-                    display: if orbit.id == self.ledger.active() {
-                        OrbitDisplay::Active
-                    } else if orbit.occupied() {
-                        OrbitDisplay::Occupied
-                    } else {
-                        OrbitDisplay::Empty
-                    },
-                    windows: orbit.windows.len(),
-                })
-                .collect(),
-            layout: self.ledger.active_orbit().layout,
-            mode: self.state.mode,
-            focused_title: self
-                .ledger
-                .focused()
-                .and_then(|win| self.windows.get(&win))
-                .map(|metadata| metadata.title.clone())
-                .unwrap_or_default(),
-            chord_echo: self.state.chord_echo.clone(),
-            whichkey: self.whichkey,
-            modules: self.modules.clone(),
         }
     }
 
@@ -1756,7 +1288,6 @@ impl<B: WmBackend> Session<B> {
     fn abandon_private_transaction(&mut self) {
         self.active = None;
         self.transaction = TransactionSubstate::Idle;
-        self.pending_backend_work = false;
     }
 
     fn enabled_bindings(&self, mode: Mode) -> Vec<BackendBindingId> {
@@ -1992,7 +1523,7 @@ impl<B: WmBackend> Session<B> {
                         }
                     }
                     event => {
-                        return Err(SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                        return Err(SessionEventError::UnexpectedInitialReplayEvent(
                             event.clone(),
                         ));
                     }
@@ -2024,10 +1555,10 @@ impl<B: WmBackend> Session<B> {
         } else {
             base.backend_ids
                 .iter()
-                .filter_map(|(id, win)| {
-                    (base.bound_backend_ids.contains(id) && base.windows.contains_key(win))
-                        .then(|| id.clone())
+                .filter(|(id, win)| {
+                    base.bound_backend_ids.contains(*id) && base.windows.contains_key(*win)
                 })
+                .map(|(id, _)| id.clone())
                 .collect()
         };
         let mut live = known.clone();
@@ -2077,7 +1608,7 @@ impl<B: WmBackend> Session<B> {
                     live.remove(id);
                     mapped.remove(id);
                     if replay {
-                        return Err(SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                        return Err(SessionEventError::UnexpectedInitialReplayEvent(
                             event.clone(),
                         ));
                     }
@@ -2087,7 +1618,7 @@ impl<B: WmBackend> Session<B> {
                         .saturating_add(backend_id.as_str().len())
                         .saturating_add(title.len());
                     if replay {
-                        return Err(SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                        return Err(SessionEventError::UnexpectedInitialReplayEvent(
                             event.clone(),
                         ));
                     }
@@ -2105,7 +1636,7 @@ impl<B: WmBackend> Session<B> {
                 | BackendPolicyEvent::ExclusiveFocusChanged(_) => {}
                 BackendPolicyEvent::WorkareaChanged(_) => {
                     if replay {
-                        return Err(SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                        return Err(SessionEventError::UnexpectedInitialReplayEvent(
                             event.clone(),
                         ));
                     }
@@ -2113,7 +1644,7 @@ impl<B: WmBackend> Session<B> {
                 BackendPolicyEvent::GeometryDrifted { backend_id, .. } => {
                     text_bytes = text_bytes.saturating_add(backend_id.as_str().len());
                     if replay {
-                        return Err(SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                        return Err(SessionEventError::UnexpectedInitialReplayEvent(
                             event.clone(),
                         ));
                     }
@@ -2204,7 +1735,7 @@ impl<B: WmBackend> Session<B> {
                 }
                 BackendPolicyEvent::InitialReplayComplete => {}
                 event => {
-                    return Err(SessionEventError::UnexpectedInitialReplayPolicyEvent(
+                    return Err(SessionEventError::UnexpectedInitialReplayEvent(
                         event.clone(),
                     ));
                 }
@@ -2542,7 +2073,6 @@ impl<B: WmBackend> Session<B> {
         self.install_authority(active.working.clone());
         if active.projection_submitted {
             self.last_projection = active.most_recent_private_projection.clone();
-            self.projection_dirty = false;
         }
         self.binding_state = BackendBindingState {
             enabled: active.response.bindings.enabled.clone(),
@@ -2604,13 +2134,10 @@ impl<B: WmBackend> Session<B> {
         Ok(SessionUpdate {
             repeat_timer,
             persistence,
-            projection_applied: active.projection_submitted,
             state,
             pending_action: None,
             action_completion,
             effects,
-            diagnostic: None,
-            deferred: None,
         })
     }
 
@@ -2847,17 +2374,6 @@ fn json_content_char_len(character: char) -> usize {
     }
 }
 
-fn should_retry_authoritative(error: &BackendError) -> bool {
-    matches!(error, BackendError::Io { .. })
-}
-
-fn should_retry_desired_repair(error: &BackendError) -> bool {
-    !matches!(
-        error,
-        BackendError::Disconnected | BackendError::Unavailable { .. }
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, VecDeque};
@@ -2868,9 +2384,8 @@ mod tests {
 
     use realm_core::ipc::{self, Capabilities, Response, PROTOCOL_VERSION};
     use realm_core::keys::{Action, Binding, Keymap, Mode};
-    use realm_core::layout::{project, Layout, Placement, Rect, TriptychParams, Workarea};
+    use realm_core::layout::{Layout, Rect, Workarea};
     use realm_core::ledger::{Dir, ORBIT_COUNT};
-    use realm_core::state::{Module, RealmState};
     use realm_core::{Ledger, OrbitId, WinId};
 
     use crate::backend::{
@@ -2893,16 +2408,9 @@ mod tests {
     struct FakeBackend {
         connect_calls: usize,
         capabilities: Capabilities,
-        workarea: Workarea,
-        apply_attempts: Vec<Vec<Placement>>,
-        successful_frames: Vec<Vec<Placement>>,
-        fail_next_apply: Option<BackendError>,
         fail_next_assign: Option<BackendContractError>,
         assignment_attempts: Vec<(BackendWindowId, WinId)>,
         bound_windows: BTreeMap<BackendWindowId, WinId>,
-        focus_calls: usize,
-        close_attempts: Vec<WinId>,
-        fail_next_close: Option<BackendError>,
         configured_bindings: Vec<Vec<BackendBindingSpec>>,
         configure_calls: Arc<Mutex<usize>>,
         request_attempts: usize,
@@ -2913,7 +2421,6 @@ mod tests {
         exit_policies: Vec<BackendExitPolicy>,
         exit_results: VecDeque<BackendResult<()>>,
         call_order: Vec<String>,
-        next_event_calls: usize,
         event_file: File,
     }
 
@@ -2929,16 +2436,9 @@ mod tests {
                     fullscreen: true,
                     unsupported: Vec::new(),
                 },
-                workarea: Workarea::new(1920, 1080, 32, 26),
-                apply_attempts: Vec::new(),
-                successful_frames: Vec::new(),
-                fail_next_apply: None,
                 fail_next_assign: None,
                 assignment_attempts: Vec::new(),
                 bound_windows: BTreeMap::new(),
-                focus_calls: 0,
-                close_attempts: Vec::new(),
-                fail_next_close: None,
                 configured_bindings: Vec::new(),
                 configure_calls: Arc::new(Mutex::new(0)),
                 request_attempts: 0,
@@ -2949,7 +2449,6 @@ mod tests {
                 exit_policies: Vec::new(),
                 exit_results: VecDeque::new(),
                 call_order: Vec::new(),
-                next_event_calls: 0,
                 event_file: File::open("/dev/null").unwrap(),
             }
         }
@@ -3018,32 +2517,6 @@ mod tests {
             self.exit_results.pop_front().unwrap_or(Ok(()))
         }
 
-        fn apply(&mut self, placements: &[Placement]) -> BackendResult<()> {
-            self.apply_attempts.push(placements.to_vec());
-            if let Some(error) = self.fail_next_apply.take() {
-                return Err(error);
-            }
-            self.successful_frames.push(placements.to_vec());
-            Ok(())
-        }
-
-        fn focus(&mut self, _win: WinId) -> BackendResult<()> {
-            self.focus_calls += 1;
-            Ok(())
-        }
-
-        fn close(&mut self, win: WinId) -> BackendResult<()> {
-            self.close_attempts.push(win);
-            if let Some(error) = self.fail_next_close.take() {
-                return Err(error);
-            }
-            Ok(())
-        }
-
-        fn workarea(&self) -> Workarea {
-            self.workarea
-        }
-
         fn event_fd(&self) -> BorrowedFd<'_> {
             self.event_file.as_fd()
         }
@@ -3062,22 +2535,6 @@ mod tests {
             _now: Instant,
         ) -> BackendResult<Option<BackendEvent>> {
             self.service_results.pop_front().unwrap_or(Ok(None))
-        }
-
-        fn next_event(
-            &mut self,
-            _deadline: Option<Instant>,
-        ) -> BackendResult<Option<BackendEvent>> {
-            self.next_event_calls += 1;
-            Ok(None)
-        }
-    }
-
-    fn window_opened(id: &str, title: &str) -> BackendEvent {
-        BackendEvent::WindowOpened {
-            backend_id: BackendWindowId::new(id).unwrap(),
-            app_id: "foot".to_owned(),
-            title: title.to_owned(),
         }
     }
 
@@ -3103,17 +2560,6 @@ mod tests {
             10,
         )
         .unwrap()
-    }
-
-    fn live_session(backend: FakeBackend) -> Session<FakeBackend> {
-        let mut session = Session::connect(backend).unwrap();
-        session
-            .handle_backend_event(BackendEvent::InitialReplayComplete)
-            .unwrap();
-        session.state = RealmState::default();
-        session.backend.apply_attempts.clear();
-        session.backend.successful_frames.clear();
-        session
     }
 
     #[test]
@@ -3328,1025 +2774,6 @@ mod tests {
                 "active orbit is out of range"
             ))
         ));
-    }
-
-    #[test]
-    fn legacy_replay_accumulator_rebinds_each_identity_once() {
-        let mut session =
-            Session::connect_with_snapshot(FakeBackend::new(), Some(recovery_snapshot())).unwrap();
-
-        assert_eq!(session.phase(), RecoveryPhase::InitialReplay);
-        assert!(session.snapshot().is_none());
-        for event in [
-            window_opened("restored-7", "old title"),
-            window_opened("new-10", "new"),
-            window_opened("restored-7", "latest title"),
-        ] {
-            let update = session.handle_backend_event(event).unwrap();
-            assert!(!update.projection_applied);
-            assert!(update.state.is_none());
-        }
-
-        assert!(session.backend.assignment_attempts.is_empty());
-        assert!(session.backend.apply_attempts.is_empty());
-        assert!(session.snapshot().is_none());
-
-        session
-            .handle_backend_event(BackendEvent::InitialReplayComplete)
-            .unwrap();
-        assert_eq!(
-            session.ledger().active_orbit().windows,
-            [WinId(7), WinId(10)]
-        );
-        assert_eq!(
-            session.window_metadata(WinId(7)).unwrap().title,
-            "latest title"
-        );
-        assert_eq!(
-            session.window_id(&BackendWindowId::new("new-10").unwrap()),
-            Some(WinId(10))
-        );
-        assert_eq!(session.backend.assignment_attempts.len(), 2);
-        assert_eq!(
-            session
-                .backend
-                .assignment_attempts
-                .iter()
-                .filter(|(backend_id, _)| backend_id.as_str() == "restored-7")
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn legacy_replay_accumulator_rejects_non_replay_events() {
-        for event in [
-            BackendEvent::TitleChanged {
-                win: WinId(7),
-                title: "impossible".to_owned(),
-            },
-            BackendEvent::WindowClosed(WinId(7)),
-            BackendEvent::FocusChanged(Some(WinId(7))),
-            BackendEvent::ExclusiveFocusChanged(true),
-            BackendEvent::GeometryDrifted {
-                win: WinId(7),
-                rect: Rect::new(0, 0, 10, 10),
-            },
-        ] {
-            let mut session = Session::connect(FakeBackend::new()).unwrap();
-            let error = session.handle_backend_event(event).unwrap_err();
-            assert!(matches!(
-                error,
-                SessionEventError::UnexpectedInitialReplayEvent(_)
-            ));
-            assert_eq!(session.phase(), RecoveryPhase::InitialReplay);
-            assert!(session.snapshot().is_none());
-        }
-    }
-
-    #[test]
-    fn restored_only_replay_preserves_persisted_focus() {
-        let mut session =
-            Session::connect_with_snapshot(FakeBackend::new(), Some(recovery_snapshot())).unwrap();
-        session
-            .handle_backend_event(window_opened("missing-9", "second"))
-            .unwrap();
-        session
-            .handle_backend_event(window_opened("restored-7", "first"))
-            .unwrap();
-
-        session
-            .handle_backend_event(BackendEvent::InitialReplayComplete)
-            .unwrap();
-
-        assert_eq!(session.ledger().focused(), Some(WinId(7)));
-        assert_eq!(
-            session
-                .ledger()
-                .orbit(OrbitId::from_human(2).unwrap())
-                .focused(),
-            Some(WinId(9))
-        );
-    }
-
-    #[test]
-    fn replay_barrier_reconciles_then_publishes_once() {
-        let mut session =
-            Session::connect_with_snapshot(FakeBackend::new(), Some(recovery_snapshot())).unwrap();
-        session
-            .handle_backend_event(window_opened("new-10", "new"))
-            .unwrap();
-        session
-            .handle_backend_event(window_opened("restored-7", "restored"))
-            .unwrap();
-
-        let update = session
-            .handle_backend_event(BackendEvent::InitialReplayComplete)
-            .unwrap();
-
-        assert_eq!(session.phase(), RecoveryPhase::Live);
-        assert_eq!(
-            session.ledger().active_orbit().windows,
-            [WinId(7), WinId(10)]
-        );
-        assert_eq!(session.ledger().focused(), Some(WinId(10)));
-        assert!(session
-            .ledger()
-            .orbit(OrbitId::from_human(2).unwrap())
-            .windows
-            .is_empty());
-        assert_eq!(session.ledger().undo_depth(), 0);
-        assert_eq!(session.backend.assignment_attempts.len(), 2);
-        assert_eq!(session.backend.apply_attempts.len(), 1);
-        assert_eq!(update.state.as_ref().unwrap().revision, 1);
-        assert_eq!(session.state().revision, 1);
-
-        let persisted = session.snapshot().unwrap();
-        assert_eq!(persisted.next_win_id(), 11);
-        assert_eq!(persisted.bindings()[0].win_id, WinId(7));
-        assert_eq!(persisted.bindings()[1].win_id, WinId(10));
-
-        let mut empty = Session::connect(FakeBackend::new()).unwrap();
-        let empty_update = empty
-            .handle_backend_event(BackendEvent::InitialReplayComplete)
-            .unwrap();
-        assert_eq!(empty.backend.apply_attempts, [Vec::<Placement>::new()]);
-        assert_eq!(empty_update.state.unwrap().revision, 1);
-    }
-
-    #[test]
-    fn backend_work_gets_one_retry_and_gates_event_reads() {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
-        session
-            .handle_backend_event(window_opened("new-0", "new"))
-            .unwrap();
-        session.backend.fail_next_apply = Some(BackendError::Io {
-            message: "first apply failure".to_owned(),
-        });
-        session
-            .handle_backend_event(BackendEvent::InitialReplayComplete)
-            .unwrap_err();
-        assert!(session.has_pending_backend_work());
-        assert_eq!(session.phase(), RecoveryPhase::FinalizingReplay);
-        assert_eq!(session.backend.next_event_calls, 0);
-        let ledger = session.ledger().clone();
-        let error = session
-            .handle_backend_event(window_opened("must-wait", "blocked"))
-            .unwrap_err();
-        assert_eq!(error, SessionEventError::BackendWorkPending);
-        assert_eq!(session.phase(), RecoveryPhase::FinalizingReplay);
-        assert_eq!(session.ledger(), &ledger);
-        assert_eq!(
-            session.window_id(&BackendWindowId::new("must-wait").unwrap()),
-            None
-        );
-        assert_eq!(session.backend.next_event_calls, 0);
-
-        let recovered = session.retry_pending_backend_work().unwrap();
-        assert!(!session.has_pending_backend_work());
-        assert_eq!(session.phase(), RecoveryPhase::Live);
-        assert_eq!(recovered.state.unwrap().revision, 1);
-
-        let mut exhausted_retry = Session::connect(FakeBackend::new()).unwrap();
-        exhausted_retry.backend.fail_next_apply = Some(BackendError::Io {
-            message: "first apply failure".to_owned(),
-        });
-        exhausted_retry
-            .handle_backend_event(BackendEvent::InitialReplayComplete)
-            .unwrap_err();
-        exhausted_retry.backend.fail_next_apply = Some(BackendError::Io {
-            message: "second apply failure".to_owned(),
-        });
-        let error = exhausted_retry.retry_pending_backend_work().unwrap_err();
-        assert!(matches!(error, SessionEventError::BackendRetryExhausted(_)));
-        assert!(!exhausted_retry.has_pending_backend_work());
-        assert_eq!(exhausted_retry.backend.apply_attempts.len(), 2);
-    }
-
-    #[test]
-    fn pending_backend_work_gates_actions_and_publication() {
-        let mut pre_live = Session::connect(FakeBackend::new()).unwrap();
-        assert_eq!(
-            pre_live.set_layout(Layout::Mono),
-            Err(SessionActionError::NotReady)
-        );
-        assert_eq!(
-            pre_live.request_close_focused(),
-            Err(SessionActionError::NotReady)
-        );
-
-        let mut session = live_session(FakeBackend::new());
-        session
-            .handle_backend_event(window_opened("one", "one"))
-            .unwrap();
-        session
-            .handle_backend_event(window_opened("two", "two"))
-            .unwrap();
-        let snapshot = session.snapshot().unwrap();
-        session.backend.fail_next_apply = Some(BackendError::Io {
-            message: "candidate failed".to_owned(),
-        });
-        session.set_layout(Layout::Mono).unwrap_err();
-        assert!(session.has_pending_backend_work());
-
-        let state = session.state().clone();
-        let apply_attempts = session.backend.apply_attempts.len();
-        assert!(matches!(
-            session.set_layout(Layout::Mono),
-            Err(SessionActionError::NotReady)
-        ));
-        assert!(matches!(
-            session.request_close_focused(),
-            Err(SessionActionError::NotReady)
-        ));
-        assert_eq!(session.toggle_whichkey(), SessionUpdate::unchanged());
-        assert_eq!(
-            session.update_modules(vec![Module {
-                id: "clock".to_owned(),
-                text: "12:34".to_owned(),
-                accent: None,
-                urgent: false,
-            }]),
-            SessionUpdate::unchanged()
-        );
-        assert_eq!(session.backend.apply_attempts.len(), apply_attempts);
-        assert!(session.backend.close_attempts.is_empty());
-        assert_eq!(session.state(), &state);
-        assert_eq!(session.snapshot().unwrap(), snapshot);
-
-        session.retry_pending_backend_work().unwrap();
-        assert!(session.toggle_whichkey().state.is_some());
-    }
-
-    #[test]
-    fn persistence_exposes_only_authoritative_live_state() {
-        let mut finalizing = Session::connect(FakeBackend::new()).unwrap();
-        finalizing.backend.fail_next_apply = Some(BackendError::Io {
-            message: "recovery projection pending".to_owned(),
-        });
-        finalizing
-            .handle_backend_event(BackendEvent::InitialReplayComplete)
-            .unwrap_err();
-        assert_eq!(finalizing.phase(), RecoveryPhase::FinalizingReplay);
-        assert!(finalizing.snapshot().is_none());
-
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
-        assert!(session.snapshot().is_none());
-        session
-            .handle_backend_event(BackendEvent::InitialReplayComplete)
-            .unwrap();
-        session
-            .handle_backend_event(window_opened("one", "one"))
-            .unwrap();
-        session
-            .handle_backend_event(window_opened("two", "two"))
-            .unwrap();
-        let authoritative = session.snapshot().unwrap();
-
-        session.backend.fail_next_apply = Some(BackendError::Io {
-            message: "candidate rejected".to_owned(),
-        });
-        session.set_layout(Layout::Mono).unwrap_err();
-        assert_eq!(session.snapshot().unwrap(), authoritative);
-
-        session.retry_pending_backend_work().unwrap();
-        session.backend.fail_next_apply = Some(BackendError::Io {
-            message: "observed repair pending".to_owned(),
-        });
-        session
-            .handle_backend_event(BackendEvent::WindowClosed(WinId(1)))
-            .unwrap_err();
-        let observed = session.snapshot().unwrap();
-        assert_eq!(observed.bindings().len(), 1);
-        assert_eq!(observed.bindings()[0].win_id, WinId(0));
-    }
-
-    #[test]
-    fn legacy_replay_accumulator_rejects_exhausted_window_ids() {
-        let mut ledger = Ledger::new();
-        ledger.summon(WinId(u64::MAX - 1), OrbitId::default());
-        let snapshot = SessionSnapshotV1::new(
-            ledger.clone(),
-            vec![SnapshotBinding {
-                win_id: WinId(u64::MAX - 1),
-                backend_id: BackendWindowId::new("old").unwrap(),
-            }],
-            u64::MAX,
-        )
-        .unwrap();
-        let mut session =
-            Session::connect_with_snapshot(FakeBackend::new(), Some(snapshot)).unwrap();
-        session
-            .handle_backend_event(window_opened("new", "new"))
-            .unwrap();
-
-        let error = session
-            .handle_backend_event(BackendEvent::InitialReplayComplete)
-            .unwrap_err();
-
-        assert_eq!(error, SessionEventError::WindowIdExhausted);
-        assert_eq!(session.phase(), RecoveryPhase::InitialReplay);
-        assert_eq!(session.ledger(), &ledger);
-        assert!(session.backend.assignment_attempts.is_empty());
-        assert!(session.backend.apply_attempts.is_empty());
-        assert!(session.snapshot().is_none());
-    }
-
-    #[test]
-    fn session_connects_once_seeds_six_orbits_and_retains_capabilities() {
-        let session = Session::connect(FakeBackend::new()).unwrap();
-
-        assert_eq!(session.backend.connect_calls, 1);
-        assert_eq!(session.ledger().orbits().len(), 6);
-        assert_eq!(session.ledger().active(), OrbitId::from_human(1).unwrap());
-        assert_eq!(session.state().revision, 0);
-        assert!(session.capabilities().unsupported.is_empty());
-        assert!(session.backend.apply_attempts.is_empty());
-    }
-
-    #[test]
-    fn window_opened_summons_after_focus_and_applies_active_projection_once() {
-        let area = Workarea::new(1920, 1080, 32, 26);
-        let mut session = live_session(FakeBackend::new());
-
-        session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        session
-            .handle_backend_event(window_opened("r2", "two"))
-            .unwrap();
-
-        assert_eq!(
-            session.ledger().active_orbit().windows,
-            [WinId(0), WinId(1)]
-        );
-        assert_eq!(
-            session.backend.bound_windows,
-            BTreeMap::from([
-                (BackendWindowId::new("r1").unwrap(), WinId(0)),
-                (BackendWindowId::new("r2").unwrap(), WinId(1)),
-            ])
-        );
-        assert_eq!(session.backend.successful_frames.len(), 2);
-        assert_eq!(
-            session.backend.successful_frames.last().unwrap(),
-            &project(
-                session.ledger().active_orbit(),
-                area,
-                TriptychParams::default()
-            )
-        );
-    }
-
-    #[test]
-    fn unchanged_projection_is_not_applied_twice() {
-        let mut session = live_session(FakeBackend::new());
-        session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-
-        let first = session.retry_pending_backend_work().unwrap();
-        let second = session.retry_pending_backend_work().unwrap();
-
-        assert!(!first.projection_applied);
-        assert!(!second.projection_applied);
-        assert_eq!(session.backend.apply_attempts.len(), 1);
-    }
-
-    #[test]
-    fn no_op_ledger_mutation_does_not_apply_or_emit() {
-        let mut session = live_session(FakeBackend::new());
-
-        let update = session
-            .switch_orbit(OrbitId::from_human(1).unwrap())
-            .unwrap();
-
-        assert!(!update.projection_applied);
-        assert!(update.state.is_none());
-        assert!(session.backend.apply_attempts.is_empty());
-        assert_eq!(session.state().revision, 0);
-    }
-
-    #[test]
-    fn workarea_change_reprojects_once_but_does_not_emit_unchanged_state() {
-        let mut session = live_session(FakeBackend::new());
-        session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        let revision = session.state().revision;
-
-        let update = session
-            .handle_backend_event(BackendEvent::WorkareaChanged(Workarea {
-                output: Rect::new(0, 0, 2560, 1440),
-                tiles: Rect::new(0, 32, 2560, 1382),
-            }))
-            .unwrap();
-
-        assert!(update.projection_applied);
-        assert!(update.state.is_none());
-        assert_eq!(session.backend.apply_attempts.len(), 2);
-        assert_eq!(session.state().revision, revision);
-    }
-
-    #[test]
-    fn geometry_drift_preserves_ledger_and_waits_for_next_projection() {
-        let mut session = live_session(FakeBackend::new());
-        for (id, title) in [("r1", "one"), ("r2", "two")] {
-            session
-                .handle_backend_event(window_opened(id, title))
-                .unwrap();
-        }
-        let ledger = session.ledger().clone();
-        let attempts = session.backend.apply_attempts.len();
-
-        let drift = session
-            .handle_backend_event(BackendEvent::GeometryDrifted {
-                win: WinId(0),
-                rect: Rect::new(50, 50, 20, 20),
-            })
-            .unwrap();
-
-        assert_eq!(session.ledger(), &ledger);
-        assert!(!drift.projection_applied);
-        assert!(drift.state.is_none());
-        assert_eq!(session.backend.apply_attempts.len(), attempts);
-
-        session.set_layout(Layout::Mono).unwrap();
-        assert_eq!(session.backend.apply_attempts.len(), attempts + 1);
-    }
-
-    #[test]
-    fn focused_title_change_emits_once_without_applying() {
-        let mut session = live_session(FakeBackend::new());
-        session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        let attempts = session.backend.apply_attempts.len();
-        let revision = session.state().revision;
-
-        let changed = session
-            .handle_backend_event(BackendEvent::TitleChanged {
-                win: WinId(0),
-                title: "renamed".to_owned(),
-            })
-            .unwrap();
-        let unchanged = session
-            .handle_backend_event(BackendEvent::TitleChanged {
-                win: WinId(0),
-                title: "renamed".to_owned(),
-            })
-            .unwrap();
-
-        assert_eq!(changed.state.unwrap().focused_title, "renamed");
-        assert!(unchanged.state.is_none());
-        assert_eq!(session.state().revision, revision + 1);
-        assert_eq!(session.backend.apply_attempts.len(), attempts);
-    }
-
-    #[test]
-    fn module_change_emits_once_without_backend_apply() {
-        let mut session = live_session(FakeBackend::new());
-        let modules = vec![Module {
-            id: "clock".to_owned(),
-            text: "12:34".to_owned(),
-            accent: None,
-            urgent: false,
-        }];
-
-        let changed = session.update_modules(modules.clone());
-        let unchanged = session.update_modules(modules);
-
-        assert!(changed.state.is_some());
-        assert!(unchanged.state.is_none());
-        assert_eq!(session.state().revision, 1);
-        assert!(session.backend.apply_attempts.is_empty());
-        assert_eq!(session.backend.focus_calls, 0);
-        assert!(session.backend.close_attempts.is_empty());
-        assert_eq!(session.backend.next_event_calls, 0);
-    }
-
-    #[test]
-    fn unsupported_apply_rolls_back_and_emits_no_state() {
-        let mut backend = FakeBackend::new();
-        backend.capabilities.exact_geometry = false;
-        backend.capabilities.unsupported = vec!["exact-geometry".to_owned()];
-        let mut session = live_session(backend);
-        session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        session
-            .handle_backend_event(window_opened("r2", "two"))
-            .unwrap();
-        let ledger = session.ledger().clone();
-        let state = session.state().clone();
-        let projection = session.last_projection().to_vec();
-        let attempts = session.backend.apply_attempts.len();
-        let successes = session.backend.successful_frames.len();
-        session.backend.fail_next_apply = Some(BackendError::Unsupported {
-            capability: "exact-geometry".to_owned(),
-        });
-
-        let error = session.set_layout(Layout::Mono).unwrap_err();
-
-        assert_eq!(
-            error,
-            SessionActionError::Backend(BackendError::Unsupported {
-                capability: "exact-geometry".to_owned()
-            })
-        );
-        assert_eq!(session.ledger(), &ledger);
-        assert_eq!(session.state(), &state);
-        assert_eq!(session.last_projection(), projection);
-        assert_eq!(session.backend.apply_attempts.len(), attempts + 1);
-        assert_eq!(session.backend.successful_frames.len(), successes);
-        assert!(session.has_pending_backend_work());
-    }
-
-    #[test]
-    fn failed_desired_apply_marks_current_projection_dirty_for_repair() {
-        let mut session = live_session(FakeBackend::new());
-        session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        session
-            .handle_backend_event(window_opened("r2", "two"))
-            .unwrap();
-        let authoritative = session.last_projection().to_vec();
-        let attempts = session.backend.apply_attempts.len();
-        session.backend.fail_next_apply = Some(BackendError::Io {
-            message: "partial apply".to_owned(),
-        });
-
-        session.set_layout(Layout::Mono).unwrap_err();
-        let repaired = session.retry_pending_backend_work().unwrap();
-
-        assert!(repaired.projection_applied);
-        assert_eq!(session.backend.apply_attempts.len(), attempts + 2);
-        assert_eq!(
-            session.backend.apply_attempts.last().unwrap(),
-            &authoritative
-        );
-        assert_eq!(
-            session.backend.successful_frames.last().unwrap(),
-            &authoritative
-        );
-    }
-
-    #[test]
-    fn failed_apply_after_window_close_retains_the_observed_close_for_retry() {
-        let mut session = live_session(FakeBackend::new());
-        session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        let backend_id = BackendWindowId::new("r1").unwrap();
-        assert_eq!(session.window_id(&backend_id), Some(WinId(0)));
-        let previous_projection = session.last_projection().to_vec();
-        session.backend.fail_next_apply = Some(BackendError::Io {
-            message: "render failed".to_owned(),
-        });
-
-        let error = session
-            .handle_backend_event(BackendEvent::WindowClosed(WinId(0)))
-            .unwrap_err();
-
-        assert!(matches!(
-            error,
-            super::SessionEventError::Backend(BackendError::Io { .. })
-        ));
-        assert!(session.ledger().is_empty());
-        assert!(session.window_metadata(WinId(0)).is_none());
-        assert_eq!(session.window_id(&backend_id), None);
-        assert_eq!(session.last_projection(), previous_projection);
-        assert!(
-            session
-                .retry_pending_backend_work()
-                .unwrap()
-                .projection_applied
-        );
-        assert!(session.last_projection().is_empty());
-    }
-
-    #[test]
-    fn failed_apply_after_workarea_change_retains_the_observed_area_for_retry() {
-        let mut session = live_session(FakeBackend::new());
-        session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        let changed = Workarea {
-            output: Rect::new(0, 0, 2560, 1440),
-            tiles: Rect::new(0, 32, 2560, 1382),
-        };
-        session.backend.fail_next_apply = Some(BackendError::Io {
-            message: "render failed".to_owned(),
-        });
-
-        session
-            .handle_backend_event(BackendEvent::WorkareaChanged(changed))
-            .unwrap_err();
-
-        assert_eq!(session.workarea, changed);
-        assert!(
-            session
-                .retry_pending_backend_work()
-                .unwrap()
-                .projection_applied
-        );
-        assert_eq!(session.last_projection()[0].rect, changed.tiles);
-    }
-
-    #[test]
-    fn failed_apply_marks_projection_dirty_until_a_complete_repair() {
-        let original = Workarea::new(1920, 1080, 32, 26);
-        let changed = Workarea {
-            output: Rect::new(0, 0, 2560, 1440),
-            tiles: Rect::new(0, 32, 2560, 1382),
-        };
-        let mut session = live_session(FakeBackend::new());
-        session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        let p1 = session.last_projection().to_vec();
-        session.backend.fail_next_apply = Some(BackendError::Io {
-            message: "partial apply".to_owned(),
-        });
-
-        session
-            .handle_backend_event(BackendEvent::WorkareaChanged(changed))
-            .unwrap_err();
-        let repaired = session.retry_pending_backend_work().unwrap();
-        let restored = session
-            .handle_backend_event(BackendEvent::WorkareaChanged(original))
-            .unwrap();
-
-        assert!(repaired.projection_applied);
-        assert!(restored.projection_applied);
-        assert_eq!(session.backend.apply_attempts.len(), 4);
-        assert_eq!(session.backend.apply_attempts.last().unwrap(), &p1);
-        assert_eq!(session.backend.successful_frames.last().unwrap(), &p1);
-    }
-
-    #[test]
-    fn assignment_contract_failure_uses_the_typed_fatal_event_path() {
-        let backend_id = BackendWindowId::new("r1").unwrap();
-        let backend = FakeBackend::new();
-        let mut session = live_session(backend);
-        session.backend.fail_next_assign = Some(BackendContractError::UnknownWindow {
-            backend_id: backend_id.clone(),
-        });
-
-        let error = session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap_err();
-
-        assert!(matches!(
-            error,
-            SessionEventError::BackendContract(BackendContractError::UnknownWindow {
-                backend_id: ref unknown,
-            }) if unknown == &backend_id
-        ));
-        assert!(!session.has_pending_backend_work());
-        assert_eq!(
-            session.backend.assignment_attempts,
-            [(backend_id.clone(), WinId(0))]
-        );
-        assert_eq!(session.window_id(&backend_id), Some(WinId(0)));
-        assert_eq!(session.next_win_id, 1);
-    }
-
-    #[test]
-    fn replayed_backend_identity_reuses_its_window_id_without_rebinding() {
-        let backend_id = BackendWindowId::new("r1").unwrap();
-        let mut session = live_session(FakeBackend::new());
-        session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-
-        let replay = session
-            .handle_backend_event(window_opened("r1", "renamed"))
-            .unwrap();
-
-        assert_eq!(session.ledger().active_orbit().windows, [WinId(0)]);
-        assert_eq!(session.window_id(&backend_id), Some(WinId(0)));
-        assert_eq!(session.next_win_id, 1);
-        assert_eq!(
-            session.backend.assignment_attempts,
-            [(backend_id, WinId(0))]
-        );
-        assert!(!replay.projection_applied);
-        assert_eq!(replay.state.unwrap().focused_title, "renamed");
-    }
-
-    #[test]
-    fn focus_event_is_deferred_without_becoming_a_backend_failure() {
-        let mut session = live_session(FakeBackend::new());
-        for event in [
-            BackendEvent::FocusChanged(None),
-            BackendEvent::ExclusiveFocusChanged(true),
-        ] {
-            let update = session.handle_backend_event(event.clone()).unwrap();
-
-            assert_eq!(update.deferred, Some(event));
-            assert!(!update.projection_applied);
-            assert!(update.state.is_none());
-        }
-    }
-
-    #[test]
-    fn focus_step_commits_one_projection_and_one_visible_state() {
-        let mut session = live_session(FakeBackend::new());
-        for (id, title) in [("r1", "one"), ("r2", "two")] {
-            session
-                .handle_backend_event(window_opened(id, title))
-                .unwrap();
-        }
-        let revision = session.state().revision;
-        let attempts = session.backend.apply_attempts.len();
-        let mut candidate = session.ledger().clone();
-        candidate.focus_step(Dir::Prev);
-        let expected = project(
-            candidate.active_orbit(),
-            Workarea::new(1920, 1080, 32, 26),
-            TriptychParams::default(),
-        );
-
-        let update = session.focus_step(Dir::Prev).unwrap();
-
-        assert_eq!(session.ledger().focused(), Some(WinId(0)));
-        assert_eq!(session.state().focused_title, "one");
-        assert_eq!(session.state().revision, revision + 1);
-        assert!(update.projection_applied);
-        assert_eq!(update.state.unwrap().focused_title, "one");
-        assert_eq!(session.backend.apply_attempts.len(), attempts + 1);
-        assert_eq!(session.backend.apply_attempts.last().unwrap(), &expected);
-    }
-
-    #[test]
-    fn failed_focus_step_rejects_the_candidate_and_repairs_authoritative_state() {
-        let mut session = live_session(FakeBackend::new());
-        for (id, title) in [("r1", "one"), ("r2", "two")] {
-            session
-                .handle_backend_event(window_opened(id, title))
-                .unwrap();
-        }
-        let ledger = session.ledger().clone();
-        let state = session.state().clone();
-        let authoritative = session.last_projection().to_vec();
-        let attempts = session.backend.apply_attempts.len();
-        let mut candidate = session.ledger().clone();
-        candidate.focus_step(Dir::Prev);
-        let expected_candidate = project(
-            candidate.active_orbit(),
-            Workarea::new(1920, 1080, 32, 26),
-            TriptychParams::default(),
-        );
-        session.backend.fail_next_apply = Some(BackendError::Io {
-            message: "partial focus apply".to_owned(),
-        });
-
-        session.focus_step(Dir::Prev).unwrap_err();
-
-        assert_eq!(session.ledger(), &ledger);
-        assert_eq!(session.state(), &state);
-        assert_eq!(session.last_projection(), authoritative);
-        assert_eq!(session.backend.apply_attempts[attempts], expected_candidate);
-        let repair = session.retry_pending_backend_work().unwrap();
-        assert!(repair.projection_applied);
-        assert!(repair.state.is_none());
-        assert_eq!(session.backend.apply_attempts.len(), attempts + 2);
-        assert_eq!(
-            session.backend.apply_attempts.last().unwrap(),
-            &authoritative
-        );
-    }
-
-    #[test]
-    fn swap_changes_order_once_and_is_a_no_op_with_one_window() {
-        let mut session = live_session(FakeBackend::new());
-        for (id, title) in [("r1", "one"), ("r2", "two")] {
-            session
-                .handle_backend_event(window_opened(id, title))
-                .unwrap();
-        }
-        let revision = session.state().revision;
-        let attempts = session.backend.apply_attempts.len();
-        let mut candidate = session.ledger().clone();
-        candidate.swap(Dir::Prev);
-        let expected = project(
-            candidate.active_orbit(),
-            Workarea::new(1920, 1080, 32, 26),
-            TriptychParams::default(),
-        );
-
-        let update = session.swap(Dir::Prev).unwrap();
-
-        assert_eq!(
-            session.ledger().active_orbit().windows,
-            [WinId(1), WinId(0)]
-        );
-        assert_eq!(session.ledger().focused(), Some(WinId(1)));
-        assert!(update.projection_applied);
-        assert!(update.state.is_none());
-        assert_eq!(session.state().revision, revision);
-        assert_eq!(session.backend.apply_attempts.len(), attempts + 1);
-        assert_eq!(session.backend.apply_attempts.last().unwrap(), &expected);
-
-        let mut singleton = live_session(FakeBackend::new());
-        singleton
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        let attempts = singleton.backend.apply_attempts.len();
-        let revision = singleton.state().revision;
-
-        let unchanged = singleton.swap(Dir::Next).unwrap();
-
-        assert!(!unchanged.projection_applied);
-        assert!(unchanged.state.is_none());
-        assert_eq!(singleton.backend.apply_attempts.len(), attempts);
-        assert_eq!(singleton.state().revision, revision);
-    }
-
-    #[test]
-    fn typed_ledger_actions_delegate_to_the_ledger_contract() {
-        let second = OrbitId::from_human(2).unwrap();
-
-        let mut moved = live_session(FakeBackend::new());
-        moved
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        moved.move_focused_to_orbit(second).unwrap();
-        assert!(moved.ledger().active_orbit().windows.is_empty());
-        assert_eq!(moved.ledger().orbit(second).windows, [WinId(0)]);
-
-        let mut stowed = live_session(FakeBackend::new());
-        stowed
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        stowed.toggle_stow().unwrap();
-        assert_eq!(stowed.ledger().active_orbit().stowed, [WinId(0)]);
-        assert!(stowed.last_projection().is_empty());
-
-        let mut fullscreen = live_session(FakeBackend::new());
-        fullscreen
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        fullscreen.toggle_fullscreen().unwrap();
-        assert_eq!(
-            fullscreen.ledger().active_orbit().fullscreen,
-            Some(WinId(0))
-        );
-        assert_eq!(
-            fullscreen.last_projection()[0].rect,
-            Workarea::new(1920, 1080, 32, 26).output
-        );
-
-        let mut switched = live_session(FakeBackend::new());
-        switched.switch_orbit(second).unwrap();
-        assert_eq!(switched.ledger().active(), second);
-
-        let mut laid_out = live_session(FakeBackend::new());
-        laid_out.set_layout(Layout::Mono).unwrap();
-        assert_eq!(laid_out.ledger().active_orbit().layout, Layout::Mono);
-    }
-
-    #[test]
-    fn failed_undo_does_not_consume_history() {
-        let mut session = live_session(FakeBackend::new());
-        session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        session
-            .handle_backend_event(window_opened("r2", "two"))
-            .unwrap();
-        session.set_layout(Layout::Mono).unwrap();
-        let ledger = session.ledger().clone();
-        let state = session.state().clone();
-        session.backend.fail_next_apply = Some(BackendError::Io {
-            message: "partial undo apply".to_owned(),
-        });
-
-        session.undo().unwrap_err();
-
-        assert_eq!(session.ledger(), &ledger);
-        assert_eq!(session.state(), &state);
-        session.retry_pending_backend_work().unwrap();
-        let retry = session.undo().unwrap();
-        assert!(retry.projection_applied);
-        assert_eq!(session.ledger().active_orbit().layout, Layout::Triptych);
-    }
-
-    #[test]
-    fn undo_never_removes_an_open_window_or_restores_a_closed_window() {
-        let mut session = live_session(FakeBackend::new());
-        for (id, title) in [("r1", "one"), ("r2", "two")] {
-            session
-                .handle_backend_event(window_opened(id, title))
-                .unwrap();
-        }
-        session.swap(Dir::Prev).unwrap();
-        session
-            .handle_backend_event(window_opened("r3", "three"))
-            .unwrap();
-        let attempts_after_open = session.backend.apply_attempts.len();
-
-        let after_open_undo = session.undo().unwrap();
-
-        assert!(!after_open_undo.projection_applied);
-        assert!(after_open_undo.state.is_none());
-        assert_eq!(session.ledger().len(), 3);
-        assert!(session.window_metadata(WinId(2)).is_some());
-        assert_eq!(session.backend.apply_attempts.len(), attempts_after_open);
-
-        session.swap(Dir::Next).unwrap();
-        session
-            .handle_backend_event(BackendEvent::WindowClosed(WinId(1)))
-            .unwrap();
-        let attempts_after_close = session.backend.apply_attempts.len();
-
-        let after_close_undo = session.undo().unwrap();
-
-        assert!(!after_close_undo.projection_applied);
-        assert!(after_close_undo.state.is_none());
-        assert_eq!(session.ledger().orbit_of(WinId(1)), None);
-        assert!(session.window_metadata(WinId(1)).is_none());
-        assert_eq!(
-            session.window_id(&BackendWindowId::new("r2").unwrap()),
-            None
-        );
-        assert_eq!(session.backend.apply_attempts.len(), attempts_after_close);
-    }
-
-    #[test]
-    fn close_request_waits_for_the_observed_close_before_mutating_state() {
-        let mut session = live_session(FakeBackend::new());
-        session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        let ledger = session.ledger().clone();
-        let state = session.state().clone();
-        let projection = session.last_projection().to_vec();
-
-        assert_eq!(
-            session.request_close_focused().unwrap(),
-            SessionUpdate::unchanged()
-        );
-        assert_eq!(session.backend.close_attempts, [WinId(0)]);
-        assert_eq!(session.ledger(), &ledger);
-        assert_eq!(session.state(), &state);
-        assert_eq!(session.last_projection(), projection);
-
-        session.backend.fail_next_close = Some(BackendError::Io {
-            message: "close request failed".to_owned(),
-        });
-        session.request_close_focused().unwrap_err();
-        assert_eq!(session.backend.close_attempts, [WinId(0), WinId(0)]);
-        assert_eq!(session.ledger(), &ledger);
-        assert_eq!(session.state(), &state);
-        assert_eq!(session.last_projection(), projection);
-
-        session
-            .handle_backend_event(BackendEvent::WindowClosed(WinId(0)))
-            .unwrap();
-        assert!(session.ledger().is_empty());
-    }
-
-    #[test]
-    fn legacy_empty_close_request_is_a_no_op() {
-        let mut session = live_session(FakeBackend::new());
-
-        assert_eq!(
-            session.request_close_focused().unwrap(),
-            SessionUpdate::unchanged()
-        );
-        assert!(session.backend.close_attempts.is_empty());
-        assert_eq!(session.state().revision, 0);
-        assert!(session.backend.apply_attempts.is_empty());
-    }
-
-    #[test]
-    fn whichkey_toggle_only_emits_state_until_workarea_is_observed() {
-        let mut session = live_session(FakeBackend::new());
-        session
-            .handle_backend_event(window_opened("r1", "one"))
-            .unwrap();
-        let attempts = session.backend.apply_attempts.len();
-        let revision = session.state().revision;
-
-        let update = session.toggle_whichkey();
-
-        assert!(!update.projection_applied);
-        assert!(!update.state.as_ref().unwrap().whichkey);
-        assert_eq!(session.state().revision, revision + 1);
-        assert_eq!(session.backend.apply_attempts.len(), attempts);
-
-        let changed = Workarea {
-            output: Rect::new(0, 0, 2560, 1440),
-            tiles: Rect::new(0, 64, 2560, 1324),
-        };
-        let workarea_update = session
-            .handle_backend_event(BackendEvent::WorkareaChanged(changed))
-            .unwrap();
-        assert!(workarea_update.projection_applied);
-        assert_eq!(session.backend.apply_attempts.len(), attempts + 1);
     }
 
     fn policy_turn(id: u64, events: Vec<BackendPolicyEvent>) -> BackendEvent {
@@ -5156,7 +3583,6 @@ mod tests {
             Some(WinId(0))
         );
         assert_eq!(session.last_projection(), response_projection);
-        assert!(completed.projection_applied);
         assert_eq!(completed.action_completion.unwrap().ticket, origin);
     }
 
@@ -5791,9 +4217,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            SessionEventError::UnexpectedInitialReplayPolicyEvent(
-                BackendPolicyEvent::WorkareaChanged(_)
-            )
+            SessionEventError::UnexpectedInitialReplayEvent(BackendPolicyEvent::WorkareaChanged(_))
         ));
         assert!(session.backend.assignment_attempts.is_empty());
         assert!(session.backend.responses.is_empty());
@@ -5811,9 +4235,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             error,
-            SessionEventError::UnexpectedInitialReplayPolicyEvent(
-                BackendPolicyEvent::WorkareaChanged(_)
-            )
+            SessionEventError::UnexpectedInitialReplayEvent(BackendPolicyEvent::WorkareaChanged(_))
         ));
         assert!(precedence.backend.assignment_attempts.is_empty());
         assert!(precedence.backend.responses.is_empty());
@@ -6220,7 +4642,6 @@ mod tests {
             Some(WinId(1))
         );
         assert_eq!(session.last_projection(), response_projection);
-        assert!(completed.projection_applied);
         assert!(completed.action_completion.is_none());
     }
 
@@ -6440,7 +4861,23 @@ mod tests {
                 vec![BackendPolicyEvent::BindingReleased(focus)],
             ))
             .unwrap();
-        assert_eq!(pending_release.repeat_timer, RepeatTimerDirective::Disarm);
+        assert_eq!(pending_release, SessionUpdate::unchanged());
+        let release_ticket = press_release.backend.responses.last().unwrap().1;
+        assert_eq!(
+            press_release
+                .handle_backend_event(BackendEvent::OperationCompleted {
+                    ticket: release_ticket,
+                    result: Ok(()),
+                })
+                .unwrap(),
+            SessionUpdate::unchanged()
+        );
+        let finalized_release = press_release
+            .handle_backend_event(BackendEvent::RetainedObservationsDrained {
+                ticket: release_ticket,
+            })
+            .unwrap();
+        assert_eq!(finalized_release.repeat_timer, RepeatTimerDirective::Disarm);
 
         let mut mode = policy_live_session(FakeBackend::new());
         open_two_policy_windows(&mut mode);

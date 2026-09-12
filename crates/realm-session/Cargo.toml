@@ -17,3 +17,6 @@ thiserror = { workspace = true }
 bitflags = "=2.13.1"
 wayland-client = "=0.31.15"
 wayland-scanner = "=0.31.11"
+
+[dev-dependencies]
+trybuild = "=1.0.119"

@@ -440,42 +440,6 @@ pub enum BackendEvent {
         /// Completed operation identity.
         ticket: BackendTicket,
     },
-    /// The backend has reported every window present at connection time.
-    InitialReplayComplete,
-    /// A new window became manageable.
-    WindowOpened {
-        /// Stable compositor identity used for restart reconciliation.
-        backend_id: BackendWindowId,
-        /// Application identifier reported by the compositor.
-        app_id: String,
-        /// Window title reported by the compositor.
-        title: String,
-    },
-    /// A managed window closed.
-    WindowClosed(WinId),
-    /// A managed window changed its title.
-    TitleChanged {
-        /// Window whose title changed.
-        win: WinId,
-        /// New title.
-        title: String,
-    },
-    /// The compositor's current keyboard focus changed.
-    FocusChanged(Option<WinId>),
-    /// A layer surface acquired or released exclusive keyboard focus.
-    ExclusiveFocusChanged(bool),
-    /// The output workarea available for projection changed.
-    WorkareaChanged(Workarea),
-    /// The compositor moved a window independently.
-    ///
-    /// This is advisory. The ledger remains authoritative and the next
-    /// projection must overrule this rectangle.
-    GeometryDrifted {
-        /// Window moved by the compositor.
-        win: WinId,
-        /// Rectangle observed from the compositor.
-        rect: Rect,
-    },
     /// The compositor connection ended.
     Disconnected,
 }
@@ -518,29 +482,6 @@ pub trait WmBackend: Send {
     /// Begin the terminal compositor exit sequence.
     fn begin_exit_session(&mut self, policy: BackendExitPolicy) -> BackendResult<()>;
 
-    /// Apply the complete visible projection when it changed or a prior apply failed.
-    ///
-    /// While no error intervenes, implementations are idempotent: submitting
-    /// identical placements twice produces no visible change and no second
-    /// frame. Before returning an error, an implementation invalidates every
-    /// projection, diff, per-window and request cache. The next call must issue
-    /// the complete requested projection even when it equals the last
-    /// successful projection. Only success restores cache validity.
-    #[deprecated(note = "temporary compatibility seam; use respond_policy_turn")]
-    fn apply(&mut self, placements: &[Placement]) -> BackendResult<()>;
-
-    /// Give a window keyboard focus.
-    #[deprecated(note = "temporary compatibility seam; use respond_policy_turn")]
-    fn focus(&mut self, win: WinId) -> BackendResult<()>;
-
-    /// Ask a window to close politely.
-    #[deprecated(note = "temporary compatibility seam; use respond_policy_turn")]
-    fn close(&mut self, win: WinId) -> BackendResult<()>;
-
-    /// Return the current projection workarea.
-    #[deprecated(note = "temporary compatibility seam; consume policy turns")]
-    fn workarea(&self) -> Workarea;
-
     /// Return the backend descriptor used by the session poll set.
     fn event_fd(&self) -> BorrowedFd<'_>;
 
@@ -550,10 +491,6 @@ pub trait WmBackend: Send {
     /// Perform one bounded nonblocking protocol quantum and expose at most one event.
     fn service(&mut self, ready: BackendReady, now: Instant)
         -> BackendResult<Option<BackendEvent>>;
-
-    /// Wait for the next compositor event, bounded by an optional deadline.
-    #[deprecated(note = "temporary compatibility seam; use service")]
-    fn next_event(&mut self, deadline: Option<Instant>) -> BackendResult<Option<BackendEvent>>;
 }
 
 #[cfg(test)]
@@ -564,7 +501,6 @@ mod tests {
     use std::time::Instant;
 
     use realm_core::ipc::Capabilities;
-    use realm_core::layout::{Placement, Workarea};
     use realm_core::WinId;
 
     use super::{
@@ -657,24 +593,6 @@ mod tests {
             Ok(())
         }
 
-        fn apply(&mut self, _placements: &[Placement]) -> BackendResult<()> {
-            Err(BackendError::Unsupported {
-                capability: "exact-geometry".to_owned(),
-            })
-        }
-
-        fn focus(&mut self, _win: WinId) -> BackendResult<()> {
-            Ok(())
-        }
-
-        fn close(&mut self, _win: WinId) -> BackendResult<()> {
-            Ok(())
-        }
-
-        fn workarea(&self) -> Workarea {
-            Workarea::new(1920, 1080, 32, 26)
-        }
-
         fn event_fd(&self) -> BorrowedFd<'_> {
             self.event_file.as_fd()
         }
@@ -694,17 +612,9 @@ mod tests {
         ) -> BackendResult<Option<BackendEvent>> {
             Ok(self.events.pop_front())
         }
-
-        fn next_event(
-            &mut self,
-            _deadline: Option<Instant>,
-        ) -> BackendResult<Option<BackendEvent>> {
-            Ok(self.events.pop_front())
-        }
     }
 
     #[test]
-    #[allow(deprecated)]
     fn trait_exposes_the_accepted_backend_contract() {
         let mut backend: Box<dyn WmBackend> = Box::new(ContractBackend::default());
         let binding_id = BackendBindingId::try_from(3).unwrap();
@@ -713,7 +623,6 @@ mod tests {
 
         assert_eq!(backend.name(), "contract");
         assert!(backend.event_fd().as_raw_fd() >= 0);
-        assert_eq!(backend.workarea().tiles.h, 1022);
         assert_eq!(binding_id.get(), 3);
         assert_eq!(turn_id.get(), 5);
         assert_eq!(ticket.get(), 9);
@@ -910,14 +819,14 @@ mod tests {
         backend.assign_window(&backend_id, WinId(42)).unwrap();
 
         assert_eq!(backend.assigned, Some((backend_id.clone(), WinId(42))));
-        let event = BackendEvent::WindowOpened {
+        let event = BackendPolicyEvent::WindowOpened {
             backend_id: backend_id.clone(),
             app_id: "foot".to_owned(),
             title: "shell".to_owned(),
         };
         assert!(matches!(
             event,
-            BackendEvent::WindowOpened {
+            BackendPolicyEvent::WindowOpened {
                 backend_id: observed,
                 ..
             } if observed == backend_id
@@ -927,8 +836,8 @@ mod tests {
     #[test]
     fn exclusive_layer_focus_is_distinct_from_window_focus() {
         assert_ne!(
-            BackendEvent::ExclusiveFocusChanged(true),
-            BackendEvent::FocusChanged(None)
+            BackendPolicyEvent::ExclusiveFocusChanged(true),
+            BackendPolicyEvent::FocusChanged(None)
         );
     }
 }
