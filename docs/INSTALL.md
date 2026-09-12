@@ -166,7 +166,9 @@ is intake context for running that producer; it is not the package build input.
 `debian/rules` rejects a full checkout before Cargo rather than treating it as
 a second workspace authority.
 
-Ubuntu 24.04's default rustc is 1.75, which is below realm's MSRV of 1.85. The
+The retained native kit still requires Rust 1.85 and does not yet include the
+new bar. The current source workspace requires **Rust 1.89 or newer**.
+Ubuntu 24.04's default rustc is 1.75, below either floor. The
 archive carries versioned toolchain packages — `rustc-1.85`/`cargo-1.85` are
 there (1.85.1) — and `debian/rules` puts the newest one it finds on PATH,
 failing with a clear message rather than building with the wrong compiler.
@@ -225,9 +227,9 @@ and the same retained Realm bundle. `%prep` rejects a checkout-shaped Source0
 and stages Cargo exclusively from the canonical inner `source.tar.gz`.
 
 Fedora 44's official package listing reported `rust` and `cargo` 1.97.1 on
-2026-08-29, above the current Rust 1.85 MSRV. Fedora repositories float, so
+2026-08-29, above the current Rust 1.89 MSRV. Fedora repositories float, so
 check `rustc --version` when building from source. On an older Fedora release,
-use `rustup` to install Rust 1.85 or newer for a source-workspace build; do not
+use `rustup` to install Rust 1.89 or newer for a source-workspace build; do not
 lower `rust-version` to match a distro toolchain, because the locked dependency
 graph would still fail to parse. RPM builds remain governed by the toolchain
 requirement in `packaging/fedora/realm.spec`.
