@@ -28,6 +28,7 @@ struct PreviousFrame {
 pub struct BarRenderer {
     text: TextSystem,
     previous_bar: Option<PreviousFrame>,
+    pending_bar: Option<PreviousFrame>,
     unknown_accents: HashSet<String>,
 }
 
@@ -36,6 +37,7 @@ impl BarRenderer {
         Ok(Self {
             text: TextSystem::new(palette)?,
             previous_bar: None,
+            pending_bar: None,
             unknown_accents: HashSet::new(),
         })
     }
@@ -46,6 +48,12 @@ impl BarRenderer {
 
     pub fn font_summary(&self) -> String {
         self.probe().summary()
+    }
+
+    pub fn commit_bar_frame(&mut self) {
+        if let Some(committed) = self.pending_bar.take() {
+            self.previous_bar = Some(committed);
+        }
     }
 
     pub fn render_bar(
@@ -74,6 +82,7 @@ impl BarRenderer {
         scale: u32,
         mut covers: impl FnMut(char) -> bool,
     ) -> Frame {
+        self.text.begin_bar_frame();
         let height = palette.metrics.bar_height.max(1) as u32;
         let scale = scale.max(1);
         let mut dropped_modules = Vec::new();
@@ -81,9 +90,11 @@ impl BarRenderer {
         let mut show_layout_label = true;
         let mut show_logo_text = true;
 
-        let mut title = sanitize_with(&state.focused_title, &mut covers);
+        let full_title = sanitize_with(&state.focused_title, &mut covers);
+        let mut title = full_title.clone();
+        let mut title_keep = full_title.chars().count();
         let chord = sanitize_with(&state.chord_echo, &mut covers);
-        let minimum_title = middle_elide(&title, 8, probe);
+        let minimum_title = middle_elide(&full_title, 8, probe);
 
         loop {
             let left = self.left_width(state, palette, probe, show_logo_text, show_layout_label);
@@ -93,7 +104,8 @@ impl BarRenderer {
                 break;
             }
             if title != minimum_title {
-                title = minimum_title.clone();
+                title_keep = title_keep.saturating_sub(1).max(8);
+                title = middle_elide(&full_title, title_keep, probe);
                 continue;
             }
             if !chord.is_empty() && !title.is_empty() {
@@ -146,7 +158,7 @@ impl BarRenderer {
         } else {
             logo_glyph.to_string()
         };
-        let logo_width = self.text.measure(&logo_text, body, medium) + 28;
+        let logo_width = self.text.measure_chrome(&logo_text, body, medium) + 28;
         elements.push(element(
             ElementRole::Logo,
             None,
@@ -191,7 +203,7 @@ impl BarRenderer {
         } else {
             layout_glyph.to_string()
         };
-        let layout_width = self.text.measure(&layout_text, body, regular) + 12;
+        let layout_width = self.text.measure_chrome(&layout_text, body, regular) + 12;
         elements.push(element(
             ElementRole::Layout,
             None,
@@ -207,7 +219,7 @@ impl BarRenderer {
         x += layout_width as i32 + 10;
 
         let mode_text = format!("{} {}", glyph("mode badge", probe), state.mode.badge());
-        let mode_width = self.text.measure(&mode_text, meta, medium) + 16;
+        let mode_width = self.text.measure_chrome(&mode_text, meta, medium) + 16;
         elements.push(element(
             ElementRole::Mode,
             None,
@@ -303,8 +315,10 @@ impl BarRenderer {
         elements.extend(module_elements);
 
         let damage = self.bar_damage(state, palette, width, height, scale, &elements);
+        self.text.begin_bar_frame();
         let pixels = self.paint_bar(&elements, palette, width, height, scale);
-        self.previous_bar = Some(PreviousFrame {
+        self.text.finish_bar_frame();
+        self.pending_bar = Some(PreviousFrame {
             state: state.clone(),
             palette: palette.clone(),
             width,
@@ -336,9 +350,9 @@ impl BarRenderer {
         let meta = palette.typography.size_meta;
         let regular = palette.typography.weight_regular;
         let modifier_text = format!("{} {}", glyph("modifier", probe), keymap.modifier);
-        let modifier_width = self.text.measure(&modifier_text, meta, regular) + 24;
+        let modifier_width = self.text.measure_chrome(&modifier_text, meta, regular) + 24;
         let prompt = "? grimoire - full spellbook".to_owned();
-        let prompt_width = self.text.measure(&prompt, meta, regular) + 12;
+        let prompt_width = self.text.measure_chrome(&prompt, meta, regular) + 12;
         let all_hints: Vec<String> = keymap
             .strip()
             .map(|binding| {
@@ -355,10 +369,10 @@ impl BarRenderer {
         loop {
             let hints_width = hints
                 .iter()
-                .map(|hint| self.text.measure(hint, meta, regular) + 18)
+                .map(|hint| self.text.measure_chrome(hint, meta, regular) + 18)
                 .sum::<u32>();
             let elision_width = if hints.len() < all_hints.len() {
-                self.text.measure(&elision, meta, regular) + 18
+                self.text.measure_chrome(&elision, meta, regular) + 18
             } else {
                 0
             };
@@ -406,7 +420,7 @@ impl BarRenderer {
         ));
         x += modifier_width + 14;
         for hint in hints {
-            let hint_width = self.text.measure(&hint, meta, regular);
+            let hint_width = self.text.measure_chrome(&hint, meta, regular);
             elements.push(element(
                 ElementRole::Hint,
                 None,
@@ -428,7 +442,7 @@ impl BarRenderer {
                 .count()
                 < all_hints.len()
         {
-            let elision_width = self.text.measure(&elision, meta, regular);
+            let elision_width = self.text.measure_chrome(&elision, meta, regular);
             elements.push(element(
                 ElementRole::Elision,
                 None,
@@ -494,11 +508,18 @@ impl BarRenderer {
             .iter()
             .filter(|binding| !binding.hint_key.is_empty())
             .collect();
-        let rows = bindings.len().div_ceil(2) as u32;
+        let mut modes = Vec::new();
+        for binding in &bindings {
+            if !modes.contains(&binding.mode) {
+                modes.push(binding.mode);
+            }
+        }
+        let body_entries = bindings.len() + modes.len();
+        let rows = body_entries.div_ceil(2) as u32;
         let max_panel_height =
             height.saturating_sub((palette.metrics.bar_height.max(0) as u32).saturating_mul(4));
         let panel_height =
-            (header_height + 22 + rows * row_height + 28).min(max_panel_height.max(header_height));
+            (header_height + rows * row_height + 28).min(max_panel_height.max(header_height));
         let body = palette.typography.size_body;
         let micro = palette.typography.size_micro;
         let meta = palette.typography.size_meta;
@@ -544,9 +565,9 @@ impl BarRenderer {
             true,
         ));
         let dismiss = "esc dismiss".to_owned();
-        let dismiss_width = self
-            .text
-            .measure(&dismiss, micro, palette.typography.weight_regular);
+        let dismiss_width =
+            self.text
+                .measure_chrome(&dismiss, micro, palette.typography.weight_regular);
         elements.push(element(
             ElementRole::GrimoireDismiss,
             None,
@@ -566,50 +587,18 @@ impl BarRenderer {
         ));
 
         let column_width = panel_width / 2;
-        let mut modes_seen = Vec::new();
-        for (index, binding) in bindings.iter().enumerate() {
-            if !modes_seen.contains(&binding.mode) {
-                modes_seen.push(binding.mode);
-            }
-            let column = (index >= rows as usize) as u32;
-            let row = if column == 0 {
-                index as u32
-            } else {
-                index as u32 - rows
-            };
-            let bx = panel_x + (column * column_width) as i32 + 16;
-            let by = panel_y + header_height as i32 + 22 + (row * row_height) as i32;
-            let text = format!(
-                "{} {} {}  {}  {}",
-                glyph("modifier", probe),
-                keymap.modifier,
-                resolve_chrome(&binding.hint_key, probe),
-                binding.label,
-                action_label(&binding.action)
-            );
-            elements.push(element(
-                ElementRole::GrimoireBinding,
-                Some(binding.key.clone()),
-                text,
-                LogicalRect::new(bx, by, column_width.saturating_sub(32), row_height),
-                palette.text.bright,
-                Some(palette.text.mid),
-                None,
-                None,
-                meta,
-                true,
-            ));
-        }
-        for (index, mode) in modes_seen.into_iter().enumerate() {
+        let mut entry_index = 0usize;
+        for (mode_index, mode) in modes.into_iter().enumerate() {
+            let (column, row) = grid_position(entry_index, rows);
             elements.push(element(
                 ElementRole::GrimoireMode,
-                Some(format!("mode-{index}")),
+                Some(format!("mode-{mode_index}")),
                 mode.badge().to_owned(),
                 LogicalRect::new(
-                    panel_x + 16 + (index as u32 % 2 * column_width) as i32,
-                    panel_y + header_height as i32,
+                    panel_x + 16 + (column * column_width) as i32,
+                    panel_y + header_height as i32 + (row * row_height) as i32,
                     column_width.saturating_sub(32),
-                    22,
+                    row_height,
                 ),
                 palette.text.dim,
                 None,
@@ -618,6 +607,77 @@ impl BarRenderer {
                 micro,
                 true,
             ));
+            entry_index += 1;
+
+            for binding in bindings
+                .iter()
+                .copied()
+                .filter(|binding| binding.mode == mode)
+            {
+                let (column, row) = grid_position(entry_index, rows);
+                let bx = panel_x + (column * column_width) as i32 + 16;
+                let by = panel_y + header_height as i32 + (row * row_height) as i32;
+                let key = format!(
+                    "{} {} {}",
+                    glyph("modifier", probe),
+                    keymap.modifier,
+                    resolve_chrome(&binding.hint_key, probe)
+                );
+                let key_width =
+                    self.text
+                        .measure_chrome(&key, meta, palette.typography.weight_regular);
+                let label_width = self.text.measure_chrome(
+                    &binding.label,
+                    meta,
+                    palette.typography.weight_regular,
+                );
+                let id = Some(binding.key.clone());
+                elements.push(element(
+                    ElementRole::GrimoireBinding,
+                    id.clone(),
+                    key,
+                    LogicalRect::new(bx, by, key_width, row_height),
+                    palette.text.bright,
+                    None,
+                    None,
+                    None,
+                    meta,
+                    true,
+                ));
+                elements.push(element(
+                    ElementRole::GrimoireBinding,
+                    id.clone(),
+                    binding.label.clone(),
+                    LogicalRect::new(bx + key_width as i32 + 10, by, label_width, row_height),
+                    palette.text.mid,
+                    None,
+                    None,
+                    None,
+                    meta,
+                    true,
+                ));
+                elements.push(element(
+                    ElementRole::GrimoireBinding,
+                    id,
+                    action_label(&binding.action),
+                    LogicalRect::new(
+                        bx + key_width as i32 + label_width as i32 + 20,
+                        by,
+                        column_width
+                            .saturating_sub(52)
+                            .saturating_sub(key_width)
+                            .saturating_sub(label_width),
+                        row_height,
+                    ),
+                    palette.text.dim,
+                    None,
+                    None,
+                    None,
+                    micro,
+                    true,
+                ));
+                entry_index += 1;
+            }
         }
         elements.push(element(
             ElementRole::GrimoireFooter,
@@ -675,7 +735,7 @@ impl BarRenderer {
         };
         let mode = format!("{} {}", glyph("mode badge", probe), state.mode.badge());
         self.text
-            .measure(&logo_text, body, palette.typography.weight_medium)
+            .measure_chrome(&logo_text, body, palette.typography.weight_medium)
             + 28
             + 6
             + (28 * state.orbits.len() as u32)
@@ -683,12 +743,12 @@ impl BarRenderer {
             + 12
             + self
                 .text
-                .measure(&layout_text, body, palette.typography.weight_regular)
+                .measure_chrome(&layout_text, body, palette.typography.weight_regular)
             + 12
             + 10
             + self
                 .text
-                .measure(&mode, meta, palette.typography.weight_medium)
+                .measure_chrome(&mode, meta, palette.typography.weight_medium)
             + 16
             + 14
     }
@@ -860,11 +920,19 @@ impl BarRenderer {
             }
             if !item.text.is_empty() {
                 let rect = item.rect.scaled(scale);
-                let measured = self.text.measure(
-                    &item.text,
-                    item.font_size * scale as f32,
-                    palette.typography.weight_regular,
-                );
+                let measured = if item.chrome {
+                    self.text.measure_chrome(
+                        &item.text,
+                        item.font_size * scale as f32,
+                        palette.typography.weight_regular,
+                    )
+                } else {
+                    self.text.measure(
+                        &item.text,
+                        item.font_size * scale as f32,
+                        palette.typography.weight_regular,
+                    )
+                };
                 let text_x = if item.role == ElementRole::Orbit || item.role == ElementRole::Mode {
                     rect.x + ((rect.width.saturating_sub(measured)) / 2) as i32
                 } else {
@@ -885,6 +953,7 @@ impl BarRenderer {
                             item.font_size * scale as f32,
                             palette.typography.weight_regular,
                             glow,
+                            item.chrome,
                         );
                     }
                 }
@@ -899,8 +968,9 @@ impl BarRenderer {
                             item.font_size * scale as f32,
                             palette.typography.weight_regular,
                             item.foreground,
+                            item.chrome,
                         );
-                        let key_width = self.text.measure(
+                        let key_width = self.text.measure_chrome(
                             key,
                             item.font_size * scale as f32,
                             palette.typography.weight_regular,
@@ -914,6 +984,7 @@ impl BarRenderer {
                             item.font_size * scale as f32,
                             palette.typography.weight_regular,
                             item.secondary_foreground.unwrap_or(item.foreground),
+                            item.chrome,
                         );
                     }
                 } else if item.role == ElementRole::GrimoirePrompt {
@@ -927,8 +998,9 @@ impl BarRenderer {
                         item.font_size * scale as f32,
                         palette.typography.weight_regular,
                         item.secondary_foreground.unwrap_or(item.foreground),
+                        item.chrome,
                     );
-                    let lead_width = self.text.measure(
+                    let lead_width = self.text.measure_chrome(
                         lead,
                         item.font_size * scale as f32,
                         palette.typography.weight_regular,
@@ -942,6 +1014,7 @@ impl BarRenderer {
                         item.font_size * scale as f32,
                         palette.typography.weight_regular,
                         item.foreground,
+                        item.chrome,
                     );
                 } else {
                     self.text.draw(
@@ -953,6 +1026,7 @@ impl BarRenderer {
                         item.font_size * scale as f32,
                         palette.typography.weight_regular,
                         item.foreground,
+                        item.chrome,
                     );
                 }
             }
@@ -1122,6 +1196,12 @@ fn action_label(action: &Action) -> String {
         Action::ReloadTheme => "theme".into(),
         Action::Quit => "quit".into(),
     }
+}
+
+fn grid_position(index: usize, rows: u32) -> (u32, u32) {
+    let rows = rows.max(1);
+    let index = index as u32;
+    (index / rows, index % rows)
 }
 
 fn vertical_gradient(pixmap: &mut Pixmap, top: Rgb, bottom: Rgb) {
