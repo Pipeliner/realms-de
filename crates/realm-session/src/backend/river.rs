@@ -538,7 +538,7 @@ struct PendingResponse {
     response: BackendPolicyResponse,
     stage: ResponseStage,
     terminal_error: Option<BackendError>,
-    corrections: HashMap<ObjectId, (i32, i32)>,
+    corrections: HashMap<ObjectId, ((i32, i32), (i32, i32))>,
     correction_round: bool,
 }
 
@@ -590,6 +590,7 @@ pub struct RiverBackend {
     selected_output_lost: bool,
     terminal_after_response: Option<BackendError>,
     last_projection: Option<Vec<realm_core::layout::Placement>>,
+    deferred_corrections: HashMap<ObjectId, ((i32, i32), (i32, i32))>,
     read_guard: Option<BoundedReadEventsGuard>,
     flush_pending: bool,
     flush_blocked: bool,
@@ -669,6 +670,7 @@ impl RiverBackend {
             selected_output_lost: false,
             terminal_after_response: None,
             last_projection: None,
+            deferred_corrections: HashMap::new(),
             read_guard: None,
             flush_pending: false,
             flush_blocked: false,
@@ -902,6 +904,7 @@ impl RiverBackend {
             return Err(protocol_error());
         }
         let terminal_error = self.terminal_after_response.take();
+        let mut correction_round = false;
         if terminal_error.is_none() {
             for win in &response.closes {
                 let backend_id = self.realm_ids.get(win).ok_or_else(protocol_error)?;
@@ -913,6 +916,35 @@ impl RiverBackend {
                     .close();
             }
             self.apply_manage_response(&response)?;
+            let requested_sizes: HashMap<_, _> = response
+                .projection
+                .as_ref()
+                .map(|projection| {
+                    projection
+                        .iter()
+                        .filter_map(|placement| {
+                            let backend_id = self.realm_ids.get(&placement.win)?;
+                            let object_id = self.window_ids.get(backend_id)?.clone();
+                            Some((object_id, (placement.rect.w, placement.rect.h)))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (id, (target, corrected)) in std::mem::take(&mut self.deferred_corrections) {
+                if !self.windows.contains_key(&id) {
+                    continue;
+                }
+                if response.projection.is_some()
+                    && requested_sizes.get(&id).copied() != Some(target)
+                {
+                    continue;
+                }
+                let window = self.windows.get_mut(&id).ok_or_else(protocol_error)?;
+                window.proxy.propose_dimensions(corrected.0, corrected.1);
+                window.proposed_size = Some(corrected);
+                window.awaiting_dimensions = true;
+                correction_round = true;
+            }
         }
         self.window_manager
             .as_ref()
@@ -925,7 +957,7 @@ impl RiverBackend {
             stage: ResponseStage::AwaitRender,
             terminal_error,
             corrections: HashMap::new(),
-            correction_round: false,
+            correction_round,
         });
         self.flush_pending = true;
         Ok(BackendSubmission::Pending)
@@ -1742,42 +1774,50 @@ impl RiverBackend {
                     .as_ref()
                     .is_some_and(|pending| pending.stage == ResponseStage::AwaitCorrectionManage)
                 {
-                    let corrections = std::mem::take(
-                        &mut self
-                            .pending_response
-                            .as_mut()
-                            .ok_or_else(protocol_error)?
-                            .corrections,
-                    );
-                    for (id, size) in corrections {
-                        let window = self.windows.get_mut(&id).ok_or_else(protocol_error)?;
-                        window.proxy.propose_dimensions(size.0, size.1);
-                        window.proposed_size = Some(size);
-                        window.awaiting_dimensions = true;
+                    let pending = self.pending_response.take().ok_or_else(protocol_error)?;
+                    if pending.terminal_error.is_some() {
+                        return Err(protocol_error());
                     }
-                    self.window_manager
-                        .as_ref()
-                        .ok_or_else(protocol_error)?
-                        .manage_finish();
-                    self.pending_response
-                        .as_mut()
-                        .ok_or_else(protocol_error)?
-                        .stage = ResponseStage::AwaitRender;
-                    self.flush_pending = true;
+                    if let Some(projection) = pending.response.projection {
+                        self.last_projection = Some(projection);
+                    }
+                    self.deferred_corrections = pending.corrections;
+                    self.public_events
+                        .push_back(BackendEvent::OperationCompleted {
+                            ticket: pending.ticket,
+                            result: Ok(()),
+                        });
+                    self.drain_ticket = Some(pending.ticket);
+                    self.finish_policy_turn()?;
                 } else {
                     self.finish_policy_turn()?;
                 }
             }
             Incoming::RenderStart => {
                 if let Some(pending) = self.pending_response.as_ref() {
-                    if pending.stage != ResponseStage::AwaitRender {
-                        return Err(protocol_error());
-                    }
                     let projection = pending
                         .terminal_error
                         .is_none()
-                        .then(|| pending.response.projection.clone())
+                        .then(|| {
+                            pending
+                                .response
+                                .projection
+                                .clone()
+                                .or_else(|| self.last_projection.clone())
+                        })
                         .flatten();
+                    if pending.stage == ResponseStage::AwaitCorrectionManage {
+                        let _ = self.apply_render_response(projection.as_deref(), false)?;
+                        self.window_manager
+                            .as_ref()
+                            .ok_or_else(protocol_error)?
+                            .render_finish();
+                        self.flush_pending = true;
+                        return Ok(());
+                    }
+                    if pending.stage != ResponseStage::AwaitRender {
+                        return Err(protocol_error());
+                    }
                     let allow_correction = !pending.correction_round;
                     let corrections =
                         self.apply_render_response(projection.as_deref(), allow_correction)?;
@@ -1959,7 +1999,7 @@ impl RiverBackend {
         &mut self,
         projection: Option<&[realm_core::layout::Placement]>,
         allow_correction: bool,
-    ) -> BackendResult<HashMap<ObjectId, (i32, i32)>> {
+    ) -> BackendResult<HashMap<ObjectId, ((i32, i32), (i32, i32))>> {
         let Some(projection) = projection else {
             return Ok(HashMap::new());
         };
@@ -2011,8 +2051,11 @@ impl RiverBackend {
                         corrections.insert(
                             object_id.clone(),
                             (
-                                target.0 + (target.0 - actual.0).max(0),
-                                target.1 + (target.1 - actual.1).max(0),
+                                target,
+                                (
+                                    target.0 + (target.0 - actual.0).max(0),
+                                    target.1 + (target.1 - actual.1).max(0),
+                                ),
                             ),
                         );
                     }

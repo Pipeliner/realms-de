@@ -289,13 +289,18 @@ fn serve_initial_replay(
         }
     }
     if let Some((width, height)) = corrected_dimensions {
+        // River may offer another render phase before honoring manage_dirty.
+        peer.write_all(&frame(window_manager, 3, &[])).unwrap();
+        let mut saw_manage_dirty = false;
         loop {
             let request @ (sender, opcode, _) = read_request(&mut peer);
             requests.push(request);
-            if sender == window_manager && opcode == 3 {
+            saw_manage_dirty |= sender == window_manager && opcode == 3;
+            if sender == window_manager && opcode == 4 {
                 break;
             }
         }
+        assert!(saw_manage_dirty);
         peer.write_all(&frame(window_manager, 2, &[])).unwrap();
         loop {
             let request @ (sender, opcode, _) = read_request(&mut peer);
@@ -566,26 +571,46 @@ fn short_dimensions_get_one_correction_before_the_response_completes() {
     submit_single_window_projection(&mut backend, ticket);
 
     let mut completions = 0;
+    let correction_ticket = BackendTicket::new(13).unwrap();
     for _ in 0..256 {
-        if matches!(
-            backend
-                .service(
-                    BackendReady {
-                        readable: true,
-                        terminal: false,
-                        writable: true,
-                    },
-                    Instant::now(),
-                )
-                .unwrap(),
-            Some(BackendEvent::OperationCompleted { .. })
-        ) {
-            completions += 1;
+        match backend
+            .service(
+                BackendReady {
+                    readable: true,
+                    terminal: false,
+                    writable: true,
+                },
+                Instant::now(),
+            )
+            .unwrap()
+        {
+            Some(BackendEvent::OperationCompleted { .. }) => completions += 1,
+            Some(BackendEvent::PolicyTurn(turn)) => {
+                assert_eq!(turn.drains, Some(ticket));
+                backend
+                    .respond_policy_turn(
+                        turn.id,
+                        correction_ticket,
+                        BackendPolicyResponse {
+                            projection: None,
+                            closes: Vec::new(),
+                            bindings: BackendBindingState {
+                                enabled: Vec::new(),
+                                watched_modifiers: Vec::new(),
+                                next_key_edge: BackendNextKeyEdge::Preserve,
+                            },
+                        },
+                    )
+                    .unwrap();
+            }
+            _ => {}
+        }
+        if completions == 2 {
             break;
         }
         thread::sleep(Duration::from_millis(1));
     }
-    assert_eq!(completions, 1);
+    assert_eq!(completions, 2);
 
     let requests = fixture.join().unwrap();
     let proposals: Vec<_> = requests
