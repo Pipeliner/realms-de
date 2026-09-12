@@ -1762,6 +1762,13 @@ impl<B: WmBackend> Session<B> {
     ) -> Result<SessionUpdate, SessionEventError> {
         self.validate_policy_turn(&turn)?;
 
+        let carries_staged_projection = matches!(
+            self.transaction,
+            TransactionSubstate::AwaitingExternalTurn { .. }
+                | TransactionSubstate::AwaitingInternalTurn { .. }
+                | TransactionSubstate::AwaitingRepairTurn { .. }
+        );
+
         let response_ticket = match self.transaction {
             TransactionSubstate::Idle => self.allocate_event_ticket()?,
             TransactionSubstate::AwaitingExternalTurn { ticket }
@@ -1780,7 +1787,9 @@ impl<B: WmBackend> Session<B> {
         active.response.projection = None;
         active.response.closes.clear();
         active.response.bindings.next_key_edge = BackendNextKeyEdge::Preserve;
-        active.projection_required = false;
+        if !carries_staged_projection {
+            active.projection_required = false;
+        }
         active.binding_changed = false;
         active.terminal_result = None;
         if let Some(close) = active.close_target {
@@ -2281,7 +2290,7 @@ impl<B: WmBackend> Session<B> {
                 | BackendPolicyEvent::BindingRepeatStopped(id) => {
                     active.working.held_bindings.remove(id);
                     if active.repeat_candidate == Some(*id) {
-                        active.repeat_candidate = None;
+                        active.repeat_timer = RepeatTimerDirective::Disarm;
                     }
                     if self.repeat_target == Some(*id) {
                         self.repeat_target = None;
@@ -2294,6 +2303,7 @@ impl<B: WmBackend> Session<B> {
                         active.working.chord_echo.clear();
                         active.binding_changed = true;
                     }
+                    active.response.bindings.next_key_edge = BackendNextKeyEdge::Preserve;
                 }
                 BackendPolicyEvent::ModifiersChanged { new, .. } => {
                     active.working.active_modifiers = new.clone();
@@ -2364,9 +2374,11 @@ impl<B: WmBackend> Session<B> {
                     String::new()
                 };
                 active.binding_changed = true;
-                if *mode != Mode::Nav {
-                    active.response.bindings.next_key_edge = BackendNextKeyEdge::Ensure;
-                }
+                active.response.bindings.next_key_edge = if *mode == Mode::Nav {
+                    BackendNextKeyEdge::Preserve
+                } else {
+                    BackendNextKeyEdge::Ensure
+                };
             }
             Action::Banish => {
                 if let Some(win) = active.working.ledger.focused() {
@@ -2450,6 +2462,9 @@ impl<B: WmBackend> Session<B> {
                     delay: Duration::from_millis(KEY_REPEAT_DELAY_MS),
                     interval: Duration::from_millis(1_000 / u64::from(KEY_REPEAT_RATE_HZ)),
                 };
+            } else {
+                self.repeat_target = None;
+                repeat_timer = RepeatTimerDirective::Disarm;
             }
         }
         if self
@@ -2788,7 +2803,7 @@ mod tests {
 
     use super::{
         RecoveryPhase, RepeatTimerDirective, Session, SessionActionError, SessionEffect,
-        SessionEventError, SessionSnapshotV1, SessionUpdate, SnapshotBinding,
+        SessionEventError, SessionSnapshotV1, SessionUpdate, SnapshotBinding, TransactionSubstate,
     };
 
     struct FakeBackend {
@@ -4331,6 +4346,30 @@ mod tests {
         session.backend.call_order.clear();
     }
 
+    fn policy_in_flight_session() -> (Session<FakeBackend>, BackendTicket) {
+        let mut session = policy_live_session(FakeBackend::new());
+        session
+            .backend
+            .response_results
+            .push_back(Ok(BackendSubmission::Pending));
+        session
+            .handle_backend_event(policy_turn(3, Vec::new()))
+            .unwrap();
+        let ticket = session.backend.responses[0].1;
+        (session, ticket)
+    }
+
+    fn policy_awaiting_drain_session() -> (Session<FakeBackend>, BackendTicket) {
+        let (mut session, ticket) = policy_in_flight_session();
+        session
+            .handle_backend_event(BackendEvent::OperationCompleted {
+                ticket,
+                result: Ok(()),
+            })
+            .unwrap();
+        (session, ticket)
+    }
+
     fn test_binding(key: &str, action: Action, mode: Mode, repeatable: bool) -> Binding {
         Binding {
             key: key.to_owned(),
@@ -4478,6 +4517,135 @@ mod tests {
     }
 
     #[test]
+    fn in_flight_rejects_every_second_untagged_turn_without_response() {
+        for events in [Vec::new(), vec![policy_window_opened("private", "private")]] {
+            let (mut session, ticket) = policy_in_flight_session();
+            let responses = session.backend.responses.clone();
+            let assignments = session.backend.assignment_attempts.clone();
+            let watermark = session.last_backend_ticket;
+
+            let error = session
+                .handle_backend_event(policy_turn(4, events))
+                .unwrap_err();
+
+            assert!(matches!(
+                error,
+                SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
+            ));
+            assert_eq!(session.backend.responses, responses);
+            assert_eq!(session.backend.assignment_attempts, assignments);
+            assert_eq!(session.last_backend_ticket, watermark);
+            assert_eq!(
+                session.transaction,
+                TransactionSubstate::InFlight { ticket }
+            );
+            assert!(session.active.is_some());
+        }
+    }
+
+    #[test]
+    fn awaiting_drain_rejects_untagged_and_wrong_tagged_turns() {
+        let (mut untagged, ticket) = policy_awaiting_drain_session();
+        let responses = untagged.backend.responses.clone();
+        let watermark = untagged.last_backend_ticket;
+        let error = untagged
+            .handle_backend_event(policy_turn(4, Vec::new()))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
+        ));
+        assert_eq!(untagged.backend.responses, responses);
+        assert_eq!(untagged.last_backend_ticket, watermark);
+        assert_eq!(
+            untagged.transaction,
+            TransactionSubstate::AwaitingDrain { ticket }
+        );
+
+        let (mut wrong_tag, ticket) = policy_awaiting_drain_session();
+        let wrong_ticket = BackendTicket::new(ticket.get() + 1).unwrap();
+        let responses = wrong_tag.backend.responses.clone();
+        let watermark = wrong_tag.last_backend_ticket;
+        let error = wrong_tag
+            .handle_backend_event(draining_policy_turn(4, wrong_ticket, Vec::new()))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
+        ));
+        assert_eq!(wrong_tag.backend.responses, responses);
+        assert_eq!(wrong_tag.last_backend_ticket, watermark);
+        assert_eq!(
+            wrong_tag.transaction,
+            TransactionSubstate::AwaitingDrain { ticket }
+        );
+    }
+
+    #[test]
+    fn awaiting_drain_accepts_only_one_matching_tagged_turn() {
+        let (mut session, ticket) = policy_awaiting_drain_session();
+
+        let completed = session
+            .handle_backend_event(draining_policy_turn(4, ticket, Vec::new()))
+            .unwrap();
+
+        assert_eq!(completed, SessionUpdate::unchanged());
+        assert_eq!(session.backend.responses.len(), 2);
+        assert_eq!(session.backend.responses[1].0.get(), 4);
+        assert_eq!(session.transaction, TransactionSubstate::Idle);
+        assert!(session.active.is_none());
+        let responses = session.backend.responses.clone();
+        let error = session
+            .handle_backend_event(draining_policy_turn(5, ticket, Vec::new()))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
+        ));
+        assert_eq!(session.backend.responses, responses);
+    }
+
+    #[test]
+    fn awaiting_drain_accepts_only_one_matching_marker() {
+        let (mut wrong_tag, ticket) = policy_awaiting_drain_session();
+        let wrong_ticket = BackendTicket::new(ticket.get() + 1).unwrap();
+        let responses = wrong_tag.backend.responses.clone();
+        let error = wrong_tag
+            .handle_backend_event(BackendEvent::RetainedObservationsDrained {
+                ticket: wrong_ticket,
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
+        ));
+        assert_eq!(wrong_tag.backend.responses, responses);
+        assert_eq!(
+            wrong_tag.transaction,
+            TransactionSubstate::AwaitingDrain { ticket }
+        );
+
+        let (mut session, ticket) = policy_awaiting_drain_session();
+        let responses = session.backend.responses.clone();
+        let completed = session
+            .handle_backend_event(BackendEvent::RetainedObservationsDrained { ticket })
+            .unwrap();
+        assert_eq!(completed, SessionUpdate::unchanged());
+        assert_eq!(session.backend.responses, responses);
+        assert_eq!(session.transaction, TransactionSubstate::Idle);
+        assert!(session.active.is_none());
+
+        let error = session
+            .handle_backend_event(BackendEvent::RetainedObservationsDrained { ticket })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
+        ));
+        assert_eq!(session.backend.responses, responses);
+    }
+
+    #[test]
     fn resize_binding_is_answered_in_the_same_policy_turn() {
         let mut session = policy_live_session(FakeBackend::new());
         let resize = binding_id(&session, "r");
@@ -4549,6 +4717,69 @@ mod tests {
         );
         assert_eq!(update.state.as_ref().unwrap().mode, Mode::Nav);
         assert!(update.state.as_ref().unwrap().chord_echo.is_empty());
+    }
+
+    #[test]
+    fn same_batch_submap_press_then_unbound_exit_returns_nav_without_ensure() {
+        let mut keymap = Keymap::default();
+        keymap.bindings.push(test_binding(
+            "Left",
+            Action::Focus(Dir::Prev),
+            Mode::Resize,
+            true,
+        ));
+        let mut unbound_exit = policy_live_session_with_keymap(FakeBackend::new(), keymap);
+        let resize = binding_id(&unbound_exit, "r");
+        let left = binding_id(&unbound_exit, "Left");
+        unbound_exit
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::BindingPressed(resize)],
+            ))
+            .unwrap();
+        unbound_exit.backend.responses.clear();
+
+        let update = unbound_exit
+            .handle_backend_event(policy_turn(
+                4,
+                vec![
+                    BackendPolicyEvent::BindingPressed(left),
+                    BackendPolicyEvent::UnboundKeyEaten,
+                ],
+            ))
+            .unwrap();
+
+        let response = &unbound_exit.backend.responses[0].2;
+        assert_eq!(
+            response.bindings.next_key_edge,
+            BackendNextKeyEdge::Preserve
+        );
+        assert!(response.bindings.enabled.contains(&resize));
+        assert!(!response.bindings.enabled.contains(&left));
+        assert_eq!(update.state.as_ref().unwrap().mode, Mode::Nav);
+        assert!(update.state.as_ref().unwrap().chord_echo.is_empty());
+
+        let mut bound_exit = policy_live_session(FakeBackend::new());
+        let resize = binding_id(&bound_exit, "r");
+        let escape = binding_id(&bound_exit, "Escape");
+        let update = bound_exit
+            .handle_backend_event(policy_turn(
+                3,
+                vec![
+                    BackendPolicyEvent::BindingPressed(resize),
+                    BackendPolicyEvent::BindingPressed(escape),
+                ],
+            ))
+            .unwrap();
+        let response = &bound_exit.backend.responses[0].2;
+        assert_eq!(
+            response.bindings.next_key_edge,
+            BackendNextKeyEdge::Preserve
+        );
+        assert!(response.bindings.enabled.contains(&resize));
+        assert!(update.state.is_none());
+        assert_eq!(bound_exit.mode, Mode::Nav);
+        assert!(bound_exit.chord_echo.is_empty());
     }
 
     #[test]
@@ -4811,6 +5042,39 @@ mod tests {
         assert_eq!(session.backend.responses[0].1, origin);
         assert_eq!(completed.action_completion.as_ref().unwrap().ticket, origin);
         assert_eq!(session.ledger().focused(), Some(WinId(0)));
+    }
+
+    #[test]
+    fn desired_action_empty_turn_carries_staged_projection() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let previous_projection = session.last_projection().to_vec();
+        let origin = session
+            .focus_step(Dir::Prev)
+            .unwrap()
+            .pending_action
+            .unwrap();
+
+        let completed = session
+            .handle_backend_event(policy_turn(4, Vec::new()))
+            .unwrap();
+
+        let response_projection = session.backend.responses[0]
+            .2
+            .projection
+            .clone()
+            .expect("the awaited response carries the staged projection");
+        assert_ne!(response_projection, previous_projection);
+        assert_eq!(
+            response_projection
+                .iter()
+                .find(|placement| placement.focused)
+                .map(|placement| placement.win),
+            Some(WinId(0))
+        );
+        assert_eq!(session.last_projection(), response_projection);
+        assert!(completed.projection_applied);
+        assert_eq!(completed.action_completion.unwrap().ticket, origin);
     }
 
     #[test]
@@ -5096,9 +5360,26 @@ mod tests {
             .unwrap();
         assert_eq!(session.backend.responses.len(), 1);
 
-        let responses = session.backend.responses.len();
+        let authority = session.current_authority();
+        let visible_state = session.state().clone();
+        let visible_ledger = session.visible_ledger(None);
+        let published_ledger = session.published_ledger.clone();
+        let published_windows = session.published_windows.clone();
+        let snapshot = session.snapshot();
+        let last_projection = session.last_projection().to_vec();
+        let assignments = session.backend.assignment_attempts.clone();
+        let bound_windows = session.backend.bound_windows.clone();
+        let responses = session.backend.responses.clone();
+        let call_order = session.backend.call_order.clone();
+        let request_attempts = session.backend.request_attempts;
+        let watermark = session.last_backend_ticket;
+        let last_turn = session.last_policy_turn;
+        let transaction = session.transaction;
+        let repeat_target = session.repeat_target;
+        let mut too_many = vec![policy_window_opened("private", "private")];
+        too_many.extend(vec![event; MAX_POLICY_EVENTS]);
         let error = session
-            .handle_backend_event(policy_turn(4, vec![event; MAX_POLICY_EVENTS + 1]))
+            .handle_backend_event(policy_turn(4, too_many))
             .unwrap_err();
         assert!(matches!(
             error,
@@ -5107,7 +5388,37 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(session.backend.responses.len(), responses);
+        let after = session.current_authority();
+        assert_eq!(&after.ledger, &authority.ledger);
+        assert_eq!(&after.windows, &authority.windows);
+        assert_eq!(&after.backend_ids, &authority.backend_ids);
+        assert_eq!(&after.bound_backend_ids, &authority.bound_backend_ids);
+        assert_eq!(after.next_win_id, authority.next_win_id);
+        assert_eq!(after.workarea, authority.workarea);
+        assert_eq!(after.exclusive_focus, authority.exclusive_focus);
+        assert_eq!(&after.effective_focus, &authority.effective_focus);
+        assert_eq!(after.mode, authority.mode);
+        assert_eq!(&after.chord_echo, &authority.chord_echo);
+        assert_eq!(after.whichkey, authority.whichkey);
+        assert_eq!(&after.modules, &authority.modules);
+        assert_eq!(&after.active_modifiers, &authority.active_modifiers);
+        assert_eq!(&after.held_bindings, &authority.held_bindings);
+        assert_eq!(session.backend.assignment_attempts, assignments);
+        assert_eq!(session.backend.bound_windows, bound_windows);
+        assert_eq!(session.last_backend_ticket, watermark);
+        assert_eq!(session.backend.responses, responses);
+        assert_eq!(session.backend.call_order, call_order);
+        assert_eq!(session.backend.request_attempts, request_attempts);
+        assert_eq!(session.state(), &visible_state);
+        assert_eq!(session.visible_ledger(None), visible_ledger);
+        assert_eq!(session.published_ledger, published_ledger);
+        assert_eq!(session.published_windows, published_windows);
+        assert_eq!(session.snapshot(), snapshot);
+        assert_eq!(session.last_projection(), last_projection);
+        assert_eq!(session.last_policy_turn, last_turn);
+        assert_eq!(session.transaction, transaction);
+        assert_eq!(session.repeat_target, repeat_target);
+        assert!(session.active.is_none());
     }
 
     #[test]
@@ -5791,6 +6102,46 @@ mod tests {
     }
 
     #[test]
+    fn internal_repeat_empty_turn_carries_repeated_projection() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let focus = binding_id(&session, "j");
+        session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(focus)],
+            ))
+            .unwrap();
+        let previous_projection = session.last_projection().to_vec();
+        session.backend.responses.clear();
+
+        assert_eq!(
+            session.fire_key_repeat().unwrap(),
+            SessionUpdate::unchanged()
+        );
+        let completed = session
+            .handle_backend_event(policy_turn(5, Vec::new()))
+            .unwrap();
+
+        let response_projection = session.backend.responses[0]
+            .2
+            .projection
+            .clone()
+            .expect("the internal response carries the repeated projection");
+        assert_ne!(response_projection, previous_projection);
+        assert_eq!(
+            response_projection
+                .iter()
+                .find(|placement| placement.focused)
+                .map(|placement| placement.win),
+            Some(WinId(1))
+        );
+        assert_eq!(session.last_projection(), response_projection);
+        assert!(completed.projection_applied);
+        assert!(completed.action_completion.is_none());
+    }
+
+    #[test]
     fn released_repeat_is_noop_before_request() {
         let mut session = policy_live_session(FakeBackend::new());
         open_two_policy_windows(&mut session);
@@ -5842,6 +6193,78 @@ mod tests {
             .unwrap();
         let requests = session.backend.request_attempts;
 
+        assert_eq!(
+            session.fire_key_repeat().unwrap(),
+            SessionUpdate::unchanged()
+        );
+        assert_eq!(session.backend.request_attempts, requests);
+    }
+
+    #[test]
+    fn same_batch_replacement_press_release_never_resumes_old_target() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let older = binding_id(&session, "j");
+        let replacement = binding_id(&session, "k");
+        session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(older)],
+            ))
+            .unwrap();
+        assert_eq!(session.repeat_target, Some(older));
+
+        let replaced = session
+            .handle_backend_event(policy_turn(
+                5,
+                vec![
+                    BackendPolicyEvent::BindingPressed(replacement),
+                    BackendPolicyEvent::BindingReleased(replacement),
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(replaced.repeat_timer, RepeatTimerDirective::Disarm);
+        assert!(session.held_bindings.contains(&older));
+        assert!(!session.held_bindings.contains(&replacement));
+        assert_eq!(session.repeat_target, None);
+        let requests = session.backend.request_attempts;
+        assert_eq!(
+            session.fire_key_repeat().unwrap(),
+            SessionUpdate::unchanged()
+        );
+        assert_eq!(session.backend.request_attempts, requests);
+    }
+
+    #[test]
+    fn same_batch_replacement_press_repeat_stop_never_resumes_old_target() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let older = binding_id(&session, "j");
+        let replacement = binding_id(&session, "k");
+        session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(older)],
+            ))
+            .unwrap();
+        assert_eq!(session.repeat_target, Some(older));
+
+        let replaced = session
+            .handle_backend_event(policy_turn(
+                5,
+                vec![
+                    BackendPolicyEvent::BindingPressed(replacement),
+                    BackendPolicyEvent::BindingRepeatStopped(replacement),
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(replaced.repeat_timer, RepeatTimerDirective::Disarm);
+        assert!(session.held_bindings.contains(&older));
+        assert!(!session.held_bindings.contains(&replacement));
+        assert_eq!(session.repeat_target, None);
+        let requests = session.backend.request_attempts;
         assert_eq!(
             session.fire_key_repeat().unwrap(),
             SessionUpdate::unchanged()
