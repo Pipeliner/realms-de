@@ -17,7 +17,9 @@ use realm_bar::{
     surface_config, Anchor as RealmAnchor, BarRenderer, Frame, Layer as RealmLayer, SurfaceCommand,
     SurfaceKind, SurfaceLifecycle,
 };
-use realm_control::{production_runtime_dir, ClientEndpoint, ClientError, Subscription};
+use realm_control::{
+    production_runtime_dir, ClientEndpoint, ClientError, ClientPhase, Subscription,
+};
 use realm_core::{
     glyphs::Probe,
     ipc::{Event, Request, Response},
@@ -80,6 +82,7 @@ struct Surface {
     scale: u32,
     configured: bool,
     pending: bool,
+    pending_frame: Option<Frame>,
 }
 
 struct App {
@@ -225,9 +228,13 @@ fn control_worker(
                     let _ = sender.send(ControlMessage::Event(Event::Shutdown));
                     return;
                 }
-                Err(error) => {
+                Err(error) if subscription_reconnectable(&error) => {
                     disconnected = Some(error.to_string());
                     break;
+                }
+                Err(error) => {
+                    let _ = sender.send(ControlMessage::Failed(error.to_string()));
+                    return;
                 }
             }
         }
@@ -309,13 +316,18 @@ fn classify_control_error(error: ClientError) -> ControlConnectError {
 }
 
 fn reconnectable(error: &ClientError) -> bool {
+    error.is_retryable()
+}
+
+fn subscription_reconnectable(error: &ClientError) -> bool {
     matches!(
         error,
-        ClientError::MissingRealm
-            | ClientError::Refused
-            | ClientError::Timeout { .. }
-            | ClientError::Eof { .. }
-            | ClientError::Io { .. }
+        ClientError::Eof {
+            phase: ClientPhase::SubscriptionEvent
+        } | ClientError::Io {
+            phase: ClientPhase::SubscriptionEvent,
+            ..
+        }
     )
 }
 
@@ -452,6 +464,7 @@ impl App {
             scale: 1,
             configured: false,
             pending: true,
+            pending_frame: None,
         });
         Ok(())
     }
@@ -512,6 +525,7 @@ impl App {
     fn commit_frame(&mut self, index: usize, frame: Frame, qh: &QueueHandle<Self>) -> Result<()> {
         let Some(damage) = frame.damage.rect() else {
             self.surfaces[index].pending = false;
+            self.surfaces[index].pending_frame = None;
             return Ok(());
         };
         let width = frame.width.saturating_mul(frame.scale).max(1);
@@ -568,6 +582,7 @@ impl App {
 
         let Some(buffer_index) = available else {
             surface.pending = true;
+            surface.pending_frame = Some(frame);
             surface
                 .layer
                 .wl_surface()
@@ -590,7 +605,27 @@ impl App {
         );
         surface.layer.commit();
         surface.pending = false;
+        surface.pending_frame = None;
+        let committed_kind = surface.kind;
+        if committed_kind == SurfaceKind::Bar {
+            self.renderer.commit_bar_frame();
+        }
         Ok(())
+    }
+
+    fn retry_surface(&mut self, kind: SurfaceKind, qh: &QueueHandle<Self>) -> Result<()> {
+        let Some(index) = self
+            .surfaces
+            .iter()
+            .position(|surface| surface.kind == kind)
+        else {
+            return Ok(());
+        };
+        if let Some(frame) = self.surfaces[index].pending_frame.take() {
+            self.commit_frame(index, frame, qh)
+        } else {
+            self.draw_surface(kind, qh)
+        }
     }
 }
 
@@ -644,7 +679,7 @@ impl CompositorHandler for App {
             .find(|surface| surface.layer.wl_surface() == wl_surface && surface.pending)
             .map(|surface| surface.kind);
         if let Some(kind) = kind {
-            if let Err(error) = self.draw_surface(kind, qh) {
+            if let Err(error) = self.retry_surface(kind, qh) {
                 tracing::error!(%error, "could not redraw pending surface");
                 self.failure = Some(error.to_string());
                 self.exit = true;
@@ -805,18 +840,40 @@ mod tests {
         bind, listen, socket_with, AddressFamily, SocketAddrUnix, SocketFlags, SocketType,
     };
 
-    use super::{reconnectable, ControlWatch, CONTROL_RETRY_INTERVAL};
+    use super::{reconnectable, subscription_reconnectable, ControlWatch, CONTROL_RETRY_INTERVAL};
 
     #[test]
-    fn control_disconnects_retry_but_protocol_disagreement_is_fatal() {
+    fn fresh_handshake_retries_only_missing_or_refused_endpoints() {
         assert!(reconnectable(&ClientError::MissingRealm));
         assert!(reconnectable(&ClientError::Refused));
-        assert!(reconnectable(&ClientError::Eof {
+        assert!(!reconnectable(&ClientError::Eof {
             phase: ClientPhase::SubscriptionEvent,
+        }));
+        assert!(!reconnectable(&ClientError::Timeout {
+            phase: ClientPhase::HelloRead,
         }));
         assert!(!reconnectable(&ClientError::VersionMismatch {
             client: 1,
             server: 2,
+        }));
+    }
+
+    #[test]
+    fn established_subscription_reconnects_only_on_disconnect() {
+        assert!(subscription_reconnectable(&ClientError::Eof {
+            phase: ClientPhase::SubscriptionEvent,
+        }));
+        assert!(subscription_reconnectable(&ClientError::Io {
+            phase: ClientPhase::SubscriptionEvent,
+            source: std::io::Error::from(std::io::ErrorKind::ConnectionReset),
+        }));
+        assert!(!subscription_reconnectable(
+            &ClientError::MalformedResponse {
+                phase: ClientPhase::SubscriptionEvent,
+            }
+        ));
+        assert!(!subscription_reconnectable(&ClientError::Timeout {
+            phase: ClientPhase::SubscriptionEvent,
         }));
     }
 

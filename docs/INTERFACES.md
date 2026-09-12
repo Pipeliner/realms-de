@@ -1157,15 +1157,17 @@ pub struct Damage(Option<Rect>);
 
 Rules, enforced by review and by the budgets in ARCHITECTURE.md §4:
 
-1. **The bar owns no timer at all.** Every value it draws arrives in
-   `RealmState`. Four of the mockup's modules — cpu, mem, gpu temperature and the
+1. **The bar owns no connected render, animation or module timer.** Every value
+   it draws arrives in `RealmState`. Four of the mockup's modules — cpu, mem, gpu temperature and the
    `↑ 18k ↓ 1.2M` throughput half of net — are *rates over counters*, and the
    kernel exposes no event for those; no bar on any platform gets them without
    sampling. So the sampling lives in **one shared sampler in `realm-session`**,
    off the window-management event loop, and is the single documented exception
    to ADR 0009's no-timers rule. The bar stays a pure function of state, which
    is the property that actually mattered.
-   The clock ticks to the next **minute** boundary, not every second: the design
+   SPEC 0004's disconnected-only control retry is a transport-liveness wakeup,
+   is disarmed after subscription and never renders. The clock ticks to the
+   next **minute** boundary, not every second: the design
    shows `14:32`, so 59 of every 60 wakeups would redraw nothing.
 2. **No redraw when nothing changed.** `RealmState::renders_same_as` gates the
    frame before any drawing happens.

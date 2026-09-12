@@ -134,6 +134,7 @@ fn unchanged_state_is_gated_and_fixed_width_clock_damages_only_its_box() {
     let mut renderer = BarRenderer::new(&palette).unwrap();
     let first = renderer.render_bar(&state(), &palette, &probe, 1920, 1);
     assert_eq!(first.damage.rect(), Some(LogicalRect::new(0, 0, 1920, 32)));
+    renderer.commit_bar_frame();
 
     let unchanged = renderer.render_bar(&state(), &palette, &probe, 1920, 1);
     assert_eq!(unchanged.damage.rect(), None);
@@ -144,6 +145,32 @@ fn unchanged_state_is_gated_and_fixed_width_clock_damages_only_its_box() {
     assert_eq!(
         clock.damage.rect(),
         Some(clock.element(ElementRole::ModuleClock).unwrap().rect)
+    );
+}
+
+#[test]
+fn uncommitted_candidate_remains_damaged_until_commit_then_later_clock_update_is_local() {
+    let palette = palette();
+    let probe = Probe::run(|_| true);
+    let mut renderer = BarRenderer::new(&palette).unwrap();
+    let initial_state = state();
+    renderer.render_bar(&initial_state, &palette, &probe, 1920, 1);
+    renderer.commit_bar_frame();
+
+    let mut first_tick = initial_state.clone();
+    first_tick.modules.last_mut().unwrap().text = "12 Sep 2026 20:57".into();
+    let unavailable = renderer.render_bar(&first_tick, &palette, &probe, 1920, 1);
+    let retried = renderer.render_bar(&first_tick, &palette, &probe, 1920, 1);
+    assert_eq!(retried.damage, unavailable.damage);
+    assert!(retried.damage.rect().is_some());
+    renderer.commit_bar_frame();
+
+    let mut second_tick = first_tick;
+    second_tick.modules.last_mut().unwrap().text = "12 Sep 2026 20:58".into();
+    let later = renderer.render_bar(&second_tick, &palette, &probe, 1920, 1);
+    assert_eq!(
+        later.damage.rect(),
+        Some(later.element(ElementRole::ModuleClock).unwrap().rect)
     );
 }
 
@@ -271,7 +298,8 @@ fn narrow_bar_keeps_critical_elements_and_drops_modules_in_priority_order() {
 #[test]
 fn grimoire_lists_only_nonempty_hints_in_binding_order_and_is_deterministic() {
     let palette = palette();
-    let keymap = Keymap::default();
+    let mut keymap = Keymap::default();
+    keymap.bindings.last_mut().unwrap().mode = Mode::Resize;
     let probe = Probe::run(|_| true);
     let mut one = BarRenderer::new(&palette).unwrap();
     let mut two = BarRenderer::new(&palette).unwrap();
@@ -281,7 +309,7 @@ fn grimoire_lists_only_nonempty_hints_in_binding_order_and_is_deterministic() {
         .elements
         .iter()
         .filter(|element| element.role == ElementRole::GrimoireBinding)
-        .map(|element| element.id.clone().unwrap())
+        .filter_map(|element| element.id.clone())
         .collect();
     let expected: Vec<_> = keymap
         .bindings
@@ -289,12 +317,52 @@ fn grimoire_lists_only_nonempty_hints_in_binding_order_and_is_deterministic() {
         .filter(|binding| !binding.hint_key.is_empty())
         .map(|binding| binding.key.clone())
         .collect();
-    assert_eq!(rows, expected);
+    let mut unique_rows = rows.clone();
+    unique_rows.dedup();
+    assert_eq!(unique_rows, expected);
+    let first = &keymap.bindings[0];
+    let parts: Vec<_> = left
+        .elements
+        .iter()
+        .filter(|element| element.id.as_deref() == Some(first.key.as_str()))
+        .collect();
+    assert_eq!(parts.len(), 3);
+    assert_eq!(parts[0].foreground, palette.text.bright);
+    assert_eq!(parts[1].foreground, palette.text.mid);
+    assert_eq!(parts[2].foreground, palette.text.dim);
+    assert_eq!(parts[2].font_size, palette.typography.size_micro);
+    let headings: Vec<_> = left
+        .elements
+        .iter()
+        .filter(|element| element.role == ElementRole::GrimoireMode)
+        .collect();
+    assert_eq!(headings.len(), 2);
+    assert!(headings[1].rect.y > headings[0].rect.y);
     assert_eq!(
         left.element(ElementRole::GrimoireDismiss).unwrap().text,
         "esc dismiss"
     );
     assert_eq!(left.pixels, right.pixels);
+}
+
+#[test]
+fn title_elision_removes_only_enough_characters_to_fit() {
+    let palette = palette();
+    let probe = Probe::run(|_| true);
+    let mut sample = state();
+    sample.modules.clear();
+    sample.focused_title =
+        "a deliberately lengthy focused title that only slightly exceeds its available centre"
+            .into();
+    let mut renderer = BarRenderer::new(&palette).unwrap();
+    let frame = renderer.render_bar(&sample, &palette, &probe, 820, 1);
+    let title = &frame.element(ElementRole::Title).unwrap().text;
+
+    assert!(title.contains('…'));
+    assert!(
+        title.chars().count() > 9,
+        "title jumped directly to its floor: {title}"
+    );
 }
 
 #[test]
