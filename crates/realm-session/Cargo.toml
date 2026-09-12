@@ -22,5 +22,4 @@ wayland-scanner = "=0.31.11"
 
 [dev-dependencies]
 trybuild = "=1.0.119"
-rustix = { workspace = true }
 wayland-backend = { version = "=0.3.17", features = ["realm_test"] }
