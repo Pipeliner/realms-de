@@ -8,7 +8,7 @@ use realm_core::WinId;
 use realm_session::backend::{
     BackendBindingState, BackendEvent, BackendNextKeyEdge, BackendPolicyEvent,
     BackendPolicyResponse, BackendReady, BackendSubmission, BackendTicket, BackendWindowId,
-    RiverBackend,
+    RiverBackend, WmBackend,
 };
 
 const REQUIRED_GLOBALS: [(&str, u32); 5] = [
@@ -18,6 +18,12 @@ const REQUIRED_GLOBALS: [(&str, u32); 5] = [
     ("river_input_manager_v1", 2),
     ("river_libinput_config_v1", 2),
 ];
+
+#[test]
+fn river_backend_implements_the_daemon_backend_seam() {
+    fn assert_backend<T: WmBackend>() {}
+    assert_backend::<RiverBackend>();
+}
 
 fn frame(sender: u32, opcode: u16, body: &[u8]) -> Vec<u8> {
     let size = u32::try_from(8 + body.len()).unwrap();

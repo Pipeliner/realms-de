@@ -32,13 +32,16 @@ use super::river_protocols::{
     river_seat_v1::{self, RiverSeatV1},
     river_window_manager_v1::{self, RiverWindowManagerV1},
     river_window_v1::{self, RiverWindowV1},
-    river_xkb_bindings_v1::RiverXkbBindingsV1,
+    river_xkb_binding_v1::{self, RiverXkbBindingV1},
+    river_xkb_bindings_seat_v1::{self, RiverXkbBindingsSeatV1},
+    river_xkb_bindings_v1::{self, RiverXkbBindingsV1},
 };
 use super::{
-    BackendBindingSpec, BackendCapacityResource, BackendContractError, BackendError, BackendEvent,
+    BackendBindingId, BackendBindingSpec, BackendCapacityResource, BackendContractError,
+    BackendError, BackendEvent, BackendExitPolicy, BackendModifier, BackendNextKeyEdge,
     BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn, BackendPolicyTurnId,
     BackendPollInterest, BackendReady, BackendResult, BackendSubmission, BackendTicket,
-    BackendWindowId, KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE_HZ, MAX_BACKEND_INPUT_DEVICES,
+    BackendWindowId, WmBackend, KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE_HZ, MAX_BACKEND_INPUT_DEVICES,
     MAX_BACKEND_LIBINPUT_DEVICES, MAX_BACKEND_OUTPUTS, MAX_BACKEND_SEATS, MAX_CONFIGURED_BINDINGS,
     MAX_MANAGED_WINDOWS, MAX_POLICY_EVENTS, MAX_POLICY_TEXT_BYTES, MAX_REPLAY_POLICY_EVENTS,
 };
@@ -121,6 +124,14 @@ enum Incoming {
         height: i32,
     },
     ExclusiveFocus(bool),
+    BindingPressed(BackendBindingId),
+    BindingReleased(BackendBindingId),
+    BindingRepeatStopped(BackendBindingId),
+    UnboundKeyEaten,
+    ModifiersChanged {
+        old: u32,
+        new: u32,
+    },
     Malformed,
 }
 
@@ -139,6 +150,8 @@ enum ObjectKind {
     Seat,
     LayerOutput,
     LayerSeat,
+    XkbSeat,
+    Binding(BackendBindingId),
     NoEvents,
 }
 
@@ -408,6 +421,32 @@ impl ObjectData for DirectData {
                     _ => self.emit(Incoming::Malformed),
                 }
             }
+            ObjectKind::XkbSeat => {
+                match RiverXkbBindingsSeatV1::parse_event(&connection, message) {
+                    Ok((_, river_xkb_bindings_seat_v1::Event::AteUnboundKey)) => {
+                        self.emit(Incoming::UnboundKeyEaten);
+                    }
+                    Ok((_, river_xkb_bindings_seat_v1::Event::ModifiersUpdate { old, new })) => {
+                        self.emit(Incoming::ModifiersChanged {
+                            old: old.into(),
+                            new: new.into(),
+                        });
+                    }
+                    _ => self.emit(Incoming::Malformed),
+                }
+            }
+            ObjectKind::Binding(id) => match RiverXkbBindingV1::parse_event(&connection, message) {
+                Ok((_, river_xkb_binding_v1::Event::Pressed)) => {
+                    self.emit(Incoming::BindingPressed(id));
+                }
+                Ok((_, river_xkb_binding_v1::Event::Released)) => {
+                    self.emit(Incoming::BindingReleased(id));
+                }
+                Ok((_, river_xkb_binding_v1::Event::StopRepeat)) => {
+                    self.emit(Incoming::BindingRepeatStopped(id));
+                }
+                _ => self.emit(Incoming::Malformed),
+            },
             ObjectKind::NoEvents => self.emit(Incoming::Malformed),
         }
         None
@@ -455,6 +494,12 @@ struct Window {
     pending_open: bool,
     assigned: Option<realm_core::WinId>,
     dimensions: Option<(i32, i32)>,
+    proposed_size: Option<(i32, i32)>,
+    position: Option<(i32, i32)>,
+    focused: Option<bool>,
+    hidden: Option<bool>,
+    fullscreen: bool,
+    initialized: bool,
 }
 
 #[derive(Debug)]
@@ -471,6 +516,12 @@ struct Output {
 struct Seat {
     proxy: RiverSeatV1,
     ordinal: u64,
+}
+
+#[derive(Debug)]
+struct Binding {
+    proxy: RiverXkbBindingV1,
+    enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -512,6 +563,8 @@ pub struct RiverBackend {
     seats: HashMap<ObjectId, Seat>,
     selected_output: Option<ObjectId>,
     selected_seat: Option<ObjectId>,
+    layer_seat: Option<RiverLayerShellSeatV1>,
+    xkb_seat: Option<RiverXkbBindingsSeatV1>,
     next_window_ordinal: u64,
     next_output_ordinal: u64,
     next_seat_ordinal: u64,
@@ -519,12 +572,22 @@ pub struct RiverBackend {
     policy_events: Vec<BackendPolicyEvent>,
     public_events: VecDeque<BackendEvent>,
     open_turn: Option<BackendPolicyTurnId>,
+    turn_requested: bool,
     pending_response: Option<PendingResponse>,
     next_turn: u64,
     bindings: BTreeMap<super::BackendBindingId, BackendBindingSpec>,
+    binding_objects: BTreeMap<BackendBindingId, Binding>,
+    watched_modifiers: Vec<BackendModifier>,
+    default_output: Option<ObjectId>,
+    focused_window: Option<WinId>,
+    exclusive_focus: bool,
+    drain_ticket: Option<BackendTicket>,
     read_guard: Option<BoundedReadEventsGuard>,
     flush_pending: bool,
     flush_blocked: bool,
+    exit_started: bool,
+    exit_flushed: bool,
+    exit_complete: bool,
 }
 
 impl RiverBackend {
@@ -576,6 +639,8 @@ impl RiverBackend {
             seats: HashMap::new(),
             selected_output: None,
             selected_seat: None,
+            layer_seat: None,
+            xkb_seat: None,
             next_window_ordinal: 0,
             next_output_ordinal: 0,
             next_seat_ordinal: 0,
@@ -583,12 +648,22 @@ impl RiverBackend {
             policy_events: Vec::new(),
             public_events: VecDeque::new(),
             open_turn: None,
+            turn_requested: false,
             pending_response: None,
             next_turn: 0,
             bindings: BTreeMap::new(),
+            binding_objects: BTreeMap::new(),
+            watched_modifiers: Vec::new(),
+            default_output: None,
+            focused_window: None,
+            exclusive_focus: false,
+            drain_ticket: None,
             read_guard: None,
             flush_pending: false,
             flush_blocked: false,
+            exit_started: false,
+            exit_flushed: false,
+            exit_complete: false,
         }
     }
 
@@ -706,6 +781,9 @@ impl RiverBackend {
 
     /// Register the stable, bounded binding mechanism catalogue.
     pub fn configure_bindings(&mut self, bindings: Vec<BackendBindingSpec>) -> BackendResult<()> {
+        if self.selected_seat.is_some() || !self.binding_objects.is_empty() {
+            return Err(protocol_error());
+        }
         if bindings.len() > MAX_CONFIGURED_BINDINGS {
             return Err(capacity(
                 BackendCapacityResource::ConfiguredBindings,
@@ -777,6 +855,7 @@ impl RiverBackend {
                 super::MAX_STAGED_EFFECTS as u64,
             ));
         }
+        let mut placed = HashSet::new();
         for win in response.closes.iter().chain(
             response
                 .projection
@@ -788,6 +867,28 @@ impl RiverBackend {
                 return Err(protocol_error());
             }
         }
+        if response.projection.as_ref().is_some_and(|projection| {
+            projection.iter().any(|placement| {
+                placement.rect.w <= 0 || placement.rect.h <= 0 || !placed.insert(placement.win)
+            })
+        }) || !response
+            .bindings
+            .enabled
+            .windows(2)
+            .all(|pair| pair[0] < pair[1])
+            || !response
+                .bindings
+                .watched_modifiers
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+            || response
+                .bindings
+                .enabled
+                .iter()
+                .any(|id| !self.binding_objects.contains_key(id))
+        {
+            return Err(protocol_error());
+        }
         for win in &response.closes {
             let backend_id = self.realm_ids.get(win).ok_or_else(protocol_error)?;
             let object_id = self.window_ids.get(backend_id).ok_or_else(protocol_error)?;
@@ -797,6 +898,7 @@ impl RiverBackend {
                 .proxy
                 .close();
         }
+        self.apply_manage_response(&response)?;
         self.window_manager
             .as_ref()
             .ok_or_else(protocol_error)?
@@ -811,13 +913,125 @@ impl RiverBackend {
         Ok(BackendSubmission::Pending)
     }
 
+    fn apply_manage_response(&mut self, response: &BackendPolicyResponse) -> BackendResult<()> {
+        let output_id = self.selected_output.clone().ok_or_else(protocol_error)?;
+        let output = self.outputs.get(&output_id).ok_or_else(protocol_error)?;
+        let (ox, oy) = output.position.ok_or_else(protocol_error)?;
+        let (ow, oh) = output.dimensions.ok_or_else(protocol_error)?;
+        let output_rect = realm_core::layout::Rect::new(ox, oy, ow, oh);
+        let output_proxy = output.proxy.clone();
+        if self.default_output.as_ref() != Some(&output_id) {
+            output.layer.set_default();
+            self.default_output = Some(output_id);
+        }
+
+        if let Some(projection) = &response.projection {
+            let fullscreen = projection.len() == 1 && projection[0].rect == output_rect;
+            for placement in projection {
+                let backend_id = self
+                    .realm_ids
+                    .get(&placement.win)
+                    .ok_or_else(protocol_error)?;
+                let object_id = self.window_ids.get(backend_id).ok_or_else(protocol_error)?;
+                let window = self.windows.get_mut(object_id).ok_or_else(protocol_error)?;
+                if !window.initialized {
+                    window
+                        .proxy
+                        .set_tiled(river_window_v1::Edges::from_bits_truncate(15));
+                    window
+                        .proxy
+                        .set_capabilities(river_window_v1::Capabilities::from_bits_truncate(4));
+                    window.initialized = true;
+                }
+                if fullscreen {
+                    if !window.fullscreen {
+                        window.proxy.fullscreen(&output_proxy);
+                        window.proxy.inform_fullscreen();
+                        window.fullscreen = true;
+                    }
+                } else {
+                    if window.fullscreen {
+                        window.proxy.exit_fullscreen();
+                        window.proxy.inform_not_fullscreen();
+                        window.fullscreen = false;
+                    }
+                    let size = (placement.rect.w, placement.rect.h);
+                    if window.proposed_size != Some(size) {
+                        window.proxy.propose_dimensions(size.0, size.1);
+                        window.proposed_size = Some(size);
+                    }
+                }
+            }
+            let focused = projection
+                .iter()
+                .find(|placement| placement.focused)
+                .map(|placement| placement.win);
+            if !self.exclusive_focus && self.focused_window != focused {
+                match focused {
+                    Some(win) => {
+                        let backend_id = self.realm_ids.get(&win).ok_or_else(protocol_error)?;
+                        let object_id =
+                            self.window_ids.get(backend_id).ok_or_else(protocol_error)?;
+                        let window = self.windows.get(object_id).ok_or_else(protocol_error)?;
+                        self.selected_seat_proxy()?.focus_window(&window.proxy);
+                    }
+                    None => self.selected_seat_proxy()?.clear_focus(),
+                }
+                self.focused_window = focused;
+            }
+        }
+
+        for (id, binding) in &mut self.binding_objects {
+            let enabled = response.bindings.enabled.binary_search(id).is_ok();
+            if binding.enabled != enabled {
+                if enabled {
+                    binding.proxy.enable();
+                } else {
+                    binding.proxy.disable();
+                }
+                binding.enabled = enabled;
+            }
+        }
+        if self.watched_modifiers != response.bindings.watched_modifiers {
+            self.xkb_seat
+                .as_ref()
+                .ok_or_else(protocol_error)?
+                .modifiers_watch(river_seat_v1::Modifiers::from_bits_truncate(
+                    modifiers_bits(&response.bindings.watched_modifiers),
+                ));
+            self.watched_modifiers = response.bindings.watched_modifiers.clone();
+        }
+        match response.bindings.next_key_edge {
+            BackendNextKeyEdge::Preserve => {}
+            BackendNextKeyEdge::Ensure => self
+                .xkb_seat
+                .as_ref()
+                .ok_or_else(protocol_error)?
+                .ensure_next_key_eaten(),
+            BackendNextKeyEdge::Cancel => self
+                .xkb_seat
+                .as_ref()
+                .ok_or_else(protocol_error)?
+                .cancel_ensure_next_key_eaten(),
+        }
+        Ok(())
+    }
+
+    fn selected_seat_proxy(&self) -> BackendResult<&RiverSeatV1> {
+        let id = self.selected_seat.as_ref().ok_or_else(protocol_error)?;
+        self.seats
+            .get(id)
+            .map(|seat| &seat.proxy)
+            .ok_or_else(protocol_error)
+    }
+
     /// Return the bounded transport interest for the daemon poll set.
     pub fn poll_interest(&self) -> BackendPollInterest {
         BackendPollInterest {
             immediate: self.flush_pending && !self.flush_blocked
                 || !self.public_events.is_empty()
                 || self.open_turn.is_none() && self.read_guard.is_none(),
-            readable: self.connected,
+            readable: self.connected && !self.exit_started,
             writable: self.flush_pending && self.flush_blocked,
         }
     }
@@ -833,7 +1047,10 @@ impl RiverBackend {
                 FlushOnce::Complete => {
                     self.flush_pending = false;
                     self.flush_blocked = false;
-                    if self
+                    if self.exit_started {
+                        self.exit_flushed = true;
+                        self.pending_response = None;
+                    } else if self
                         .pending_response
                         .as_ref()
                         .is_some_and(|pending| pending.stage == ResponseStage::FlushingRender)
@@ -844,14 +1061,21 @@ impl RiverBackend {
                                 ticket: pending.ticket,
                                 result: Ok(()),
                             });
-                        self.public_events
-                            .push_back(BackendEvent::RetainedObservationsDrained {
-                                ticket: pending.ticket,
-                            });
+                        self.drain_ticket = Some(pending.ticket);
                     }
                 }
                 FlushOnce::Progress { .. } => self.flush_blocked = false,
                 FlushOnce::WouldBlock => self.flush_blocked = true,
+            }
+            return Ok(None);
+        }
+        if self.exit_started {
+            if self.exit_complete {
+                return Err(protocol_error());
+            }
+            if ready.terminal && self.exit_flushed {
+                self.exit_complete = true;
+                return Ok(Some(BackendEvent::Disconnected));
             }
             return Ok(None);
         }
@@ -874,7 +1098,13 @@ impl RiverBackend {
                     return Ok(None);
                 }
                 DispatchOne::PreparedReadLive => return Err(protocol_error()),
-                DispatchOne::NeedRead => {}
+                DispatchOne::NeedRead => {
+                    if let Some(ticket) = self.drain_ticket.take() {
+                        self.public_events
+                            .push_back(BackendEvent::RetainedObservationsDrained { ticket });
+                        return Ok(None);
+                    }
+                }
             }
         }
         if (ready.readable || ready.terminal) && self.read_guard.is_some() {
@@ -1116,6 +1346,12 @@ impl RiverBackend {
                         pending_open: true,
                         assigned: None,
                         dimensions: None,
+                        proposed_size: None,
+                        position: None,
+                        focused: None,
+                        hidden: None,
+                        fullscreen: false,
+                        initialized: false,
                     },
                 );
             }
@@ -1257,7 +1493,8 @@ impl RiverBackend {
                     .ok_or_else(|| capacity(BackendCapacityResource::ObjectOrdinals, u64::MAX))?;
                 if self.selected_seat.is_none() {
                     self.selected_seat = Some(proxy.id());
-                    self.layer_shell
+                    let layer_seat = self
+                        .layer_shell
                         .as_ref()
                         .ok_or_else(protocol_error)?
                         .send_constructor::<RiverLayerShellSeatV1>(
@@ -1267,16 +1504,45 @@ impl RiverBackend {
                             DirectData::new(ObjectKind::LayerSeat, &self.incoming_tx),
                         )
                         .map_err(invalid_id)?;
-                    self.xkb_bindings
+                    let xkb_seat = self
+                        .xkb_bindings
                         .as_ref()
                         .ok_or_else(protocol_error)?
-                        .send_constructor::<super::river_protocols::river_xkb_bindings_seat_v1::RiverXkbBindingsSeatV1>(
-                            super::river_protocols::river_xkb_bindings_v1::Request::GetSeat {
+                        .send_constructor::<RiverXkbBindingsSeatV1>(
+                            river_xkb_bindings_v1::Request::GetSeat {
                                 seat: proxy.clone(),
                             },
-                            DirectData::new(ObjectKind::NoEvents, &self.incoming_tx),
+                            DirectData::new(ObjectKind::XkbSeat, &self.incoming_tx),
                         )
                         .map_err(invalid_id)?;
+                    for (id, spec) in &self.bindings {
+                        let binding = self
+                            .xkb_bindings
+                            .as_ref()
+                            .ok_or_else(protocol_error)?
+                            .send_constructor::<RiverXkbBindingV1>(
+                                river_xkb_bindings_v1::Request::GetXkbBinding {
+                                    seat: proxy.clone(),
+                                    keysym: keysym(&spec.keysym).ok_or_else(protocol_error)?,
+                                    modifiers: WEnum::Value(
+                                        river_seat_v1::Modifiers::from_bits_truncate(
+                                            modifiers_bits(&spec.modifiers),
+                                        ),
+                                    ),
+                                },
+                                DirectData::new(ObjectKind::Binding(*id), &self.incoming_tx),
+                            )
+                            .map_err(invalid_id)?;
+                        self.binding_objects.insert(
+                            *id,
+                            Binding {
+                                proxy: binding,
+                                enabled: false,
+                            },
+                        );
+                    }
+                    self.layer_seat = Some(layer_seat);
+                    self.xkb_seat = Some(xkb_seat);
                     self.flush_pending = true;
                 }
                 self.seats.insert(
@@ -1333,24 +1599,65 @@ impl RiverBackend {
                     ));
                 }
             }
-            Incoming::ExclusiveFocus(exclusive) => self
-                .policy_events
-                .push(BackendPolicyEvent::ExclusiveFocusChanged(exclusive)),
-            Incoming::ManageStart => self.finish_policy_turn()?,
-            Incoming::RenderStart => {
-                let pending = self.pending_response.as_mut().ok_or_else(protocol_error)?;
-                if pending.stage != ResponseStage::AwaitRender {
+            Incoming::ExclusiveFocus(exclusive) => {
+                self.exclusive_focus = exclusive;
+                self.policy_events
+                    .push(BackendPolicyEvent::ExclusiveFocusChanged(exclusive));
+            }
+            Incoming::BindingPressed(id) => {
+                if !self.binding_objects.contains_key(&id) {
                     return Err(protocol_error());
                 }
-                // Rendering requests are applied in a separate River phase. A
-                // projection-free response deliberately preserves River's
-                // currently committed geometry.
-                let _ = &pending.response;
+                self.policy_events
+                    .push(BackendPolicyEvent::BindingPressed(id));
+            }
+            Incoming::BindingReleased(id) => {
+                if !self.binding_objects.contains_key(&id) {
+                    return Err(protocol_error());
+                }
+                self.policy_events
+                    .push(BackendPolicyEvent::BindingReleased(id));
+            }
+            Incoming::BindingRepeatStopped(id) => {
+                if !self.binding_objects.contains_key(&id) {
+                    return Err(protocol_error());
+                }
+                self.policy_events
+                    .push(BackendPolicyEvent::BindingRepeatStopped(id));
+            }
+            Incoming::UnboundKeyEaten => {
+                self.policy_events.push(BackendPolicyEvent::UnboundKeyEaten)
+            }
+            Incoming::ModifiersChanged { old, new } => {
+                self.policy_events
+                    .push(BackendPolicyEvent::ModifiersChanged {
+                        old: decode_modifiers(old)?,
+                        new: decode_modifiers(new)?,
+                    })
+            }
+            Incoming::ManageStart => {
+                self.turn_requested = false;
+                self.finish_policy_turn()?;
+            }
+            Incoming::RenderStart => {
+                if self.pending_response.as_ref().map(|pending| pending.stage)
+                    != Some(ResponseStage::AwaitRender)
+                {
+                    return Err(protocol_error());
+                }
+                let projection = self
+                    .pending_response
+                    .as_ref()
+                    .and_then(|pending| pending.response.projection.clone());
+                self.apply_render_response(projection.as_deref())?;
                 self.window_manager
                     .as_ref()
                     .ok_or_else(protocol_error)?
                     .render_finish();
-                pending.stage = ResponseStage::FlushingRender;
+                self.pending_response
+                    .as_mut()
+                    .ok_or_else(protocol_error)?
+                    .stage = ResponseStage::FlushingRender;
                 self.flush_pending = true;
             }
             incoming @ (Incoming::InputDeviceCreated(_)
@@ -1433,11 +1740,170 @@ impl RiverBackend {
         self.public_events
             .push_back(BackendEvent::PolicyTurn(BackendPolicyTurn {
                 id,
-                drains: None,
+                drains: self.drain_ticket.take(),
                 events,
             }));
         self.replay = false;
         Ok(())
+    }
+
+    fn apply_render_response(
+        &mut self,
+        projection: Option<&[realm_core::layout::Placement]>,
+    ) -> BackendResult<()> {
+        let Some(projection) = projection else {
+            return Ok(());
+        };
+        let visible: HashSet<_> = projection.iter().map(|placement| placement.win).collect();
+        for window in self.windows.values_mut() {
+            let Some(win) = window.assigned else {
+                continue;
+            };
+            if !visible.contains(&win) && window.hidden != Some(true) {
+                window.proxy.hide();
+                window.hidden = Some(true);
+            }
+        }
+
+        let raise = projection.iter().any(|placement| placement.occluded);
+        for placement in projection {
+            let backend_id = self
+                .realm_ids
+                .get(&placement.win)
+                .ok_or_else(protocol_error)?;
+            let object_id = self.window_ids.get(backend_id).ok_or_else(protocol_error)?;
+            let window = self.windows.get_mut(object_id).ok_or_else(protocol_error)?;
+            if !window.fullscreen {
+                let position = (placement.rect.x, placement.rect.y);
+                if window.position != Some(position) {
+                    window.node.set_position(position.0, position.1);
+                    window.position = Some(position);
+                }
+                if window.focused != Some(placement.focused) {
+                    let (r, g, b, a) = border_rgba(placement.focused);
+                    window.proxy.set_borders(
+                        river_window_v1::Edges::from_bits_truncate(15),
+                        1,
+                        r,
+                        g,
+                        b,
+                        a,
+                    );
+                    window.focused = Some(placement.focused);
+                }
+                let target = (placement.rect.w, placement.rect.h);
+                if let Some(actual) = window.dimensions {
+                    if actual.0 >= target.0 && actual.1 >= target.1 && actual != target {
+                        window.proxy.set_content_clip_box(0, 0, target.0, target.1);
+                    } else if actual == target {
+                        window.proxy.set_content_clip_box(0, 0, 0, 0);
+                    }
+                }
+                if window.dimensions == Some(target) && window.hidden != Some(false) {
+                    window.proxy.show();
+                    window.hidden = Some(false);
+                }
+                if raise && placement.focused {
+                    window.node.place_top();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn request_policy_turn_inner(&mut self) -> BackendResult<()> {
+        if !self.connected || self.exit_started {
+            return Err(protocol_error());
+        }
+        if self.turn_requested {
+            return Ok(());
+        }
+        self.window_manager
+            .as_ref()
+            .ok_or_else(protocol_error)?
+            .send_request(river_window_manager_v1::Request::ManageDirty {})
+            .map_err(invalid_id)?;
+        self.turn_requested = true;
+        self.flush_pending = true;
+        Ok(())
+    }
+
+    fn begin_exit_session_inner(&mut self, _policy: BackendExitPolicy) -> BackendResult<()> {
+        if !self.connected || self.exit_started {
+            return Err(protocol_error());
+        }
+        self.read_guard.take();
+        self.public_events.clear();
+        if self.open_turn.take().is_some() {
+            self.window_manager
+                .as_ref()
+                .ok_or_else(protocol_error)?
+                .manage_finish();
+        }
+        self.pending_response = None;
+        self.window_manager
+            .as_ref()
+            .ok_or_else(protocol_error)?
+            .exit_session();
+        self.flush_pending = true;
+        self.flush_blocked = false;
+        self.exit_started = true;
+        Ok(())
+    }
+}
+
+impl WmBackend for RiverBackend {
+    fn name(&self) -> &str {
+        RiverBackend::name(self)
+    }
+
+    fn connect(&mut self) -> BackendResult<Capabilities> {
+        RiverBackend::connect(self)
+    }
+
+    fn assign_window(
+        &mut self,
+        backend_id: &BackendWindowId,
+        win: WinId,
+    ) -> Result<(), BackendContractError> {
+        RiverBackend::assign_window(self, backend_id, win)
+    }
+
+    fn configure_bindings(&mut self, bindings: Vec<BackendBindingSpec>) -> BackendResult<()> {
+        RiverBackend::configure_bindings(self, bindings)
+    }
+
+    fn request_policy_turn(&mut self) -> BackendResult<()> {
+        self.request_policy_turn_inner()
+    }
+
+    fn respond_policy_turn(
+        &mut self,
+        turn: BackendPolicyTurnId,
+        ticket: BackendTicket,
+        response: BackendPolicyResponse,
+    ) -> BackendResult<BackendSubmission> {
+        RiverBackend::respond_policy_turn(self, turn, ticket, response)
+    }
+
+    fn begin_exit_session(&mut self, policy: BackendExitPolicy) -> BackendResult<()> {
+        self.begin_exit_session_inner(policy)
+    }
+
+    fn event_fd(&self) -> BorrowedFd<'_> {
+        RiverBackend::event_fd(self)
+    }
+
+    fn poll_interest(&self) -> BackendPollInterest {
+        RiverBackend::poll_interest(self)
+    }
+
+    fn service(
+        &mut self,
+        ready: BackendReady,
+        now: Instant,
+    ) -> BackendResult<Option<BackendEvent>> {
+        RiverBackend::service(self, ready, now)
     }
 }
 
@@ -1587,4 +2053,44 @@ fn keysym(name: &str) -> Option<u32> {
         }
         _ => None,
     }
+}
+
+fn modifiers_bits(modifiers: &[BackendModifier]) -> u32 {
+    modifiers.iter().fold(0, |bits, modifier| {
+        bits | match modifier {
+            BackendModifier::Shift => 1,
+            BackendModifier::Control => 4,
+            BackendModifier::Alt => 8,
+            BackendModifier::Super => 64,
+        }
+    })
+}
+
+fn decode_modifiers(bits: u32) -> BackendResult<Vec<BackendModifier>> {
+    if bits & !(1 | 4 | 8 | 64) != 0 {
+        return Err(protocol_error());
+    }
+    let mut modifiers = Vec::new();
+    for (bit, modifier) in [
+        (1, BackendModifier::Shift),
+        (4, BackendModifier::Control),
+        (8, BackendModifier::Alt),
+        (64, BackendModifier::Super),
+    ] {
+        if bits & bit != 0 {
+            modifiers.push(modifier);
+        }
+    }
+    Ok(modifiers)
+}
+
+fn border_rgba(focused: bool) -> (u32, u32, u32, u32) {
+    let (red, green, blue, alpha_percent) = if focused {
+        (0xa6_u64, 0x92_u64, 0xec_u64, 60_u64)
+    } else {
+        (0x66_u64, 0x74_u64, 0x8e_u64, 30_u64)
+    };
+    let alpha = u64::from(u32::MAX) * alpha_percent / 100;
+    let channel = |value: u64| (alpha * value / 255) as u32;
+    (channel(red), channel(green), channel(blue), alpha as u32)
 }
