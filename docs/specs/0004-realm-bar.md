@@ -45,6 +45,16 @@ client, not by the bar.
 
 ## Behaviour
 
+The implemented bar stack requires Rust 1.89 or newer (cosmic-text 0.19 and
+smol_str 0.3.6). The source workspace declares and CI verifies that floor.
+Retained native source kits remain separate versioned build inputs; their old
+compiler requirements are not evidence that they include the new bar.
+
+The selected renderer dependencies add BSD-2-Clause, BSD-3-Clause, and Zlib
+licenses to the dependency allowlist; their upstream notices must be retained
+in distributed source bundles. This records the expansion for the accepted
+SCTK/tiny-skia/cosmic-text stack, not a new runtime capability.
+
 ### 1. Surfaces
 
 Three `wlr-layer-shell` surfaces, all `wl_shm`, all CPU-rasterised, no GPU

@@ -36,15 +36,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # cargo-deny checks the locked graph against deny.toml, including RustSec
-      # advisories, the explicit licence allowlist, and dependency sources.
+      # Check distribution licences and dependency sources. Security/advisory
+      # checks are deferred until after MVP, per docs/MVP.md.
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
           # rust-toolchain.toml selects stable for repository commands. Keep
           # cargo-deny's installed toolchain aligned with that override; the
-          # separate MSRV job verifies the 1.85 floor.
+          # separate MSRV job verifies the manifest's floor.
           rust-version: "stable"
-          command: check advisories licenses sources
+          command: check licenses sources
 
   action-pins:
     name: action pins

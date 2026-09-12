@@ -18,6 +18,10 @@ confidence-threshold = 0.93
 allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
+    # Accepted bar stack: arrayref, tiny-skia/path, and slotmap (SPEC 0004).
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
     "MIT",
     "Unlicense",
     "Unicode-3.0",
