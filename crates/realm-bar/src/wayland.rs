@@ -814,7 +814,12 @@ fn to_wayland_anchor(anchor: RealmAnchor) -> Anchor {
 }
 
 fn rgba_to_argb8888(source: &[u8], destination: &mut [u8]) {
-    for (rgba, argb) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
+    for (rgba, argb) in source
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(destination.as_chunks_mut::<4>().0.iter_mut())
+    {
         argb[0] = rgba[2];
         argb[1] = rgba[1];
         argb[2] = rgba[0];
