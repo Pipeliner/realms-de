@@ -49,6 +49,9 @@ The implemented bar stack requires Rust 1.89 or newer (cosmic-text 0.19 and
 smol_str 0.3.6). The source workspace declares and CI verifies that floor.
 Retained native source kits remain separate versioned build inputs; their old
 compiler requirements are not evidence that they include the new bar.
+Raster/text-cache tests require a real installed fallback font. Minimal CI
+containers and Nix build sandboxes supply DejaVu explicitly; they must not skip
+font-rendering tests or silently depend on the developer host's font database.
 
 The selected renderer dependencies add BSD-2-Clause, BSD-3-Clause, and Zlib
 licenses to the dependency allowlist; their upstream notices must be retained
