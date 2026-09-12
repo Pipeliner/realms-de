@@ -63,6 +63,15 @@ modules; those counters have no useful event source. It runs on one session
 thread outside the input path. The clock schedules the next minute boundary,
 not a one-second redraw. Neither timer licenses polling by individual clients.
 
+Control clients have one narrower liveness exception: while disconnected, a
+client may arm a bounded one-shot retry solely to repeat the handshake. This is
+needed because the session binds `ctl.sock` before recovery and activates
+`listen(2)` on the same inode only after reaching `Live`; inotify cannot observe
+that transition. The retry is disarmed after subscription, never drives a
+render or module sample, and therefore leaves connected idle CPU and the
+no-intermediate-frame rule unchanged. SPEC 0004 fixes the bar's interval at
+250 ms and combines it with immediate filesystem-event wakeups.
+
 ### Held-key repeat
 
 [ADR 0013](0013-river-window-management-backend.md) found that
