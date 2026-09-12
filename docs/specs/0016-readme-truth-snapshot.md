@@ -48,15 +48,17 @@ MVP. It distinguishes present pre-alpha artifacts from a usable desktop:
 wrapper, systemd-unit, portal-configuration, Nix-module and native-package
 assets exist; `realmctl theme apply`, `theme lint`, and `theme diff` are
 implemented; the `realm-session` crate contains the accepted `WmBackend`
-contract and wire capability type, but none provides a working log-in session
-because the `realm-wm` daemon binary and dispatch loop are not implemented. The
-bar implementation now exists, but live compositor verification is pending.
-Its presence alone does not establish a usable desktop.
+contract, real River adapter, daemon binary, and dispatch loop. Their contract
+and real-socket fixture tests do not substitute for the still-pending live
+compositor and installed-package verification. The bar implementation also
+exists with that same live-verification boundary. Their presence alone does not
+establish a usable desktop.
 
 For this pre-alpha snapshot, the `crates/realm-session` manifest, library and
-backend contract are checked evidence for the implemented seam. Absence of a
-`realm-wm` binary target, including the conventional `src/bin/realm-wm.rs`, is
-the checked repository evidence for the missing daemon. For `realm-bar`,
+backend contract, runtime owner, production `src/bin/realm-wm.rs` entrypoint,
+and real-socket runtime fixture are checked evidence for the implemented daemon.
+README status must retain the pending live compositor verification boundary.
+For `realm-bar`,
 its manifest, binary entrypoint, and render
 contract tests are required artifacts. README status must call it implemented
 while explicitly retaining the pending live compositor verification boundary.
@@ -104,7 +106,7 @@ to be live.
 | # | Given / When / Then | Test |
 |---|---|---|
 | A1 | Given the README before its first divider, when a visitor reads it, then it contains the five-part identity; given the rule section, it contains the three exact headings with ADR 0001/0005/0009 links. | `docs/test-readme-truth-snapshot.sh` — `intro-and-rules` |
-| A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, present backend seam and pre-alpha assets, absent `realm-wm` daemon binary, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
+| A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, implemented-but-not-live-verified `realm-wm` and `realm-bar`, present pre-alpha assets, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
 | A3 | Given the `2026-08-30T06:18:36Z` snapshot, when each `Needs a human` table row is checked, then it binds one exact issue number, URL and title to a nonempty factual blocker; exactly the 13 accepted rows exist and #34 does not. | `docs/test-readme-truth-snapshot.sh` — `needs-human-snapshot` |
 | A4 | Given the documentation CI job, when it runs on a pull request or push, then uncommented fixture and production-check commands run in the `docs` job without a network call. | `docs/test-readme-truth-snapshot.sh` — `workflow-invocation` |
 

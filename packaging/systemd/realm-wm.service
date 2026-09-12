@@ -9,9 +9,8 @@
 # — which means no bar either. It is not a background service; it is half the
 # compositor.
 #
-# PRE-ALPHA (0.1.0): /usr/bin/realm-wm does not exist yet — the crate
-# `realm-session` lands in M2. Until then this unit fails with 203/EXEC, which is
-# exactly the condition the entry turns into FATAL WM-ABORT.
+# PRE-ALPHA (0.1.0): the daemon exists; installed headless-River verification
+# remains the release boundary rather than being inferred from this unit.
 [Unit]
 Description=realm window manager and session daemon
 Documentation=https://github.com/pipeliner/realms-de/blob/main/docs/specs/0005-session-startup.md
@@ -35,11 +34,11 @@ OnFailure=realm-session-abort.service
 
 [Service]
 Environment=PATH=/usr/lib/realm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
-# Type=exec until the daemon exists. In M2 this becomes Type=notify with
-# sd_notify(READY=1) sent once the window-management global *and* the
-# layer-shell manager global are bound, so that "the target is active" and
-# "windows can be placed" become the same statement (SPEC 0005 OQ-6).
-Type=exec
+# sd_notify(READY=1) is sent only after recovery reaches Live and the control
+# listener is active, so "the unit is active" and "windows can be placed and
+# queried" become the same statement (SPEC 0003 §1, SPEC 0005 OQ-6).
+Type=notify
+NotifyAccess=main
 ExecStart=/usr/bin/realm-wm
 # always, not on-failure: quit is expressed through river's exit_session, not
 # through this process exiting, so a clean exit on its own is not a normal path
