@@ -516,6 +516,8 @@ pub enum RecoveryPhase {
     QuitPending,
     /// Shutdown has discarded ordinary transaction semantics.
     ShuttingDown,
+    /// The backend accepted the one terminal exit request.
+    Exiting,
 }
 
 #[derive(Debug, Clone)]
@@ -679,6 +681,14 @@ pub enum SessionEventError {
     /// A policy fact cannot occur in the initial replay batch.
     #[error("unexpected policy event during initial replay: {0:?}")]
     UnexpectedInitialReplayPolicyEvent(BackendPolicyEvent),
+    /// A lifecycle operation was invoked outside its accepted phase.
+    #[error("invalid lifecycle operation {operation} in phase {phase:?}")]
+    InvalidLifecycleOperation {
+        /// Stable operation name.
+        operation: &'static str,
+        /// Phase that rejected the operation.
+        phase: RecoveryPhase,
+    },
 }
 
 /// Failure of a caller-requested session action.
@@ -727,39 +737,25 @@ struct ActiveTransaction {
     working: AuthorityState,
     most_recent_private_projection: Vec<Placement>,
     original_action_result: Option<(BackendTicket, Result<(), SessionActionError>)>,
-    repair_available: bool,
     response: BackendPolicyResponse,
     staged_effects: Vec<SessionEffect>,
     close_target: Option<WinId>,
     repeat_candidate: Option<BackendBindingId>,
     repeat_timer: RepeatTimerDirective,
     projection_required: bool,
+    projection_submitted: bool,
     binding_changed: bool,
     bootstrap: bool,
     quit_staged: bool,
-    terminal_result: Option<BackendResult<()>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TransactionSubstate {
     Idle,
-    AwaitingExternalTurn {
-        ticket: BackendTicket,
-    },
-    AwaitingInternalTurn {
-        ticket: BackendTicket,
-    },
-    InFlight {
-        ticket: BackendTicket,
-    },
-    AwaitingDrain {
-        ticket: BackendTicket,
-    },
-    RetryReady,
-    #[allow(dead_code)]
-    AwaitingRepairTurn {
-        ticket: BackendTicket,
-    },
+    AwaitingExternalTurn { ticket: BackendTicket },
+    AwaitingInternalTurn { ticket: BackendTicket },
+    InFlight { ticket: BackendTicket },
+    AwaitingDrain { ticket: BackendTicket },
 }
 
 /// The compositor-independent owner of Realm's ledger and visible state.
@@ -800,6 +796,7 @@ pub struct Session<B: WmBackend> {
     last_policy_turn: Option<BackendPolicyTurnId>,
     published_ledger: Ledger,
     published_windows: BTreeMap<WinId, WindowMetadata>,
+    exit_attempted: bool,
 }
 
 #[allow(deprecated)]
@@ -913,6 +910,7 @@ impl<B: WmBackend> Session<B> {
             last_policy_turn: None,
             published_ledger,
             published_windows: BTreeMap::new(),
+            exit_attempted: false,
         })
     }
 
@@ -923,7 +921,7 @@ impl<B: WmBackend> Session<B> {
 
     /// True when backend repair must run before another event is read.
     pub fn has_pending_backend_work(&self) -> bool {
-        self.pending_backend_work || self.transaction == TransactionSubstate::RetryReady
+        self.pending_backend_work
     }
 
     /// True until the current requested/response/drain transaction is final.
@@ -935,7 +933,29 @@ impl<B: WmBackend> Session<B> {
         &mut self,
         now: Instant,
     ) -> BackendResult<Option<BackendEvent>> {
-        self.backend.next_event(Some(now))
+        match self.backend.next_event(Some(now)) {
+            Ok(event) => Ok(event),
+            Err(error) => {
+                self.abandon_private_transaction();
+                Err(error)
+            }
+        }
+    }
+
+    /// Service one backend quantum, abandoning any private transaction on failure.
+    #[allow(dead_code)] // Task 4 wires the accepted readiness helper to this boundary.
+    pub(crate) fn service_backend(
+        &mut self,
+        ready: crate::backend::BackendReady,
+        now: Instant,
+    ) -> Result<Option<BackendEvent>, SessionEventError> {
+        match self.backend.service(ready, now) {
+            Ok(event) => Ok(event),
+            Err(error) => {
+                self.abandon_private_transaction();
+                Err(SessionEventError::Backend(error))
+            }
+        }
     }
 
     /// A validated persistence snapshot, exposed only in authoritative live state.
@@ -969,6 +989,74 @@ impl<B: WmBackend> Session<B> {
     /// The last visible state accepted for publication.
     pub fn state(&self) -> &RealmState {
         &self.state
+    }
+
+    /// Preempt ordinary work for a direct control-socket Quit request.
+    pub fn begin_direct_quit(&mut self) -> Result<SessionUpdate, SessionEventError> {
+        match self.phase {
+            RecoveryPhase::QuitPending => return Ok(SessionUpdate::unchanged()),
+            RecoveryPhase::Live => {}
+            phase => {
+                return Err(SessionEventError::InvalidLifecycleOperation {
+                    operation: "begin_direct_quit",
+                    phase,
+                });
+            }
+        }
+
+        self.abandon_private_transaction();
+        self.repeat_target = None;
+        self.phase = RecoveryPhase::QuitPending;
+        Ok(SessionUpdate {
+            repeat_timer: RepeatTimerDirective::Disarm,
+            effects: vec![SessionEffect::QuitPending {
+                after: QuitAfter::CurrentControlRequest,
+            }],
+            ..SessionUpdate::unchanged()
+        })
+    }
+
+    /// Abandon private work and enter the externally coordinated shutdown phase.
+    pub fn begin_shutdown(&mut self) -> SessionUpdate {
+        match self.phase {
+            RecoveryPhase::ShuttingDown | RecoveryPhase::Exiting => {
+                return SessionUpdate::unchanged();
+            }
+            RecoveryPhase::InitialReplay
+            | RecoveryPhase::FinalizingReplay
+            | RecoveryPhase::Live
+            | RecoveryPhase::QuitPending => {}
+        }
+
+        self.abandon_private_transaction();
+        self.pending_assignments.clear();
+        self.replay.clear();
+        self.repeat_target = None;
+        self.phase = RecoveryPhase::ShuttingDown;
+        SessionUpdate {
+            repeat_timer: RepeatTimerDirective::Disarm,
+            ..SessionUpdate::unchanged()
+        }
+    }
+
+    /// Begin the compositor's terminal exit sequence exactly once.
+    pub fn begin_exit_session(&mut self) -> Result<(), SessionEventError> {
+        if self.phase != RecoveryPhase::ShuttingDown || self.exit_attempted {
+            return Err(SessionEventError::InvalidLifecycleOperation {
+                operation: "begin_exit_session",
+                phase: self.phase,
+            });
+        }
+        self.exit_attempted = true;
+        let policy = crate::backend::BackendExitPolicy {
+            enabled: self.binding_state.enabled.clone(),
+            watched_modifiers: self.binding_state.watched_modifiers.clone(),
+        };
+        self.backend
+            .begin_exit_session(policy)
+            .map_err(SessionEventError::Backend)?;
+        self.phase = RecoveryPhase::Exiting;
+        Ok(())
     }
 
     /// Metadata for a managed window.
@@ -1159,6 +1247,10 @@ impl<B: WmBackend> Session<B> {
         &mut self,
         event: BackendEvent,
     ) -> Result<SessionUpdate, SessionEventError> {
+        if event == BackendEvent::Disconnected {
+            self.abandon_private_transaction();
+            return Err(SessionEventError::Backend(BackendError::Disconnected));
+        }
         match event {
             BackendEvent::PolicyTurn(turn) => {
                 self.policy_transactions = true;
@@ -1191,7 +1283,7 @@ impl<B: WmBackend> Session<B> {
                 _ => Err(SessionEventError::BackendWorkPending),
             },
             RecoveryPhase::Live => self.handle_live_event(event),
-            RecoveryPhase::QuitPending | RecoveryPhase::ShuttingDown => {
+            RecoveryPhase::QuitPending | RecoveryPhase::ShuttingDown | RecoveryPhase::Exiting => {
                 Err(SessionEventError::BackendWorkPending)
             }
         }
@@ -1627,7 +1719,6 @@ impl<B: WmBackend> Session<B> {
             working: committed,
             most_recent_private_projection: self.last_projection.clone(),
             original_action_result: None,
-            repair_available: true,
             response: BackendPolicyResponse {
                 projection: None,
                 closes: Vec::new(),
@@ -1638,10 +1729,10 @@ impl<B: WmBackend> Session<B> {
             repeat_candidate: None,
             repeat_timer: RepeatTimerDirective::Preserve,
             projection_required: false,
+            projection_submitted: false,
             binding_changed: false,
             bootstrap: false,
             quit_staged: false,
-            terminal_result: None,
         }
     }
 
@@ -1660,6 +1751,12 @@ impl<B: WmBackend> Session<B> {
     fn allocate_event_ticket(&mut self) -> Result<BackendTicket, SessionEventError> {
         self.allocate_ticket()
             .map_err(|()| SessionEventError::BackendTicketExhausted)
+    }
+
+    fn abandon_private_transaction(&mut self) {
+        self.active = None;
+        self.transaction = TransactionSubstate::Idle;
+        self.pending_backend_work = false;
     }
 
     fn enabled_bindings(&self, mode: Mode) -> Vec<BackendBindingId> {
@@ -1766,16 +1863,20 @@ impl<B: WmBackend> Session<B> {
             self.transaction,
             TransactionSubstate::AwaitingExternalTurn { .. }
                 | TransactionSubstate::AwaitingInternalTurn { .. }
-                | TransactionSubstate::AwaitingRepairTurn { .. }
         );
 
         let response_ticket = match self.transaction {
             TransactionSubstate::Idle => self.allocate_event_ticket()?,
             TransactionSubstate::AwaitingExternalTurn { ticket }
-            | TransactionSubstate::AwaitingInternalTurn { ticket }
-            | TransactionSubstate::AwaitingRepairTurn { ticket } => ticket,
-            TransactionSubstate::AwaitingDrain { .. } => self.allocate_event_ticket()?,
-            TransactionSubstate::InFlight { .. } | TransactionSubstate::RetryReady => {
+            | TransactionSubstate::AwaitingInternalTurn { ticket } => ticket,
+            TransactionSubstate::AwaitingDrain { .. } => match self.allocate_event_ticket() {
+                Ok(ticket) => ticket,
+                Err(error) => {
+                    self.abandon_private_transaction();
+                    return Err(error);
+                }
+            },
+            TransactionSubstate::InFlight { .. } => {
                 return Err(BackendContractError::InvalidPolicySequence.into());
             }
         };
@@ -1791,35 +1892,40 @@ impl<B: WmBackend> Session<B> {
             active.projection_required = false;
         }
         active.binding_changed = false;
-        active.terminal_result = None;
         if let Some(close) = active.close_target {
             if active.working.windows.contains_key(&close) {
                 push_unique(&mut active.response.closes, close);
             }
         }
 
-        if self.phase == RecoveryPhase::InitialReplay {
-            self.reduce_initial_replay(&mut active, &turn.events)?;
+        let reduction = if self.phase == RecoveryPhase::InitialReplay {
+            self.reduce_initial_replay(&mut active, &turn.events)
         } else {
-            self.reduce_policy_events(&mut active, &turn.events)?;
+            self.reduce_policy_events(&mut active, &turn.events)
+        };
+        if let Err(error) = reduction {
+            self.abandon_private_transaction();
+            return Err(error);
         }
         self.derive_response(&mut active);
         let response = active.response.clone();
         self.last_policy_turn = Some(turn.id);
-        let submission = self
+        let submission = match self
             .backend
             .respond_policy_turn(turn.id, response_ticket, response)
-            .map_err(SessionEventError::Backend)?;
+        {
+            Ok(submission) => submission,
+            Err(error) => {
+                self.abandon_private_transaction();
+                return Err(SessionEventError::Backend(error));
+            }
+        };
 
         active.close_target = None;
+        active.projection_submitted |= active.response.projection.is_some();
         match submission {
             BackendSubmission::Complete => self.finalize_active(active),
             BackendSubmission::Pending => {
-                let update = SessionUpdate {
-                    repeat_timer: active.repeat_timer.clone(),
-                    ..SessionUpdate::unchanged()
-                };
-                active.repeat_timer = RepeatTimerDirective::Preserve;
                 if active.bootstrap {
                     self.phase = RecoveryPhase::FinalizingReplay;
                 }
@@ -1827,7 +1933,7 @@ impl<B: WmBackend> Session<B> {
                 self.transaction = TransactionSubstate::InFlight {
                     ticket: response_ticket,
                 };
-                Ok(update)
+                Ok(SessionUpdate::unchanged())
             }
         }
     }
@@ -1843,7 +1949,6 @@ impl<B: WmBackend> Session<B> {
             TransactionSubstate::Idle
             | TransactionSubstate::AwaitingExternalTurn { .. }
             | TransactionSubstate::AwaitingInternalTurn { .. }
-            | TransactionSubstate::AwaitingRepairTurn { .. }
                 if turn.drains.is_none() => {}
             TransactionSubstate::AwaitingDrain { ticket } if turn.drains == Some(ticket) => {}
             _ => return Err(BackendContractError::InvalidPolicySequence.into()),
@@ -2293,7 +2398,6 @@ impl<B: WmBackend> Session<B> {
                         active.repeat_timer = RepeatTimerDirective::Disarm;
                     }
                     if self.repeat_target == Some(*id) {
-                        self.repeat_target = None;
                         active.repeat_timer = RepeatTimerDirective::Disarm;
                     }
                 }
@@ -2427,14 +2531,13 @@ impl<B: WmBackend> Session<B> {
         mut active: ActiveTransaction,
     ) -> Result<SessionUpdate, SessionEventError> {
         debug_assert_eq!(active.visible, self.state);
-        let _repair_available = active.repair_available;
         let before_snapshot = self.snapshot();
         let entering_live = self.phase == RecoveryPhase::FinalizingReplay
             && active.working.workarea.is_some()
-            && active.response.projection.is_some();
+            && active.projection_submitted;
         self.install_authority(active.working.clone());
-        if let Some(projection) = active.response.projection.clone() {
-            self.last_projection = projection;
+        if active.projection_submitted {
+            self.last_projection = active.most_recent_private_projection.clone();
             self.projection_dirty = false;
         }
         self.binding_state = BackendBindingState {
@@ -2467,10 +2570,9 @@ impl<B: WmBackend> Session<B> {
                 repeat_timer = RepeatTimerDirective::Disarm;
             }
         }
-        if self
-            .repeat_target
-            .is_some_and(|target| !self.binding_state.enabled.contains(&target))
-        {
+        if self.repeat_target.is_some_and(|target| {
+            !self.held_bindings.contains(&target) || !self.binding_state.enabled.contains(&target)
+        }) {
             self.repeat_target = None;
             repeat_timer = RepeatTimerDirective::Disarm;
         }
@@ -2498,7 +2600,7 @@ impl<B: WmBackend> Session<B> {
         Ok(SessionUpdate {
             repeat_timer,
             persistence,
-            projection_applied: active.response.projection.is_some(),
+            projection_applied: active.projection_submitted,
             state,
             pending_action: None,
             action_completion,
@@ -2519,33 +2621,15 @@ impl<B: WmBackend> Session<B> {
         if ticket != expected {
             return Err(BackendContractError::InvalidPolicySequence.into());
         }
-        let active = self
-            .active
+        if let Err(error) = result {
+            self.abandon_private_transaction();
+            return Err(SessionEventError::Backend(error));
+        }
+        self.active
             .as_mut()
             .ok_or(BackendContractError::InvalidPolicySequence)?;
-        let diagnostic = match &result {
-            Err(error @ (BackendError::Io { .. } | BackendError::Unsupported { .. }))
-                if active.original_action_result.is_none() =>
-            {
-                Some(SessionDiagnostic {
-                    error: error.clone(),
-                })
-            }
-            Err(error @ (BackendError::Io { .. } | BackendError::Unsupported { .. })) => {
-                if let Some((_, original)) = &mut active.original_action_result {
-                    *original = Err(SessionActionError::Backend(error.clone()));
-                }
-                None
-            }
-            Err(error) => return Err(SessionEventError::Backend(error.clone())),
-            Ok(()) => None,
-        };
-        active.terminal_result = Some(result);
         self.transaction = TransactionSubstate::AwaitingDrain { ticket };
-        Ok(SessionUpdate {
-            diagnostic,
-            ..SessionUpdate::unchanged()
-        })
+        Ok(SessionUpdate::unchanged())
     }
 
     fn handle_observations_drained(
@@ -2606,17 +2690,8 @@ impl<B: WmBackend> Session<B> {
         self.transaction = TransactionSubstate::AwaitingInternalTurn { ticket };
         match self.backend.request_policy_turn() {
             Ok(()) => Ok(SessionUpdate::unchanged()),
-            Err(error @ (BackendError::Io { .. } | BackendError::Unsupported { .. })) => {
-                self.active = None;
-                self.transaction = TransactionSubstate::Idle;
-                Ok(SessionUpdate {
-                    diagnostic: Some(SessionDiagnostic { error }),
-                    ..SessionUpdate::unchanged()
-                })
-            }
             Err(error) => {
-                self.active = None;
-                self.transaction = TransactionSubstate::Idle;
+                self.abandon_private_transaction();
                 Err(SessionEventError::Backend(error))
             }
         }
@@ -2802,8 +2877,9 @@ mod tests {
     };
 
     use super::{
-        RecoveryPhase, RepeatTimerDirective, Session, SessionActionError, SessionEffect,
-        SessionEventError, SessionSnapshotV1, SessionUpdate, SnapshotBinding, TransactionSubstate,
+        ActionCompletion, QuitAfter, RecoveryPhase, RepeatTimerDirective, Session,
+        SessionActionError, SessionEffect, SessionEventError, SessionSnapshotV1, SessionUpdate,
+        SnapshotBinding, TransactionSubstate,
     };
 
     struct FakeBackend {
@@ -2825,6 +2901,9 @@ mod tests {
         request_results: VecDeque<BackendResult<()>>,
         responses: Vec<(BackendPolicyTurnId, BackendTicket, BackendPolicyResponse)>,
         response_results: VecDeque<BackendResult<BackendSubmission>>,
+        service_results: VecDeque<BackendResult<Option<BackendEvent>>>,
+        exit_policies: Vec<BackendExitPolicy>,
+        exit_results: VecDeque<BackendResult<()>>,
         call_order: Vec<String>,
         next_event_calls: usize,
         event_file: File,
@@ -2858,6 +2937,9 @@ mod tests {
                 request_results: VecDeque::new(),
                 responses: Vec::new(),
                 response_results: VecDeque::new(),
+                service_results: VecDeque::new(),
+                exit_policies: Vec::new(),
+                exit_results: VecDeque::new(),
                 call_order: Vec::new(),
                 next_event_calls: 0,
                 event_file: File::open("/dev/null").unwrap(),
@@ -2922,8 +3004,10 @@ mod tests {
                 .unwrap_or(Ok(BackendSubmission::Complete))
         }
 
-        fn begin_exit_session(&mut self, _policy: BackendExitPolicy) -> BackendResult<()> {
-            Ok(())
+        fn begin_exit_session(&mut self, policy: BackendExitPolicy) -> BackendResult<()> {
+            self.call_order.push("exit".to_owned());
+            self.exit_policies.push(policy);
+            self.exit_results.pop_front().unwrap_or(Ok(()))
         }
 
         fn apply(&mut self, placements: &[Placement]) -> BackendResult<()> {
@@ -2969,7 +3053,7 @@ mod tests {
             _ready: BackendReady,
             _now: Instant,
         ) -> BackendResult<Option<BackendEvent>> {
-            Ok(None)
+            self.service_results.pop_front().unwrap_or(Ok(None))
         }
 
         fn next_event(
@@ -6400,5 +6484,1066 @@ mod tests {
             quitting.effects.as_slice(),
             [SessionEffect::QuitPending { .. }]
         ));
+    }
+
+    #[test]
+    fn complete_response_finalizes_synchronously_without_pending_artifacts() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let before_ledger = session.ledger().clone();
+        let before_state = session.state().clone();
+        let before_projection = session.last_projection().to_vec();
+
+        let admitted = session.focus_step(Dir::Prev).unwrap();
+        let origin = admitted.pending_action.unwrap();
+        assert_eq!(session.ledger(), &before_ledger);
+        assert_eq!(session.state(), &before_state);
+        assert_eq!(session.last_projection(), before_projection);
+
+        let finalized = session
+            .handle_backend_event(policy_turn(4, Vec::new()))
+            .unwrap();
+
+        assert_eq!(session.backend.responses[0].1, origin);
+        assert!(!session.has_active_backend_transaction());
+        assert!(session.active.is_none());
+        assert_eq!(session.ledger().focused(), Some(WinId(0)));
+        assert_ne!(session.last_projection(), before_projection);
+        assert_eq!(finalized.state.as_ref(), Some(session.state()));
+        assert_eq!(finalized.persistence, session.snapshot());
+        assert_eq!(
+            finalized.action_completion,
+            Some(ActionCompletion {
+                ticket: origin,
+                result: Ok(()),
+            })
+        );
+        assert_eq!(finalized.repeat_timer, RepeatTimerDirective::Preserve);
+        assert!(finalized.effects.is_empty());
+    }
+
+    #[test]
+    fn pending_response_commits_only_after_matching_ok_and_clean_drain() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        session
+            .backend
+            .response_results
+            .push_back(Ok(BackendSubmission::Pending));
+        let before_ledger = session.ledger().clone();
+        let before_state = session.state().clone();
+        let before_projection = session.last_projection().to_vec();
+        let before_snapshot = session.snapshot();
+        let before_visible = session.visible_ledger(None);
+        let origin = session
+            .focus_step(Dir::Prev)
+            .unwrap()
+            .pending_action
+            .unwrap();
+
+        let submitted = session
+            .handle_backend_event(policy_turn(4, Vec::new()))
+            .unwrap();
+        assert_eq!(submitted, SessionUpdate::unchanged());
+        assert_eq!(session.ledger(), &before_ledger);
+        assert_eq!(session.state(), &before_state);
+        assert_eq!(session.last_projection(), before_projection);
+        assert_eq!(session.snapshot(), before_snapshot);
+        assert_eq!(session.visible_ledger(None), before_visible);
+
+        let completed = session
+            .handle_backend_event(BackendEvent::OperationCompleted {
+                ticket: origin,
+                result: Ok(()),
+            })
+            .unwrap();
+        assert_eq!(completed, SessionUpdate::unchanged());
+        assert_eq!(session.ledger(), &before_ledger);
+        assert_eq!(session.state(), &before_state);
+        assert_eq!(session.last_projection(), before_projection);
+        assert_eq!(session.snapshot(), before_snapshot);
+        assert_eq!(session.visible_ledger(None), before_visible);
+
+        let drained = session
+            .handle_backend_event(BackendEvent::RetainedObservationsDrained { ticket: origin })
+            .unwrap();
+        assert_eq!(session.ledger().focused(), Some(WinId(0)));
+        assert_ne!(session.state(), &before_state);
+        assert_ne!(session.last_projection(), before_projection);
+        assert_ne!(session.snapshot(), before_snapshot);
+        assert_ne!(session.visible_ledger(None), before_visible);
+        assert_eq!(
+            drained.action_completion,
+            Some(ActionCompletion {
+                ticket: origin,
+                result: Ok(()),
+            })
+        );
+        assert!(drained.state.is_some());
+        assert!(drained.persistence.is_some());
+        assert!(!session.has_active_backend_transaction());
+    }
+
+    #[test]
+    fn tagged_retained_turn_replaces_marker_and_finalizes_only_after_its_response() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        session
+            .backend
+            .response_results
+            .push_back(Ok(BackendSubmission::Pending));
+        let before_ledger = session.ledger().clone();
+        let before_state = session.state().clone();
+        let before_projection = session.last_projection().to_vec();
+        let origin = session
+            .focus_step(Dir::Prev)
+            .unwrap()
+            .pending_action
+            .unwrap();
+        session
+            .handle_backend_event(policy_turn(4, Vec::new()))
+            .unwrap();
+        let submitted_projection = session.backend.responses[0]
+            .2
+            .projection
+            .clone()
+            .expect("the desired response carries P2");
+        assert_ne!(submitted_projection, before_projection);
+        session
+            .handle_backend_event(BackendEvent::OperationCompleted {
+                ticket: origin,
+                result: Ok(()),
+            })
+            .unwrap();
+
+        let finalized = session
+            .handle_backend_event(draining_policy_turn(
+                5,
+                origin,
+                vec![BackendPolicyEvent::TitleChanged {
+                    backend_id: BackendWindowId::new("r1").unwrap(),
+                    title: "retained".to_owned(),
+                }],
+            ))
+            .unwrap();
+
+        assert_eq!(session.backend.responses.len(), 2);
+        assert_eq!(session.backend.responses[1].0.get(), 5);
+        assert_ne!(session.ledger(), &before_ledger);
+        assert_ne!(session.state(), &before_state);
+        assert_eq!(session.last_projection(), submitted_projection);
+        assert_eq!(session.window_metadata(WinId(0)).unwrap().title, "retained");
+        assert_eq!(
+            finalized.action_completion,
+            Some(ActionCompletion {
+                ticket: origin,
+                result: Ok(()),
+            })
+        );
+        assert!(finalized.state.is_some());
+        assert!(finalized.persistence.is_some());
+        assert!(!session.has_active_backend_transaction());
+    }
+
+    #[test]
+    fn policy_turn_and_completion_tags_are_exact() {
+        let (mut wrong_completion, ticket) = policy_in_flight_session();
+        let wrong = BackendTicket::new(ticket.get() + 1).unwrap();
+        let responses = wrong_completion.backend.responses.clone();
+        let ledger = wrong_completion.ledger().clone();
+        let error = wrong_completion
+            .handle_backend_event(BackendEvent::OperationCompleted {
+                ticket: wrong,
+                result: Ok(()),
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
+        ));
+        assert_eq!(wrong_completion.backend.responses, responses);
+        assert_eq!(wrong_completion.ledger(), &ledger);
+
+        let (mut wrong_drain, ticket) = policy_awaiting_drain_session();
+        let wrong = BackendTicket::new(ticket.get() + 1).unwrap();
+        let responses = wrong_drain.backend.responses.clone();
+        let error = wrong_drain
+            .handle_backend_event(draining_policy_turn(4, wrong, Vec::new()))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
+        ));
+        assert_eq!(wrong_drain.backend.responses, responses);
+        assert_eq!(
+            wrong_drain.transaction,
+            TransactionSubstate::AwaitingDrain { ticket }
+        );
+
+        let error = wrong_drain
+            .handle_backend_event(BackendEvent::RetainedObservationsDrained { ticket: wrong })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionEventError::BackendContract(BackendContractError::InvalidPolicySequence)
+        ));
+        assert_eq!(wrong_drain.backend.responses, responses);
+    }
+
+    #[test]
+    fn bootstrap_replay_and_first_workarea_gate_live_until_final_boundary() {
+        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        session.backend.response_results.extend([
+            Ok(BackendSubmission::Pending),
+            Ok(BackendSubmission::Pending),
+        ]);
+
+        let replay = session
+            .handle_backend_event(policy_turn(
+                1,
+                vec![
+                    policy_window_opened("boot", "booting"),
+                    BackendPolicyEvent::InitialReplayComplete,
+                ],
+            ))
+            .unwrap();
+        let replay_ticket = session.backend.responses[0].1;
+        assert_eq!(session.phase(), RecoveryPhase::FinalizingReplay);
+        assert_eq!(replay, SessionUpdate::unchanged());
+        assert!(session.ledger().is_empty());
+        assert_eq!(session.state().revision, 0);
+        assert!(session.snapshot().is_none());
+        assert!(session
+            .visible_ledger(None)
+            .iter()
+            .all(|orbit| orbit.windows.is_empty()));
+
+        assert_eq!(
+            session
+                .handle_backend_event(BackendEvent::OperationCompleted {
+                    ticket: replay_ticket,
+                    result: Ok(()),
+                })
+                .unwrap(),
+            SessionUpdate::unchanged()
+        );
+        let workarea = session
+            .handle_backend_event(draining_policy_turn(
+                2,
+                replay_ticket,
+                vec![BackendPolicyEvent::WorkareaChanged(selected_workarea())],
+            ))
+            .unwrap();
+        let workarea_ticket = session.backend.responses[1].1;
+        assert_ne!(workarea_ticket, replay_ticket);
+        assert!(session.backend.responses[0].2.projection.is_none());
+        assert!(session.backend.responses[0].2.bindings.enabled.is_empty());
+        assert!(session.backend.responses[1].2.projection.is_some());
+        assert_eq!(
+            session.backend.responses[1].2.bindings.enabled.len(),
+            Keymap::default().bindings.len()
+        );
+        assert_eq!(workarea, SessionUpdate::unchanged());
+        assert_eq!(session.phase(), RecoveryPhase::FinalizingReplay);
+        assert!(session.ledger().is_empty());
+        assert_eq!(session.state().revision, 0);
+        assert!(session.snapshot().is_none());
+
+        assert_eq!(
+            session
+                .handle_backend_event(BackendEvent::OperationCompleted {
+                    ticket: workarea_ticket,
+                    result: Ok(()),
+                })
+                .unwrap(),
+            SessionUpdate::unchanged()
+        );
+        assert_eq!(session.phase(), RecoveryPhase::FinalizingReplay);
+        assert!(session.ledger().is_empty());
+        assert!(session.snapshot().is_none());
+
+        let live = session
+            .handle_backend_event(draining_policy_turn(
+                3,
+                workarea_ticket,
+                vec![BackendPolicyEvent::TitleChanged {
+                    backend_id: BackendWindowId::new("boot").unwrap(),
+                    title: "ready".to_owned(),
+                }],
+            ))
+            .unwrap();
+        assert_eq!(session.phase(), RecoveryPhase::Live);
+        assert_eq!(session.ledger().active_orbit().windows, [WinId(0)]);
+        assert_eq!(session.window_metadata(WinId(0)).unwrap().title, "ready");
+        assert_eq!(live.state.as_ref().map(|state| state.revision), Some(1));
+        assert!(live.persistence.is_some());
+        assert!(session.snapshot().is_some());
+        assert_eq!(session.visible_ledger(None)[0].windows.len(), 1);
+    }
+
+    #[test]
+    fn tagged_observed_only_authority_is_private_until_its_clean_final_boundary() {
+        let mut session = policy_live_session(FakeBackend::new());
+        session.backend.response_results.extend([
+            Ok(BackendSubmission::Pending),
+            Ok(BackendSubmission::Pending),
+        ]);
+        let before_ledger = session.ledger().clone();
+        let before_state = session.state().clone();
+        let before_snapshot = session.snapshot();
+        let before_visible = session.visible_ledger(None);
+
+        session
+            .handle_backend_event(policy_turn(3, Vec::new()))
+            .unwrap();
+        let first_ticket = session.backend.responses[0].1;
+        session
+            .handle_backend_event(BackendEvent::OperationCompleted {
+                ticket: first_ticket,
+                result: Ok(()),
+            })
+            .unwrap();
+        let submitted = session
+            .handle_backend_event(draining_policy_turn(
+                4,
+                first_ticket,
+                vec![policy_window_opened("seen", "private")],
+            ))
+            .unwrap();
+        let tagged_ticket = session.backend.responses[1].1;
+        assert_eq!(submitted, SessionUpdate::unchanged());
+        assert_eq!(session.ledger(), &before_ledger);
+        assert!(session.window_metadata(WinId(0)).is_none());
+        assert_eq!(session.state(), &before_state);
+        assert_eq!(session.snapshot(), before_snapshot);
+        assert_eq!(session.visible_ledger(None), before_visible);
+
+        assert_eq!(
+            session
+                .handle_backend_event(BackendEvent::OperationCompleted {
+                    ticket: tagged_ticket,
+                    result: Ok(()),
+                })
+                .unwrap(),
+            SessionUpdate::unchanged()
+        );
+        assert!(session.window_metadata(WinId(0)).is_none());
+        assert_eq!(session.state(), &before_state);
+        assert_eq!(session.snapshot(), before_snapshot);
+        assert_eq!(session.visible_ledger(None), before_visible);
+
+        let finalized = session
+            .handle_backend_event(BackendEvent::RetainedObservationsDrained {
+                ticket: tagged_ticket,
+            })
+            .unwrap();
+        assert_eq!(session.window_metadata(WinId(0)).unwrap().title, "private");
+        assert_ne!(session.state(), &before_state);
+        assert_ne!(session.snapshot(), before_snapshot);
+        assert_ne!(session.visible_ledger(None), before_visible);
+        assert!(finalized.state.is_some());
+        assert!(finalized.persistence.is_some());
+    }
+
+    #[test]
+    fn final_boundary_coreleases_state_completion_and_ordered_effects() {
+        let mut keymap = Keymap::default();
+        keymap.bindings.extend([
+            test_binding(
+                "x",
+                Action::Spawn(vec!["before-quit".to_owned()]),
+                Mode::Nav,
+                false,
+            ),
+            test_binding("z", Action::Quit, Mode::Nav, false),
+            test_binding(
+                "y",
+                Action::Spawn(vec!["after-quit".to_owned()]),
+                Mode::Nav,
+                false,
+            ),
+        ]);
+        let mut session = policy_live_session_with_keymap(FakeBackend::new(), keymap);
+        open_two_policy_windows(&mut session);
+        let repeat = binding_id(&session, "j");
+        let spawn = binding_id(&session, "x");
+        let quit = binding_id(&session, "z");
+        let suppressed = binding_id(&session, "y");
+        session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(repeat)],
+            ))
+            .unwrap();
+        assert_eq!(session.repeat_target, Some(repeat));
+        session.backend.responses.clear();
+        session
+            .backend
+            .response_results
+            .push_back(Ok(BackendSubmission::Pending));
+        let before_ledger = session.ledger().clone();
+        let before_state = session.state().clone();
+        let before_snapshot = session.snapshot();
+        let origin = session
+            .focus_step(Dir::Prev)
+            .unwrap()
+            .pending_action
+            .unwrap();
+
+        let submitted = session
+            .handle_backend_event(policy_turn(
+                5,
+                vec![
+                    BackendPolicyEvent::BindingReleased(repeat),
+                    BackendPolicyEvent::BindingPressed(spawn),
+                    BackendPolicyEvent::BindingPressed(quit),
+                    BackendPolicyEvent::BindingPressed(suppressed),
+                ],
+            ))
+            .unwrap();
+        assert_eq!(submitted, SessionUpdate::unchanged());
+        assert_eq!(session.ledger(), &before_ledger);
+        assert_eq!(session.state(), &before_state);
+        assert_eq!(session.snapshot(), before_snapshot);
+        assert_eq!(session.repeat_target, Some(repeat));
+
+        assert_eq!(
+            session
+                .handle_backend_event(BackendEvent::OperationCompleted {
+                    ticket: origin,
+                    result: Ok(()),
+                })
+                .unwrap(),
+            SessionUpdate::unchanged()
+        );
+        assert_eq!(session.ledger(), &before_ledger);
+        assert_eq!(session.state(), &before_state);
+        assert_eq!(session.snapshot(), before_snapshot);
+        assert_eq!(session.repeat_target, Some(repeat));
+
+        let finalized = session
+            .handle_backend_event(BackendEvent::RetainedObservationsDrained { ticket: origin })
+            .unwrap();
+        assert_eq!(finalized.repeat_timer, RepeatTimerDirective::Disarm);
+        assert!(finalized.state.is_some());
+        assert!(finalized.persistence.is_some());
+        assert_eq!(
+            finalized.action_completion,
+            Some(ActionCompletion {
+                ticket: origin,
+                result: Ok(()),
+            })
+        );
+        assert_eq!(
+            finalized.effects,
+            vec![
+                SessionEffect::Spawn(vec!["before-quit".to_owned()]),
+                SessionEffect::QuitPending {
+                    after: QuitAfter::OriginalAction(origin),
+                },
+            ]
+        );
+        assert_eq!(session.phase(), RecoveryPhase::QuitPending);
+        assert_eq!(session.repeat_target, None);
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum PendingFailureScenario {
+        Desired,
+        KeyEffect,
+        Observation,
+        Replay,
+        TaggedObservation,
+    }
+
+    fn pending_failure_scenario(
+        scenario: PendingFailureScenario,
+    ) -> (Session<FakeBackend>, BackendTicket) {
+        match scenario {
+            PendingFailureScenario::Desired => {
+                let mut session = policy_live_session(FakeBackend::new());
+                open_two_policy_windows(&mut session);
+                session
+                    .backend
+                    .response_results
+                    .push_back(Ok(BackendSubmission::Pending));
+                let ticket = session
+                    .focus_step(Dir::Prev)
+                    .unwrap()
+                    .pending_action
+                    .unwrap();
+                session
+                    .handle_backend_event(policy_turn(4, Vec::new()))
+                    .unwrap();
+                (session, ticket)
+            }
+            PendingFailureScenario::KeyEffect => {
+                let mut session =
+                    policy_live_session_with_keymap(FakeBackend::new(), spawn_keymap());
+                let spawn = binding_id(&session, "x");
+                session
+                    .backend
+                    .response_results
+                    .push_back(Ok(BackendSubmission::Pending));
+                session
+                    .handle_backend_event(policy_turn(
+                        3,
+                        vec![BackendPolicyEvent::BindingPressed(spawn)],
+                    ))
+                    .unwrap();
+                let ticket = session.backend.responses[0].1;
+                (session, ticket)
+            }
+            PendingFailureScenario::Observation => {
+                let mut session = policy_live_session(FakeBackend::new());
+                session
+                    .backend
+                    .response_results
+                    .push_back(Ok(BackendSubmission::Pending));
+                session
+                    .handle_backend_event(policy_turn(
+                        3,
+                        vec![policy_window_opened("private", "private")],
+                    ))
+                    .unwrap();
+                let ticket = session.backend.responses[0].1;
+                (session, ticket)
+            }
+            PendingFailureScenario::Replay => {
+                let mut session = Session::connect(FakeBackend::new()).unwrap();
+                session
+                    .backend
+                    .response_results
+                    .push_back(Ok(BackendSubmission::Pending));
+                session
+                    .handle_backend_event(policy_turn(
+                        1,
+                        vec![
+                            policy_window_opened("private", "private"),
+                            BackendPolicyEvent::InitialReplayComplete,
+                        ],
+                    ))
+                    .unwrap();
+                let ticket = session.backend.responses[0].1;
+                (session, ticket)
+            }
+            PendingFailureScenario::TaggedObservation => {
+                let mut session = policy_live_session(FakeBackend::new());
+                session.backend.response_results.extend([
+                    Ok(BackendSubmission::Pending),
+                    Ok(BackendSubmission::Pending),
+                ]);
+                session
+                    .handle_backend_event(policy_turn(3, Vec::new()))
+                    .unwrap();
+                let first = session.backend.responses[0].1;
+                session
+                    .handle_backend_event(BackendEvent::OperationCompleted {
+                        ticket: first,
+                        result: Ok(()),
+                    })
+                    .unwrap();
+                session
+                    .handle_backend_event(draining_policy_turn(
+                        4,
+                        first,
+                        vec![policy_window_opened("tagged-private", "private")],
+                    ))
+                    .unwrap();
+                let ticket = session.backend.responses[1].1;
+                (session, ticket)
+            }
+        }
+    }
+
+    #[test]
+    fn post_admission_io_and_unsupported_fail_closed_without_completion_or_effects() {
+        let errors = [
+            BackendError::Io {
+                message: "terminal io".to_owned(),
+            },
+            BackendError::Unsupported {
+                capability: "terminal capability".to_owned(),
+            },
+        ];
+        let scenarios = [
+            PendingFailureScenario::Desired,
+            PendingFailureScenario::KeyEffect,
+            PendingFailureScenario::Observation,
+            PendingFailureScenario::Replay,
+            PendingFailureScenario::TaggedObservation,
+        ];
+
+        for error in errors {
+            for scenario in scenarios {
+                let (mut session, ticket) = pending_failure_scenario(scenario);
+                let ledger = session.ledger().clone();
+                let state = session.state().clone();
+                let projection = session.last_projection().to_vec();
+                let snapshot = session.snapshot();
+                let visible = session.visible_ledger(None);
+                let requests = session.backend.request_attempts;
+                let responses = session.backend.responses.len();
+
+                let actual = session
+                    .handle_backend_event(BackendEvent::OperationCompleted {
+                        ticket,
+                        result: Err(error.clone()),
+                    })
+                    .unwrap_err();
+
+                assert_eq!(
+                    actual,
+                    SessionEventError::Backend(error.clone()),
+                    "{scenario:?}"
+                );
+                assert_eq!(session.ledger(), &ledger, "{scenario:?}");
+                assert_eq!(session.state(), &state, "{scenario:?}");
+                assert_eq!(session.last_projection(), projection, "{scenario:?}");
+                assert_eq!(session.snapshot(), snapshot, "{scenario:?}");
+                assert_eq!(session.visible_ledger(None), visible, "{scenario:?}");
+                assert_eq!(session.backend.request_attempts, requests, "{scenario:?}");
+                assert_eq!(session.backend.responses.len(), responses, "{scenario:?}");
+                assert!(!session.has_active_backend_transaction(), "{scenario:?}");
+                assert!(session.active.is_none(), "{scenario:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn protocol_capacity_and_backend_loss_are_fatal_without_completion() {
+        let errors = [
+            BackendError::Protocol {
+                kind: crate::backend::BackendProtocolErrorKind::InvalidObjectOrder,
+            },
+            BackendError::Capacity {
+                resource: BackendCapacityResource::PolicyFacts,
+                limit: MAX_POLICY_EVENTS as u64,
+            },
+            BackendError::Disconnected,
+            BackendError::Unavailable {
+                message: "wm disappeared".to_owned(),
+            },
+        ];
+
+        for error in errors {
+            let (mut session, ticket) = pending_failure_scenario(PendingFailureScenario::Desired);
+            let ledger = session.ledger().clone();
+            let state = session.state().clone();
+            let requests = session.backend.request_attempts;
+            let responses = session.backend.responses.len();
+            let actual = session
+                .handle_backend_event(BackendEvent::OperationCompleted {
+                    ticket,
+                    result: Err(error.clone()),
+                })
+                .unwrap_err();
+            assert_eq!(actual, SessionEventError::Backend(error));
+            assert_eq!(session.ledger(), &ledger);
+            assert_eq!(session.state(), &state);
+            assert_eq!(session.backend.request_attempts, requests);
+            assert_eq!(session.backend.responses.len(), responses);
+            assert!(!session.has_active_backend_transaction());
+            assert!(session.active.is_none());
+        }
+
+        let response_errors = [
+            BackendError::Io {
+                message: "response write".to_owned(),
+            },
+            BackendError::Unsupported {
+                capability: "response".to_owned(),
+            },
+            BackendError::Protocol {
+                kind: crate::backend::BackendProtocolErrorKind::InvalidFraming,
+            },
+            BackendError::Capacity {
+                resource: BackendCapacityResource::RetainedBytes,
+                limit: 65_535,
+            },
+        ];
+        for error in response_errors {
+            let mut session = policy_live_session(FakeBackend::new());
+            open_two_policy_windows(&mut session);
+            let ledger = session.ledger().clone();
+            let state = session.state().clone();
+            session
+                .backend
+                .response_results
+                .push_back(Err(error.clone()));
+            session.focus_step(Dir::Prev).unwrap();
+            let actual = session
+                .handle_backend_event(policy_turn(4, Vec::new()))
+                .unwrap_err();
+            assert_eq!(actual, SessionEventError::Backend(error));
+            assert_eq!(session.ledger(), &ledger);
+            assert_eq!(session.state(), &state);
+            assert!(!session.has_active_backend_transaction());
+            assert!(session.active.is_none());
+        }
+
+        let (mut session, _) = pending_failure_scenario(PendingFailureScenario::Desired);
+        let ledger = session.ledger().clone();
+        let state = session.state().clone();
+        let service_error = BackendError::Io {
+            message: "service".to_owned(),
+        };
+        session
+            .backend
+            .service_results
+            .push_back(Err(service_error.clone()));
+        let actual = session
+            .service_backend(
+                BackendReady {
+                    readable: true,
+                    terminal: false,
+                    writable: false,
+                },
+                Instant::now(),
+            )
+            .unwrap_err();
+        assert_eq!(actual, SessionEventError::Backend(service_error));
+        assert_eq!(session.ledger(), &ledger);
+        assert_eq!(session.state(), &state);
+        assert!(!session.has_active_backend_transaction());
+        assert!(session.active.is_none());
+
+        let (mut session, _) = pending_failure_scenario(PendingFailureScenario::Observation);
+        let ledger = session.ledger().clone();
+        let state = session.state().clone();
+        let actual = session
+            .handle_backend_event(BackendEvent::Disconnected)
+            .unwrap_err();
+        assert_eq!(
+            actual,
+            SessionEventError::Backend(BackendError::Disconnected)
+        );
+        assert_eq!(session.ledger(), &ledger);
+        assert_eq!(session.state(), &state);
+        assert!(!session.has_active_backend_transaction());
+        assert!(session.active.is_none());
+    }
+
+    #[test]
+    fn bootstrap_pending_failure_is_fatal_without_publication() {
+        let mut replay = Session::connect(FakeBackend::new()).unwrap();
+        replay
+            .backend
+            .response_results
+            .push_back(Ok(BackendSubmission::Pending));
+        replay
+            .handle_backend_event(policy_turn(
+                1,
+                vec![
+                    policy_window_opened("replay-private", "private"),
+                    BackendPolicyEvent::InitialReplayComplete,
+                ],
+            ))
+            .unwrap();
+        let replay_ticket = replay.backend.responses[0].1;
+        let error = BackendError::Io {
+            message: "replay finish".to_owned(),
+        };
+        assert_eq!(
+            replay
+                .handle_backend_event(BackendEvent::OperationCompleted {
+                    ticket: replay_ticket,
+                    result: Err(error.clone()),
+                })
+                .unwrap_err(),
+            SessionEventError::Backend(error)
+        );
+        assert_ne!(replay.phase(), RecoveryPhase::Live);
+        assert_eq!(replay.state().revision, 0);
+        assert!(replay.ledger().is_empty());
+        assert!(replay.snapshot().is_none());
+        assert!(replay
+            .visible_ledger(None)
+            .iter()
+            .all(|orbit| orbit.windows.is_empty()));
+        assert!(!replay.has_active_backend_transaction());
+
+        let mut workarea = Session::connect(FakeBackend::new()).unwrap();
+        workarea
+            .handle_backend_event(policy_turn(
+                1,
+                vec![
+                    policy_window_opened("workarea-private", "private"),
+                    BackendPolicyEvent::InitialReplayComplete,
+                ],
+            ))
+            .unwrap();
+        workarea
+            .backend
+            .response_results
+            .push_back(Ok(BackendSubmission::Pending));
+        workarea
+            .handle_backend_event(policy_turn(
+                2,
+                vec![BackendPolicyEvent::WorkareaChanged(selected_workarea())],
+            ))
+            .unwrap();
+        let workarea_ticket = workarea.backend.responses[1].1;
+        let error = BackendError::Unsupported {
+            capability: "workarea projection".to_owned(),
+        };
+        assert_eq!(
+            workarea
+                .handle_backend_event(BackendEvent::OperationCompleted {
+                    ticket: workarea_ticket,
+                    result: Err(error.clone()),
+                })
+                .unwrap_err(),
+            SessionEventError::Backend(error)
+        );
+        assert_ne!(workarea.phase(), RecoveryPhase::Live);
+        assert_eq!(workarea.state().revision, 0);
+        assert!(workarea.snapshot().is_none());
+        assert!(workarea
+            .visible_ledger(None)
+            .iter()
+            .all(|orbit| orbit.windows.is_empty()));
+        assert!(!workarea.has_active_backend_transaction());
+    }
+
+    #[test]
+    fn backend_ticket_exhaustion_covers_every_mvp_reachable_origin_without_request_response_or_wrap(
+    ) {
+        let mut desired = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut desired);
+        desired.last_backend_ticket = u64::MAX;
+        let ledger = desired.ledger().clone();
+        let requests = desired.backend.request_attempts;
+        let responses = desired.backend.responses.len();
+        assert_eq!(
+            desired.focus_step(Dir::Prev).unwrap_err(),
+            SessionActionError::BackendTicketExhausted
+        );
+        assert_eq!(desired.ledger(), &ledger);
+        assert_eq!(desired.backend.request_attempts, requests);
+        assert_eq!(desired.backend.responses.len(), responses);
+        assert_eq!(desired.last_backend_ticket, u64::MAX);
+
+        let mut close = policy_live_session(FakeBackend::new());
+        close
+            .handle_backend_event(policy_turn(3, vec![policy_window_opened("close", "close")]))
+            .unwrap();
+        close.backend.responses.clear();
+        close.last_backend_ticket = u64::MAX;
+        let requests = close.backend.request_attempts;
+        assert_eq!(
+            close.request_close_focused().unwrap_err(),
+            SessionActionError::BackendTicketExhausted
+        );
+        assert_eq!(close.backend.request_attempts, requests);
+        assert!(close.backend.responses.is_empty());
+        assert_eq!(close.last_backend_ticket, u64::MAX);
+
+        let mut replay = Session::connect(FakeBackend::new()).unwrap();
+        replay.last_backend_ticket = u64::MAX;
+        assert_eq!(
+            replay
+                .handle_backend_event(policy_turn(
+                    1,
+                    vec![BackendPolicyEvent::InitialReplayComplete],
+                ))
+                .unwrap_err(),
+            SessionEventError::BackendTicketExhausted
+        );
+        assert!(replay.backend.responses.is_empty());
+        assert!(replay.backend.assignment_attempts.is_empty());
+        assert_eq!(replay.last_backend_ticket, u64::MAX);
+
+        let mut key = policy_live_session_with_keymap(FakeBackend::new(), spawn_keymap());
+        let spawn = binding_id(&key, "x");
+        key.last_backend_ticket = u64::MAX;
+        assert_eq!(
+            key.handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::BindingPressed(spawn)],
+            ))
+            .unwrap_err(),
+            SessionEventError::BackendTicketExhausted
+        );
+        assert!(key.backend.responses.is_empty());
+        assert_eq!(key.last_backend_ticket, u64::MAX);
+
+        let mut repeat = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut repeat);
+        let focus = binding_id(&repeat, "j");
+        repeat
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(focus)],
+            ))
+            .unwrap();
+        repeat.backend.responses.clear();
+        repeat.backend.request_attempts = 0;
+        repeat.last_backend_ticket = u64::MAX;
+        let ledger = repeat.ledger().clone();
+        assert_eq!(
+            repeat.fire_key_repeat().unwrap_err(),
+            SessionEventError::BackendTicketExhausted
+        );
+        assert_eq!(repeat.ledger(), &ledger);
+        assert_eq!(repeat.backend.request_attempts, 0);
+        assert!(repeat.backend.responses.is_empty());
+        assert_eq!(repeat.last_backend_ticket, u64::MAX);
+
+        let (mut tagged, ticket) = policy_awaiting_drain_session();
+        tagged.last_backend_ticket = u64::MAX;
+        let responses = tagged.backend.responses.clone();
+        assert_eq!(
+            tagged
+                .handle_backend_event(draining_policy_turn(
+                    4,
+                    ticket,
+                    vec![policy_window_opened("tagged", "tagged")],
+                ))
+                .unwrap_err(),
+            SessionEventError::BackendTicketExhausted
+        );
+        assert_eq!(tagged.backend.responses, responses);
+        assert_eq!(tagged.last_backend_ticket, u64::MAX);
+    }
+
+    #[test]
+    fn shutdown_and_exit_lifecycle_is_minimal_idempotent_and_exactly_once() {
+        let (mut session, _) = pending_failure_scenario(PendingFailureScenario::Desired);
+        let ledger = session.ledger().clone();
+        let state = session.state().clone();
+        let watermark = session.last_backend_ticket;
+        let requests = session.backend.request_attempts;
+        let responses = session.backend.responses.len();
+
+        let shutdown = session.begin_shutdown();
+        assert_eq!(
+            shutdown,
+            SessionUpdate {
+                repeat_timer: RepeatTimerDirective::Disarm,
+                ..SessionUpdate::unchanged()
+            }
+        );
+        assert_eq!(session.phase(), RecoveryPhase::ShuttingDown);
+        assert_eq!(session.ledger(), &ledger);
+        assert_eq!(session.state(), &state);
+        assert!(shutdown.persistence.is_none());
+        assert!(session.snapshot().is_none());
+        assert_eq!(session.last_backend_ticket, watermark);
+        assert_eq!(session.backend.request_attempts, requests);
+        assert_eq!(session.backend.responses.len(), responses);
+        assert!(session.backend.exit_policies.is_empty());
+        assert!(!session.has_active_backend_transaction());
+        assert!(session.active.is_none());
+        assert_eq!(session.begin_shutdown(), SessionUpdate::unchanged());
+
+        session.begin_exit_session().unwrap();
+        assert_eq!(session.phase(), RecoveryPhase::Exiting);
+        assert_eq!(session.backend.exit_policies.len(), 1);
+        assert_eq!(
+            session.backend.exit_policies[0],
+            BackendExitPolicy {
+                enabled: session.binding_state.enabled.clone(),
+                watched_modifiers: session.binding_state.watched_modifiers.clone(),
+            }
+        );
+        assert!(matches!(
+            session.begin_exit_session().unwrap_err(),
+            SessionEventError::InvalidLifecycleOperation { .. }
+        ));
+        assert_eq!(session.backend.exit_policies.len(), 1);
+        assert_eq!(session.begin_shutdown(), SessionUpdate::unchanged());
+
+        let mut failed = policy_live_session(FakeBackend::new());
+        failed.begin_shutdown();
+        failed.backend.exit_results.push_back(Err(BackendError::Io {
+            message: "exit".to_owned(),
+        }));
+        assert!(matches!(
+            failed.begin_exit_session().unwrap_err(),
+            SessionEventError::Backend(BackendError::Io { .. })
+        ));
+        assert_eq!(failed.phase(), RecoveryPhase::ShuttingDown);
+        assert_eq!(failed.backend.exit_policies.len(), 1);
+        assert!(matches!(
+            failed.begin_exit_session().unwrap_err(),
+            SessionEventError::InvalidLifecycleOperation { .. }
+        ));
+        assert_eq!(failed.backend.exit_policies.len(), 1);
+
+        let mut wrong_phase = policy_live_session(FakeBackend::new());
+        assert!(matches!(
+            wrong_phase.begin_exit_session().unwrap_err(),
+            SessionEventError::InvalidLifecycleOperation { .. }
+        ));
+        assert!(wrong_phase.backend.exit_policies.is_empty());
+    }
+
+    #[test]
+    fn direct_quit_enters_quit_pending_idempotently_without_backend_ticket() {
+        let mut session = policy_live_session(FakeBackend::new());
+        open_two_policy_windows(&mut session);
+        let before_ledger = session.ledger().clone();
+        let before_state = session.state().clone();
+        session.focus_step(Dir::Prev).unwrap();
+        let watermark = session.last_backend_ticket;
+        let requests = session.backend.request_attempts;
+        let responses = session.backend.responses.len();
+
+        let quit = session.begin_direct_quit().unwrap();
+        assert_eq!(session.phase(), RecoveryPhase::QuitPending);
+        assert_eq!(
+            quit,
+            SessionUpdate {
+                repeat_timer: RepeatTimerDirective::Disarm,
+                effects: vec![SessionEffect::QuitPending {
+                    after: QuitAfter::CurrentControlRequest,
+                }],
+                ..SessionUpdate::unchanged()
+            }
+        );
+        assert_eq!(session.ledger(), &before_ledger);
+        assert_eq!(session.state(), &before_state);
+        assert!(quit.persistence.is_none());
+        assert!(session.snapshot().is_none());
+        assert_eq!(session.last_backend_ticket, watermark);
+        assert_eq!(session.backend.request_attempts, requests);
+        assert_eq!(session.backend.responses.len(), responses);
+        assert!(!session.has_active_backend_transaction());
+        assert_eq!(
+            session.begin_direct_quit().unwrap(),
+            SessionUpdate::unchanged()
+        );
+        assert_eq!(session.last_backend_ticket, watermark);
+
+        let mut initial = Session::connect(FakeBackend::new()).unwrap();
+        let initial_watermark = initial.last_backend_ticket;
+        assert!(matches!(
+            initial.begin_direct_quit().unwrap_err(),
+            SessionEventError::InvalidLifecycleOperation { .. }
+        ));
+        assert_eq!(initial.phase(), RecoveryPhase::InitialReplay);
+        assert_eq!(initial.last_backend_ticket, initial_watermark);
+
+        let mut finalizing = Session::connect(FakeBackend::new()).unwrap();
+        finalizing
+            .handle_backend_event(policy_turn(
+                1,
+                vec![BackendPolicyEvent::InitialReplayComplete],
+            ))
+            .unwrap();
+        assert!(matches!(
+            finalizing.begin_direct_quit().unwrap_err(),
+            SessionEventError::InvalidLifecycleOperation { .. }
+        ));
+        assert_eq!(finalizing.phase(), RecoveryPhase::FinalizingReplay);
+
+        let mut shutting_down = policy_live_session(FakeBackend::new());
+        shutting_down.begin_shutdown();
+        assert!(matches!(
+            shutting_down.begin_direct_quit().unwrap_err(),
+            SessionEventError::InvalidLifecycleOperation { .. }
+        ));
+        assert_eq!(shutting_down.phase(), RecoveryPhase::ShuttingDown);
     }
 }
