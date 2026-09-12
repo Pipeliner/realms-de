@@ -351,7 +351,6 @@ pub enum QuitAfter {
 pub enum SessionEffect {
     Spawn(Vec<String>),
     Launcher,
-    Grimoire,
     ReloadTheme,
     /// Stop admission now and apply the typed response-drain barrier.
     QuitPending { after: QuitAfter },
@@ -482,6 +481,9 @@ pub fn backend_turn<B: WmBackend>(
 /// 256-window all-orbit result must bounded-encode inside one
 /// `realm_core::ipc::MAX_FRAME_BYTES` frame, so this clone cannot grow with
 /// repeated adversarial title changes.
+/// `pub fn keymap(&self) -> &Keymap` exposes the exact immutable keymap whose
+/// mechanisms were configured on this Session. `GetKeymap` clones that value
+/// for `Response::Keymap`; the adapter must not substitute `Keymap::default()`.
 /// `pub fn backend_event_fd(&self) -> BorrowedFd<'_>` and
 /// `pub fn backend_poll_interest(&self) -> BackendPollInterest` are the sole
 /// read-only registration seams for #38. Session retains exclusive mutable

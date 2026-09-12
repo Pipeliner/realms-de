@@ -587,8 +587,6 @@ pub enum SessionEffect {
     Spawn(Vec<String>),
     /// Open the launcher.
     Launcher,
-    /// Open the full binding sheet.
-    Grimoire,
     /// Retained legacy theme action.
     ReloadTheme,
     /// Stop admission and apply the matching Quit barrier.
@@ -702,6 +700,7 @@ struct AuthorityState {
     mode: Mode,
     chord_echo: String,
     whichkey: bool,
+    grimoire: bool,
     modules: Vec<Module>,
     active_modifiers: Vec<BackendModifier>,
     held_bindings: BTreeSet<BackendBindingId>,
@@ -748,6 +747,7 @@ pub struct Session<B: WmBackend> {
     last_projection: Vec<Placement>,
     state: RealmState,
     phase: RecoveryPhase,
+    keymap: Keymap,
     bindings: BTreeMap<BackendBindingId, Binding>,
     binding_order: Vec<BackendBindingId>,
     modifier_label: String,
@@ -759,6 +759,7 @@ pub struct Session<B: WmBackend> {
     mode: Mode,
     chord_echo: String,
     whichkey: bool,
+    grimoire: bool,
     modules: Vec<Module>,
     active_modifiers: Vec<BackendModifier>,
     held_bindings: BTreeSet<BackendBindingId>,
@@ -815,6 +816,7 @@ impl<B: WmBackend> Session<B> {
                 (snapshot.ledger, backend_ids, snapshot.next_win_id)
             },
         );
+        let configured_keymap = keymap.clone();
         let Keymap {
             modifier: modifier_label,
             bindings: keymap_bindings,
@@ -853,6 +855,7 @@ impl<B: WmBackend> Session<B> {
             last_projection: Vec::new(),
             state: RealmState::default(),
             phase: RecoveryPhase::InitialReplay,
+            keymap: configured_keymap,
             bindings,
             binding_order,
             modifier_label,
@@ -868,6 +871,7 @@ impl<B: WmBackend> Session<B> {
             mode: Mode::Nav,
             chord_echo: String::new(),
             whichkey: RealmState::default().whichkey,
+            grimoire: RealmState::default().grimoire,
             modules: Vec::new(),
             active_modifiers: Vec::new(),
             held_bindings: BTreeSet::new(),
@@ -959,6 +963,11 @@ impl<B: WmBackend> Session<B> {
     /// The last visible state accepted for publication.
     pub fn state(&self) -> &RealmState {
         &self.state
+    }
+
+    /// The exact immutable keymap configured for this Session incarnation.
+    pub fn keymap(&self) -> &Keymap {
+        &self.keymap
     }
 
     /// Preempt ordinary work for a direct control-socket Quit request.
@@ -1228,6 +1237,7 @@ impl<B: WmBackend> Session<B> {
             mode: self.mode,
             chord_echo: self.chord_echo.clone(),
             whichkey: self.state.whichkey,
+            grimoire: self.state.grimoire,
             modules: self.state.modules.clone(),
             active_modifiers: self.active_modifiers.clone(),
             held_bindings: self.held_bindings.clone(),
@@ -1252,6 +1262,7 @@ impl<B: WmBackend> Session<B> {
         self.chord_echo = authority.chord_echo;
         self.held_bindings = authority.held_bindings;
         self.whichkey = authority.whichkey;
+        self.grimoire = authority.grimoire;
         self.modules = authority.modules;
         self.active_modifiers = authority.active_modifiers;
     }
@@ -2016,6 +2027,9 @@ impl<B: WmBackend> Session<B> {
             }
             Action::EnterMode(mode) => {
                 active.working.mode = *mode;
+                if *mode == Mode::Nav {
+                    active.working.grimoire = false;
+                }
                 active.working.chord_echo = if *mode != Mode::Nav
                     || active
                         .working
@@ -2042,7 +2056,7 @@ impl<B: WmBackend> Session<B> {
                 active.working.ledger.undo();
             }
             Action::ToggleWhichKey => active.working.whichkey = !active.working.whichkey,
-            Action::Grimoire => active.staged_effects.push(SessionEffect::Grimoire),
+            Action::Grimoire => active.working.grimoire = !active.working.grimoire,
             Action::ReloadTheme => active.staged_effects.push(SessionEffect::ReloadTheme),
             Action::Quit => {
                 let after = active
@@ -2296,6 +2310,7 @@ impl<B: WmBackend> Session<B> {
             },
             chord_echo: self.chord_echo.clone(),
             whichkey: self.whichkey,
+            grimoire: self.grimoire,
             modules: self.modules.clone(),
         }
     }
@@ -2342,7 +2357,7 @@ fn canonical_modifiers(modifiers: &[BackendModifier]) -> bool {
 fn action_has_effect(action: &Action) -> bool {
     matches!(
         action,
-        Action::Spawn(_) | Action::Launcher | Action::Grimoire | Action::ReloadTheme | Action::Quit
+        Action::Spawn(_) | Action::Launcher | Action::ReloadTheme | Action::Quit
     )
 }
 
@@ -2947,6 +2962,73 @@ mod tests {
             assert_eq!(mechanism.modifiers, [BackendModifier::Super]);
         }
         assert_eq!(session.state().mode, Mode::Nav);
+    }
+
+    #[test]
+    fn keymap_accessor_returns_the_exact_configured_vocabulary() {
+        let keymap = Keymap {
+            modifier: "hyper".to_owned(),
+            bindings: vec![test_binding(
+                "x",
+                Action::Spawn(vec!["custom-command".to_owned()]),
+                Mode::Nav,
+                false,
+            )],
+        };
+        let session = Session::connect_with_keymap(FakeBackend::new(), keymap.clone()).unwrap();
+
+        assert_eq!(session.keymap(), &keymap);
+    }
+
+    #[test]
+    fn grimoire_is_private_until_clean_boundary_and_escape_dismisses_it() {
+        let mut session = policy_live_session(FakeBackend::new());
+        let grimoire = binding_id(&session, "question");
+        session
+            .backend
+            .response_results
+            .push_back(Ok(BackendSubmission::Pending));
+
+        let pending = session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::BindingPressed(grimoire)],
+            ))
+            .unwrap();
+        assert!(pending.state.is_none());
+        assert!(!session.state().grimoire);
+        let ticket = session.backend.responses.last().unwrap().1;
+        assert_eq!(
+            session
+                .handle_backend_event(BackendEvent::OperationCompleted {
+                    ticket,
+                    result: Ok(()),
+                })
+                .unwrap(),
+            SessionUpdate::unchanged()
+        );
+
+        let opened = session
+            .handle_backend_event(BackendEvent::RetainedObservationsDrained { ticket })
+            .unwrap();
+        assert_eq!(
+            opened.state.as_ref().map(|state| state.grimoire),
+            Some(true)
+        );
+        assert!(opened.effects.is_empty());
+
+        let escape = binding_id(&session, "Escape");
+        let dismissed = session
+            .handle_backend_event(policy_turn(
+                4,
+                vec![BackendPolicyEvent::BindingPressed(escape)],
+            ))
+            .unwrap();
+        assert_eq!(
+            dismissed.state.as_ref().map(|state| state.grimoire),
+            Some(false)
+        );
+        assert!(!session.state().grimoire);
     }
 
     #[test]
