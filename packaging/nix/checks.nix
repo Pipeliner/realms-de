@@ -324,7 +324,8 @@ EOF
       )
       assert tiled["data"]["whichkey"] is True, tiled
       machine.wait_for_text("Realm VM sample")
-      machine.wait_for_text("which-key")
+      # The strip has no "which-key" heading; assert its actual prompt.
+      machine.wait_for_text("grimoire.*full spellbook")
       write_artifact("control-tiled-state.json", tiled_raw)
       machine.screenshot("realm-tiled-desktop")
 
