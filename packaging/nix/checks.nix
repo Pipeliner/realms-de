@@ -354,10 +354,15 @@ EOF
               "realm_probe_status=$?; printf '%s\\n' \"$realm_probe_status\" "
               f"> {shlex.quote(done)}\n"
           )
-          managed_raw, managed = wait_for_managed_window_count(
-              2, f"{name} application window"
+          managed_raw, _managed = wait_for_state(
+              lambda response: (
+                  sum(
+                      cell["windows"] for cell in response["data"]["orbits"]
+                  ) == 2
+                  and response["data"]["focused_title"] == expected_text
+              ),
+              f"focused {name} application window",
           )
-          assert managed["data"]["focused_title"] == expected_text, managed
           machine.wait_for_text(expected_text, timeout=OCR_TIMEOUT)
           if screenshot is not None:
               write_artifact(f"control-{name}-state.json", managed_raw)
