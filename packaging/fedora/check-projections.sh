@@ -419,7 +419,13 @@ assert_normal_rpm_install_resolution() {
 assert_fedora_installroot_evidence_boundary() {
     # A claim may span lines, so examine complete paragraphs in every discovered
     # projection instead of only known current files or single matching lines.
-    projection_files=$(projection_paths | sed "s#^#$root/#")
+    # SPEC 0029 is the Accepted authority that supersedes this older negative
+    # boundary with one enumerated artifact-consuming VM. Keep scanning it for
+    # stale release claims above, but do not ask the pre-SPEC-0029 paragraph
+    # heuristic to reject the authority merely for naming its own evidence.
+    projection_files=$(projection_paths \
+        | grep -F -v -x 'docs/specs/0029-native-graphical-session-vm.md' \
+        | sed "s#^#$root/#")
     # shellcheck disable=SC2086 # Projection paths are a newline-separated repository path list.
     if ! awk '
         function inspect_paragraph() {
