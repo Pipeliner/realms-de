@@ -1701,8 +1701,14 @@ mod tests {
         // fixture held at spawn time. This exact subprocess has no peer tests,
         // so establish the ordinary production-login mask before bootstrap.
         rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o022));
-        let root = fixture_dir("startup-theme");
+        let fixture = fixture_dir("startup-theme");
+        let root = fixture.join("fresh-config");
+        assert!(!root.exists());
         let first = super::prepare_startup_theme(&root).unwrap();
+        assert_eq!(
+            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
         let current = fs::read(root.join("realm/generated/current")).unwrap();
 
         let second = super::prepare_startup_theme(&root).unwrap();
@@ -1719,7 +1725,14 @@ mod tests {
             fs::read(root.join("realm/generated/current")).unwrap(),
             malformed
         );
-        fs::remove_dir_all(root).unwrap();
+
+        let missing_parent = fixture.join("missing-parent/config");
+        assert!(super::prepare_startup_theme(&missing_parent).is_err());
+        assert!(
+            !fixture.join("missing-parent").exists(),
+            "bootstrap recursively created an absent configuration-root parent"
+        );
+        fs::remove_dir_all(fixture).unwrap();
     }
 
     #[test]

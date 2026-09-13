@@ -409,7 +409,12 @@ including safe escaping of the diagnostic cause. This result mapping neither
 adds a live-upgrade mechanism nor preserves a control-socket wire contract.
 
 Before publication, the apply boundary holds only safe input locators and opens
-the configuration root.  It creates or opens `realm/generated` only
+the configuration root. Session bootstrap additionally accepts a missing final
+configuration-root component below an existing safely opened parent as fresh
+login absence: it creates exactly that component with `mkdirat` mode 0700,
+reopens it without following links, and fsyncs the parent. Missing earlier
+ancestors and every unsafe or unreadable existing component remain errors. It
+creates or opens `realm/generated` only
 descriptor-relatively: each existing component is opened with `O_NOFOLLOW`,
 the final generated root is current-UID mode 0700, and an absent `realm` or
 `generated` component is created with `mkdirat` mode 0700 then reopened and
@@ -505,7 +510,8 @@ operation against the captured configuration root:
    or launch an unthemed fallback. `OutcomeAmbiguous` likewise fails startup and
    is not retried.
 
-For this operation, **clean absent** means either that no Realm-owned
+For this operation, **clean absent** means either that the final configuration
+root is absent below its existing safely opened parent, that no Realm-owned
 `realm/generated` directory exists below a valid captured configuration root,
 or that a valid initialized generated store has no `current`, generation,
 lease, staging entry, or pointer journal. A partially initialized control tree,
@@ -574,7 +580,7 @@ candidate with a partially validated or mixed generation.
 | G10 | Given a valid current generation and a candidate whose normalized output set differs, when `theme diff` runs, then it reports only lexicographically sorted `added`, `removed`, and `byte-different` output paths after fully validating current, and performs no control initialization, recovery, lease, GC, publication, output write, pointer switch, or reload. |
 | G11 | Given a successful apply or rollback pointer commit, when existing processes continue running, then Realm sends no signal, command, or notification and only later launches may select the newly current generation. |
 | G12 | Given `Committed`, `CommittedWithCleanupPending`, or `OutcomeAmbiguous`, when `realmctl theme apply` reports the result, then the first two exit 0 and name the selected future-launch generation (with a cleanup warning for the second), while the ambiguous result exits 6, claims no activation, safely reports its candidate/cause, and performs no automatic recovery or retry. |
-| G13 | Given a fresh configuration root with cleanly absent current, a valid current, malformed current, or an absent pointer with recovery evidence, when session bootstrap ensures current, then only clean absence performs one serialized built-in apply; valid current is byte-for-byte retained without apply or palette seed, and every malformed/inconsistent case fails readiness without repair, retry, newest-generation selection, or unthemed fallback. A concurrent valid apply that wins the lock is retained rather than overwritten. |
+| G13 | Given a fresh login whose final configuration root is absent below an existing safely opened parent, a present configuration root with cleanly absent current, a valid current, malformed current, or an absent pointer with recovery evidence, when session bootstrap ensures current, then only clean absence descriptor-relatively creates the final root if needed and performs one serialized built-in apply; valid current is byte-for-byte retained without apply or palette seed, and every malformed/inconsistent case fails readiness without repair, retry, newest-generation selection, or unthemed fallback. A concurrent valid apply that wins the lock is retained rather than overwritten. |
 | G14 | Given either fixed consumer, including terminal launch from an already-valid generation whose foot output predates this refinement, and a later pointer switch from N to N+1, when Realm launches it, then its exact argv contains one `--config=` path below its fully validated selected N, terminal argv also contains the exact `spawn-terminal=none` command-line override, its process lease exists durably before exec and remains live for that unchanged PID until the consumer exits, and it never reads an ordinary mutable foot/fuzzel config as fallback. The fuzzel-started application is explicitly not reported as generation-selected. |
 
 ## Boundaries
