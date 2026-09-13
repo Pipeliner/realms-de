@@ -1,10 +1,26 @@
 //! Production Realm window-manager and session-daemon entry point.
 
 use realm_session::backend::{BackendError, RiverBackend};
+use realm_session::consumer::{exec_from_env, FixedConsumer};
 use realm_session::runtime::{run_production_daemon, RuntimeError};
 use realm_session::session::SessionEventError;
 
 fn main() {
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if !args.is_empty() {
+        let consumer = match FixedConsumer::parse_args(&args) {
+            Ok(consumer) => consumer,
+            Err(error) => {
+                eprintln!("realm-wm: {error}");
+                std::process::exit(2);
+            }
+        };
+        if let Err(error) = exec_from_env(consumer) {
+            eprintln!("realm-wm: {error}");
+            std::process::exit(1);
+        }
+        unreachable!("successful fixed-consumer exec does not return");
+    }
     if let Err(error) = run_production_daemon(RiverBackend::from_env) {
         eprintln!("realm-wm: {error}");
         std::process::exit(exit_status(&error));

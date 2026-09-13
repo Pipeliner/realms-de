@@ -3,7 +3,8 @@
 - **Status:** Accepted (2026-09-10; control-transport and nonblocking backend
   transaction corrections 2026-09-11; Task 3 MVP fail-closed, provenance, and
   evidence-ownership corrections 2026-09-12; bounded Wayland transport API
-  clarification 2026-09-12; doctor health boundary 2026-09-13)
+  clarification 2026-09-12; MVP module-producer correction and doctor health
+  boundary 2026-09-13)
 - **Milestone:** M2
 - **Issues:** [#36](https://github.com/Pipeliner/realms-de/issues/36),
   [#38](https://github.com/Pipeliner/realms-de/issues/38),
@@ -699,6 +700,13 @@ scroll preference, or mapping policy. Runtime keyboard-layout switching and
 `river-xkb-config-v1` are post-MVP; M2 preserves River's existing keyboard
 keymap and layout rather than claiming a switch Realm does not yet expose.
 
+The default Return binding is `Action::Terminal`, not a raw Spawn containing a
+helper name. Session reduces it to `SessionEffect::Terminal`; only the runtime
+adapter maps that closed effect to the fixed consumer executor specified by
+SPEC 0012. Consequently `GetKeymap` reports the typed action and neither a
+client-supplied Spawn argv nor an argv string that happens to equal an installed
+helper can select the fixed-consumer path.
+
 - During initial replay, after selecting the first reported `river_seat_v1`,
   create its xkb-bindings-seat and layer-shell-seat objects exactly once, then
   for each pre-registered `Binding` in the `Keymap` call
@@ -850,20 +858,20 @@ session, and the frame budgets in
   `realm_theme::apply`, no ledger snapshot write, no `stat` of a spawn target;
 - any process creation or `waitpid`;
 - any D-Bus call, DNS lookup or network I/O;
-- any mutex acquisition (there are none — see below);
+- any mutex acquisition, including the sampler latest-slot `try_lock`;
 - `RealmState` derivation, JSON encoding and fan-out, which are cheap but are
   not needed before `manage_finish` and therefore must not precede it.
 
-**The specified architecture: one event-loop thread, one worker thread, no
-shared mutable state.**
+**The specified architecture: one event-loop thread, one worker thread, one
+shared module-sampler thread, and one bounded child reaper.**
 
 - The **event loop** thread owns the river connection, the `Ledger`, the
   `Keymap`, the mode machine, the last-applied backend state, the control-socket
   listener and every client connection. Every fd is non-blocking and the loop is
   a single `poll(2)` over: river's Wayland fd, the listener, each client fd, a
   `timerfd` for the clock, an armed-only-when-held `timerfd` for key repeat, and
-  an `eventfd` the worker signals.
-- The **worker** thread owns nothing and receives process jobs over a bounded
+  one `eventfd` each for the worker and module sampler.
+- The **worker** thread owns process creation and receives process jobs over a bounded
   `MAX_WORKER_JOBS = 256` FIFO plus one separate replaceable snapshot slot.
   The snapshot slot does not consume process-job capacity, so a due snapshot is
   accepted even when all 256 process slots are reserved or committed; total
@@ -886,6 +894,20 @@ shared mutable state.**
   immediate interest while more remain. Maximum and maximum-plus-one behavior
   for both queues is tested. Future D-Bus work must choose an explicit
   coalescing/admission rule before entering this mailbox.
+- The **child reaper** receives each successful worker-owned `Child` through a
+  bounded 256-slot channel, owns only those exact PIDs, and calls nonblocking
+  `try_wait` across the bounded live set off both the event loop and worker.
+  While the set is nonempty, a bounded receive timeout supplies a cleanup
+  cadence rather than synchronizing launch success; a new child wakes it
+  immediately. One long-lived terminal therefore never serializes reclamation
+  of a later short child, and it cannot steal a child awaited by another owner.
+  One atomic counter is the sole shared state: commit acquires capacity and
+  spawn failure or successful reap releases it. The existing 256 process slots
+  consequently bound queued, running and unreaped children together, as well as
+  the channel and reaper set. The worker reports the existing spawn boundary
+  immediately and its fence does not wait for application exit. An impossible
+  ownership-channel overflow or unexpected `try_wait` failure terminates the
+  daemon rather than silently retaining zombies.
 
   At the adapter's first observation of the terminal `QuitPending` boundary,
   after all pre-Quit effect reservations have committed, explicit logout calls
@@ -910,8 +932,31 @@ shared mutable state.**
   A successful clean shutdown has acknowledged the final snapshot write and
   every pre-Quit process job. Maximum-capacity Spawn followed by Quit cannot
   overtake or omit the fence.
-- **No locks.** A single owner means the input path cannot contend, which
-  matters because a lock held for 40 ms is a stall nobody sees in review.
+- The **module sampler** is the one 1 Hz thread authorized by ADR 0009. It owns
+  CPU and per-interface network baselines, the power-supply uevent source, and
+  every `/proc` or `/sys` read. It opens the uevent source before its initial
+  pass, publishes valid current memory/battery while establishing CPU/network
+  baselines, and then polls that source to the next absolute one-second
+  monotonic deadline. A late wake samples once and sets its next deadline from
+  the current time; it never catches up missed intervals. It publishes a
+  fixed-size numeric snapshot into one capacity-one latest-value slot and
+  signals an `eventfd`. Replacing an unread snapshot is permitted and bounded;
+  sampled states are observational, unlike process jobs and persistence
+  results. A private stop `eventfd` is also in the sampler thread's poll set.
+  At the first `QuitPending` boundary its event-loop owner sets the stop fact
+  and signals that fd; the sampler closes its sources and returns. Shutdown
+  never joins or waits for the sampler on the window-management critical path.
+- **No blocking lock reaches the input path.** The sampler's latest-value slot
+  is the sole shared `Mutex<Option<ModuleSnapshot>>`. The producer may lock it
+  only after constructing a complete snapshot. After backend work is
+  quiescent, the event loop uses only `try_lock`: contention performs no read
+  and leaves the sampler `eventfd` unread, so readiness retries on the next
+  cycle. Success drains the nonblocking `eventfd` and takes the newest snapshot
+  while holding the lock. Backend priority permits no mutex attempt while a
+  manage/render protocol response is open. A Session transaction may remain
+  active after that response writing is quiescent; sampler service may then
+  consume into private latest state, but cannot publish until the transaction's
+  final clean boundary. No other event-loop authority is shared.
 
 Each #38 combined-loop cycle captures one readiness snapshot and performs these
 bounded steps in order:
@@ -919,12 +964,13 @@ bounded steps in order:
 1. service at most one eligible backend quantum from immediate work
    or current readable/terminal/writable readiness, then recompute backend
    interest. If already-admitted work keeps `poll_interest().immediate` true,
-   begin the next cycle without consuming any timer, worker, or control
+   begin the next cycle without consuming any timer, sampler, worker, or control
    readiness. This lets one bounded ingress epoch cross protocol dispatch and
    public dequeue before a received release can be overtaken by repeat. Merely
    observing fresh level-readable bytes in a zero-poll does not extend that
-   burst: after the admitted epoch is quiescent, timers/worker/control each get
-   their bounded opportunity before a later cycle admits another ingress unit;
+   burst: after the admitted epoch is quiescent, timers/sampler/worker/control
+   each get their bounded opportunity before a later cycle admits another
+   ingress unit;
 2. consume at most one key-repeat `timerfd` readiness. One `read` consumes the
    kernel overrun count and coalesces all expirations into one attempt. If a
    transaction is active the attempt is the unchanged no-ticket/no-request
@@ -933,14 +979,19 @@ bounded steps in order:
 3. consume at most one clock `timerfd` readiness, coalescing its overrun count
    into one latest-value recomputation. During an active transaction it records
    one bounded dirty flag and defers that recomputation until finalization;
-4. consume at most one worker completion. A single `eventfd` read may represent
+4. when Live, attempt at most one sampler latest-slot service. `try_lock`
+   contention leaves its `eventfd` unread; success drains the coalesced wake,
+   takes only the newest fixed snapshot, and performs no filesystem or
+   compositor operation. During an active Session transaction it records the
+   latest snapshot and one dirty flag but does not publish;
+5. consume at most one worker completion. A single `eventfd` read may represent
    several queued completions, so a bounded in-memory result queue keeps
    immediate interest until later cycles process the rest one at a time;
-5. service at most one SPEC 0007 control quantum; and
-6. zero-poll and recheck backend interest/readiness before another control
+6. service at most one SPEC 0007 control quantum; and
+7. zero-poll and recheck backend interest/readiness before another control
    quantum.
 
-Backend input therefore preempts timers, workers, and control until its complete
+Backend input therefore preempts timers, the sampler, workers, and control until its complete
 bounded ingress/dispatch/dequeue handoff is quiescent; a release or repeat-stop
 received before a simultaneous timer is reduced first and disarms the target.
 Timer overruns never become an unbounded catch-up loop. While `QuitPending`, the
@@ -1698,7 +1749,7 @@ ledger plus the session's own mode and module state.
 | `chord_echo` | Non-empty exactly while a submap is pending or `mod4` is held; cleared on `ate_unbound_key`, on leaving the submap, and on restart |
 | `whichkey` | Toggled by `Action::ToggleWhichKey`. Changing it changes the bar's exclusive zone, so the new `Workarea` arrives from river as a `non_exclusive_area` event rather than being computed here |
 | `grimoire` | Toggled by `Action::Grimoire`; cleared by the same action or `Action::EnterMode(Mode::Nav)` (the `?` and Escape bindings). It remains private through a pending response/drain chain and publishes only at the final clean boundary |
-| `modules` | Owned by the session. Push-driven except for one shared 1 Hz sampler for interval-derived CPU, memory, GPU, and network-rate values; the clock schedules the next minute boundary rather than ticking once a second |
+| `modules` | Owned by the session. The M2 production vector is SPEC 0004's ordered `net`, `cpu`, `mem`, optional `battery`, and `clock` set; `gpu` and `vol` are not produced in the MVP. One shared off-input-path 1 Hz sampler produces CPU, memory and network values, power-supply uevents produce battery values, and the clock schedules the next minute boundary |
 | `revision` | See below |
 
 **When `revision` increments.** The session derives a candidate state and
@@ -1719,6 +1770,16 @@ syscall.
 battery change alters no window-management and no rendering state, so it must
 not make `manage_dirty`. A session that took a compositor round trip once a
 second would multiply its own input latency for a clock.
+
+The runtime holds the current clock value, the newest sampler snapshot, and
+separate dirty facts as one module-publication authority. A clock or sampler
+wake while Session has an active transaction updates only that private
+authority. The next clean backend finalization folds all dirty sources into one
+newest ordered module vector before publication. A sample received while
+Session is not Live is ignored; no initial sample is awaited for READY, and the
+sampler stops at QuitPending without joining the worker shutdown fence or being
+serviced again. Source formatting, first-observation, reset, hotplug, absence,
+and failure-episode rules are owned by SPEC 0004 section 7.
 
 ### 9. Typed desired-action reducer
 
@@ -1807,15 +1868,15 @@ Each row is one happy path and becomes one test.
 | A7 | Given a tiled window, when it is stowed, then `hide` is sent inside a render sequence, no `propose_dimensions` is sent for it, and the window is still present in `Response::Ledger` | `ledger::tests::stow_removes_from_projection_but_not_from_the_ledger`; #40 `backend::tests::stow_hides_inside_render_without_dimension_request` |
 | A8 | Given `realm-session` bound to `river_layer_shell_v1`, when a `wlr-layer-shell` client maps a top-anchored surface with a 32 px exclusive zone, then the surface is not closed and the resulting `Workarea` has `tiles.y == 32` and `tiles.h == output height − 32` | #40 `backend::tests::layer_shell_exclusive_zone_maps_to_workarea_without_close` |
 | A8a | Given a ledger-focused titled window, when one turn reports `ExclusiveFocusChanged(true)`, then its response has no focused placement/border and its final visible state has empty `focused_title`; when a later turn reports false, that turn's response restores `Ledger::focused()` and its border and finalization restores the title. Each turn is answered exactly once. Ordinary `FocusChanged` only acknowledges or causes reassertion of ledger focus, never mutates ledger focus and never implies exclusivity. Any post-admission terminal failure is fatal without publication | `session::tests::exclusive_focus_true_then_false_clears_and_restores_ledger_focus`, `session::tests::ordinary_focus_observation_cannot_change_ledger_policy` |
-| A9 | Given `Keymap::default()`, when bindings are configured and the initial replay policy turn is answered, then one `river_xkb_binding_v1` mechanism exists per stable id with the xkbcommon keysym and canonical modifiers, Session alone maps ids to policy, and that projection-free response enables none with next-key Preserve. The first later selected-output workarea response enables exactly the `Mode::Nav` ids | `session::tests::binding_configuration_contains_mechanism_not_policy`, `session::tests::initial_workarea_enables_nav_bindings_after_disabled_replay`; #40 `backend::tests::configured_bindings_create_one_stable_river_object_each` |
+| A9 | Given `Keymap::default()`, when bindings are configured and the initial replay policy turn is answered, then one `river_xkb_binding_v1` mechanism exists per stable id with the xkbcommon keysym and canonical modifiers, Session alone maps ids to policy, and that projection-free response enables none with next-key Preserve. The first later selected-output workarea response enables exactly the `Mode::Nav` ids. When its Return id is pressed, the successful final boundary emits exactly `SessionEffect::Terminal`, never `SessionEffect::Spawn`; `GetKeymap` exposes the same typed action | `session::tests::binding_configuration_contains_mechanism_not_policy`, `session::tests::initial_workarea_enables_nav_bindings_after_disabled_replay`, `session::tests::default_return_binding_emits_only_the_typed_terminal_effect`; `runtime::tests::request_dispatch_uses_live_state_and_exact_session_keymap`; #40 `backend::tests::configured_bindings_create_one_stable_river_object_each` |
 | A9a | Given the initial input-manager enumeration or a later hot-plug, when an input device reaches its v2 `done`, then a keyboard receives exactly one `set_repeat_info(25, 600)`, another device type receives none, the existing `default` seat is used without `create_seat` or `assign_to_seat`, and Realm sends no scroll-factor or mapping request. Removal destroys the object and cancels unfinished policy without reuse | #40 `backend::tests::input_defaults_use_existing_default_seat_and_fixed_keyboard_repeat`, `backend::tests::removed_input_device_cancels_unfinished_policy_without_reuse` |
 | A9b | Given every tap-support/current combination for a libinput device, when its v2 `done` arrives, then positive support plus disabled current state emits exactly one `set_tap(enabled)` and waits for its result, while already-enabled or zero-support state emits none. `success`, `unsupported`, and `invalid` are handled totally; the latter two are fatal for a request Realm emitted. No other libinput preference request is sent. Initial enumeration and every emitted result settle before recovery/readiness continues | #40 `backend::tests::tap_to_click_is_enabled_only_after_complete_supported_device_snapshot`, `backend::tests::tap_request_result_is_total_and_startup_waits_for_success`, `backend::tests::non_tap_input_policy_is_preserved_without_requests` |
 | A10 | Given `Mode::Nav` and the binding id for `r`, when `BindingPressed` arrives in a policy turn, then Session answers that exact turn with the Resize enabled set, disables Nav, and sends exactly one next-key Ensure; neither mode publication nor process/control effects occur before the response reaches its final clean boundary. A post-admission terminal failure is fatal and exposes none of those deltas | `session::tests::resize_binding_is_answered_in_the_same_policy_turn` |
 | A11 | Given `Mode::Resize` with the one-shot chord edge effective, when `UnboundKeyEaten` arrives in a policy turn, then its response returns to the Nav enabled set, clears `chord_echo`, and makes no further Ensure. Only a successful final boundary commits that result | `session::tests::eaten_unbound_key_returns_to_nav_in_its_policy_response` |
 | A11a | Given empty, release-only, stop-repeat, or modifier-only policy turns, when Session reduces them, then each receives exactly one bounded response; release and `BindingRepeatStopped` disarm repeat irreversibly, modifier state follows report order, and a semantic no-op still answers without publication. Any input event naming an unconfigured binding id fails fatally before partial reduction or response | `session::tests::non_action_policy_turns_are_answered_exactly_once`, `session::tests::unknown_binding_id_is_fatal_before_partial_reduction` |
 | A11b | Given the exact successful held binding is still the sole armed target, configured, repeatable, and enabled by committed binding policy, when its timer fires while Session is Idle, then `fire_key_repeat()` rechecks those facts and either finalizes a local result or requests one internal-origin turn with a fresh response ticket but no pending action or ActionCompletion. A later successfully finalized repeatable press replaces/restarts the target; a noncurrent release cannot disarm it, and releasing the replacement never resumes an older held binding. Release, repeat-stop, or finalized mode disable of the current target makes firing an unchanged no-op. A tick during any active backend transaction is consumed unchanged without a ticket/request while leaving the target armed for a later scheduled tick. Every successful update emits one immediate Preserve/Arm/Disarm directive: a finalized same/new press restarts at the Accepted 600 ms delay and 40 ms interval; current release/stop, disabling mode, and Quit disarm before delayed effects. Any backend failure is fatal without an ordinary update. The MVP default marks only Focus and Swap bindings repeatable | `session::tests::armed_repeat_requests_internal_turn_without_action_completion`, `session::tests::released_repeat_is_noop_before_request`, `session::tests::new_repeatable_press_replaces_without_resuming_older_target`, `session::tests::mode_change_disables_armed_repeat_target`, `session::tests::repeat_tick_during_internal_in_flight_is_consumed_without_second_request`, `session::tests::repeat_timer_directives_cover_final_press_pending_release_mode_and_quit`, `keys::tests::only_directional_focus_and_swap_bindings_repeat`; #38 `realm_session::tests::repeat_timer_directives_program_single_timerfd_exactly`, `realm_session::tests::clock_and_repeat_overruns_coalesce_without_catchup` |
-| A12 | Given simultaneous backend, repeat timer, clock timer, worker, and control readiness including a subscriber whose socket buffer is full, when the real #38 combined loop runs with #40's River backend, then one bounded ingress epoch plus all already-admitted immediate dispatch/dequeue work and the complete policy response preempt every other source. The loop does not chase merely fresh level-readable bytes, so continuous new ingress cannot starve one timer/worker/control quantum. An already admitted current-target release/stop crosses ingress, dispatch, and dequeue before repeat; repeat and clock overruns coalesce without catch-up; worker results remain bounded; at most one control quantum follows; backend readiness is zero-polled between control operations; and `manage_finish` is flushed within the key-press budget before any subscriber write | #38 `realm_session::tests::combined_loop_orders_all_ready_sources_once`, `realm_session::tests::received_release_crosses_ingress_dispatch_dequeue_before_repeat`, `realm_session::tests::continuous_backend_readability_yields_after_one_admitted_epoch`, `realm_session::tests::repeat_overrun_during_pending_work_is_dropped_without_catchup`; #40 `backend::tests::policy_response_orders_manage_then_render_and_finishes_once`; #65 `realm_session::tests::key_to_manage_finish_meets_four_millisecond_budget_on_reference_linux` |
-| A12a | Given 256 admitted process jobs, a due snapshot, a full 256-result queue, or a sealed worker, when #38 performs nonblocking admission/service, then the 256 process slots and one replaceable snapshot slot remain distinct, process job 257 fails atomically, the due snapshot remains accepted/coalesced, a full result queue blocks only the worker while the event loop drains, the capacity-free fence can still seal, and all post-seal jobs are rejected | #38 `realm_session::tests::worker_process_queue_accepts_256_and_rejects_257_atomically`, `realm_session::tests::worker_result_queue_blocks_worker_not_event_loop`, `realm_session::tests::snapshot_slot_is_separate_replaceable_and_accepted_beside_256_process_jobs`, `realm_session::tests::worker_seal_rejects_new_jobs_without_consuming_queue_capacity` |
+| A12 | Given simultaneous backend, repeat timer, clock timer, sampler, worker, and control readiness including a subscriber whose socket buffer is full, when the real #38 combined loop runs with #40's River backend, then one bounded ingress epoch plus all already-admitted immediate dispatch/dequeue work and the complete policy response preempt every other source. The loop does not chase merely fresh level-readable bytes, so continuous new ingress cannot starve one timer/sampler/worker/control quantum. An already admitted current-target release/stop crosses ingress, dispatch, and dequeue before repeat; repeat and clock overruns coalesce without catch-up; the sampler receives one latest-slot opportunity after clock and before one bounded worker result; at most one control quantum follows; backend readiness is zero-polled between control operations; and `manage_finish` is flushed within the key-press budget before any subscriber write | #38 `realm_session::tests::combined_loop_orders_all_ready_sources_once`, `realm_session::tests::received_release_crosses_ingress_dispatch_dequeue_before_repeat`, `realm_session::tests::continuous_backend_readability_yields_after_one_admitted_epoch`, `realm_session::tests::repeat_overrun_during_pending_work_is_dropped_without_catchup`, `realm_session::tests::sampler_latest_slot_is_serviced_after_clock_before_worker`; #40 `backend::tests::policy_response_orders_manage_then_render_and_finishes_once`; #65 `realm_session::tests::key_to_manage_finish_meets_four_millisecond_budget_on_reference_linux` |
+| A12a | Given 256 admitted process jobs, a due snapshot, a full 256-result queue, a sealed worker, or a long-lived child followed by a short-lived child, when #38 performs nonblocking admission/service, then the 256 process slots and one replaceable snapshot slot remain distinct, process job 257 fails atomically, the due snapshot remains accepted/coalesced, a full result queue blocks only the worker while the event loop drains, the capacity-free fence can still seal, and all post-seal jobs are rejected. The sole off-loop reaper reaps whichever owned child exits without waiting for the older child, and no exited worker child remains a zombie. Spawn failure and successful reap each release the owned-child slot; a running or unreaped child retains it | #38 `realm_session::tests::worker_process_queue_accepts_256_and_rejects_257_atomically`, `realm_session::tests::worker_result_queue_blocks_worker_not_event_loop`, `realm_session::tests::snapshot_slot_is_separate_replaceable_and_accepted_beside_256_process_jobs`, `realm_session::tests::worker_seal_rejects_new_jobs_without_consuming_queue_capacity`, `worker::tests::worker_reaps_a_later_short_child_while_an_older_child_is_alive`, `worker::tests::failed_spawn_releases_its_owned_child_capacity` |
 | A13 | Given subscriber output whose last positive send was two seconds ago, when the #38 loop supplies the exact deadline to SPEC 0007, then that subscriber is closed without waiting for another state change and remaining subscribers continue | Transport deadline evidence belongs to SPEC 0007 A16; #38 `realm_session::tests::subscriber_deadline_expires_without_new_state` |
 | A14 | Given a client that sends `Request::Hello` with a version other than `PROTOCOL_VERSION`, when the session receives it, then it answers `Response::Hello` carrying its own version and then closes the connection | Delegated to SPEC 0007 A14: `realm_control::tests::protocol_state_machine_is_total`, `realm_control::control_socket_linux::mismatched_hello_discards_a_pipelined_request_and_sends_only_hello` |
 | A14a | Given `XDG_RUNTIME_DIR` is absent, relative, or not a directory, when `realm-session` starts or a production client resolves the control socket, then it fails with `IpcPathError::MissingRuntimeDir`, never probes `/tmp`, and ignores `REALM_SOCKET` | Delegated to SPEC 0007 A1/A2: `realm_control::tests::runtime_capability_rejects_every_unsafe_input_and_openat2_failure`, `realm_control::tests::server_creates_realm_exactly_once_under_scoped_umask`, and `realm_control::tests::client_endpoint_missing_realm_is_retryable_and_creates_nothing` |
@@ -1826,8 +1887,11 @@ Each row is one happy path and becomes one test.
 | A14f | Given a delayed snapshot worker and an immediately ready River replay, when startup runs, then snapshot classification completes before binding the window-manager global, so no manage turn can open first. A restricted pre-listener pump services bounded backend immediate/prepared-read/write and only the successful projection-free replay, selected-output workarea projection, matching completion, and drain/follow-up chain while the endpoint remains non-listening. Transition to `Live`, listener activation, and `READY=1` occur only after that chain's clean final boundary; any worker/backend/poll/recovery/listen failure is fatal and sends no readiness | `realm_session::tests::snapshot_classification_precedes_window_manager_binding`, `realm_session::tests::pre_listener_recovery_pump_reaches_live_before_activation`, `realm_session::tests::readiness_follows_live_listener_activation` |
 | A14g | Given any lifecycle phase and optional active transaction, when #38 externally calls `Session::begin_shutdown`, the first call preserves the ticket watermark, abandons every private candidate/origin/ticket/effect without commit, backend request/response, or completion, enters `ShuttingDown`, and returns only repeat Disarm; later calls are unchanged. Given `ShuttingDown`, #38 externally authorizes exactly one `begin_exit_session` after its own response, control-drain, and worker-fence conditions settle; Session owns no receipt or clock. The call passes last-committed binding policy, enters `Exiting` only on backend success, and treats wrong phase, repetition, or backend failure as fatal. #40 owns the backend cutoff and #38 owns receipts, deadlines, worker fences, and poll-loop shutdown proof | `session::tests::shutdown_and_exit_lifecycle_is_minimal_idempotent_and_exactly_once`, `turn::tests::expected_exit_disconnect_returns_exit_complete_once`; #38 `realm_session::tests::shutdown_driver_calls_session_exit_once_and_stops_on_exit_complete`; #40 `backend::tests::exit_cutoff_disables_read_interest_and_requires_postflush_terminal` |
 | A14h | Given direct `Request::Quit` in `Live`, when the adapter calls `begin_direct_quit`, Session allocates no backend ticket or turn, abandons any private transaction without commit/completion, enters `QuitPending`, stops admission, and returns one `QuitPending { CurrentControlRequest }`; a repeat call in `QuitPending` is unchanged, and calls in other phases are typed errors without mutation. #38 queues the Quit response, proves that exact response Drained or Closed, and only then calls `begin_shutdown`; Session owns no receipt or deadline. Key-derived Quit remains staged until its successful transaction reaches a clean final boundary | `session::tests::direct_quit_enters_quit_pending_idempotently_without_backend_ticket`; #38 `realm_session::tests::direct_quit_waits_for_exact_response_receipt` |
-| A14i | Given the production `realm-wm` binary, tracked service, and a headless River v0.4.8 session, when the service starts from a clean runtime directory, then the binary constructs the real River backend, control endpoint/server, worker, repeat/clock timers, and combined loop; it reaches `Live`, activates the listener, and sends `READY=1`. A real `realm_control::Client` completes Hello, sends `Request::GetState`, receives the current State, then sends `Request::Quit`; that exact Quit response drains before the daemon exits River through the specified post-flush disconnect. The smoke uses the control library directly and adds no CLI surface. A library-only driver or fake backend does not satisfy this criterion. The packaged NixOS, Ubuntu, and Fedora lanes must launch the installed binary rather than a workspace artifact | #38 `realm_session::tests::production_daemon_wires_every_runtime_owner`; #40 `backend::tests::headless_river_daemon_reaches_ready_serves_get_state_and_quits`; #74/#75/#76 packaged session smoke, including the enabled `checks.x86_64-linux.session-boots` assertion |
+| A14i | Given the production `realm-wm` binary, tracked service, and a headless River v0.4.8 session, when the service starts from a clean runtime directory, then the binary constructs the real River backend, control endpoint/server, worker, module sampler, repeat/clock timers, and combined loop; it reaches `Live`, activates the listener, and sends `READY=1`. A real `realm_control::Client` completes Hello, sends `Request::GetState`, receives the current State, then sends `Request::Quit`; that exact Quit response drains before the daemon exits River through the specified post-flush disconnect. The smoke uses the control library directly and adds no CLI surface. A library-only driver or fake backend does not satisfy this criterion. The packaged NixOS, Ubuntu, and Fedora lanes must launch the installed binary rather than a workspace artifact | #38 `realm_session::tests::production_daemon_wires_every_runtime_owner`; #40 `backend::tests::headless_river_daemon_reaches_ready_serves_get_state_and_quits`; #74/#75/#76 packaged session smoke, including the enabled `checks.x86_64-linux.session-boots` assertion |
 | A15 | Given an idle session, when the clock module's tick changes the clock text, then exactly one `Event::State` is broadcast and no `manage_dirty` and no other river request is made | `session::tests::module_change_emits_once_without_backend_apply` covers the in-process state effect; socket coverage remains SPEC 0007 |
+| A15a | Given sampler snapshots A then B before event-loop service, when the loop acquires the capacity-one latest slot, then only B is taken; given producer contention, `try_lock` returns without blocking or draining the `eventfd` and the next cycle retries. One successful service drains the coalesced wake and performs no compositor request | `modules::tests::sampler_mailbox_replaces_with_latest_and_try_lock_never_blocks`; `realm_session::tests::sampler_latest_slot_is_serviced_after_clock_before_worker` |
+| A15b | Given a clock tick and multiple sampler observations after protocol response writing is quiescent but while a Session transaction remains active, when its final clean boundary arrives, then the newest values are published once in SPEC 0004 order with no `manage_dirty`; before that boundary no module state escapes. At the first QuitPending boundary the sampler receives its stop wake, no later result is serviced, and shutdown neither joins it nor waits for it | `realm_session::tests::active_transaction_coalesces_latest_modules_at_one_clean_publication`, `realm_session::tests::quit_pending_stops_sampler_without_join_or_further_service` |
+| A15c | Given a delayed first sampler result, when the production daemon reaches Live, then listener activation and READY do not wait for it; current memory and optional battery arrive from the initial pass, CPU/network appear only after a second valid observation, and a VM with no battery eventually publishes exactly `net`, `cpu`, `mem`, and `clock` in order | `realm_session::tests::readiness_does_not_wait_for_initial_sampler_result`; `checks.x86_64-linux.session-boots` |
 | A16 | Given a module that recomputes to the text it already had, when derivation runs, then `revision` does not increment and no `Event::State` is sent | `session::tests::module_change_emits_once_without_backend_apply` |
 | A17 | Given a client that quantises its dimensions down to a multiple of a 9×18 cell, when a triptych of three such clients is applied, then after at most one corrective `propose_dimensions` per window each `set_content_clip_box` equals that window's projected rect and the clip boxes tile the workarea exactly | #40 `backend::tests::corrective_content_clip_converges_once` |
 | A18 | Given a persisted ledger snapshot holding three windows across two orbits, their `BackendWindowId` mappings, and a next-`WinId` watermark, when all identities replay and `InitialReplayComplete` is the final item of the first policy turn, then the projection-free bootstrap response either finalizes immediately on `Complete` or waits through matching completion and its drain/follow-up chain without entering Live. At that boundary each window is restored to its snapshotted orbit/order, a new identity receives the persisted next id, and immediate Undo is a no-op. Only a later selected-output workarea response produces the first full `RealmState` at revision 1 with `Mode::Nav`, empty chord/module state, and default which-key state. Accumulated exclusive focus suppresses that response's window focus/border and makes revision-1 `focused_title` empty without changing ledger focus | `session::tests::initial_replay_is_projection_free_and_stays_unpublished`, `session::tests::initial_workarea_projection_with_exclusive_focus_suppresses_window_focus` |

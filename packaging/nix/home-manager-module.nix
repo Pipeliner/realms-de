@@ -98,6 +98,8 @@ in
         # PRE-ALPHA: this binary does not exist yet (M2). The unit is here so
         # the session shape is complete and testable.
         ExecStart = "${cfg.package}/bin/realm-wm";
+        Environment =
+          "PATH=${lib.makeBinPath (support.reusedTools pkgs)}:/usr/lib/realm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin";
         # always, not on-failure: under river 0.4 this process *is* the window
         # manager, and quit goes through river's exit_session rather than
         # through this exiting — so a clean exit is not a normal path and must

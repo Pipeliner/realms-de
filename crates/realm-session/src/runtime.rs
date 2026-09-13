@@ -16,7 +16,8 @@ use realm_core::ipc::{ErrorKind, Request, Response};
 use realm_core::ledger::OrbitId;
 
 use crate::backend::{BackendError, BackendReady, BackendTicket, WmBackend, WorkerCapacityError};
-use crate::modules::ClockModule;
+use crate::consumer::FixedConsumer;
+use crate::modules::{ClockModule, ModuleSampler, ModuleSnapshot};
 use crate::persistence::{PersistCompletion, PersistCompletionError, PersistenceCoordinator};
 use crate::session::{
     QuitAfter, Session, SessionActionError, SessionEffect, SessionEventError, SessionUpdate,
@@ -75,6 +76,12 @@ pub enum RuntimeError {
     /// The control transport failed outside a peer-local close boundary.
     #[error(transparent)]
     Control(#[from] ControlError),
+    /// The fixed-consumer configuration root could not be resolved.
+    #[error("theme configuration: {0}")]
+    Configuration(String),
+    /// The fresh-login generation could not be retained or published safely.
+    #[error(transparent)]
+    Theme(#[from] realm_theme::Error),
     /// A worker reported a persistence sequence the owner did not issue.
     #[error(transparent)]
     Persistence(#[from] PersistCompletionError),
@@ -208,6 +215,7 @@ pub struct RuntimeOwners<B: WmBackend> {
     worker: Worker,
     timers: SessionTimers,
     clock: ClockRuntime,
+    sampler: ModuleSampler,
     persistence: PersistenceCoordinator,
     pending_request: Option<(BackendTicket, ConnectionId)>,
     quit_receipt: Option<ResponseReceipt>,
@@ -219,12 +227,18 @@ pub struct RuntimeOwners<B: WmBackend> {
 
 impl<B: WmBackend> RuntimeOwners<B> {
     /// Assemble the owners after recovery reached Live and listener activation succeeded.
+    // Keep each event-loop owner and the pre-startup monotonic origin explicit.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "explicit runtime ownership assembly"
+    )]
     fn new(
         session: Session<B>,
         control: ControlServer,
         worker: Worker,
         timers: SessionTimers,
         clock: ClockRuntime,
+        sampler: ModuleSampler,
         persistence: PersistenceCoordinator,
         started_at: Instant,
     ) -> Self {
@@ -234,6 +248,7 @@ impl<B: WmBackend> RuntimeOwners<B> {
             worker,
             timers,
             clock,
+            sampler,
             persistence,
             pending_request: None,
             quit_receipt: None,
@@ -410,13 +425,17 @@ impl<B: WmBackend> RuntimeOwners<B> {
         for effect in update.effects.drain(..) {
             match effect {
                 SessionEffect::Spawn(argv) => jobs.push(ProcessJob::Spawn(argv)),
+                SessionEffect::Terminal => {
+                    jobs.push(ProcessJob::FixedConsumer(FixedConsumer::Terminal));
+                }
                 SessionEffect::Launcher => {
-                    jobs.push(ProcessJob::Spawn(vec!["fuzzel".to_owned()]));
+                    jobs.push(ProcessJob::FixedConsumer(FixedConsumer::Launcher));
                 }
                 SessionEffect::ReloadTheme => {
                     eprintln!("realm-wm: ignored retired key-derived theme reload");
                 }
                 SessionEffect::QuitPending { after } => {
+                    self.sampler.stop()?;
                     if quit_after.replace(after).is_some() {
                         return Err(RuntimeError::Invariant(
                             "one update contained more than one Quit barrier",
@@ -591,6 +610,18 @@ impl<B: WmBackend> RuntimeOwners<B> {
         }
         Ok(())
     }
+
+    /// Consume at most one latest sampler snapshot without blocking.
+    pub fn service_sampler(&mut self) -> Result<(), RuntimeError> {
+        if self.session.phase() != crate::session::RecoveryPhase::Live {
+            return Ok(());
+        }
+        if let Some(snapshot) = self.sampler.try_take_latest()? {
+            let update = self.clock.accept_sampler(&mut self.session, snapshot)?;
+            self.handle_session_update(Instant::now(), update)?;
+        }
+        Ok(())
+    }
 }
 
 fn cancel_reservation(worker: &mut Worker, reservation: Option<WorkerReservation>) {
@@ -742,12 +773,14 @@ where
 
     let control = bound.activate()?.into_server(Instant::now());
     let timers = SessionTimers::new()?;
+    let sampler = ModuleSampler::start()?;
     let mut owners = RuntimeOwners::new(
         session,
         control,
         worker,
         timers,
         clock,
+        sampler,
         persistence,
         started_at,
     );
@@ -757,17 +790,21 @@ where
 
 fn update_clock_module<B: WmBackend>(
     session: &mut Session<B>,
+    snapshot: Option<ModuleSnapshot>,
     clock: realm_core::state::Module,
 ) -> SessionUpdate {
-    let mut modules = session.state().modules.clone();
-    modules.retain(|module| module.id != "clock");
-    modules.push(clock);
+    let modules = match snapshot {
+        Some(snapshot) => snapshot.modules(clock),
+        None => vec![clock],
+    };
     session.update_modules(modules)
 }
 
 struct ClockRuntime {
     module: ClockModule,
     dirty: bool,
+    sampler: Option<ModuleSnapshot>,
+    sampler_dirty: bool,
 }
 
 impl ClockRuntime {
@@ -775,6 +812,8 @@ impl ClockRuntime {
         Self {
             module: ClockModule::system(),
             dirty: false,
+            sampler: None,
+            sampler_dirty: false,
         }
     }
 
@@ -783,6 +822,8 @@ impl ClockRuntime {
         Self {
             module: ClockModule::utc(),
             dirty: false,
+            sampler: None,
+            sampler_dirty: false,
         }
     }
 
@@ -796,7 +837,29 @@ impl ClockRuntime {
             return Ok(SessionUpdate::unchanged());
         }
         self.dirty = false;
-        Ok(update_clock_module(session, self.module.render(now)?))
+        Ok(update_clock_module(
+            session,
+            self.sampler,
+            self.module.render(now)?,
+        ))
+    }
+
+    fn accept_sampler<B: WmBackend>(
+        &mut self,
+        session: &mut Session<B>,
+        snapshot: ModuleSnapshot,
+    ) -> Result<SessionUpdate, RuntimeError> {
+        self.sampler = Some(snapshot);
+        if session.has_active_backend_transaction() {
+            self.sampler_dirty = true;
+            return Ok(SessionUpdate::unchanged());
+        }
+        self.sampler_dirty = false;
+        Ok(update_clock_module(
+            session,
+            self.sampler,
+            self.module.render(SystemTime::now())?,
+        ))
     }
 
     fn fold_if_clean<B: WmBackend>(
@@ -805,11 +868,12 @@ impl ClockRuntime {
         mut update: SessionUpdate,
         now: SystemTime,
     ) -> Result<SessionUpdate, RuntimeError> {
-        if !self.dirty || session.has_active_backend_transaction() {
+        if (!self.dirty && !self.sampler_dirty) || session.has_active_backend_transaction() {
             return Ok(update);
         }
         self.dirty = false;
-        let clock_update = update_clock_module(session, self.module.render(now)?);
+        self.sampler_dirty = false;
+        let clock_update = update_clock_module(session, self.sampler, self.module.render(now)?);
         if clock_update.state.is_some() {
             update.state = clock_update.state;
         }
@@ -824,8 +888,17 @@ where
     F: FnOnce() -> Result<B, BackendError>,
 {
     let runtime = production_runtime_dir()?;
+    let config_root =
+        crate::consumer::config_root_from_env().map_err(RuntimeError::Configuration)?;
+    prepare_startup_theme(&config_root)?;
     let degraded_codes = load_degraded_handoff(&runtime);
     run_daemon_with(runtime, make_backend, notify_ready, degraded_codes)
+}
+
+fn prepare_startup_theme(
+    config_root: &std::path::Path,
+) -> Result<realm_theme::generation::GenerationId, RuntimeError> {
+    realm_theme::ensure_current(config_root).map_err(RuntimeError::from)
 }
 
 fn load_startup_snapshot(
@@ -945,6 +1018,7 @@ enum PollSource {
     Backend,
     Repeat,
     Clock,
+    Sampler,
     Worker,
     Control(ControlToken),
 }
@@ -998,6 +1072,13 @@ fn run_combined_loop<B: WmBackend>(owners: &mut RuntimeOwners<B>) -> Result<(), 
             owners.timers.clock_fd(),
             PollFlags::IN,
         ));
+        if phase == RecoveryPhase::Live {
+            sources.push(PollSource::Sampler);
+            poll_fds.push(PollFd::from_borrowed_fd(
+                owners.sampler.event_fd(),
+                PollFlags::IN,
+            ));
+        }
         sources.push(PollSource::Worker);
         poll_fds.push(PollFd::from_borrowed_fd(
             owners.worker.event_fd(),
@@ -1062,6 +1143,9 @@ fn run_combined_loop<B: WmBackend>(owners: &mut RuntimeOwners<B>) -> Result<(), 
         }
         if ready_for(&ready, |source| matches!(source, PollSource::Clock)).is_some() {
             owners.service_clock(SystemTime::now())?;
+        }
+        if ready_for(&ready, |source| matches!(source, PollSource::Sampler)).is_some() {
+            owners.service_sampler()?;
         }
         if owners.worker.has_results()
             || ready_for(&ready, |source| matches!(source, PollSource::Worker)).is_some()
@@ -1191,6 +1275,7 @@ mod tests {
     use std::os::fd::{AsFd, BorrowedFd};
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixStream;
+    use std::process::Command;
     use std::sync::mpsc;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1207,6 +1292,7 @@ mod tests {
         BackendPolicyTurnId, BackendPollInterest, BackendReady, BackendResult, BackendSubmission,
         BackendTicket, BackendWindowId, WmBackend,
     };
+    use crate::modules::{ModuleSampler, ModuleSnapshot, NetworkRate};
     use crate::persistence::PersistenceCoordinator;
     use crate::session::{Session, SessionUpdate};
     use crate::timers::SessionTimers;
@@ -1578,6 +1664,53 @@ mod tests {
     }
 
     #[test]
+    fn production_startup_theme_preparation_seeds_once_and_refuses_malformed_current() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "runtime::tests::startup_theme_preparation_subprocess",
+                "--nocapture",
+            ])
+            .env("REALM_STARTUP_THEME_FIXTURE", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated startup-theme fixture failed: {output:?}"
+        );
+    }
+
+    #[test]
+    fn startup_theme_preparation_subprocess() {
+        if std::env::var_os("REALM_STARTUP_THEME_FIXTURE").is_none() {
+            return;
+        }
+        // fork/exec inherits whichever process-wide umask a parallel endpoint
+        // fixture held at spawn time. This exact subprocess has no peer tests,
+        // so establish the ordinary production-login mask before bootstrap.
+        rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o022));
+        let root = fixture_dir("startup-theme");
+        let first = super::prepare_startup_theme(&root).unwrap();
+        let current = fs::read(root.join("realm/generated/current")).unwrap();
+
+        let second = super::prepare_startup_theme(&root).unwrap();
+        assert_eq!(second, first);
+        assert_eq!(
+            fs::read(root.join("realm/generated/current")).unwrap(),
+            current
+        );
+
+        fs::write(root.join("realm/generated/current"), b"malformed\n").unwrap();
+        let malformed = fs::read(root.join("realm/generated/current")).unwrap();
+        assert!(super::prepare_startup_theme(&root).is_err());
+        assert_eq!(
+            fs::read(root.join("realm/generated/current")).unwrap(),
+            malformed
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn real_socket_get_state_and_exact_quit_receipt_drive_clean_exit() {
         let root = fixture_dir("get-state-quit");
         let server_runtime = test_runtime_dir(&root).unwrap();
@@ -1643,12 +1776,14 @@ mod tests {
         let control = bound.activate().unwrap().into_server(Instant::now());
         let timers = SessionTimers::new().unwrap();
         let clock = ClockRuntime::utc();
+        let sampler = ModuleSampler::fixture().unwrap();
         let mut owners = super::RuntimeOwners::new(
             session,
             control,
             worker,
             timers,
             clock,
+            sampler,
             persistence,
             Instant::now(),
         );
@@ -1708,5 +1843,110 @@ mod tests {
             .iter()
             .any(|module| module.id == "clock" && module.text == "00:00"));
         assert!(!clock.dirty);
+    }
+
+    #[test]
+    fn active_transaction_coalesces_latest_modules_at_one_clean_publication() {
+        let mut session = live_session();
+        let mut modules = ClockRuntime::utc();
+        let fixed = UNIX_EPOCH + Duration::from_secs(1_735_689_600);
+        assert!(session
+            .switch_orbit(realm_core::ledger::OrbitId::from_human(2).unwrap())
+            .unwrap()
+            .pending_action
+            .is_some());
+
+        assert_eq!(
+            modules
+                .accept_sampler(
+                    &mut session,
+                    ModuleSnapshot {
+                        cpu_percent: Some(10),
+                        ..ModuleSnapshot::default()
+                    },
+                )
+                .unwrap(),
+            SessionUpdate::unchanged()
+        );
+        modules
+            .accept_sampler(
+                &mut session,
+                ModuleSnapshot {
+                    cpu_percent: Some(80),
+                    memory_tenths_gib: Some(95),
+                    network: Some(NetworkRate {
+                        receive_bps: 2_000_000,
+                        transmit_bps: 1_200,
+                    }),
+                    battery: None,
+                },
+            )
+            .unwrap();
+        assert!(session.state().modules.is_empty());
+
+        let update = session
+            .handle_backend_event(BackendEvent::PolicyTurn(BackendPolicyTurn {
+                id: BackendPolicyTurnId::new(3).unwrap(),
+                drains: None,
+                events: Vec::new(),
+            }))
+            .unwrap();
+        let folded = modules.fold_if_clean(&mut session, update, fixed).unwrap();
+        let state = folded.state.unwrap();
+        assert_eq!(
+            state
+                .modules
+                .iter()
+                .map(|module| module.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["net", "cpu", "mem", "clock"]
+        );
+        assert_eq!(state.modules[1].text, "cpu 80%");
+        assert_eq!(state.modules[2].text, "mem 9.5G");
+    }
+
+    #[test]
+    fn quit_pending_stops_sampler_without_join_or_further_service() {
+        let root = fixture_dir("quit-stops-sampler");
+        let runtime = test_runtime_dir(&root).unwrap();
+        let snapshot_path = runtime.path().join("realm/ledger.json");
+        let bound = runtime.prepare_server_endpoint().unwrap().bind().unwrap();
+        let worker = Worker::start(snapshot_path).unwrap();
+        let session = live_session();
+        let control = bound.activate().unwrap().into_server(Instant::now());
+        let timers = SessionTimers::new().unwrap();
+        let clock = ClockRuntime::utc();
+        let sampler = ModuleSampler::fixture().unwrap();
+        sampler
+            .publish_fixture(ModuleSnapshot {
+                cpu_percent: Some(99),
+                ..ModuleSnapshot::default()
+            })
+            .unwrap();
+        let persistence = PersistenceCoordinator::new(None);
+        let mut owners = super::RuntimeOwners::new(
+            session,
+            control,
+            worker,
+            timers,
+            clock,
+            sampler,
+            persistence,
+            Instant::now(),
+        );
+
+        let now = Instant::now();
+        let quit = owners.session.begin_direct_quit().unwrap();
+        owners.apply_update(now, quit, None).unwrap();
+        assert!(owners.sampler.stopped());
+        owners.service_sampler().unwrap();
+        assert!(owners.sampler.try_take_latest().unwrap().is_some());
+        assert!(owners
+            .session
+            .state()
+            .modules
+            .iter()
+            .all(|module| module.id != "cpu"));
+        fs::remove_dir_all(root).unwrap();
     }
 }

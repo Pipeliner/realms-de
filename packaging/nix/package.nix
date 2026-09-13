@@ -95,6 +95,9 @@
     # unchanged.
     substituteInPlace $out/lib/systemd/user/*.service \
       --replace-quiet /usr/bin/ $out/bin/
+    substituteInPlace $out/lib/systemd/user/realm-wm.service \
+      --replace-fail 'Environment=PATH=' \
+        'Environment=PATH=${lib.makeBinPath (support.reusedTools pkgs)}:'
 
     install -Dm644 ${src + "/palette.toml"} $out/share/realm/palette.toml
 

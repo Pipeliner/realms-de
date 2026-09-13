@@ -585,6 +585,8 @@ pub enum QuitAfter {
 pub enum SessionEffect {
     /// Launch one argv vector through the worker owner.
     Spawn(Vec<String>),
+    /// Open Realm's fixed themed terminal consumer.
+    Terminal,
     /// Open the launcher.
     Launcher,
     /// Retained legacy theme action.
@@ -2038,6 +2040,7 @@ impl<B: WmBackend> Session<B> {
             Action::Spawn(argv) => active
                 .staged_effects
                 .push(SessionEffect::Spawn(argv.clone())),
+            Action::Terminal => active.staged_effects.push(SessionEffect::Terminal),
             Action::Launcher => active.staged_effects.push(SessionEffect::Launcher),
             Action::Focus(direction) => active.working.ledger.focus_step(*direction),
             Action::Swap(direction) => {
@@ -2396,7 +2399,7 @@ fn canonical_modifiers(modifiers: &[BackendModifier]) -> bool {
 fn action_has_effect(action: &Action) -> bool {
     matches!(
         action,
-        Action::Spawn(_) | Action::Launcher | Action::ReloadTheme | Action::Quit
+        Action::Spawn(_) | Action::Terminal | Action::Launcher | Action::ReloadTheme | Action::Quit
     )
 }
 
@@ -3005,6 +3008,21 @@ mod tests {
             assert_eq!(mechanism.modifiers, [BackendModifier::Super]);
         }
         assert_eq!(session.state().mode, Mode::Nav);
+    }
+
+    #[test]
+    fn default_return_binding_emits_only_the_typed_terminal_effect() {
+        let mut session = policy_live_session(FakeBackend::new());
+        let terminal = binding_id(&session, "Return");
+
+        let update = session
+            .handle_backend_event(policy_turn(
+                3,
+                vec![BackendPolicyEvent::BindingPressed(terminal)],
+            ))
+            .unwrap();
+
+        assert_eq!(update.effects, [SessionEffect::Terminal]);
     }
 
     #[test]

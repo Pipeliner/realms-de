@@ -1,6 +1,7 @@
 # SPEC 0004 — realm-bar
 
-- **Status:** Accepted (2026-08-26) — MVP implementation in progress
+- **Status:** Accepted (2026-08-26; MVP module-source correction 2026-09-13)
+  — MVP implementation in progress
 - **Milestone:** M2
 - **Decisions:** [ADR 0008](../adr/0008-layer-shell-rendering-stack.md),
   [ADR 0009](../adr/0009-no-animation-budget.md),
@@ -212,8 +213,9 @@ of padding at the right edge. Each `Module` carries `id`, `text`, an optional
 The prototype's row is `↑ 18k ↓ 1.2M` (default), `cpu 31%`
 (`accent.starlight`), `mem 9.8G`, `gpu 44°`, `♪ 64%`, `⚡ 87%`
 (`accent.gold`), `26·08·2026 ☾ 14:32` (`text.bright`). Those strings and their
-accents are the session's business, not the bar's — except the clock, which is
-the bar's own; see [Module data sources](#7-module-data-sources).
+accents are the session's business, not the bar's. The clock is also produced
+by the session; the bar only gives the unaccented `clock` identity its specified
+bright foreground. See [Module data sources](#7-module-data-sources).
 
 ### 3. The which-key strip
 
@@ -286,7 +288,8 @@ specified here from the vocabulary the rest of the design already uses.
   `u undo`, `w which-key`, `? grimoire`, `p theme` and `esc nav`.
 - Each row: `⊞ mod` + `hint_key` in `text.bright`, `label` in `text.mid`, and
   the action spelled out in `text.dim` at `typography.size_micro`
-  (`spawn realm-term`, `orbit 1-6`, `set-layout mono`). Two columns at 720 px.
+  (`terminal`, `orbit 1-6`, `set-layout mono`). The typed terminal action is
+  labeled directly rather than rendered as a raw Spawn argv. Two columns at 720 px.
 - Footer in `text.faint` at `typography.size_micro`: the binding count and
   `? or esc dismiss`.
 
@@ -461,6 +464,58 @@ genuinely not observable any other way.
 | mem | `/proc/meminfo` | sampled | step 3 |
 | gpu | hwmon temperature | sampled | step 3 |
 
+The M2 production set is exactly `net`, `cpu`, `mem`, `battery`, and `clock`,
+in that left-to-right order. `gpu` and `vol` remain valid renderable module
+identities, but are not produced in the MVP. Absence from the production set is
+not a request for an empty placeholder. The session omits a module until its
+source has produced a valid value and preserves the relative order of the
+remaining modules.
+
+The MVP strings and attributes are exact:
+
+| Module | Text | Accent | Urgent |
+|---|---|---|---|
+| `net` | `↑ {transmit rate} ↓ {receive rate}` | none | false |
+| `cpu` | `cpu {nearest integer busy percent}%` | `starlight` | false |
+| `mem` | `mem {used GiB to one decimal}G` | none | false |
+| `battery` | `⚡ {capacity}%` | `gold` | true only at capacity ≤ 15 while discharging |
+| `clock` | fixed-width local `HH:MM` | none | false |
+
+CPU uses the aggregate `cpu` line from `/proc/stat`. Total is
+`user + nice + system + idle + iowait + irq + softirq + steal`; guest fields
+are not added because Linux already includes them in user/nice. Idle is
+`idle + iowait`, and busy percent is the checked busy delta over the checked
+total delta, rounded to the nearest integer and clamped to 0–100. The first
+observation establishes a baseline and emits no CPU module. A zero total delta
+or counter decrease replaces the baseline and retains the last valid CPU value,
+or remains absent if none exists.
+
+Memory is the checked `MemTotal - MemAvailable` from `/proc/meminfo`; missing
+fields, an unavailable value greater than total, or overflow is invalid. The
+kernel's `kB` values are interpreted as KiB and the result is rounded to the
+nearest tenth of a GiB. Network throughput sums every non-loopback interface from
+`/proc/net/dev`, divides checked byte deltas by the actual monotonic elapsed
+interval, and uses transmit for `↑` and receive for `↓`. Baselines are
+per-interface: a new or decreased counter contributes no delta for that
+interval, a removed interface disappears, and surviving interfaces continue
+without a hotplug spike. The first observation establishes those baselines and
+emits no network module. With no comparable interface the last valid network
+value is retained, or the module remains absent. Rates below 1000 are decimal
+integers; larger rates use decimal `k`, `M`, or `G`, rounded to one decimal
+with a trailing `.0` removed.
+
+Battery discovery sorts `/sys/class/power_supply` entries and selects the first
+whose trimmed `type` is `Battery`. Capacity must be an integer from 0 through
+100. The sampler opens its uevent source before the initial scan, and any
+`SUBSYSTEM=power_supply` uevent causes a fresh selection and read. A valid scan
+with no battery omits the module; disappearance selects the next eligible
+battery or removes the module. Failure to establish uevent observation disables
+the battery producer with one diagnostic rather than silently polling it.
+Malformed or transient source reads retain the last valid value and emit one
+diagnostic per failure episode; a later valid read ends that episode. A failure
+of any individual module source disables or retains only that module and is not
+a fatal window-manager error.
+
 **The justification the four sampled modules owe.** `cpu` and `net` are ratios
 over an interval; there is nothing to signal, because the value does not exist
 until two samples have been taken and divided. `mem` and the hwmon temperature
@@ -571,6 +626,10 @@ Each row is one happy path and becomes one test.
 | A19 | Given both user and system palettes exist, when the bar starts, then it loads the user palette; if that user palette is malformed it reports the error rather than falling back | `tests::user_palette_precedes_system_and_a_broken_user_palette_is_not_hidden` |
 | A20 | Given an unchanged chrome or dynamic string is measured and drawn repeatedly, when frames render, then its existing shaped cosmic-text buffer is reused | `text::tests::chrome_and_unchanged_dynamic_text_reuse_shaped_buffers` |
 | A21 | Given a fresh handshake failure or an established subscription failure, when retry is classified, then only fresh `MissingRealm`/`Refused` and established EOF/connection-I/O are retried | `wayland::tests::fresh_handshake_retries_only_missing_or_refused_endpoints`, `wayland::tests::established_subscription_reconnects_only_on_disconnect` |
+| A22 | Given fixture `/proc` observations, when the first and next one-second samples are reduced, then CPU excludes guest double-counting, memory uses `MemAvailable`, network excludes loopback and uses actual elapsed time, and the exact ordered module strings and rounding above result | `modules::tests::first_and_second_proc_samples_format_the_exact_mvp_modules` |
+| A23 | Given CPU or per-interface network counters that are zero-delta, decreased, new, or removed, when sampled, then baselines advance without a false spike and the specified previous-value-or-absence rule applies | `modules::tests::counter_resets_and_interface_changes_never_publish_false_rates` |
+| A24 | Given zero, one, or several fixture power supplies plus power-supply and unrelated uevents, when battery state changes, then selection is lexicographic, absence removes the module, unrelated events do nothing, and only a discharging capacity at or below 15 is urgent | `modules::tests::battery_uevents_select_remove_and_mark_low_capacity_exactly` |
+| A25 | Given repeated malformed or unreadable source observations, when sampling continues and later recovers, then the last valid value or initial absence is retained, exactly one diagnostic is emitted for that failure episode, and a later failure starts a new episode; uevent setup failure disables only battery without adding battery polling, and no individual source failure is fatal to the window manager | `modules::tests::source_failures_retain_last_value_and_log_once_per_episode` |
 
 ## Budgets
 
