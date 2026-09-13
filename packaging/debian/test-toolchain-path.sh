@@ -5,6 +5,9 @@ set -eu
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 resolver="$repo_root/packaging/debian/toolchain-path.sh"
 rules="$repo_root/packaging/debian/rules"
+control="$repo_root/packaging/debian/control"
+workflow="$repo_root/.github/workflows/distro.yml"
+install_guide="$repo_root/docs/INSTALL.md"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
@@ -72,3 +75,20 @@ fi
 printf '%s\n' "$output" | grep -F "/usr/lib/rust-1.[89][0-9]/bin" >/dev/null \
   || fail "rules-missing-toolchain diagnostic did not name expected path: $output"
 pass rules-missing-toolchain
+
+grep -F 'cargo-1.89 | cargo (>= 1.89)' "$control" >/dev/null \
+  || fail "Debian control does not require the accepted Cargo 1.89 floor"
+grep -F 'rustc-1.89 | rustc (>= 1.89)' "$control" >/dev/null \
+  || fail "Debian control does not require the accepted rustc 1.89 floor"
+grep -F 'cargo-1.89' "$workflow" >/dev/null \
+  || fail "Ubuntu distro CI does not install cargo-1.89"
+grep -F 'rustc-1.89' "$workflow" >/dev/null \
+  || fail "Ubuntu distro CI does not install rustc-1.89"
+grep -F 'v[2] < 89' "$rules" >/dev/null \
+  || fail "Debian rules do not enforce the workspace Rust 1.89 floor"
+grep -F 'rustc-1.89/cargo-1.89' "$rules" >/dev/null \
+  || fail "Debian rules do not diagnose the required 1.89 packages"
+grep -F 'sudo apt install devscripts debhelper rustc-1.89 cargo-1.89 pkg-config python3 zstd' \
+  "$install_guide" >/dev/null \
+  || fail "install guide does not name the accepted Ubuntu 1.89 packages"
+pass accepted-rust-floor-projections

@@ -4,6 +4,7 @@ set -eu
 
 root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 kit_builder=$root/packaging/tool-sources/build-native-source-kits.sh
+cargo_wrapper=$root/packaging/tool-sources/native-cargo-wrapper.sh
 native_tmp=${REALM_NATIVE_TMPDIR:-${TMPDIR:-/tmp}}
 failures=0
 
@@ -120,23 +121,7 @@ exit 97
 EOF
         chmod +x "$directory/$command"
     done
-    cat >"$directory/cargo" <<'EOF'
-#!/bin/sh
-printf 'cargo|cwd=%s|home=%s|args=%s\n' "$PWD" "${CARGO_HOME:-}" "$*" >>"${REALM_SENTINEL_LOG:?}"
-if [ ! -e "${REALM_CARGO_START_MARKER:?}" ]; then
-    if find "${CARGO_HOME:?}" -mindepth 1 -print -quit | grep . >/dev/null; then
-        printf 'cargo-home-not-empty|home=%s\n' "$CARGO_HOME" >>"$REALM_SENTINEL_LOG"
-        exit 96
-    fi
-    : >"$REALM_CARGO_START_MARKER"
-fi
-set +e
-"${REALM_REAL_CARGO:?}" "$@"
-status=$?
-set -e
-printf 'cargo-result|status=%s\n' "$status" >>"$REALM_SENTINEL_LOG"
-exit "$status"
-EOF
+    cp "$cargo_wrapper" "$directory/cargo"
     chmod +x "$directory/cargo"
 }
 
@@ -168,7 +153,8 @@ run_debian() {
     kit=$1
     log=$2
     source=$kit/debian/realm-workspace/source
-    cargo_home=$kit/debian/.cargo-home
+    cargo_home=$kit/debian/realm-workspace/.cargo
+    cargo_config=$kit/packaging/tool-sources/bundles/realm-workspace/config.toml
     target_dir=$kit/debian/cargo-target
     fixture_state=$kit.fixture-state
     sentinels=$fixture_state/sentinels
@@ -189,9 +175,9 @@ run_debian() {
         CARGO_HOME="$fixture_state/outer-cargo-home" \
         REALM_EXPECTED_SOURCE="$source" \
         REALM_EXPECTED_CARGO_HOME="$cargo_home" \
+        REALM_EXPECTED_CARGO_CONFIG="$cargo_config" \
         REALM_EXPECTED_TARGET_DIR="$target_dir" \
         REALM_SENTINEL_LOG="$log" \
-        REALM_CARGO_START_MARKER="$fixture_state/cargo-started" \
         REALM_REAL_CARGO="$real_cargo" \
         REALM_REAL_RUSTC="$real_rustc" \
         REALM_RUST_VERSIONED_ROOT="$versioned_root" \
@@ -230,10 +216,10 @@ assert_current_package_guide() {
     fi
     case $guide_name in
         Debian)
-            required_install='sudo apt install devscripts debhelper rustc-1.85 cargo-1.85 pkg-config python3 zstd'
+            required_install='sudo apt install devscripts debhelper rustc-1.89 cargo-1.89 pkg-config python3 zstd fonts-dejavu-core'
             ;;
         RPM)
-            required_install='sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd'
+            required_install='sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts'
             ;;
     esac
     if ! grep -F -x "$required_install" "$guide_output" >/dev/null; then
@@ -246,7 +232,8 @@ run_rpm() {
     log=$2
     top=$tree/top
     source=$top/BUILD/realm-0.1.0/.realm-workspace/source
-    cargo_home=$top/BUILD/realm-0.1.0/.cargo-home
+    cargo_home=$top/BUILD/realm-0.1.0/.realm-workspace/.cargo
+    cargo_config=$top/BUILD/realm-0.1.0/packaging/tool-sources/bundles/realm-workspace/config.toml
     target_dir=$top/BUILD/realm-0.1.0/.cargo-target
     sentinels=$tree/sentinels
     selectors=$tree/selectors
@@ -265,9 +252,9 @@ run_rpm() {
         CARGO_HOME="$tree/outer-cargo-home" \
         REALM_EXPECTED_SOURCE="$source" \
         REALM_EXPECTED_CARGO_HOME="$cargo_home" \
+        REALM_EXPECTED_CARGO_CONFIG="$cargo_config" \
         REALM_EXPECTED_TARGET_DIR="$target_dir" \
         REALM_SENTINEL_LOG="$log" \
-        REALM_CARGO_START_MARKER="$tree/cargo-started" \
         REALM_REAL_CARGO="$real_cargo" \
         REALM_REAL_RUSTC="$real_rustc" \
         RUSTC="$real_rustc" \
@@ -328,8 +315,8 @@ accepts_offline_cargo() {
     if grep '^rustc-selector|' "$log" >/dev/null; then
         fail "$name honored an inherited rustc selector"
     fi
-    if grep '^cargo-home-not-empty|' "$log" >/dev/null; then
-        fail "$name did not begin with an empty package-local Cargo home"
+    if grep '^cargo-home-not-retained-config|' "$log" >/dev/null; then
+        fail "$name did not use an otherwise-empty Cargo home containing the retained source configuration"
     fi
     cargo_count=$(grep -c '^cargo|' "$log" || true)
     if [ "$cargo_count" -ne 2 ]; then
@@ -350,11 +337,13 @@ accepts_offline_cargo() {
         *"|args=test --release --frozen --offline --locked --workspace --exclude realm-agent-sdd") ;;
         *) fail "$name did not run the exact package-relevant workspace test selection" ;;
     esac
+    for bin in realmctl realm-wm realm-bar; do
+        if ! grep -F -x "cargo-output|binary=$bin|executable=yes" "$log" >/dev/null; then
+            fail "$name Cargo build did not produce the staged workspace $bin"
+        fi
+    done
     case $name in
         Debian)
-            if [ ! -x "$REALM_EXPECTED_TARGET_DIR/release/realmctl" ]; then
-                fail "$name Cargo build did not produce the staged workspace realmctl"
-            fi
             deb_artifact=$(find "$REALM_EXPECTED_PACKAGE_ROOT" -maxdepth 1 \
                 -type f -name 'realm_*_*.deb' -print -quit)
             if [ -z "$deb_artifact" ]; then
@@ -362,6 +351,11 @@ accepts_offline_cargo() {
             else
                 mkdir -p "$output.deb-root"
                 dpkg-deb -x "$deb_artifact" "$output.deb-root"
+                for bin in realmctl realm-wm realm-bar; do
+                    if [ ! -x "$output.deb-root/usr/bin/$bin" ]; then
+                        fail "$name package did not contain the staged workspace $bin"
+                    fi
+                done
                 assert_current_package_guide "$name" "$output.deb-root" \
                     "$output.package-guide"
             fi
@@ -371,9 +365,12 @@ accepts_offline_cargo() {
                 -name 'realm-*.rpm' -print -quit)
             if [ -z "$rpm_artifact" ]; then
                 fail "$name native driver did not emit a package artifact"
-            elif ! rpm -qpl "$rpm_artifact" | grep -Fx '/usr/bin/realmctl' >/dev/null; then
-                fail "$name package did not contain the staged workspace realmctl"
             else
+                for bin in realmctl realm-wm realm-bar; do
+                    if ! rpm -qpl "$rpm_artifact" | grep -Fx "/usr/bin/$bin" >/dev/null; then
+                        fail "$name package did not contain the staged workspace $bin"
+                    fi
+                done
                 mkdir -p "$output.rpm-archive" "$output.rpm-root"
                 rpm_tar=$output.rpm-archive/package.tgz
                 if ! rpm2archive "$rpm_artifact" >"$rpm_tar"; then
@@ -401,7 +398,7 @@ accepts_offline_cargo() {
         esac
         case $invocation in
             *"|home=${REALM_EXPECTED_CARGO_HOME}"*) ;;
-            *) fail "$name did not use its empty package-local Cargo home" ;;
+            *) fail "$name did not inherit its retained-config Cargo home" ;;
         esac
         for flag in --frozen --offline --locked; do
             case " $invocation " in
@@ -438,10 +435,11 @@ rejects_before_cargo Debian run_debian "$tmp/debian-invalid" \
 
 make_debian_kit "$tmp/debian-valid"
 REALM_EXPECTED_SOURCE="$tmp/debian-valid/debian/realm-workspace/source"
-REALM_EXPECTED_CARGO_HOME="$tmp/debian-valid/debian/.cargo-home"
+REALM_EXPECTED_CARGO_HOME="$tmp/debian-valid/debian/realm-workspace/.cargo"
+REALM_EXPECTED_CARGO_CONFIG="$tmp/debian-valid/packaging/tool-sources/bundles/realm-workspace/config.toml"
 REALM_EXPECTED_TARGET_DIR="$tmp/debian-valid/debian/cargo-target"
 REALM_EXPECTED_PACKAGE_ROOT="$tmp"
-export REALM_EXPECTED_SOURCE REALM_EXPECTED_CARGO_HOME REALM_EXPECTED_TARGET_DIR \
+export REALM_EXPECTED_SOURCE REALM_EXPECTED_CARGO_HOME REALM_EXPECTED_CARGO_CONFIG REALM_EXPECTED_TARGET_DIR \
     REALM_EXPECTED_PACKAGE_ROOT
 accepts_offline_cargo Debian run_debian "$tmp/debian-valid" \
     "$tmp/debian-valid.log" "$tmp/debian-valid.out"
@@ -465,10 +463,11 @@ rejects_before_cargo RPM run_rpm "$tmp/rpm-invalid" \
 
 make_rpm_tree "$tmp/rpm-valid"
 REALM_EXPECTED_SOURCE="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.realm-workspace/source"
-REALM_EXPECTED_CARGO_HOME="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.cargo-home"
+REALM_EXPECTED_CARGO_HOME="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.realm-workspace/.cargo"
+REALM_EXPECTED_CARGO_CONFIG="$tmp/rpm-valid/top/BUILD/realm-0.1.0/packaging/tool-sources/bundles/realm-workspace/config.toml"
 REALM_EXPECTED_TARGET_DIR="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.cargo-target"
 REALM_EXPECTED_PACKAGE_ROOT="$tmp/rpm-valid/top/RPMS"
-export REALM_EXPECTED_SOURCE REALM_EXPECTED_CARGO_HOME REALM_EXPECTED_TARGET_DIR \
+export REALM_EXPECTED_SOURCE REALM_EXPECTED_CARGO_HOME REALM_EXPECTED_CARGO_CONFIG REALM_EXPECTED_TARGET_DIR \
     REALM_EXPECTED_PACKAGE_ROOT
 accepts_offline_cargo RPM run_rpm "$tmp/rpm-valid" \
     "$tmp/rpm-valid.log" "$tmp/rpm-valid.out"
