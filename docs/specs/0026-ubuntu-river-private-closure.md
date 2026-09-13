@@ -50,8 +50,8 @@ libxkbcommon source; Noble's Meson 1.3.2 is insufficient.
 | wlroots | 0.20.2 | `https://gitlab.freedesktop.org/wlroots/wlroots/-/archive/0.20.2/wlroots-0.20.2.tar.gz` | `972c7ac44b17828f4702bfae7cd8347346a3fb5b2c1076cfa2c3fcedac5ec343` | private compositor runtime |
 | River | tag `v0.4.8`, commit `c4b5f706314555f4846e25b8d3635631387b3fdd` | `https://codeberg.org/river/river/releases/download/v0.4.8/river-0.4.8.tar.gz` | `6d4030526e307e40de357167b4d6daacb583aed353dd93e32e1314c2d34400fa` | selected compositor |
 
-River's exact Zig package-manager inputs come from the selected release's
-`build.zig.zon` and are also explicit manifest records:
+River's five direct Zig package-manager inputs come from the selected release's
+`build.zig.zon` and are explicit manifest records:
 
 | Package | Acquisition URL | Zig content hash |
 |---|---|---|
@@ -60,6 +60,17 @@ River's exact Zig package-manager inputs come from the selected release's
 | wlroots | `https://codeberg.org/ifreund/zig-wlroots/archive/v0.20.1.tar.gz` | `wlroots-0.20.1-jmOlcqNVBAB3uB5oqBTzpRlwu-FmMyyZMVAWCe5kmcSt` |
 | xkbcommon | `https://codeberg.org/ifreund/zig-xkbcommon/archive/v0.4.0.tar.gz` | `xkbcommon-0.4.0-VDqIe0i2AgDRsok2GpMFYJ8SVhQS10_PI2M_CnHXsJJZ` |
 | translate-c | `git+https://codeberg.org/ziglang/translate-c/#57c559cf581b1fcad90494eda219f98abeb155ce` | `translate_c-0.0.0-Q_BUWlX1BgCD1wo6uo97prlp9VJ4gxAjwN_vZ7nsSjGN` |
+
+Their pinned `build.zig.zon` files add two transitive records. translate-c
+selects Aro, and zig-wlroots 0.20.1 selects zig-xkbcommon 0.3.0 in addition to
+River's direct 0.4.0 selection. Both transitive packages declare an empty
+dependency set, so these seven records are the complete recursive Zig package
+graph:
+
+| Package role | Acquisition URL | Zig content hash |
+|---|---|---|
+| translate-c → aro | `git+https://github.com/Vexu/arocc#5f5a050569a95ecc40a426f0c3666ae7ef987ede` | `aro-0.0.0-JSD1Qi7QNgDnfcrdEJf82v3o6MhZySjYVrtdfEf3E4Se` |
+| zig-wlroots → xkbcommon 0.3.0 | `https://codeberg.org/ifreund/zig-xkbcommon/archive/v0.3.0.tar.gz` | `xkbcommon-0.3.0-VDqIe3K9AQB2fG5ZeRcMC9i7kfrp5m2rWgLrmdNn9azr` |
 
 The validator rejects an absent or extra selected input, duplicate identity,
 an archive URL that is not HTTPS, a Zig dependency URL that is neither HTTPS
@@ -101,8 +112,8 @@ The private source set is required because Noble remains below these floors:
    project-local `zig-pkg/` directory. Acquisition therefore creates one
    dedicated cache-local fetch root containing only a minimal `build.zig`, runs
    `zig fetch --global-cache-dir <cache>/zig-global` from that root once for
-   each of the five declared Zig URLs, and requires each returned content hash
-   to equal the manifest. The resulting
+   each of the seven declared direct and transitive Zig URLs, and requires each
+   returned content hash to equal the manifest. The resulting
    `<cache>/zig-fetch-root/zig-pkg/<hash>` directories are the only Zig package
    inputs admitted to compilation; the global cache is not treated as the
    unpacked package authority.
