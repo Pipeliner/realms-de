@@ -20,7 +20,9 @@
   shellcheck =
     pkgs.runCommand "realm-shellcheck" { nativeBuildInputs = [ pkgs.shellcheck ]; }
       ''
-        shellcheck --shell=bash ${src + "/packaging/session/realm-session"}
+        shellcheck --shell=bash \
+          ${src + "/packaging/session/realm-session"} \
+          ${src + "/packaging/session/test-runtime-dir-mode.sh"}
         shellcheck --shell=sh \
           ${src + "/packaging/check-font-policy.sh"} \
           ${src + "/packaging/font-policy-test.sh"} \
@@ -35,6 +37,7 @@
           ${src + "/docs/test-github-body-safety.sh"} \
           ${src + "/packaging/debian/toolchain-path.sh"} \
           ${src + "/packaging/debian/test-toolchain-path.sh"}
+        bash ${src + "/packaging/session/test-runtime-dir-mode.sh"}
         touch $out
       '';
 
