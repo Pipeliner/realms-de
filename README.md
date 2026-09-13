@@ -8,18 +8,29 @@
 <p align="center">
   <a href="https://github.com/Pipeliner/realms-de/actions"><img alt="ci" src="https://img.shields.io/github/actions/workflow/status/Pipeliner/realms-de/ci.yml?label=ci&style=flat-square&labelColor=0a0c15&color=7fd4c1"></a>
   <a href="#licence"><img alt="licence: MIT OR Apache-2.0" src="https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-a692ec?style=flat-square&labelColor=0a0c15"></a>
-  <a href="Cargo.toml"><img alt="MSRV 1.85" src="https://img.shields.io/badge/msrv-1.85-d9b06a?style=flat-square&labelColor=0a0c15"></a>
+  <a href="Cargo.toml"><img alt="MSRV 1.89" src="https://img.shields.io/badge/msrv-1.89-d9b06a?style=flat-square&labelColor=0a0c15"></a>
   <a href="docs/ROADMAP.md"><img alt="status: pre-alpha, milestone M0" src="https://img.shields.io/badge/status-pre--alpha%20(M0)-a3bff2?style=flat-square&labelColor=0a0c15"></a>
 </p>
 
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="Concept rendering, not a screenshot. The intended realm desktop: a 32-pixel bar carrying six runic orbits, a layout indicator, a mode badge and a clock; below it a gapless triptych of five panes — odin, thoth, hermes, horus and urania — separated by one-pixel violet seams; a which-key strip along the bottom." width="100%">
+  <img src="docs/assets/realm-tiled-desktop.png" alt="Real screenshot of the installed Realm session in the NixOS QEMU VM: three foot windows tiled by River beneath the Realm bar, with the which-key strip visible." width="100%">
 </p>
 
 <p align="center">
-  <sub><strong>Concept rendering — not a screenshot.</strong> No part of this image was produced by running realm;
-  it is hand-drawn SVG to the same measurements the compositor will use.<br>
-  It will be replaced by a real screen capture once there is something to capture. See <a href="#status">Status</a>.</sub>
+  <sub><strong>Installed Realm in the reference NixOS QEMU VM.</strong> River 0.4.8 at the actual
+  1280×800 framebuffer, with three real foot windows, the bar and which-key visible.<br>
+  See the <a href="docs/assets/capture-review.md">visual review and dimension correction</a> and
+  <a href="docs/assets/capture-provenance.json">original provenance</a>. This is VM evidence,
+  not physical-hardware or final-theme evidence.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/assets/realm-grimoire.png" alt="Real screenshot from the same installed Realm VM session, with three managed foot windows and the grimoire opened through a River keybinding." width="100%">
+</p>
+
+<p align="center">
+  <sub>The same session with the grimoire open through a real keybinding. The unthemed foot
+  windows, numeric orbit labels and ASCII glyph fallbacks are visible rather than hidden.</sub>
 </p>
 
 ---
@@ -105,7 +116,7 @@ The long form, with the component map and the decision register, is in
 
 ## Status
 
-**Pre-alpha. Milestone M0 is in progress. There is no desktop environment here yet.**
+**Pre-alpha. Milestone M0 is in progress. The installed NixOS package now runs a graphical Realm session in the reference VM; this is not M3 or hardware readiness.**
 
 What exists, honestly:
 
@@ -115,11 +126,11 @@ What exists, honestly:
 | Architecture, MVP cut line, failure register | **Written.** [ARCHITECTURE](docs/ARCHITECTURE.md) · [MVP](docs/MVP.md) · [PITFALLS](docs/PITFALLS.md) |
 | Specs and ADRs | **In progress.** [`docs/specs/`](docs/specs/) · [`docs/adr/`](docs/adr/) |
 | `realm-theme` and `realmctl theme` | **Implemented and tested pre-alpha surface.** The library renders and validates sealed generations; `realmctl theme apply`, `theme lint`, and `theme diff` expose it. |
-| `realm-session` | **Daemon and real River adapter implemented; live compositor verification pending.** The `realm-wm` binary owns recovery, control, timers, persistence, worker effects, and exact Quit shutdown; contract and real-socket fixtures pass, while installed headless-River proof is still pending. |
-| `realm-bar` | **Implemented with contract tests. Live compositor verification pending.** Layer-shell bar, which-key, and grimoire consume live session state; integrated desktop captures are still pending. |
+| `realm-session` | **Daemon and real River adapter verified in the installed NixOS QEMU VM.** The display-manager session reaches live River 0.4.8; the packaged `realm-wm` manages three ordinary Wayland windows, serves control state, and completes exact Quit shutdown. Contract and real-socket fixtures also pass. |
+| `realm-bar` | **Implemented and verified in the installed NixOS QEMU VM.** The packaged layer-shell bar consumes live session state; the captures show its orbit state, which-key strip, and grimoire reached through a real keybinding. |
 | `realm-hecate`, `realm-odin`, `realm-compositor` | **Planned, post-MVP.** The MVP uses themed external clients and River. |
-| Package/session/portal assets | **Tracked pre-alpha contract.** The repository contains a session entry and wrapper, systemd units, portal configuration, Nix module and native package definitions; none creates a usable Realm desktop yet. |
-| Every image in this repository | **Concept art.** Hand-drawn SVG and the design handoff's HTML prototypes. There are no screenshots of realm, because realm does not run yet. |
+| Package/session/portal assets | **Tracked pre-alpha contract; installed NixOS reference path verified in a VM.** Its session entry, wrapper, systemd units and Nix module produce the captured desktop. Physical-hardware, native-package installation, and functional portal verification remain pending. |
+| Images | **Two real VM screenshots, plus design assets.** The PNGs above are unchanged compositor-framebuffer captures; the hand-drawn SVGs and design handoff's HTML prototypes remain diagrams and concepts. |
 
 Crates join the Cargo workspace only when they gain a real implementation, so a
 fresh clone always builds. If a crate is not in
@@ -130,10 +141,12 @@ is in [docs/ROADMAP.md](docs/ROADMAP.md). **M3 is the MVP.**
 
 ## Try it
 
-You should not treat realm as log-in ready yet. The daemon and bar now exist,
-but their combined installed headless-River verification and real desktop
-captures are still pending. `cargo test` exercises the implemented pre-alpha
-libraries and real local socket fixtures, not a proven packaged desktop.
+You should not treat realm as log-in ready on physical hardware yet. The
+installed NixOS package has completed an automated display-manager login and
+graphical River session in the reference QEMU VM. That does not prove native
+package installation, portals, final application theming or hardware support.
+`cargo test` exercises the implemented pre-alpha libraries and real local
+socket fixtures; the packaged graphical proof is the NixOS VM check.
 
 ```console
 $ git clone https://github.com/Pipeliner/realms-de
@@ -196,7 +209,7 @@ realms-de/
 │  ├─ PITFALLS.md       the failure register, with the guard for each
 │  ├─ specs/            what each component must do, before it does it
 │  ├─ adr/              decisions, with alternatives and reversal costs
-│  └─ assets/           the diagrams on this page
+│  └─ assets/           the screenshots, provenance and diagrams on this page
 ├─ design/              the design handoff and prototypes, for provenance
 ├─ .claude/             operational memory, skills, the agentic loop
 └─ palette.toml         the one place a colour is written down
@@ -260,8 +273,9 @@ review. That is worth stating plainly rather than leaving to be inferred:
   tested, it names the test. Where something does not exist, it says so. If you
   find a claim that cannot be checked against the repository, that is a bug —
   please file it.
-- **Nothing here has run on real hardware.** No maintainer has logged into realm,
-  because there is not yet a session to log into.
+- **Nothing here has run on physical hardware yet.** An installed graphical
+  Realm session has run in the reference NixOS QEMU VM; no maintainer has yet
+  logged into it on physical hardware.
 
 ## Credits
 
