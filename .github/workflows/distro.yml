@@ -77,7 +77,8 @@ jobs:
             rustc-1.89 \
             xkb-data \
             xwayland \
-            xz-utils
+            xz-utils \
+            zstd
       - name: Validate and acquire pinned closure sources
         run: |
           set -euo pipefail
@@ -97,14 +98,14 @@ jobs:
             "$RUNNER_TEMP/realm-river-cache" \
             "$RUNNER_TEMP/realm-river-0.4.8"
           cd "$RUNNER_TEMP/realm-river-0.4.8"
-          dpkg-buildpackage -us -uc -b -d
+          dpkg-buildpackage -us -uc -b
           "$GITHUB_WORKSPACE/packaging/river/check-noble-river-package.py" \
             "$RUNNER_TEMP/realm-river_0.4.8-1_amd64.deb"
           cd "$GITHUB_WORKSPACE"
           packaging/tool-sources/build-native-source-kits.sh \
             "$RUNNER_TEMP/realm-native-kits"
           cd "$RUNNER_TEMP/realm-native-kits/realm-debian-0.1.0"
-          dpkg-buildpackage -us -uc -b -d
+          dpkg-buildpackage -us -uc -b
           test -f "$RUNNER_TEMP/realm-native-kits/realm_0.1.0_amd64.deb"
       - name: Clean-install Realm with its private River
         run: |

@@ -6,6 +6,7 @@ checker="$repo_root/packaging/river/check-noble-river-package.py"
 control="$repo_root/packaging/debian-river/control"
 rules="$repo_root/packaging/debian-river/rules"
 realm_control="$repo_root/packaging/debian/control"
+workflow="$repo_root/.github/workflows/distro.yml"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -33,6 +34,16 @@ grep -F 'realm-river (>= 0.4.8) | river (>= 0.4.0),' "$realm_control" >/dev/null
     echo 'Realm control does not require the selected private River version' >&2
     exit 1
 }
+river_job=$(sed -n '/^  ubuntu-river-debian:/,/^  ubuntu-debian-package:/p' "$workflow")
+printf '%s\n' "$river_job" | grep -Fx '            zstd' >/dev/null || {
+    echo 'Noble River package job omits the Realm zstd build dependency' >&2
+    exit 1
+}
+if printf '%s\n' "$river_job" | \
+    grep -F 'dpkg-buildpackage -us -uc -b -d' >/dev/null; then
+    echo 'Noble River package job bypasses declared build dependency validation' >&2
+    exit 1
+fi
 
 make_package() {
     local root=$1 package=$2
