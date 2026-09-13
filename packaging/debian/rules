@@ -123,12 +123,11 @@ override_dh_auto_test:
 	cargo test --release --frozen --offline --locked --workspace \
 		--exclude realm-agent-sdd; \
 	./packaging/tool-sources/test-tool-configs.sh; \
-	runtime_path="$${REALM_RUNTIME_PATH:-$$PATH}"; \
 	env -u CARGO_HOME -u CARGO_TARGET_DIR -u CARGO_INCREMENTAL \
 		-u CARGO_PROFILE_RELEASE_DEBUG -u RUSTC -u RUSTC_WRAPPER \
 		-u RUSTC_WORKSPACE_WRAPPER -u CARGO_BUILD_RUSTC \
 		-u CARGO_BUILD_RUSTC_WRAPPER -u CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER \
-		-u REALM_SENTINEL_LOG PATH="$$runtime_path" \
+		-u REALM_SENTINEL_LOG PATH="/usr/bin:/bin" \
 		python3 "$(TOOL_RUNTIME)" \
 		"$(CARGO_TARGET_DIR)/release/realmctl" \
 		"$(YAZI_TARGET)/release/yazi" "$(YAZI_TARGET)/release/ya" \

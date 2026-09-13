@@ -181,7 +181,6 @@ run_debian() {
         REALM_REAL_CARGO="$real_cargo" \
         REALM_REAL_RUSTC="$real_rustc" \
         REALM_RUST_VERSIONED_ROOT="$versioned_root" \
-        REALM_RUNTIME_PATH=/usr/bin:/bin \
         RUSTC="$real_rustc" \
         RUSTC_WRAPPER= \
         RUSTC_WORKSPACE_WRAPPER= \
@@ -258,7 +257,6 @@ run_rpm() {
         REALM_SENTINEL_LOG="$log" \
         REALM_REAL_CARGO="$real_cargo" \
         REALM_REAL_RUSTC="$real_rustc" \
-        REALM_RUNTIME_PATH=/usr/bin:/bin \
         RUSTC="$real_rustc" \
         RUSTC_WRAPPER= \
         RUSTC_WORKSPACE_WRAPPER= \
