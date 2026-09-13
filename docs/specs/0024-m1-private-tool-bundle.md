@@ -195,7 +195,9 @@ elevates that fixture, it SHALL first stage a complete Rust toolchain in a
 directory readable, traversable, and executable by the elevated process, and
 preflight-execute that staged Cargo and rustc. Staging may copy the real
 toolchain solely to make it accessible; it SHALL NOT replace either executable
-with a shim.
+with a shim. The CI step that invokes the network-isolated native fixture SHALL
+have a bounded job-step timeout and SHALL fail closed when the fixture exceeds
+it; an indefinitely hung isolation check is not verification evidence.
 
 The Debian recipe's production resolver SHALL continue to select its complete
 versioned Cargo/rustc pair below `/usr/lib/rust-1.[89][0-9]/bin`.  The native

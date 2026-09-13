@@ -196,6 +196,7 @@ jobs:
             "$native_toolchain/bin/rustc" --version
           printf 'path=%s\n' "$native_toolchain" >> "$GITHUB_OUTPUT"
       - name: Check network-isolated native package paths
+        timeout-minutes: 15
         run: |
           sudo env \
             REALM_NATIVE_TMPDIR="${{ steps.native-temp.outputs.path }}" \
