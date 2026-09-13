@@ -84,6 +84,8 @@ for path in \
     crates/realm-session/Cargo.toml \
     crates/realm-session/src/lib.rs \
     crates/realm-session/src/backend.rs \
+    crates/realm-session/src/runtime.rs \
+    crates/realm-session/src/bin/realm-wm.rs \
     crates/realm-bar/Cargo.toml \
     crates/realm-bar/src/main.rs \
     crates/realm-bar/tests/render_contract.rs \
@@ -108,18 +110,11 @@ grep -F -q -e 'pub trait WmBackend' "$root/crates/realm-session/src/backend.rs" 
 
 require_section "$status_section" "${markdown_tick}realmctl theme${markdown_tick}" \
     'README status must name the implemented realmctl theme surface'
-require_section "$status_section" "${markdown_tick}WmBackend${markdown_tick} contract" \
-    'README status must distinguish the implemented backend seam from the missing daemon'
+require_section "$status_section" 'Daemon and real River adapter implemented; live compositor verification pending' \
+    'README must distinguish implemented realm-wm from pending live verification'
 
 require_section "$status_section" 'Live compositor verification pending' \
     'README must distinguish implemented bar from pending live verification'
-if find "$root/crates" -type f -path '*/src/bin/realm-wm.rs' -print -quit | grep -q .; then
-    fail 'README must not say realm-wm is absent after its binary lands'
-fi
-if grep -F -q -e 'name = "realm-wm"' "$root/crates/realm-session/Cargo.toml"; then
-    fail 'README must not say realm-wm is absent after its binary target lands'
-fi
-
 while IFS='|' read -r path map_name; do
     [ -n "$path" ] || continue
     [ -e "$root/$path" ] || fail "README repository-map path is missing: $path"

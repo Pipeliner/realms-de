@@ -24,12 +24,9 @@
 # it. river is pinned and carried in realm's runtime closure — see
 # packaging/nix/support.nix for the version guard and the pinning decision.
 #
-# PRE-ALPHA (0.1.0). Desktop binaries remain pending, but the Cargo workspace
-# already installs the metadata-only local validator as realm-sdd. The package's
-# real, testable contents today are that validator, the session wrapper, the
-# wayland-session entry, the systemd user units and the palette. realm-bar,
-# realm-wm and realm land in M1–M2 and will appear in $out/bin without any
-# change to this file.
+# PRE-ALPHA (0.1.0). The Cargo workspace builds realm-wm and realm-bar alongside
+# the command-line and validation tools. Their installed live-session proof is
+# still pending; source presence is not treated as a usable desktop claim.
 {
   description = "realm — a keyboard-first, gapless-tiling Wayland desktop environment";
 
@@ -75,6 +72,15 @@
           inherit pkgs support;
           src = self;
         };
+
+      vmControlHelper =
+        pkgs:
+        import ./packaging/nix/vm-control-helper.nix {
+          inherit pkgs lib support;
+          src = self;
+        };
+
+      sourceRevision = self.rev or self.dirtyRev or "unknown";
 
       nixosModule = import ./packaging/nix/nixos-module.nix { inherit self support; };
       homeManagerModule = import ./packaging/nix/home-manager-module.nix { inherit self support; };
@@ -157,10 +163,11 @@
       checks = forAllSystems (
         pkgs:
         import ./packaging/nix/checks.nix {
-          inherit pkgs lib nixosModule;
+          inherit pkgs lib nixosModule sourceRevision;
           src = self;
           realm = realmPackage pkgs;
           desktopAdmissionVmTest = desktopAdmissionVmTest pkgs;
+          vmControlHelper = vmControlHelper pkgs;
         }
       );
 

@@ -2,11 +2,20 @@ use std::{
     ffi::OsString,
     path::{Path, PathBuf},
     process::ExitCode,
+    str::FromStr,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
 };
 
 use clap::{error::ErrorKind, Args, Parser, Subcommand};
 use realm_core::Palette;
 use realm_theme::{generation::GenerationPublicationOutcome, ThemeOutputChange};
+use wayland_client::{
+    globals::{registry_queue_init, GlobalListContents},
+    protocol::wl_registry,
+    Connection, Dispatch, QueueHandle,
+};
 
 #[allow(dead_code)]
 mod retry;
@@ -21,6 +30,32 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Theme(Theme),
+    WaitDisplay(WaitDisplayArgs),
+}
+
+#[derive(Args)]
+struct WaitDisplayArgs {
+    #[arg(long)]
+    timeout: PositiveSeconds,
+}
+
+#[derive(Clone, Copy)]
+struct PositiveSeconds(Duration);
+
+impl FromStr for PositiveSeconds {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let seconds = value
+            .parse::<f64>()
+            .map_err(|_| "timeout must be a finite positive number of seconds".to_owned())?;
+        if !seconds.is_finite() || seconds <= 0.0 {
+            return Err("timeout must be a finite positive number of seconds".to_owned());
+        }
+        Duration::try_from_secs_f64(seconds)
+            .map(Self)
+            .map_err(|_| "timeout is outside the supported duration range".to_owned())
+    }
 }
 
 #[derive(Args)]
@@ -91,6 +126,7 @@ where
     };
 
     match cli.command {
+        Command::WaitDisplay(args) => run_wait_display(args, env),
         Command::Theme(Theme {
             command: ThemeCommand::Apply(args),
         }) => {
@@ -134,6 +170,76 @@ where
             }
         }
     }
+}
+
+struct DisplayProbe;
+
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for DisplayProbe {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_registry::WlRegistry,
+        _event: wl_registry::Event,
+        _data: &GlobalListContents,
+        _connection: &Connection,
+        _queue_handle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+fn run_wait_display(args: WaitDisplayArgs, env: &impl Env) -> ExitCode {
+    match wait_display(env, args.timeout.0) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => failure(&format!("wait-display: {error}")),
+    }
+}
+
+fn wait_display(env: &impl Env, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| "timeout is outside the supported monotonic range".to_owned())?;
+    let socket = display_socket(env)?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = sender.send(probe_display(socket));
+    });
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    match receiver.recv_timeout(remaining) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            Err(format!("Wayland round trip timed out after {timeout:?}"))
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("Wayland probe terminated without a result".to_owned())
+        }
+    }
+}
+
+fn display_socket(env: &impl Env) -> Result<PathBuf, String> {
+    let display = env
+        .var_os("WAYLAND_DISPLAY")
+        .ok_or_else(|| "WAYLAND_DISPLAY is unset".to_owned())?;
+    let display = PathBuf::from(display);
+    let socket = if display.is_absolute() {
+        display
+    } else {
+        let runtime = env
+            .var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .ok_or_else(|| "XDG_RUNTIME_DIR is unset or not absolute".to_owned())?;
+        runtime.join(display)
+    };
+    Ok(socket)
+}
+
+fn probe_display(socket: PathBuf) -> Result<(), String> {
+    let stream = std::os::unix::net::UnixStream::connect(&socket)
+        .map_err(|error| format!("connect {}: {error}", socket.display()))?;
+    let connection = Connection::from_socket(stream)
+        .map_err(|error| format!("initialize Wayland connection: {error}"))?;
+    registry_queue_init::<DisplayProbe>(&connection)
+        .map_err(|error| format!("Wayland registry round trip: {error}"))?;
+    Ok(())
 }
 
 fn run_apply(root: &Path) -> ExitCode {

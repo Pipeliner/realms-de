@@ -46,11 +46,10 @@ river's window manager, driving it over `river-window-management-v1` (ADR 0013).
 Two consequences you will meet immediately:
 
 - **river 0.4 does no window management on its own.** Until `realm-wm` attaches,
-  river places nothing — and serves no layer shell, so a bar would map nothing
-  even if it were running. Today `realm-wm` does not exist, so a login applies the
-  environment contract, finds no window manager, logs `FATAL WM-ABORT` and hands
-  you back to the display manager. That is the expected state of 0.1.0, not a bug
-  to report.
+  river places nothing — and serves no layer shell, so the bar maps nothing.
+  The daemon now exists, but its installed headless-River verification remains
+  pending; a failed unit must still return the login rather than leave an inert
+  compositor.
 - **`river-window-management-v1` is declared *stable* as of river 0.4.0**, with
   a forward-compatibility pledge to 1.0.0. The residual risk is not a protocol
   classification but trust in a single maintainer of a pre-1.0 project. realm
@@ -428,9 +427,10 @@ tail -20 ~/.local/state/realm/session.log
 ```
 
 Look for `FATAL WM-ABORT: river is running but realm is not managing it`. river
-0.4 does no window management by itself; `realm-wm` does, and it does not exist
-until M2. The entry refuses to leave you on an inert compositor because, with no
-layer shell, realm cannot draw an explanation onto it.
+0.4 does no window management by itself; `realm-wm` does. The entry refuses to
+leave you on an inert compositor because, with no layer shell, realm cannot draw
+an explanation onto it. Check `systemctl --user status realm-wm.service` for the
+daemon's concrete startup error.
 
 `REALM_ALLOW_NO_WM=1` keeps river running without a window manager — useful for
 poking at the compositor, not a desktop. Once M2 lands, the same abort means the

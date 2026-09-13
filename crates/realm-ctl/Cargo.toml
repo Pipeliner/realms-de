@@ -1,6 +1,6 @@
 [package]
 name = "realm-ctl"
-description = "Command-line interface for Realm theme generation operations."
+description = "Command-line interface for Realm desktop control and theme generation."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,7 @@ realm-core = { workspace = true }
 realm-control = { workspace = true }
 realm-theme = { path = "../realm-theme", version = "0.1.0" }
 serde_json = { workspace = true }
+wayland-client = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

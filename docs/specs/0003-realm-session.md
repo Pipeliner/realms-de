@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (2026-09-10; control-transport and nonblocking backend
   transaction corrections 2026-09-11; Task 3 MVP fail-closed, provenance, and
-  evidence-ownership corrections 2026-09-12)
+  evidence-ownership corrections 2026-09-12; bounded Wayland transport API
+  clarification 2026-09-12)
 - **Milestone:** M2
 - **Issues:** [#36](https://github.com/Pipeliner/realms-de/issues/36),
   [#38](https://github.com/Pipeliner/realms-de/issues/38),
@@ -506,6 +507,20 @@ most once; repeated close derivations collapse to one edge and a close after a
 WindowClosed fact emits none, so closes are bounded by the same envelope. ADR
 0021 and A40-A41 make both raw I/O and the complete normalized transaction
 mechanically finite.
+
+The private pinned Rust Wayland backend adaptation exposes only the primitives
+needed to enforce that schedule: an exclusive `prepare_read_bounded` guard
+whose consuming `read_once` performs one `recvmsg`, `dispatch_one_pending`
+which parses and handles at most one already-admitted protocol message without
+reading the socket, and `flush_once` which performs at most one `sendmsg`.
+Their result values distinguish read-needed, progress/complete, and
+`WouldBlock` without an internal retry. Dropping the exclusive guard cancels
+it; a second preparation and protocol dispatch are refused while it is live.
+The adaptation remains in the pinned `wayland-backend` parser, object map, and
+`ObjectData` callback path; it does not introduce another wire decoder or use
+`wayland-client`'s stock drain-all event-queue APIs. River's future backend
+owns that guard across poll and calls these primitives according to ADR 0021's
+phase priority.
 
 An external desired action that changes required response state, a dirty
 projection-equal action, or a close request stages private intent, reserves its

@@ -14,9 +14,13 @@ realm-control = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+rustix = { workspace = true, features = ["time"] }
+jiff = "0.2"
 bitflags = "=2.13.1"
 wayland-client = "=0.31.15"
+wayland-backend = "=0.3.17"
 wayland-scanner = "=0.31.11"
 
 [dev-dependencies]
 trybuild = "=1.0.119"
+wayland-backend = { version = "=0.3.17", features = ["realm_test"] }

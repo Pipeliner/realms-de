@@ -115,7 +115,7 @@ What exists, honestly:
 | Architecture, MVP cut line, failure register | **Written.** [ARCHITECTURE](docs/ARCHITECTURE.md) · [MVP](docs/MVP.md) · [PITFALLS](docs/PITFALLS.md) |
 | Specs and ADRs | **In progress.** [`docs/specs/`](docs/specs/) · [`docs/adr/`](docs/adr/) |
 | `realm-theme` and `realmctl theme` | **Implemented and tested pre-alpha surface.** The library renders and validates sealed generations; `realmctl theme apply`, `theme lint`, and `theme diff` expose it. |
-| `realm-session` | **Backend seam implemented and tested.** Its `WmBackend` contract and capability wire type exist; the `realm-wm` daemon binary and dispatch loop do not. |
+| `realm-session` | **Daemon and real River adapter implemented; live compositor verification pending.** The `realm-wm` binary owns recovery, control, timers, persistence, worker effects, and exact Quit shutdown; contract and real-socket fixtures pass, while installed headless-River proof is still pending. |
 | `realm-bar` | **Implemented with contract tests. Live compositor verification pending.** Layer-shell bar, which-key, and grimoire consume live session state; integrated desktop captures are still pending. |
 | `realm-hecate`, `realm-odin`, `realm-compositor` | **Planned, post-MVP.** The MVP uses themed external clients and River. |
 | Package/session/portal assets | **Tracked pre-alpha contract.** The repository contains a session entry and wrapper, systemd units, portal configuration, Nix module and native package definitions; none creates a usable Realm desktop yet. |
@@ -130,10 +130,10 @@ is in [docs/ROADMAP.md](docs/ROADMAP.md). **M3 is the MVP.**
 
 ## Try it
 
-You cannot log into realm yet. A tracked session entry intentionally aborts
-because `realm-wm` is not implemented; the bar is also absent, so the
-package/session assets are not a usable desktop. `cargo test` exercises the
-implemented pre-alpha libraries, not a running desktop.
+You should not treat realm as log-in ready yet. The daemon and bar now exist,
+but their combined installed headless-River verification and real desktop
+captures are still pending. `cargo test` exercises the implemented pre-alpha
+libraries and real local socket fixtures, not a proven packaged desktop.
 
 ```console
 $ git clone https://github.com/Pipeliner/realms-de

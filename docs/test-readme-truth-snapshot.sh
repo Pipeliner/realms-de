@@ -32,7 +32,7 @@ make_fixture() {
         "$fixture_root/configs/templates" \
         "$fixture_root/crates/realm-theme/src" \
         "$fixture_root/crates/realm-ctl/src" \
-        "$fixture_root/crates/realm-session/src" \
+        "$fixture_root/crates/realm-session/src/bin" \
         "$fixture_root/crates/realm-bar/src" \
         "$fixture_root/crates/realm-bar/tests"
     cp "$repo_root/README.md" "$fixture_root/README.md"
@@ -50,6 +50,8 @@ make_fixture() {
     printf '%s\n' 'enum ThemeCommand {}' >"$fixture_root/crates/realm-ctl/src/main.rs"
     : >"$fixture_root/crates/realm-session/Cargo.toml"
     : >"$fixture_root/crates/realm-session/src/lib.rs"
+    : >"$fixture_root/crates/realm-session/src/runtime.rs"
+    : >"$fixture_root/crates/realm-session/src/bin/realm-wm.rs"
     : >"$fixture_root/crates/realm-bar/Cargo.toml"
     : >"$fixture_root/crates/realm-bar/src/main.rs"
     : >"$fixture_root/crates/realm-bar/tests/render_contract.rs"
@@ -211,10 +213,17 @@ rm "$fixture_root/crates/realm-ctl/src/main.rs"
 expect_fail missing-realmctl "$fixture_root" \
     'README truth snapshot artifact is missing: crates/realm-ctl/src/main.rs'
 
-fixture_root=$(make_fixture implemented-wm-binary)
-mkdir -p "$fixture_root/crates/realm-session/src/bin"
-: >"$fixture_root/crates/realm-session/src/bin/realm-wm.rs"
-expect_fail implemented-wm-binary "$fixture_root" 'README must not say realm-wm is absent after its binary lands'
+fixture_root=$(make_fixture missing-wm-binary)
+rm "$fixture_root/crates/realm-session/src/bin/realm-wm.rs"
+expect_fail missing-wm-binary "$fixture_root" \
+    'README truth snapshot artifact is missing: crates/realm-session/src/bin/realm-wm.rs'
+
+fixture_root=$(make_fixture stale-wm-status)
+sed '/Daemon and real River adapter implemented; live compositor verification pending/d' \
+    "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail stale-wm-status "$fixture_root" \
+    'README must distinguish implemented realm-wm from pending live verification'
 
 fixture_root=$(make_fixture missing-nix-module)
 rm "$fixture_root/packaging/nix/nixos-module.nix"
