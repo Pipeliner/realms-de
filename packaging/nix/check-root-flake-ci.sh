@@ -61,4 +61,9 @@ if ! grep -F -q -e 'realm-session-boots/realmctl-doctor.json' "$workflow"; then
     fail 'live VM artifact must retain realmctl doctor JSON'
 fi
 
+if grep -F -q -e 're.sub(' "$checks" \
+    && ! grep -E -q -e '^[[:space:]]+import re$' "$checks"; then
+    fail 'Nix VM prompt proof must import its regular-expression dependency'
+fi
+
 echo 'root-flake CI contract: pass'
