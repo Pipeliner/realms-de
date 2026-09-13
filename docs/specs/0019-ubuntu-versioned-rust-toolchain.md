@@ -1,6 +1,6 @@
 # SPEC 0019 — Ubuntu versioned Rust toolchain guard
 
-- **Status:** Accepted (2026-08-30; amended 2026-09-01)
+- **Status:** Accepted (2026-08-30; amended 2026-09-01 and 2026-09-13)
 - **Milestone:** M3
 - **Issue:** [#104](https://github.com/Pipeliner/realms-de/issues/104)
 - **Decisions:** [ADR 0010](../adr/0010-nix-flake-as-reference-build.md), [SPEC 0009](0009-fedora-44-pre-alpha-baseline.md)
@@ -15,8 +15,9 @@ it must never silently fall back to an unrelated `cargo` on `PATH`.
 ## Scope
 
 **In:** deterministic discovery of a complete Ubuntu versioned Rust toolchain,
-an actionable missing-toolchain error, a focused resolver test, and a clean
-Ubuntu 24.04 CI lane that builds the Debian package.
+an actionable missing-toolchain error, reconciliation with the workspace's
+existing Rust 1.89 floor, a focused resolver test, and a clean Ubuntu 24.04 CI
+lane that builds the Debian package.
 
 **Out:** selecting a Rust release for the project, changing the MSRV, vendoring
 dependencies, or solving the separate River/wlroots packaging decision.
@@ -29,8 +30,11 @@ dependencies, or solving the separate River/wlroots packaging decision.
 2. `packaging/debian/rules` obtains that resolver result before the build and
    prepends it to `PATH`. If no complete candidate exists, Make stops before
    compilation with an error naming `/usr/lib/rust-1.[89][0-9]/bin`.
-3. The existing Rust version guard remains the final assertion that the chosen
-   compiler meets MSRV 1.85 before Cargo compiles the workspace.
+3. The Rust version guard is the final assertion that the chosen compiler meets
+   the workspace's Rust 1.89 floor before Cargo compiles the workspace. Ubuntu
+   Noble Updates provides `rustc-1.89` and `cargo-1.89` version
+   `1.89.0+dfsg~24.04-0ubuntu0.24.04.2`, verified against Ubuntu's package index
+   on 2026-09-13.
 4. Distro CI installs the Ubuntu 24.04 versioned toolchain and Debian build
    prerequisites, constructs the retained-only Debian source kit governed by
    SPEC 0024, and builds the `.deb` from that kit. The kit contains packaging
@@ -44,7 +48,7 @@ dependencies, or solving the separate River/wlroots packaging decision.
 | A1 | Given a fixture root containing complete versioned Rust toolchains, when the resolver runs, then it emits the newest matching `/usr/lib/rust-X.Y/bin` path. | `packaging/debian/test-toolchain-path.sh` — `newest-complete-toolchain` |
 | A2 | Given a fixture root without a complete versioned toolchain, when the resolver runs, then it fails and names `/usr/lib/rust-1.[89][0-9]/bin`. | `packaging/debian/test-toolchain-path.sh` — `missing-toolchain` |
 | A3 | Given Debian rules with no resolver result, when Make evaluates them, then it fails before the Cargo build and names the expected versioned path glob. | `packaging/debian/test-toolchain-path.sh` — `rules-missing-toolchain` |
-| A4 | Given the Ubuntu 24.04 distro lane, when it runs, then it installs `cargo-1.85` and `rustc-1.85`, constructs the retained-only Debian source kit, and completes `dpkg-buildpackage -us -uc -b -d` from that kit. | `.github/workflows/distro.yml` — `ubuntu-debian-package`; `packaging/tool-sources/test-native-source-kits.sh` |
+| A4 | Given the Ubuntu 24.04 distro lane, when it runs, then it installs `cargo-1.89` and `rustc-1.89`, constructs the retained-only Debian source kit, and completes `dpkg-buildpackage -us -uc -b -d` from that kit. | `.github/workflows/distro.yml` — `ubuntu-debian-package`; `packaging/tool-sources/test-native-source-kits.sh` |
 
 ## Failure modes
 

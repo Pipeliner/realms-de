@@ -4,8 +4,8 @@ realm (0.1.0) UNRELEASED; urgency=medium
     wayland-session entry, the session entry script implementing the ADR 0011 /
     SPEC 0005 environment handshake, the systemd user units with their
     realm-session.target.wants symlinks, the portal policy and palette.toml.
-  * No realm binaries are packaged: realm-wm, realm-bar and realmctl do not exist
-    yet (M1-M2). debian/rules installs them automatically once they do.
+  * Requires and packages realmctl, realm-wm and realm-bar from the retained
+    Realm workspace authority; a missing binary fails the package build.
   * Depends on a vendored river 0.4.x (realm-river); river 0.4 is the compositor
     realm drives over river-window-management-v1.
   * Package and security correspondence use the reachable maintainer contact

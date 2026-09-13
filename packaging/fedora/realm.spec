@@ -1,11 +1,11 @@
 # realm — Fedora 44 pre-alpha spec (ADR 0015 / SPEC 0009).
 #
-# PRE-ALPHA (0.1.0). The Cargo workspace builds realmctl for the implemented
-# theme commands. This package also installs the session contract — the
+# PRE-ALPHA (0.1.0). The Cargo workspace builds realmctl, realm-wm and realm-bar.
+# This package also installs the session contract — the
 # wayland-session entry, the
 # session wrapper that performs the ADR 0011 systemd/D-Bus environment
-# handshake, the systemd user units and the palette. %install picks up
-# realm-wm and realm-bar automatically once they build.
+# handshake, the systemd user units and the palette. %install requires every
+# Realm runtime binary; absence is a package-build failure.
 #
 # BINARY NAMES ARE SETTLED (SPEC 0006 / SPEC 0025). Realm's CLI installs as
 # `realmctl`, and the window manager and session daemon install as `realm-wm`
@@ -38,14 +38,16 @@ Source0:        %{name}-%{version}.tar.gz
 %global realm_bundle %{_builddir}/%{name}-%{version}/packaging/tool-sources/bundles/realm-workspace
 %global realm_stage %{_builddir}/%{name}-%{version}/.realm-workspace
 %global realm_source %{realm_stage}/source
-%global realm_cargo_home %{_builddir}/%{name}-%{version}/.cargo-home
+%global realm_cargo_home %{realm_stage}/.cargo
 %global realm_target_dir %{_builddir}/%{name}-%{version}/.cargo-target
 
-# realm's MSRV is 1.85 (Cargo.toml). The BuildRequires below is the mechanical
+# realm's MSRV is 1.89 (Cargo.toml). The BuildRequires below is the mechanical
 # check: dnf refuses the build rather than failing halfway through cargo if the
 # shipped Rust compiler is older.
-BuildRequires:  rust >= 1.85
+BuildRequires:  rust >= 1.89
 BuildRequires:  cargo
+BuildRequires:  dejavu-sans-fonts
+BuildRequires:  dejavu-sans-mono-fonts
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  make
 BuildRequires:  python3
@@ -101,19 +103,17 @@ starship, fuzzel and foot — and themes all of them from a single palette file.
 The compositor is river 0.4, driven by realm's own window manager over
 river-window-management-v1.
 
-THIS PACKAGE IS PRE-ALPHA AND DOES NOT INSTALL A WORKING DESKTOP. It installs
-realmctl with `theme apply`, `theme lint`, and `theme diff`, plus the session
-contract: the wayland-session entry, the session wrapper that performs the
-systemd and D-Bus environment handshake, the systemd user units and the
-palette. Logging into the session gives you river with no window management
-attached because realm-wm and realm-bar are not written yet.
+THIS PACKAGE IS PRE-ALPHA AND DOES NOT INSTALL A WORKING DESKTOP. Its recipe
+requires realmctl, realm-wm and realm-bar plus the session contract. Clean
+installation, River compatibility, graphical login and SELinux runtime
+behaviour on Fedora remain unverified.
 
 %prep
 %autosetup
 python3 packaging/tool-sources/check-native-source-kit.py rpm \
     %{_builddir}/%{name}-%{version}
-rm -rf %{realm_cargo_home} %{realm_target_dir}
-mkdir -p %{realm_cargo_home} %{realm_target_dir}
+rm -rf %{realm_stage} %{realm_target_dir}
+mkdir -p %{realm_target_dir}
 python3 packaging/tool-sources/stage-realm-workspace.py \
     %{realm_bundle} %{realm_stage}
 
@@ -144,22 +144,12 @@ install -dm0755 %{buildroot}%{_userunitdir}/realm-session.target.wants
 ln -sf ../realm-wm.service %{buildroot}%{_userunitdir}/realm-session.target.wants/realm-wm.service
 ln -sf ../realm-bar.service %{buildroot}%{_userunitdir}/realm-session.target.wants/realm-bar.service
 
-# Install whichever realm binaries this revision actually built, and record them
-# in a generated file list. This revision builds realmctl, realm-wm and realm-bar.
-#
-# A generated list, rather than globs in %%files: rpmbuild treats a %%files glob
-# that matches nothing as a hard error ("File not found: .../realm-wm*"), so
-# globbing for binaries that do not exist yet fails the build. Verified the hard
-# way — that is exactly how this spec first failed. The list means realm-wm and
-# realm-bar need no spec change.
-# The list starts with the session entry, which always exists — rpm rejects an
-# *empty* -f list as firmly as it rejects a glob that matches nothing.
+# Install the complete runtime payload and record it in the RPM file list. A
+# missing output makes install fail rather than producing a partial package.
 echo "%{_bindir}/realm-session" >%{_builddir}/realm-binaries.list
 for bin in realmctl realm-wm realm-bar; do
-    if [ -x "%{realm_target_dir}/release/${bin}" ]; then
-        install -Dpm0755 "%{realm_target_dir}/release/${bin}" "%{buildroot}%{_bindir}/${bin}"
-        echo "%{_bindir}/${bin}" >>%{_builddir}/realm-binaries.list
-    fi
+    install -Dpm0755 "%{realm_target_dir}/release/${bin}" "%{buildroot}%{_bindir}/${bin}"
+    echo "%{_bindir}/${bin}" >>%{_builddir}/realm-binaries.list
 done
 
 %check
@@ -182,9 +172,8 @@ CARGO_HOME=%{realm_cargo_home} CARGO_TARGET_DIR=%{realm_target_dir} \
 # shipped in %%install are what make the target start anything, and they need no
 # scriptlet.
 
-# -f: every %%{_bindir} entry this revision actually installed, recorded during
-# %%install — the session entry and realmctl today, plus realm-wm and realm-bar
-# once they build, with no spec change.
+# -f: the session entry and mandatory three-binary runtime payload recorded
+# during %%install.
 %files -f %{_builddir}/realm-binaries.list
 %license .realm-workspace/source/LICENSE-MIT .realm-workspace/source/LICENSE-APACHE
 %doc packaging/package-docs/INSTALL.md .realm-workspace/source/docs/PITFALLS.md

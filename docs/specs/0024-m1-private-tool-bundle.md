@@ -1,6 +1,6 @@
 # SPEC 0024 — M1 private Yazi and Starship tool bundle
 
-- **Status:** Accepted (2026-08-31; amended 2026-09-01)
+- **Status:** Accepted (2026-08-31; amended 2026-09-13)
 - **Milestone:** M1
 - **Issue:** [#134](https://github.com/Pipeliner/realms-de/issues/134)
 - **Refines:** [SPEC 0023](0023-m1-tool-source-intake.md)
@@ -130,16 +130,29 @@ packaging metadata, not from the identity-bound archive's historical
 `ln -s packaging/debian` or moving `git archive ... HEAD` workflows. Updating
 package guidance SHALL NOT mutate or regenerate the canonical source authority.
 Its clean-host prerequisite commands SHALL include the direct native recipe
-requirements: Debian `pkg-config` and Fedora `make`.
+requirements: Debian `pkg-config` and Fedora `make`. Because the package-native
+test phase exercises SPEC 0004's raster/text-cache tests, both package recipes
+and their CI prerequisite installs SHALL also supply a real DejaVu fallback
+font: Debian/Ubuntu uses `fonts-dejavu-core`, while Fedora uses
+`dejavu-sans-fonts` and `dejavu-sans-mono-fonts`. The build must not inherit
+this test input accidentally from the CI host's font database.
 
 The Debian and Fedora package paths SHALL unpack only these retained inputs and
 build using `cargo --frozen --offline --locked`. They MAY consume declared,
 target-provided C toolchain/system dependencies, but SHALL NOT acquire an
 upstream source, registry package, Git dependency, or release artifact over the
-network. A test fixture SHALL run the actual `debian/rules` build path and the
-Fedora RPM build phase with networking disabled and empty Cargo registry/Git
-caches, reject a closure/configuration/lockfile mismatch, and fail when an
-adversarial injected-fetch attempt is present in either recipe.
+network. The retained source-replacement configuration SHALL remain visible to
+Cargo subprocesses launched by package-relevant tests, including generated
+trybuild projects outside the staged source tree: native recipes SHALL expose
+the staged `.cargo` directory as inherited `CARGO_HOME`, not rely only on
+top-level ancestor probing. Compile-fail checks in that package test path SHALL
+prove the intended API boundary from the compiler error code and inaccessible
+symbol, without requiring diagnostic prose or note layout to be identical
+across supported Rust versions. A test fixture SHALL run the actual
+`debian/rules` build path and the Fedora RPM build phase with networking
+disabled and empty Cargo registry/Git caches, reject a
+closure/configuration/lockfile mismatch, and fail when an adversarial
+injected-fetch attempt is present in either recipe.
 
 The fixture's disposable build tree SHALL be on a Linux filesystem that
 supports `O_TMPFILE` with file `fsync`, atomic `renameat2` publication/exchange,
