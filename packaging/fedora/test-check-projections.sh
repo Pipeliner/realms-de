@@ -290,6 +290,13 @@ expect_fail_message misnamed-retained-source-rpm-lane "$case_root" \
 
 expect_pass canonical-projections "$tmp_dir/canonical"
 
+case_root=$(clone_case wrong-doctor-header-fedora)
+replace_once "$case_root/docs/specs/0006-realm-ctl.md" \
+    '2026-08-26T14:32:11+01:00 | Fedora 44 | kernel 6.12.4' \
+    '2026-08-26T14:32:11+01:00 | Fedora 45 | kernel 6.12.4'
+expect_fail_message wrong-doctor-header-fedora "$case_root" \
+    'SPEC 0006 doctor example must use Fedora 44'
+
 case_root=$(clone_case unrelated-action-hash)
 append_line "$case_root/.github/workflows/distro.yml" '      # actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
 expect_pass unrelated-action-hash "$case_root"

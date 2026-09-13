@@ -524,7 +524,8 @@ assert_contains docs/integration/session-services.md \
     'session-services must identify the Fedora 44 pre-alpha boundary'
 assert_contains .github/ISSUE_TEMPLATE/bug.yml 'Fedora 44, built from source' \
     'bug template must use the exact Fedora 44 source-build example'
-assert_contains docs/specs/0006-realm-ctl.md '· Fedora 44 ·' \
+assert_contains docs/specs/0006-realm-ctl.md \
+    '2026-08-26T14:32:11+01:00 | Fedora 44 | kernel 6.12.4' \
     'SPEC 0006 doctor example must use Fedora 44'
 
 if current_matches '(vendor|vendors|vendored).*River.*(every target|all three (target|package))|River.*(every target|all three (target|package))|(every target|all three (target|package)).*River'; then
