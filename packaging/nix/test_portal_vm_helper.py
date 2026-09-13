@@ -16,6 +16,20 @@ from portal_vm_helper import (
 
 
 class PortalVmHelperContract(unittest.TestCase):
+    def test_vm_background_launcher_detaches_driver_fds_and_retains_evidence(self):
+        source = Path(__file__).with_name("checks.nix").read_text(encoding="utf-8")
+        launcher = source.split("portal_command = shlex.join", 1)[1].split(
+            "machine.wait_until_succeeds(", 1
+        )[0]
+        for fragment in [
+            "> {portal_output_path}",
+            "2> {portal_error_path}",
+            "> {portal_status_path}",
+            '"< /dev/null > /dev/null 2>&1 &"',
+        ]:
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, launcher)
+
     @mock.patch("portal_vm_helper.run")
     @mock.patch("portal_vm_helper.load_namespaces")
     def test_import_only_mode_loads_namespaces_without_opening_portals(

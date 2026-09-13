@@ -466,7 +466,8 @@ EOF
           ])
           machine.succeed(
               f"({portal_command} > {portal_output_path} "
-              f"2> {portal_error_path}; printf '%s\\n' $? > {portal_status_path}) &"
+              f"2> {portal_error_path}; printf '%s\\n' $? > {portal_status_path}) "
+              "< /dev/null > /dev/null 2>&1 &"
           )
           machine.wait_until_succeeds(
               f"test -s {portal_ready_path}", timeout=STATE_TIMEOUT
