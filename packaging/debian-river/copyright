@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: realm-river
+Source: https://github.com/pipeliner/realms-de
+
+Files: *
+Copyright: 2026 realm contributors
+License: MIT
+ The complete license texts for the packaged upstream components are retained
+ in their digest-pinned source archives. This CI-only pre-alpha package does
+ not yet claim Debian archive submission readiness.
