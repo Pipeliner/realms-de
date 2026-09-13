@@ -43,6 +43,10 @@ the same change whenever a contract changes.
   active-build exclusion, and bounded retention. Never sweep source worktrees,
   user files, retained bundles, or verification evidence. Keep local cleanup
   infrastructure private and record its operation at the local authority.
+- All permitted local Cargo checks across agents and worktrees use one shared
+  `CARGO_TARGET_DIR` through the private cache wrapper. Do not create per-task
+  target directories or bypass its active-build lease. Apply periodic size and
+  age cleanup only when the shared cache is inactive; packaging remains CI-only.
 - Security checks and security-hardening review are post-MVP work. Do not make
   them MVP gates; track them for the post-MVP queue instead.
 - **Never let process become the product.** Keep specifications, reviews,
