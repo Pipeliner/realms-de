@@ -123,7 +123,7 @@ class PortalClient:
             _interface: str,
             _signal: str,
             parameters_value: Any,
-            _user_data: Any,
+            _user_data: Any = None,
         ) -> None:
             code = parameters_value.get_child_value(0).get_uint32()
             results = _deep_unpack(parameters_value.get_child_value(1))
@@ -204,7 +204,7 @@ class PortalClient:
             _interface: str,
             _signal: str,
             parameters_value: Any,
-            _user_data: Any,
+            _user_data: Any = None,
         ) -> None:
             response.update(
                 code=parameters_value.get_child_value(0).get_uint32(),

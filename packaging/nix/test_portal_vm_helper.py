@@ -210,7 +210,6 @@ class PortalVmHelperContract(unittest.TestCase):
                         REQUEST_INTERFACE,
                         "Response",
                         Response(self.connection.response_code),
-                        None,
                     )
 
         class VariantType:
