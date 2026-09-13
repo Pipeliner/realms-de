@@ -148,7 +148,7 @@ The private source set is required because Noble remains below these floors:
 | U1 | Given the selected manifest and mutation fixtures, when validation runs, then the exact source/Zig inventory passes while missing, extra, duplicate, malformed-digest, wrong-lock and malformed-Zig-hash cases fail before acquisition. | `packaging/river/test-closure-manifest.sh` |
 | U2 | Given a freshly acquired cache, when the Ubuntu 24.04 probe runs, then every archive is rehashed before extraction and compilation completes in a different network namespace with no usable network; unavailable isolation or a Meson fallback is fatal, never skipped. | `.github/workflows/distro.yml` — `ubuntu-river-closure`; CI log namespace and build assertions |
 | U3 | Given the built wlroots pkg-config record, when required features are queried, then `have_drm_backend`, `have_libinput_backend`, `have_gles2_renderer`, `have_gbm_allocator`, `have_session` and `have_xwayland` are all `true`; `have_x11_backend`, `have_vulkan_renderer`, `have_udmabuf_allocator` and `have_color_management` are `false`. | `packaging/river/probe-noble-closure.sh`; CI log |
-| U4 | Given the staged closure, when ELF metadata and dependencies are inspected, then River has only the relative private runpath, every required private wlroots/Wayland/libdrm/pixman/xkbcommon/libdisplay-info dependency resolves below the closure, no dependency is missing, and the executable prints `river 0.4.8` for `-version`. | `packaging/river/probe-noble-closure.sh`; CI log |
+| U4 | Given the staged closure and `LD_LIBRARY_PATH` unset, when River and every regular private shared object are recursively inspected through ELF metadata and dependency resolution, then each object has only its specified relative private runpath, the complete transitive dependency graph has no unresolved entry, every required private wlroots/Wayland/libdrm/pixman/xkbcommon/libdisplay-info dependency resolves below the closure, and `river -version` has exact stdout `0.4.8 +xwayland`. | `packaging/river/probe-noble-closure.sh`; CI log |
 | U5 | Given the successful CI-only probe, when support claims are inspected, then it is described only as source-build and version-path evidence; Debian integration, clean install, graphical login and hardware DRM remain unverified. | SPEC 0026 boundary; later documentation changes must preserve this evidence level |
 
 ## Failure modes
@@ -158,8 +158,11 @@ The private source set is required because Noble remains below these floors:
 - A missing native dependency fails configuration inside the isolated build;
   the job does not retry with networking or drop a required feature.
 - A successful compile with any required feature false fails the probe.
-- A private dependency resolving outside the closure, an absolute runpath or an
-  unresolved ELF dependency fails before the version command.
+- A private-family dependency resolving outside the closure, an
+  absolute/non-private runpath, an unresolved transitive ELF dependency or a
+  non-empty `LD_LIBRARY_PATH` fails before the version command.
+- Version stdout other than exact `0.4.8 +xwayland` fails; the `+xwayland`
+  suffix is the upstream v0.4.8 build-option signal required by this profile.
 - A hosted runner without network-namespace support fails the job. There is no
   reduced headless or non-isolated success path.
 

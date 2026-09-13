@@ -88,9 +88,10 @@ repository is a separate hosting/signing decision, not an implicit next step.
 SPEC 0026's manifest fixtures reject missing, duplicate or malformed pins. Its
 Ubuntu 24.04 CI job must acquire and hash the selected sources, compile the
 closure inside a fresh network namespace, assert the six required wlroots
-features, verify relative runpaths and private ELF resolution, and execute
-`river -version` as `river 0.4.8`. A missing network namespace is a failure, not
-a skip.
+features, inspect River and every private shared object for complete transitive
+ELF resolution with `LD_LIBRARY_PATH` unset, verify relative runpaths, and
+execute `river -version` with exact stdout `0.4.8 +xwayland`. A missing network
+namespace is a failure, not a skip.
 
 ## Needs a human
 
