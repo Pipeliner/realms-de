@@ -44,6 +44,7 @@ libxkbcommon source; Noble's Meson 1.3.2 is insufficient.
 | Wayland | 1.26.0 | `https://gitlab.freedesktop.org/wayland/wayland/-/releases/1.26.0/downloads/wayland-1.26.0.tar.xz` | `64176eaa46e4969903e286f8e5ef8331affc17fdf03ac9b58381d2b23162b7a3` | private runtime and `wayland-scanner` |
 | wayland-protocols | 1.49 | `https://gitlab.freedesktop.org/wayland/wayland-protocols/-/releases/1.49/downloads/wayland-protocols-1.49.tar.xz` | `ec4c8f74942d6dff7ace8b4ce4764f0ef9ff618a935d974ea77edee2ad240b14` | build-time protocol data |
 | libdrm | 2.4.134 | `https://dri.freedesktop.org/libdrm/libdrm-2.4.134.tar.xz` | `ac5e74d157830eb8bee44c6a6bf3ad49774ef0dd2a72bdad74a8f20308b52a95` | private runtime |
+| libinput | 1.31.3 | `https://gitlab.freedesktop.org/libinput/libinput/-/archive/1.31.3/libinput-1.31.3.tar.gz` | `b6749bf6f1890f6631c0a70a027c35fec9d2e096a39f720548896e41474a9854` | private input runtime |
 | pixman | 0.46.4 | `https://cairographics.org/releases/pixman-0.46.4.tar.gz` | `d09c44ebc3bd5bee7021c79f922fe8fb2fb57f7320f55e97ff9914d2346a591c` | private runtime |
 | libxkbcommon | 1.13.2 | `https://github.com/xkbcommon/libxkbcommon/archive/refs/tags/xkbcommon-1.13.2.tar.gz` | `acc4d5f7c3cbba5f9f8d08d8bdbeede84ecede46792f47929aa9321873385528` | private runtime; satisfies River's stricter 1.12 floor |
 | libdisplay-info | 0.4.0 | `https://gitlab.freedesktop.org/emersion/libdisplay-info/-/archive/0.4.0/libdisplay-info-0.4.0.tar.gz` | `787b58aec473830b0030251ba2b880560b4b3853dc5d6961a6e9701abae29b55` | private DRM runtime |
@@ -81,14 +82,14 @@ compilation.
 
 ## Noble system boundary
 
-Noble supplies runtime dependencies whose versions already meet wlroots
-0.20.2's requirements: libinput 1.25.0, libseat 0.8.0, Mesa EGL/GLES/GBM,
-XCB/Xfixes 1.15 and Xwayland 23.2.6. It also supplies Ninja and Python for the
-selected Meson 1.4.0 source entry point. The CI job installs their development
+Noble supplies runtime dependencies whose versions already meet the selected
+sources' requirements: libseat 0.8.0, Mesa EGL/GLES/GBM, XCB/Xfixes 1.15 and
+Xwayland 23.2.6. It also supplies Ninja and Python for the selected Meson 1.4.0
+source entry point. The CI job installs their development
 closure: build-essential, pkg-config, ninja-build, Python, bison, patchelf,
-libffi, expat, libpciaccess, pthread stubs, udev, libevdev, libcap, GL/EGL/GLES,
-GBM, X11, the XCB composite/EWMH/ICCCM/render/res/xfixes packages, hwdata,
-xkb-data and Xwayland.
+libffi, expat, libpciaccess, pthread stubs, udev, libevdev, mtdev, libwacom,
+libcap, GL/EGL/GLES, GBM, X11, the XCB composite/EWMH/ICCCM/render/res/xfixes
+packages, hwdata, xkb-data and Xwayland.
 
 The private source set is required because Noble remains below these floors:
 
@@ -97,10 +98,28 @@ The private source set is required because Noble remains below these floors:
 | Wayland | 1.24.0 | 1.22.0 |
 | wayland-protocols | 1.47 | 1.45 |
 | libdrm | 2.4.129 | 2.4.125 |
+| libinput | 1.27 (River input configuration API) | 1.25.0 |
 | pixman | 0.43.0 | 0.42.2 |
 | libxkbcommon | 1.12.0 (River) | 1.6.0 |
 | libdisplay-info | 0.2.0 | 0.1.1 |
 | wlroots | 0.20.x | 0.17.1 |
+
+The first feature-bearing River compile against Noble's libinput 1.25.0 is the
+direct RED evidence for the libinput gap: translation of River's input code
+failed because `libinput_device_config_3fg_drag_get_finger_count` and
+`LIBINPUT_CONFIG_DRAG_LOCK_ENABLED_TIMEOUT` were absent. The former API is
+marked `since 1.27` by the selected libinput headers. The closure therefore
+uses nixpkgs' selected libinput 1.31.3 without patching River or removing input
+configuration behavior.
+
+All dependencies enabled in that libinput build are satisfied by Noble:
+
+| Enabled libinput dependency | libinput 1.31.3 floor | Noble package version |
+|---|---:|---:|
+| libudev | no explicit version floor | 255.4-1ubuntu8.17 |
+| libevdev | 1.10.0 | 1.13.1+dfsg-1build1 |
+| mtdev | 1.1.0 | 1.1.6-1.1build1 |
+| libwacom | 0.27 | 2.10.0-2 |
 
 ## Acquisition and build contract (L4)
 
@@ -130,13 +149,17 @@ The private source set is required because Noble remains below these floors:
    or install a Python package from the network. Builds install into one new
    private prefix with `bin/`, `lib/`, `include/` and `share/`. `PATH` and
    `PKG_CONFIG_PATH` put that prefix ahead of Noble for all later builds. The
-   source build order is: Wayland; wayland-protocols; libdrm, pixman,
+   source build order is: Wayland; wayland-protocols; libdrm, libinput, pixman,
    libxkbcommon and libdisplay-info; wlroots; River.
 5. Wayland builds its scanner with documentation and tests disabled;
-   wayland-protocols builds with tests disabled. libxkbcommon disables its
-   tools, X11/Wayland utilities, docs and registry while retaining the core
-   library. Dependency test/demo programs are not installed in the runtime
-   tree.
+   wayland-protocols builds with tests disabled. libinput is configured exactly
+   with `-Dmtdev=true -Dlibwacom=true -Dtests=false -Dinstall-tests=false
+   -Ddocumentation=false -Ddebug-gui=false -Dlua-plugins=disabled`: mtdev and
+   libwacom device support remain enabled while tests, installed tests,
+   documentation, the debug GUI and Lua plugins are omitted. libxkbcommon
+   disables its tools, X11/Wayland utilities, docs and registry while retaining
+   the core library. Dependency test/demo programs are not installed in the
+   runtime tree.
 6. wlroots is configured exactly with:
 
    ```text
@@ -172,7 +195,7 @@ The private source set is required because Noble remains below these floors:
 | U1 | Given the selected manifest and mutation fixtures, when validation runs, then the exact source/Zig inventory passes while missing, extra, duplicate, malformed-digest, wrong-lock and malformed-Zig-hash cases fail before acquisition. | `packaging/river/test-closure-manifest.sh` |
 | U2 | Given a freshly acquired cache, when the Ubuntu 24.04 probe runs, then every archive is rehashed before extraction and compilation completes in a different network namespace with no usable network; unavailable isolation or a Meson fallback is fatal, never skipped. | `.github/workflows/distro.yml` — `ubuntu-river-closure`; CI log namespace and build assertions |
 | U3 | Given the built wlroots pkg-config record, when required features are queried, then `have_drm_backend`, `have_libinput_backend`, `have_gles2_renderer`, `have_gbm_allocator`, `have_session` and `have_xwayland` are all `true`; `have_x11_backend`, `have_vulkan_renderer`, `have_udmabuf_allocator` and `have_color_management` are `false`. | `packaging/river/probe-noble-closure.sh`; CI log |
-| U4 | Given the staged closure and `LD_LIBRARY_PATH` unset, when River and every regular private shared object are recursively inspected through ELF metadata and dependency resolution, then each object has only its specified relative private runpath, the complete transitive dependency graph has no unresolved entry, every required private wlroots/Wayland/libdrm/pixman/xkbcommon/libdisplay-info dependency resolves below the closure, and `river -version` has exact stdout `0.4.8 +xwayland`. | `packaging/river/probe-noble-closure.sh`; CI log |
+| U4 | Given the staged closure and `LD_LIBRARY_PATH` unset, when River and every regular private shared object are recursively inspected through ELF metadata and dependency resolution, then each object has only its specified relative private runpath, the complete transitive dependency graph has no unresolved entry, every required private wlroots/Wayland/libdrm/libinput/pixman/xkbcommon/libdisplay-info dependency resolves below the closure, and `river -version` has exact stdout `0.4.8 +xwayland`. | `packaging/river/probe-noble-closure.sh`; CI log |
 | U5 | Given the successful CI-only probe, when support claims are inspected, then it is described only as source-build and version-path evidence; Debian integration, clean install, graphical login and hardware DRM remain unverified. | SPEC 0026 boundary; later documentation changes must preserve this evidence level |
 
 ## Failure modes

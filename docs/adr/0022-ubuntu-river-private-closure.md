@@ -10,9 +10,10 @@
 ADR 0013 selected River 0.4 and assumed that native packaging could vendor a
 pinned River build. Ubuntu 24.04 Noble has no River or Zig package and its
 wlroots 0.17 cannot build River 0.4.8. Checking River 0.4.8 and wlroots 0.20.2
-also found seven libraries below their required versions in Noble: Wayland,
-wayland-protocols, libdrm, pixman, libxkbcommon, libdisplay-info and wlroots
-itself. Building only River would therefore leave the Ubuntu target unusable.
+also found eight libraries below their required versions in Noble: Wayland,
+wayland-protocols, libdrm, libinput, pixman, libxkbcommon, libdisplay-info and
+wlroots itself. Building only River would therefore leave the Ubuntu target
+unusable.
 
 Fedora 44 now has an official River 0.4.8 package and is outside this decision.
 Nix already obtains the tested closure from the locked nixpkgs input.
@@ -28,7 +29,9 @@ Nix already obtains the tested closure from the locked nixpkgs input.
 3. The closure retains real DRM, libinput, GBM/GLES2, session and Xwayland
    support. A headless-only build does not satisfy this decision. Optional
    Vulkan, nested X11, libliftoff, colour-management and xcb-errors support are
-   omitted from this first Ubuntu closure.
+   omitted from this first Ubuntu closure. The private libinput build retains
+   both mtdev and libwacom device support; it is not permitted to make River
+   compile by dropping supported input-device classes.
 4. Private shared libraries and River receive relative runpaths and are checked
    by ELF resolution before River's version command is executed. They do not
    replace Noble's system libraries.
@@ -63,14 +66,14 @@ Nix already obtains the tested closure from the locked nixpkgs input.
 
 ### Bad
 
-- Realm owns rebuilds for River and seven private library sources on Ubuntu.
+- Realm owns rebuilds for River and eight private library sources on Ubuntu.
 - The probe adds a Zig toolchain and a non-trivial native graphics build to CI.
 - A successful container build still leaves Debian integration and graphical
   login unproven.
 
 ### Neutral
 
-- Noble continues supplying Mesa, libinput, libseat, Xwayland and the remaining
+- Noble continues supplying Mesa, libseat, Xwayland and the remaining
   system runtime. Private libraries are limited to the version gaps.
 - This decision neither changes Fedora's official-package route nor Nix's
   locked closure.
