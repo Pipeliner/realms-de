@@ -12,11 +12,13 @@ struct RunningStub {
     pid_path: PathBuf,
     args_path: PathBuf,
     selectors_path: PathBuf,
+    pid_gate_path: PathBuf,
     stop_gate_path: PathBuf,
 }
 
 impl RunningStub {
     fn wait_until_stopped(&mut self) -> u32 {
+        let mut released_pid_gate = false;
         let mut released_stop_gate = false;
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -25,14 +27,19 @@ impl RunningStub {
                 fs::read_to_string(&self.args_path),
                 fs::read_to_string(&self.selectors_path),
             ) {
-                let pid = raw_pid.trim().parse().unwrap();
-                if !raw_args.is_empty() && !raw_selectors.is_empty() {
-                    if !released_stop_gate {
-                        fs::write(&self.stop_gate_path, b"release\n").unwrap();
-                        released_stop_gate = true;
-                    }
-                    if process_is_stopped(pid) {
-                        return pid;
+                if raw_pid.is_empty() && !released_pid_gate {
+                    fs::write(&self.pid_gate_path, b"release\n").unwrap();
+                    released_pid_gate = true;
+                }
+                if let Ok(pid) = raw_pid.trim().parse() {
+                    if !raw_args.is_empty() && !raw_selectors.is_empty() {
+                        if !released_stop_gate {
+                            fs::write(&self.stop_gate_path, b"release\n").unwrap();
+                            released_stop_gate = true;
+                        }
+                        if process_is_stopped(pid) {
+                            return pid;
+                        }
                     }
                 }
             }
@@ -80,7 +87,7 @@ fn install_stopping_stub(directory: &Path, name: &str) {
     let path = directory.join(name);
     fs::write(
         &path,
-        "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$REALM_TEST_PID\"\nprintf '%s\\n' \"$@\" > \"$REALM_TEST_ARGS\"\nprintf '%s\\n' \"${REALM_GENERATION-unset}\" \"${ZDOTDIR-unset}\" \"${STARSHIP_CONFIG-unset}\" \"${YAZI_CONFIG_HOME-unset}\" > \"$REALM_TEST_SELECTORS\"\nwhile [ ! -e \"$REALM_TEST_STOP_GATE\" ]; do :; done\nkill -STOP \"$$\"\n",
+        "#!/bin/sh\n: > \"$REALM_TEST_PID\"\n: > \"$REALM_TEST_ARGS\"\n: > \"$REALM_TEST_SELECTORS\"\nwhile [ ! -e \"$REALM_TEST_PID_GATE\" ]; do :; done\nprintf '%s\\n' \"$$\" > \"$REALM_TEST_PID\"\nprintf '%s\\n' \"$@\" > \"$REALM_TEST_ARGS\"\nprintf '%s\\n' \"${REALM_GENERATION-unset}\" \"${ZDOTDIR-unset}\" \"${STARSHIP_CONFIG-unset}\" \"${YAZI_CONFIG_HOME-unset}\" > \"$REALM_TEST_SELECTORS\"\nwhile [ ! -e \"$REALM_TEST_STOP_GATE\" ]; do :; done\nkill -STOP \"$$\"\n",
     )
     .unwrap();
     fs::set_permissions(path, PermissionsExt::from_mode(0o700)).unwrap();
@@ -90,6 +97,7 @@ fn spawn_consumer(root: &Path, stub_dir: &Path, kind: &str) -> RunningStub {
     let pid_path = root.join(format!("{kind}.pid"));
     let args_path = root.join(format!("{kind}.args"));
     let selectors_path = root.join(format!("{kind}.selectors"));
+    let pid_gate_path = root.join(format!("{kind}.pid-gate"));
     let stop_gate_path = root.join(format!("{kind}.stop-gate"));
     let child = Command::new(env!("CARGO_BIN_EXE_realm-wm"))
         .args(["--fixed-consumer", kind])
@@ -99,6 +107,7 @@ fn spawn_consumer(root: &Path, stub_dir: &Path, kind: &str) -> RunningStub {
         .env("REALM_TEST_PID", &pid_path)
         .env("REALM_TEST_ARGS", &args_path)
         .env("REALM_TEST_SELECTORS", &selectors_path)
+        .env("REALM_TEST_PID_GATE", &pid_gate_path)
         .env("REALM_TEST_STOP_GATE", &stop_gate_path)
         .spawn()
         .unwrap();
@@ -107,6 +116,7 @@ fn spawn_consumer(root: &Path, stub_dir: &Path, kind: &str) -> RunningStub {
         pid_path,
         args_path,
         selectors_path,
+        pid_gate_path,
         stop_gate_path,
     }
 }
