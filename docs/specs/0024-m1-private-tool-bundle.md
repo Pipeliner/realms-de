@@ -114,6 +114,30 @@ commit SHALL refresh the canonical archive from a new committed snapshot before
 native package CI can satisfy this contract; passing tests against the moving
 checkout do not make a stale retained archive current.
 
+### CI-only Realm workspace rebinding
+
+Producing or rebinding the Realm workspace source authority is packaging and
+SHALL run only in the repository's CI. The rebind workflow accepts one exact,
+full repository commit ID; checks out that object with complete history; and
+creates the archive only from that immutable Git object with the exclusion
+above. A branch name, tag, working-tree byte, local archive, or caller-supplied
+provenance field is not an admissible source input.
+
+The workflow SHALL refuse a commit whose `Cargo.lock` differs from the retained
+Realm-workspace lockfile. Such a change requires a separate controlled
+dependency-closure refresh; this path does not vendor dependencies. For an
+unchanged lockfile, CI stages the existing digest-bound closure in runner-local
+temporary storage, generates `source.tar.gz`, updates only the bound commit,
+commit timestamp, source digest, and provenance digest fields, and runs the
+normal bundle-linkage validator over the complete candidate bundle.
+
+Successful CI publishes an artifact containing exactly the candidate
+`source.tar.gz`, `bundle.toml`, and `provenance.md`. The workflow has read-only
+repository permission and SHALL NOT commit or push the result. A maintainer may
+place those exact three CI-produced files in the source change; the ordinary
+freshness and linkage checks remain authoritative before merge. An uploaded
+candidate alone is not package-build, install, or runtime evidence.
+
 The Realm-workspace source-replacement configuration is a separately retained
 build input: native recipes SHALL stage it at the unpacked source root before
 Cargo runs. The linkage fixture SHALL verify that configuration, the retained
@@ -426,6 +450,7 @@ terminals keep their original selectors and receive no live reload.
 | B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | `packaging/tool-sources/test-bundle-linkage.sh`; `packaging/tool-sources/check-bundle-linkage.py` |
 | B6 | Given a complete current generation N, when the typed terminal binding launches Foot and zsh, then exact argv/environment select only N, Starship renders Realm's prompt, Yazi loads all three generation-local files, `Ctrl+p` launches btop with N's exact config/theme arguments, and both TUI screens visibly use their selected Realm configuration. Given a valid pre-profile generation, terminal refuses without mutation; after explicit apply a complete later generation launches successfully. User configuration remains untouched, prior committed generations remain present, and no mutable/live-reload path is used. | `fixed_consumers` exact profile tests; installed Nix terminal/Yazi/btop fixture |
 | B7 | Given a complete N and no explicit user qt6ct override, when packaged GTK 3, GTK 4 and Qt 6 applications start below N's selected terminal, then the actual toolkit/plugin loaders consume N's named GTK CSS and N's qt6ct colour scheme, including actual qt6ct expansion of `$REALM_GENERATION`, and the VM retains nonempty application frames. A pre-existing qt6ct configuration remains byte-identical and is reported as an override rather than Realm-palette success. | fixed-consumer selector tests; packaged parser probes; installed Nix application fixture |
+| B8 | Given an exact committed workspace revision with an unchanged retained lockfile, when its source authority needs rebinding, then read-only repository CI alone creates and validates the candidate archive/records and retains exactly those three files as an artifact without committing or pushing them; a mutable ref, changed lockfile, local packaging command, or unvalidated candidate is rejected. | CI rebind workflow projection and transformation fixtures; bundle-linkage validator in the rebind job. |
 
 ## Boundaries and follow-on work
 
