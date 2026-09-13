@@ -173,8 +173,7 @@ run_native_session_vm() (
         '  mode: auto' \
         'resize_rootfs: true' \
         > "$user_data"
-    printf 'instance-id: realm-%s\nlocal-hostname: realm-native-vm\n' \
-        "$target" > "$meta_data"
+    printf 'instance-id: realm-%s\n' "$target" > "$meta_data"
     seed="$run_root/seed.img"
     cloud-localds "$seed" "$user_data" "$meta_data"
 

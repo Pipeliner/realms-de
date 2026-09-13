@@ -4,10 +4,12 @@
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -90,6 +92,38 @@ class NativeVmInputTests(unittest.TestCase):
             facts[extra] = {"name": "other", "version": "1", "arch": "amd64"}
             with self.assertRaisesRegex(ValueError, "exactly two Debian packages"):
                 self.module.select_packages("ubuntu-24.04-x86_64", root, facts.__getitem__)
+
+    def test_debian_identity_uses_unlabelled_show_format_records(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            package = root / "realm.deb"
+            package.touch()
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            dpkg_deb = fake_bin / "dpkg-deb"
+            dpkg_deb.write_text(
+                """#!/bin/sh
+if [ "$1" = "-f" ]; then
+    printf 'Package: realm\nVersion: 0.1.0\nArchitecture: amd64\n'
+    exit 0
+fi
+if [ "$1" = '--showformat=${Package}\\n${Version}\\n${Architecture}\\n' ] \
+    && [ "$2" = "--show" ]; then
+    printf 'realm\n0.1.0\namd64\n'
+    exit 0
+fi
+exit 97
+""",
+                encoding="utf-8",
+            )
+            dpkg_deb.chmod(0o755)
+            path = f"{fake_bin}:{os.environ['PATH']}"
+            with mock.patch.dict(os.environ, {"PATH": path}):
+                facts = self.module._deb_facts(package)
+            self.assertEqual(
+                facts,
+                {"name": "realm", "version": "0.1.0", "arch": "amd64"},
+            )
 
     def test_non_regular_artifact_entry_is_rejected_not_ignored(self):
         with tempfile.TemporaryDirectory() as raw:

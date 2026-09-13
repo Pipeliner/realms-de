@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
-script_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd)
+fixture_script_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd)
 # shellcheck source=packaging/native-vm/run-native-session-vm.sh
-source "$script_dir/run-native-session-vm.sh"
+source "$fixture_script_dir/run-native-session-vm.sh"
 
 fail() {
     printf 'FAIL: %s\n' "$*" >&2
@@ -22,6 +22,10 @@ if require_kvm "$case_root/missing-kvm" 2>"$case_root/missing.err"; then
     fail 'missing KVM was accepted'
 fi
 grep -Fq 'KVM is required' "$case_root/missing.err" || fail 'missing KVM diagnostic was lost'
+
+if grep -Fq 'local-hostname:' "$fixture_script_dir/run-native-session-vm.sh"; then
+    fail 'NoCloud seed still requests a cosmetic hostname'
+fi
 
 (
     exit 0

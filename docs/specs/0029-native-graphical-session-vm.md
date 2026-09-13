@@ -62,6 +62,11 @@ downloads the target's exact artifact name, and rejects a missing or additional
 package. Ubuntu receives exactly one `realm` deb and one `realm-river` deb;
 Fedora receives exactly one RPM whose queried name is `realm`. The VM job never
 runs Cargo, `dpkg-buildpackage`, `rpmbuild`, or a Realm source-kit producer.
+Debian package identity is read with an explicit output format whose three
+unlabelled records are package, version, and architecture; the default
+multi-field `dpkg-deb` display is not an identity protocol. The admitted values
+remain exactly `realm`/`0.1.0`/`amd64` and
+`realm-river`/`0.4.8-1`/`amd64`.
 
 ## Host KVM admission
 
@@ -79,7 +84,10 @@ bounded harness contract.
 
 1. Cloud-init creates unprivileged user `alice` with an ephemeral CI SSH key.
    Host-only QEMU user networking exposes SSH; a bounded host loop fails early
-   if QEMU exits.
+   if QEMU exits. The NoCloud seed supplies a stable per-target instance ID but
+   does not request a cosmetic hostname. `cloud-init status --wait` must exit
+   zero; a recoverable-error status is not accepted merely because
+   initialization reached `done`.
 2. The guest uses its ordinary enabled distribution repositories to install
    the downloaded local Realm package(s), their dependencies, and SDDM. No
    dependency suppression is allowed. SDDM is configured only inside the

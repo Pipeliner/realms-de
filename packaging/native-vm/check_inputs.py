@@ -126,7 +126,12 @@ def verify_image(manifest: Path, name: str, image: Path) -> dict[str, str]:
 
 def _deb_facts(path: Path) -> dict[str, str]:
     output = subprocess.run(
-        ["dpkg-deb", "-f", str(path), "Package", "Version", "Architecture"],
+        [
+            "dpkg-deb",
+            "--showformat=${Package}\\n${Version}\\n${Architecture}\\n",
+            "--show",
+            str(path),
+        ],
         check=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
