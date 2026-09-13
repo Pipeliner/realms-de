@@ -452,32 +452,35 @@ The only fixed consumer identifiers and invocations are:
 
 | Consumer | Exact child argv | Required manifest output |
 |---|---|---|
-| `terminal` | `foot`, `--config=<N>/foot/foot.ini` | `foot/foot.ini` |
+| `terminal` | `foot`, `--config=<N>/foot/foot.ini`, `--override=key-bindings.spawn-terminal=none` | `foot/foot.ini` |
 | `launcher` | `fuzzel`, `--config=<N>/fuzzel/fuzzel.ini` | `fuzzel/fuzzel.ini` |
 
 Here `<N>` is the absolute path returned by the one validated
-`GenerationSelection`; the `--config=` option and path are one argument. Realm
-passes no shell, no mutable ordinary-config path, no additional option, and no
-fallback invocation. The executable basenames are resolved from the packaged
-session's inherited `PATH`; packaging must make the declared `foot` and
-`fuzzel` dependencies reachable there. A missing executable or rejected
-generation is a visible launch failure, never permission to omit `--config=`.
+`GenerationSelection`; each `--config=` or `--override=` option and its value
+are one argument. Realm passes no shell, no mutable ordinary-config path, no
+other option, and no fallback invocation. The executable basenames are resolved
+from the packaged session's inherited `PATH`; packaging must make the declared
+`foot` and `fuzzel` dependencies reachable there. A missing executable or
+rejected generation is a visible launch failure, never permission to omit
+`--config=`.
 The terminal invocation lets foot start the user's ordinary default shell. The
 launcher invocation uses fuzzel's default XDG-application mode. Only the fuzzel
 UI consumes N: an application that fuzzel starts remains ADR 0018's explicitly
 unverified direct launch and must not be reported as a Realm profile or as
 generation-selected.
 
-The generated `foot/foot.ini` disables foot's default `spawn-terminal` action
-with `[key-bindings]\nspawn-terminal=none\n`; users open another terminal
-through Realm's terminal binding. This makes the directly executed foot process
-the only process allowed to reopen that generation path. Foot's shell child
-does not receive the config path. Fuzzel reads its config in the directly
-executed UI process and does not pass that config argument or path to the XDG
-application it starts. Consumer fixtures must prove these two boundaries
-against the packaged versions; a package whose `--config=PATH` or foot
-key-binding grammar differs is unsupported rather than launched without the
-exact binding.
+The terminal's exact command-line override disables foot's default
+`spawn-terminal` action independently of the selected generation's template
+bytes; users open another terminal through Realm's terminal binding. This is
+required so an already-valid generation published before this refinement
+remains usable without republishing and cannot create a later process carrying
+N's config path beyond the leased foot PID. Foot's shell child does not receive
+the config path. Fuzzel reads its config in the directly executed UI process and
+does not pass that config argument or path to the XDG application it starts.
+Consumer fixtures must prove these two boundaries against the packaged
+versions; a package whose `--config=PATH`,
+`--override=[SECTION.]KEY=VALUE`, or `spawn-terminal=none` grammar differs is
+unsupported rather than launched without the exact binding.
 
 Before publishing WM readiness or accepting the first action that could launch
 either consumer, session bootstrap performs one serialized **ensure-current**
@@ -572,7 +575,7 @@ candidate with a partially validated or mixed generation.
 | G11 | Given a successful apply or rollback pointer commit, when existing processes continue running, then Realm sends no signal, command, or notification and only later launches may select the newly current generation. |
 | G12 | Given `Committed`, `CommittedWithCleanupPending`, or `OutcomeAmbiguous`, when `realmctl theme apply` reports the result, then the first two exit 0 and name the selected future-launch generation (with a cleanup warning for the second), while the ambiguous result exits 6, claims no activation, safely reports its candidate/cause, and performs no automatic recovery or retry. |
 | G13 | Given a fresh configuration root with cleanly absent current, a valid current, malformed current, or an absent pointer with recovery evidence, when session bootstrap ensures current, then only clean absence performs one serialized built-in apply; valid current is byte-for-byte retained without apply or palette seed, and every malformed/inconsistent case fails readiness without repair, retry, newest-generation selection, or unthemed fallback. A concurrent valid apply that wins the lock is retained rather than overwritten. |
-| G14 | Given either fixed consumer and a later pointer switch from N to N+1, when Realm launches it, then its exact argv contains one `--config=` path below its fully validated selected N, its process lease exists durably before exec and remains live for that unchanged PID until the consumer exits, and it never reads an ordinary mutable foot/fuzzel config as fallback. The fuzzel-started application is explicitly not reported as generation-selected. |
+| G14 | Given either fixed consumer, including terminal launch from an already-valid generation whose foot output predates this refinement, and a later pointer switch from N to N+1, when Realm launches it, then its exact argv contains one `--config=` path below its fully validated selected N, terminal argv also contains the exact `spawn-terminal=none` command-line override, its process lease exists durably before exec and remains live for that unchanged PID until the consumer exits, and it never reads an ordinary mutable foot/fuzzel config as fallback. The fuzzel-started application is explicitly not reported as generation-selected. |
 
 ## Boundaries
 
