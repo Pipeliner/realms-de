@@ -28,7 +28,7 @@ target ([ARCHITECTURE.md §5](ARCHITECTURE.md)):
 
 | Platform | Delivery | State today |
 |---|---|---|
-| NixOS / Nix | flake: `packages.default`, `nixosModules.realm`, `homeManagerModules.realm` | Reference build. Evaluates; VM test asserts the contract, not the desktop |
+| NixOS / Nix | flake: `packages.default`, `nixosModules.realm`, `homeManagerModules.realm` | Reference build; its installed display-manager session boots River and the Realm desktop in the QEMU VM. This is not physical-hardware evidence |
 | Ubuntu 24.04 LTS + | `.deb` from `packaging/debian/` | Builds; three runtime dependencies are not in the Ubuntu archive (below) |
 | Fedora 44 (pre-alpha) | RPM from the retained-only source kit | Builds in a pinned Fedora 44 image; its exact output clean-installs into an empty Fedora 44 root and its installed CLI/palette and River probes pass. Graphical login, portals and SELinux remain unverified |
 
