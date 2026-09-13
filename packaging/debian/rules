@@ -49,7 +49,7 @@ export CARGO_TARGET_DIR = $(CURDIR)/debian/cargo-target
 # enough for its MSRV.
 export CARGO_TERM_COLOR = never
 
-# Ubuntu 24.04's default cargo is 1.75, below realm's MSRV of 1.85. The
+# Ubuntu 24.04's default cargo is 1.75, below realm's MSRV of 1.89. The
 # versioned toolchain packages install under /usr/lib/rust-<version>/bin. The
 # resolver accepts only a complete cargo/rustc pair and returns the newest
 # matching path. Its Ubuntu 24.04 archive layout was verified on #104.
@@ -80,9 +80,9 @@ override_dh_auto_build:
 	@set -e; \
 	realm_source="$$(python3 "$(REALM_STAGER)" "$(REALM_BUNDLE)" "$(REALM_STAGE)")"; \
 	cd "$$realm_source"; \
-	rustc --version | awk '{split($$2,v,"."); if (v[1] < 1 || (v[1] == 1 && v[2] < 85)) { \
-		print "realm: rustc " $$2 " is older than the MSRV 1.85 declared in Cargo.toml."; \
-		print "      Install rustc-1.85/cargo-1.85 (in the Ubuntu 24.04 archive) or newer."; \
+	rustc --version | awk '{split($$2,v,"."); if (v[1] < 1 || (v[1] == 1 && v[2] < 89)) { \
+		print "realm: rustc " $$2 " is older than the MSRV 1.89 declared in Cargo.toml."; \
+		print "      Install rustc-1.89/cargo-1.89 (from Noble Updates) or newer."; \
 		exit 1 }}'; \
 	cargo build --release --frozen --offline --locked --workspace
 
@@ -109,18 +109,11 @@ override_dh_auto_install:
 		debian/realm/usr/lib/systemd/user/realm-session.target.wants/realm-wm.service
 	ln -sf ../realm-bar.service \
 		debian/realm/usr/lib/systemd/user/realm-session.target.wants/realm-bar.service
-	# Install whichever realm binaries this revision actually built. `realmctl` is
-	# built now; the loop means realm-wm and realm-bar need no packaging change. The
-	# names are the settled ones: realm-wm (the window manager and session
-	# daemon) and realmctl (the one CLI spelling on every distribution).
+	# The runtime payload is indivisible: a successful package contains all three
+	# settled binary names, and a missing build output fails packaging here.
 	set -e; \
 	for bin in realmctl realm-wm realm-bar; do \
-		if [ -x "$(CARGO_TARGET_DIR)/release/$$bin" ]; then \
-			install -Dm755 "$(CARGO_TARGET_DIR)/release/$$bin" "debian/realm/usr/bin/$$bin"; \
-			echo "installed $$bin"; \
-		else \
-			echo "skipping $$bin: not built in this revision"; \
-		fi; \
+		install -Dm755 "$(CARGO_TARGET_DIR)/release/$$bin" "debian/realm/usr/bin/$$bin"; \
 	done
 
 override_dh_auto_clean:

@@ -101,7 +101,7 @@ expect_fail "$tmp_dir/cargo-missing-plex"
 
 cp -R "$tmp_dir/canonical" "$tmp_dir/rpm-qualified-font"
 replace_once "$tmp_dir/rpm-qualified-font/packaging/fedora/realm.spec" \
-    'BuildRequires:  rust >= 1.85' 'Requires(pre):  ibm-plex-mono-fonts\nBuildRequires:  rust >= 1.85'
+    'BuildRequires:  rust >= 1.89' 'Requires(pre):  ibm-plex-mono-fonts\nBuildRequires:  rust >= 1.89'
 expect_fail "$tmp_dir/rpm-qualified-font"
 
 cp -R "$tmp_dir/canonical" "$tmp_dir/font-byte"

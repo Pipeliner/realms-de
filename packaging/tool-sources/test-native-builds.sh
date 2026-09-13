@@ -230,7 +230,7 @@ assert_current_package_guide() {
     fi
     case $guide_name in
         Debian)
-            required_install='sudo apt install devscripts debhelper rustc-1.85 cargo-1.85 pkg-config python3 zstd'
+            required_install='sudo apt install devscripts debhelper rustc-1.89 cargo-1.89 pkg-config python3 zstd'
             ;;
         RPM)
             required_install='sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd'
@@ -350,11 +350,13 @@ accepts_offline_cargo() {
         *"|args=test --release --frozen --offline --locked --workspace --exclude realm-agent-sdd") ;;
         *) fail "$name did not run the exact package-relevant workspace test selection" ;;
     esac
+    for bin in realmctl realm-wm realm-bar; do
+        if [ ! -x "$REALM_EXPECTED_TARGET_DIR/release/$bin" ]; then
+            fail "$name Cargo build did not produce the staged workspace $bin"
+        fi
+    done
     case $name in
         Debian)
-            if [ ! -x "$REALM_EXPECTED_TARGET_DIR/release/realmctl" ]; then
-                fail "$name Cargo build did not produce the staged workspace realmctl"
-            fi
             deb_artifact=$(find "$REALM_EXPECTED_PACKAGE_ROOT" -maxdepth 1 \
                 -type f -name 'realm_*_*.deb' -print -quit)
             if [ -z "$deb_artifact" ]; then
@@ -362,6 +364,11 @@ accepts_offline_cargo() {
             else
                 mkdir -p "$output.deb-root"
                 dpkg-deb -x "$deb_artifact" "$output.deb-root"
+                for bin in realmctl realm-wm realm-bar; do
+                    if [ ! -x "$output.deb-root/usr/bin/$bin" ]; then
+                        fail "$name package did not contain the staged workspace $bin"
+                    fi
+                done
                 assert_current_package_guide "$name" "$output.deb-root" \
                     "$output.package-guide"
             fi
@@ -371,9 +378,12 @@ accepts_offline_cargo() {
                 -name 'realm-*.rpm' -print -quit)
             if [ -z "$rpm_artifact" ]; then
                 fail "$name native driver did not emit a package artifact"
-            elif ! rpm -qpl "$rpm_artifact" | grep -Fx '/usr/bin/realmctl' >/dev/null; then
-                fail "$name package did not contain the staged workspace realmctl"
             else
+                for bin in realmctl realm-wm realm-bar; do
+                    if ! rpm -qpl "$rpm_artifact" | grep -Fx "/usr/bin/$bin" >/dev/null; then
+                        fail "$name package did not contain the staged workspace $bin"
+                    fi
+                done
                 mkdir -p "$output.rpm-archive" "$output.rpm-root"
                 rpm_tar=$output.rpm-archive/package.tgz
                 if ! rpm2archive "$rpm_artifact" >"$rpm_tar"; then

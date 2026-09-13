@@ -5,11 +5,50 @@ set -eu
 root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 builder=$root/packaging/tool-sources/build-native-source-kits.sh
 checker=$root/packaging/tool-sources/check-native-source-kit.py
+bundle=$root/packaging/tool-sources/bundles/realm-workspace
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/realm-native-source-kits.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 if [ ! -x "$builder" ] || [ ! -x "$checker" ]; then
     echo "native source-kit producer or checker is missing" >&2
+    exit 1
+fi
+
+# SPEC 0024 requires the retained source authority to move whenever workspace
+# source or Cargo build/test input moves. Keep this guard in the source checkout
+# before the Git-free kit producer is placed behind sentinels below.
+bundle_commit=$(sed -n 's/^commit = "\([0-9a-f][0-9a-f]*\)"$/\1/p' \
+    "$bundle/bundle.toml")
+if [ -z "$bundle_commit" ] \
+    || ! git -C "$root" cat-file -e "$bundle_commit^{commit}" 2>/dev/null; then
+    echo "Realm workspace bundle does not name a reachable source commit" >&2
+    exit 1
+fi
+if ! git -C "$root" diff --quiet "$bundle_commit" HEAD -- \
+    Cargo.toml Cargo.lock crates configs/templates palette.toml; then
+    echo "Realm workspace bundle is stale relative to Cargo build/test inputs" >&2
+    git -C "$root" diff --name-only "$bundle_commit" HEAD -- \
+        Cargo.toml Cargo.lock crates configs/templates palette.toml >&2
+    exit 1
+fi
+
+archive_members=$(tar -tzf "$bundle/source.tar.gz")
+for member in \
+    realm-workspace/crates/realm-ctl/src/main.rs \
+    realm-workspace/crates/realm-session/src/bin/realm-wm.rs \
+    realm-workspace/crates/realm-bar/src/main.rs; do
+    printf '%s\n' "$archive_members" | grep -Fx "$member" >/dev/null \
+        || {
+            echo "Realm workspace source authority omits mandatory runtime source: $member" >&2
+            exit 1
+        }
+done
+
+if grep -F 'skipping $$bin: not built in this revision' \
+    "$root/packaging/debian/rules" >/dev/null \
+    || grep -F 'if [ -x "%{realm_target_dir}/release/${bin}" ]' \
+        "$root/packaging/fedora/realm.spec" >/dev/null; then
+    echo "native package recipes still permit a missing Realm runtime binary" >&2
     exit 1
 fi
 

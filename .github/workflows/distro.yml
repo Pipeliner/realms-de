@@ -36,8 +36,8 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes \
-            cargo-1.85 \
-            rustc-1.85 \
+            cargo-1.89 \
+            rustc-1.89 \
             debhelper \
             pkg-config \
             python3 \

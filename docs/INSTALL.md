@@ -1,19 +1,14 @@
 # Installing realm
 
-> **realm 0.1.0 is pre-alpha and does not install a working desktop.** The
-> binaries that make realm a desktop — `realm-wm` (the window manager) and
-> `realm-bar` — are not written yet (M1–M2 in [docs/MVP.md](MVP.md)). `realmctl`
-> is installed with `theme apply`, `theme lint`, and `theme diff`. What you can
-> install today is the *session contract*: the login entry, the entry script that
-> performs the systemd/D-Bus environment handshake, the systemd user units, the
-> portal policy and the palette.
+> **realm 0.1.0 is pre-alpha.** The native recipes now require the complete
+> Realm runtime payload — `realmctl`, `realm-wm`, and `realm-bar` — plus the
+> session contract. Native clean installation, River resolution and graphical
+> login remain unverified; a successful package build is not that evidence.
 >
-> **Selecting the realm session today ends in `FATAL WM-ABORT` and returns you to
-> the display manager.** That is deliberate, not a crash: river 0.4 does no
-> window management of its own, so without `realm-wm` there is no layer shell and
-> realm could not draw an error onto the screen it was occupying. A returned login
-> beats a black screen ([SPEC 0005](specs/0005-session-startup.md) §2). Set
-> `REALM_ALLOW_NO_WM=1` to stay in bare river instead.
+> A failed `realm-wm` unit returns the user to the display manager rather than
+> leaving bare river. That failure policy remains required while live native
+> session verification is pending ([SPEC 0005](specs/0005-session-startup.md)
+> §2). Set `REALM_ALLOW_NO_WM=1` only for deliberate bare-river diagnostics.
 >
 > Every section below has a **What this actually installs today** block that says
 > exactly what you get and what you do not.
@@ -116,7 +111,9 @@ For the user half — palette, generated configs, user units — add
 
 ### What this actually installs today
 
-- `bin/realmctl` — the theme CLI: `theme apply`, `theme lint`, and `theme diff`.
+- `bin/realmctl` — the theme CLI and display readiness probe.
+- `bin/realm-wm` — the Realm session daemon/window manager.
+- `bin/realm-bar` — the Wayland layer-shell status surfaces.
 - `bin/realm-session` — the session entry, with river, `systemctl`,
   `dbus-update-activation-environment`, `dbus-run-session` and `gsettings` on
   its PATH.
@@ -126,16 +123,15 @@ For the user half — palette, generated configs, user units — add
 - `lib/systemd/user/realm-session.target`, `realm-wm.service`,
   `realm-bar.service`, `realm-session-abort.service` — installed together with the
   `realm-session.target.wants/` symlinks that make starting the target actually
-  start something. The two client services fail because their binaries do not
-  exist.
+  start something.
 - `share/xdg-desktop-portal/realm-portals.conf`, and the equivalent as
   `xdg.portal.config.realm` — a named backend per interface.
 - `share/realm/palette.toml`, `/etc/realm/palette.toml`.
 - river 0.4.x, yazi, btop, starship, zsh, fuzzel, foot and slurp as runtime
   packages.
 
-Not installed, because they are not written: `realm-wm`, `realm-bar`, any
-generated theme.
+The generated theme is not installed as a static package artifact; `realmctl`
+applies it into the user's configuration.
 
 `checks.session-boots` boots a NixOS VM and asserts the login entry, the
 wrapper, the units, the palette and river's presence. The assertion it exists
@@ -150,7 +146,7 @@ There is no apt repository yet (`NEEDS-HUMAN` in `packaging/debian/control`:
 PPA, self-hosted apt, or GitHub Releases). Build it yourself:
 
 ```sh
-sudo apt install devscripts debhelper rustc-1.85 cargo-1.85 pkg-config python3 zstd
+sudo apt install devscripts debhelper rustc-1.89 cargo-1.89 pkg-config python3 zstd
 git clone https://github.com/pipeliner/realms-de && cd realms-de
 
 packaging/tool-sources/build-native-source-kits.sh "$PWD/native-kits"
@@ -165,11 +161,11 @@ is intake context for running that producer; it is not the package build input.
 `debian/rules` rejects a full checkout before Cargo rather than treating it as
 a second workspace authority.
 
-The retained native kit still requires Rust 1.85 and does not yet include the
-new bar. The current source workspace requires **Rust 1.89 or newer**.
-Ubuntu 24.04's default rustc is 1.75, below either floor. The
-archive carries versioned toolchain packages — `rustc-1.85`/`cargo-1.85` are
-there (1.85.1) — and `debian/rules` puts the newest one it finds on PATH,
+The retained native kit and source workspace require **Rust 1.89 or newer**.
+Ubuntu 24.04's default rustc is 1.75, below that floor. Noble Updates carries
+versioned `rustc-1.89`/`cargo-1.89` packages
+(`1.89.0+dfsg~24.04-0ubuntu0.24.04.2`, checked 2026-09-13), and
+`debian/rules` puts the newest complete versioned pair it finds on PATH,
 failing with a clear message rather than building with the wrong compiler.
 For a source-workspace build where those versioned packages are unavailable,
 install the declared floor or newer with `rustup` instead; the MSRV comes from
@@ -196,9 +192,9 @@ install fonts-ibm-plex` fixes it.
 `/usr/bin/realm-session`, `/usr/share/wayland-sessions/realm.desktop`, the four
 user units under `/usr/lib/systemd/user/` **plus the
 `realm-session.target.wants/` symlinks**, `/usr/share/xdg-desktop-portal/realm-portals.conf`
-and `/usr/share/realm/palette.toml`, plus `/usr/bin/realmctl` with `theme apply`,
-`theme lint`, and `theme diff`. `debian/rules` will also install `realm-wm` and
-`realm-bar` automatically when they build.
+and `/usr/share/realm/palette.toml`, plus the mandatory `/usr/bin/realmctl`,
+`/usr/bin/realm-wm`, and `/usr/bin/realm-bar` runtime payload. A missing binary
+fails the package build.
 
 ---
 
@@ -255,10 +251,9 @@ empty. That is the guard that would fail if the claim ever stopped being true.
 
 ### What this actually installs today
 
-The same set as the deb: `realmctl` with its three theme commands, session
-entry, login entry, four user units and their `.wants` symlinks, portal policy,
-and palette. The `%install` loop will also pick up `realm-wm` and `realm-bar`
-when they build.
+The same set as the deb: the mandatory `realmctl`, `realm-wm`, and `realm-bar`
+runtime payload, session entry, login entry, four user units and their `.wants`
+symlinks, portal policy, and palette. A missing runtime binary fails `%install`.
 
 ---
 

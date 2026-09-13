@@ -14,9 +14,9 @@
 # Keep the two in step: the dependency list below mirrors debian/control, and a
 # change to one is a change to both.
 #
-# PRE-ALPHA: `cargo deb` needs at least one [[bin]] in the packaged crate, so
-# this cannot run until M1-M2 land realm-ctl. The metadata is written now so it
-# is reviewed with everything else rather than invented in a hurry later.
+# PRE-ALPHA: this fragment is not wired into a package manifest or exercised by
+# native CI. If that alternate route is activated, its payload is the same
+# mandatory three Realm binaries as debian/rules, not a partial package.
 
 [package.metadata.deb]
 name = "realm"
@@ -27,9 +27,8 @@ extended-description = """
 realm is a Wayland desktop built around one idea: an ordered ledger of windows is
 the only state that matters, and every layout is a pure projection of it.
 
-PRE-ALPHA. realm's binaries are not written yet; this package installs the
-session contract — the wayland-session entry, the session wrapper, the systemd
-user units and the palette."""
+PRE-ALPHA. This metadata requires realmctl, realm-wm and realm-bar plus the
+session contract. Native installation and graphical login remain unverified."""
 section = "x11"
 priority = "optional"
 depends = "$auto, realm-river (>= 0.4.0) | river (>= 0.4.0), dbus-user-session, systemd, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, foot, fuzzel, btop, zsh"
@@ -44,10 +43,9 @@ assets = [
     ["palette.toml", "usr/share/realm/", "644"],
     ["configs/portal/realm-portals.conf", "usr/share/xdg-desktop-portal/", "644"],
     ["docs/INSTALL.md", "usr/share/doc/realm/", "644"],
-    # Binaries land here once they exist (M1-M2), under the settled names:
-    # ["target/release/realmctl", "usr/bin/", "755"],
-    # ["target/release/realm-wm", "usr/bin/", "755"],
-    # ["target/release/realm-bar", "usr/bin/", "755"],
+    ["target/release/realmctl", "usr/bin/", "755"],
+    ["target/release/realm-wm", "usr/bin/", "755"],
+    ["target/release/realm-bar", "usr/bin/", "755"],
 ]
 
 # cargo-deb installs these into /usr/lib/systemd/user and generates the enable
@@ -57,7 +55,7 @@ assets = [
 #
 # UNVERIFIED, and it matters: cargo-deb's systemd-units handling is
 # single-unit-oriented and its behaviour for a *target* with two wanted services
-# has not been exercised here (cargo deb cannot run until a crate has a [[bin]]).
+# has not been exercised here (the fragment is not wired into a manifest).
 # If it turns out not to create both symlinks, add them as assets pointing at a
 # checked-in symlink tree, the way packaging/debian/rules does explicitly.
 [package.metadata.deb.systemd-units]
