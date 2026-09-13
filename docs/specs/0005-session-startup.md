@@ -1,8 +1,9 @@
 # SPEC 0005 — Session startup and desktop integration
 
 - **Status:** Draft — the NixOS session-discovery contract, startup step 3,
-  XWayland display discovery and publication, and current-incarnation
-  doctor-health handoff are accepted; open questions below remain unresolved
+  XWayland display discovery and publication, current-incarnation
+  doctor-health handoff, and distro-native swayidle/swaylock selection are
+  accepted; the idle and lid-close defaults below remain unresolved
   (`needs-human`)
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
@@ -80,7 +81,8 @@ the session through NixOS display-manager session data, and assert both the
 `realm.desktop` identity and its rewritten `Exec` target. A test that uses no
 display manager may test package contents directly, but must not claim to test
 NixOS session discovery.
-- Choosing the lock screen and the idle defaults — see **Open questions**.
+- Choosing the idle and lid-close defaults — see **Open questions**. The locker
+  and idle client selection is accepted below.
 
 ## Behaviour
 
@@ -791,26 +793,31 @@ register yet. They are recorded here as findings for a human to add.
 
 ## Open questions
 
-- **OQ-1 — the lock screen and the idle defaults. `needs-human`, and this one
-  matters most.** Carried forward from ADR 0011, sharpened by ADR 0013.
+- **OQ-1 — the idle and lid-close defaults. `needs-human`, and this one matters
+  most.** Locker selection is resolved; policy remains open.
 
-  *Locker.* river 0.4 implements `ext-session-lock-v1` and reports
+  *Locker (resolved).* river 0.4 implements `ext-session-lock-v1` and reports
   `session_locked`/`session_unlocked` to the window manager, so realm can disable
   every non-lock binding while locked. That makes an `ext-session-lock-v1`
   client a hard requirement rather than a preference: a locker that draws a
   layer-shell overlay instead depends on realm serving `river-layer-shell-v1` and
   on realm granting it exclusive focus, so a crash in *realm* would expose the
-  desktop. Options: **gtklock** (proper `ext-session-lock-v1`; GTK, which we
+  desktop. Rejected alternatives remain documented for reversal: **gtklock**
+  (proper `ext-session-lock-v1`; GTK, which we
   already theme); **waylock** (same protocol, minimal, but Zig — a toolchain we
   otherwise removed from the workspace by ADR 0013); **swaylock**, only in
   versions that speak `ext-session-lock-v1`, older ones must be excluded;
   **`realm-ward`**, our own, which is the worst class of bug to get wrong and is
-  not before M6. *Recommendation: gtklock for M3*, per ADR 0011, with waylock as
-  the minimalist alternative if the Zig dependency is acceptable to packaging.
+  not before M6. Realm selects distro-native swaylock 1.7 or newer for M3:
+  Ubuntu 24.04 supplies 1.7.2, Fedora 44 supplies 1.8.5 and locked nixpkgs
+  supplies 1.8.6. All three use the supported protocol line without a private
+  tool build. NixOS must explicitly enable the `swaylock` PAM service; every
+  target must use a PAM-backed build. Swayidle is the matching idle client and
+  uses its documented `-w` plus `swaylock -f` readiness pairing.
 
-  *Idle.* Also unverified: whether river 0.4.8 implements `ext-idle-notify-v1`.
-  If it does not, no idle daemon works at all and this is blocking rather than
-  merely undecided.
+  *Idle client (resolved).* river 0.4.8's input manager creates wlroots'
+  idle-notifier global, and swayidle consumes that compositor idle protocol.
+  This settles tool compatibility, not the policy below.
 
   *Defaults.* Candidates: (a) no idle action by default; (b) blank at 5 min,
   lock at 10 min, lid-close always locks; (c) lock at 15 min, lid-close locks
