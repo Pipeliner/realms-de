@@ -13,7 +13,7 @@ use realm_core::ipc::{Request, Response};
 use realm_core::ledger::OrbitId;
 
 use crate::backend::{BackendError, BackendReady, BackendTicket, WmBackend, WorkerCapacityError};
-use crate::modules::ClockModule;
+use crate::modules::{ClockModule, ModuleSampler, ModuleSnapshot};
 use crate::persistence::{PersistCompletion, PersistCompletionError, PersistenceCoordinator};
 use crate::session::{
     QuitAfter, Session, SessionActionError, SessionEffect, SessionEventError, SessionUpdate,
@@ -188,6 +188,7 @@ pub struct RuntimeOwners<B: WmBackend> {
     worker: Worker,
     timers: SessionTimers,
     clock: ClockRuntime,
+    sampler: ModuleSampler,
     persistence: PersistenceCoordinator,
     pending_request: Option<(BackendTicket, ConnectionId)>,
     quit_receipt: Option<ResponseReceipt>,
@@ -204,6 +205,7 @@ impl<B: WmBackend> RuntimeOwners<B> {
         worker: Worker,
         timers: SessionTimers,
         clock: ClockRuntime,
+        sampler: ModuleSampler,
         persistence: PersistenceCoordinator,
     ) -> Self {
         Self {
@@ -212,6 +214,7 @@ impl<B: WmBackend> RuntimeOwners<B> {
             worker,
             timers,
             clock,
+            sampler,
             persistence,
             pending_request: None,
             quit_receipt: None,
@@ -388,6 +391,7 @@ impl<B: WmBackend> RuntimeOwners<B> {
                     eprintln!("realm-wm: ignored retired key-derived theme reload");
                 }
                 SessionEffect::QuitPending { after } => {
+                    self.sampler.stop()?;
                     if quit_after.replace(after).is_some() {
                         return Err(RuntimeError::Invariant(
                             "one update contained more than one Quit barrier",
@@ -562,6 +566,18 @@ impl<B: WmBackend> RuntimeOwners<B> {
         }
         Ok(())
     }
+
+    /// Consume at most one latest sampler snapshot without blocking.
+    pub fn service_sampler(&mut self) -> Result<(), RuntimeError> {
+        if self.session.phase() != crate::session::RecoveryPhase::Live {
+            return Ok(());
+        }
+        if let Some(snapshot) = self.sampler.try_take_latest()? {
+            let update = self.clock.accept_sampler(&mut self.session, snapshot)?;
+            self.handle_session_update(Instant::now(), update)?;
+        }
+        Ok(())
+    }
 }
 
 fn cancel_reservation(worker: &mut Worker, reservation: Option<WorkerReservation>) {
@@ -612,24 +628,37 @@ where
 
     let control = bound.activate()?.into_server(Instant::now());
     let timers = SessionTimers::new()?;
-    let mut owners = RuntimeOwners::new(session, control, worker, timers, clock, persistence);
+    let sampler = ModuleSampler::start()?;
+    let mut owners = RuntimeOwners::new(
+        session,
+        control,
+        worker,
+        timers,
+        clock,
+        sampler,
+        persistence,
+    );
     ready()?;
     run_combined_loop(&mut owners)
 }
 
 fn update_clock_module<B: WmBackend>(
     session: &mut Session<B>,
+    snapshot: Option<ModuleSnapshot>,
     clock: realm_core::state::Module,
 ) -> SessionUpdate {
-    let mut modules = session.state().modules.clone();
-    modules.retain(|module| module.id != "clock");
-    modules.push(clock);
+    let modules = match snapshot {
+        Some(snapshot) => snapshot.modules(clock),
+        None => vec![clock],
+    };
     session.update_modules(modules)
 }
 
 struct ClockRuntime {
     module: ClockModule,
     dirty: bool,
+    sampler: Option<ModuleSnapshot>,
+    sampler_dirty: bool,
 }
 
 impl ClockRuntime {
@@ -637,6 +666,8 @@ impl ClockRuntime {
         Self {
             module: ClockModule::system(),
             dirty: false,
+            sampler: None,
+            sampler_dirty: false,
         }
     }
 
@@ -645,6 +676,8 @@ impl ClockRuntime {
         Self {
             module: ClockModule::utc(),
             dirty: false,
+            sampler: None,
+            sampler_dirty: false,
         }
     }
 
@@ -658,7 +691,29 @@ impl ClockRuntime {
             return Ok(SessionUpdate::unchanged());
         }
         self.dirty = false;
-        Ok(update_clock_module(session, self.module.render(now)?))
+        Ok(update_clock_module(
+            session,
+            self.sampler,
+            self.module.render(now)?,
+        ))
+    }
+
+    fn accept_sampler<B: WmBackend>(
+        &mut self,
+        session: &mut Session<B>,
+        snapshot: ModuleSnapshot,
+    ) -> Result<SessionUpdate, RuntimeError> {
+        self.sampler = Some(snapshot);
+        if session.has_active_backend_transaction() {
+            self.sampler_dirty = true;
+            return Ok(SessionUpdate::unchanged());
+        }
+        self.sampler_dirty = false;
+        Ok(update_clock_module(
+            session,
+            self.sampler,
+            self.module.render(SystemTime::now())?,
+        ))
     }
 
     fn fold_if_clean<B: WmBackend>(
@@ -667,11 +722,12 @@ impl ClockRuntime {
         mut update: SessionUpdate,
         now: SystemTime,
     ) -> Result<SessionUpdate, RuntimeError> {
-        if !self.dirty || session.has_active_backend_transaction() {
+        if (!self.dirty && !self.sampler_dirty) || session.has_active_backend_transaction() {
             return Ok(update);
         }
         self.dirty = false;
-        let clock_update = update_clock_module(session, self.module.render(now)?);
+        self.sampler_dirty = false;
+        let clock_update = update_clock_module(session, self.sampler, self.module.render(now)?);
         if clock_update.state.is_some() {
             update.state = clock_update.state;
         }
@@ -805,6 +861,7 @@ enum PollSource {
     Backend,
     Repeat,
     Clock,
+    Sampler,
     Worker,
     Control(ControlToken),
 }
@@ -858,6 +915,13 @@ fn run_combined_loop<B: WmBackend>(owners: &mut RuntimeOwners<B>) -> Result<(), 
             owners.timers.clock_fd(),
             PollFlags::IN,
         ));
+        if phase == RecoveryPhase::Live {
+            sources.push(PollSource::Sampler);
+            poll_fds.push(PollFd::from_borrowed_fd(
+                owners.sampler.event_fd(),
+                PollFlags::IN,
+            ));
+        }
         sources.push(PollSource::Worker);
         poll_fds.push(PollFd::from_borrowed_fd(
             owners.worker.event_fd(),
@@ -922,6 +986,9 @@ fn run_combined_loop<B: WmBackend>(owners: &mut RuntimeOwners<B>) -> Result<(), 
         }
         if ready_for(&ready, |source| matches!(source, PollSource::Clock)).is_some() {
             owners.service_clock(SystemTime::now())?;
+        }
+        if ready_for(&ready, |source| matches!(source, PollSource::Sampler)).is_some() {
+            owners.service_sampler()?;
         }
         if owners.worker.has_results()
             || ready_for(&ready, |source| matches!(source, PollSource::Worker)).is_some()
@@ -1067,6 +1134,7 @@ mod tests {
         BackendPollInterest, BackendReady, BackendResult, BackendSubmission, BackendTicket,
         BackendWindowId, WmBackend,
     };
+    use crate::modules::{ModuleSampler, ModuleSnapshot, NetworkRate};
     use crate::persistence::PersistenceCoordinator;
     use crate::session::{Session, SessionUpdate};
     use crate::timers::SessionTimers;
@@ -1431,8 +1499,16 @@ mod tests {
         let control = bound.activate().unwrap().into_server(Instant::now());
         let timers = SessionTimers::new().unwrap();
         let clock = ClockRuntime::utc();
-        let mut owners =
-            super::RuntimeOwners::new(session, control, worker, timers, clock, persistence);
+        let sampler = ModuleSampler::fixture().unwrap();
+        let mut owners = super::RuntimeOwners::new(
+            session,
+            control,
+            worker,
+            timers,
+            clock,
+            sampler,
+            persistence,
+        );
         let started = Instant::now();
         let quit = owners.session.begin_direct_quit().unwrap();
         owners.apply_update(started, quit, None).unwrap();
@@ -1489,5 +1565,109 @@ mod tests {
             .iter()
             .any(|module| module.id == "clock" && module.text == "00:00"));
         assert!(!clock.dirty);
+    }
+
+    #[test]
+    fn active_transaction_coalesces_latest_modules_at_one_clean_publication() {
+        let mut session = live_session();
+        let mut modules = ClockRuntime::utc();
+        let fixed = UNIX_EPOCH + Duration::from_secs(1_735_689_600);
+        assert!(session
+            .switch_orbit(realm_core::ledger::OrbitId::from_human(2).unwrap())
+            .unwrap()
+            .pending_action
+            .is_some());
+
+        assert_eq!(
+            modules
+                .accept_sampler(
+                    &mut session,
+                    ModuleSnapshot {
+                        cpu_percent: Some(10),
+                        ..ModuleSnapshot::default()
+                    },
+                )
+                .unwrap(),
+            SessionUpdate::unchanged()
+        );
+        modules
+            .accept_sampler(
+                &mut session,
+                ModuleSnapshot {
+                    cpu_percent: Some(80),
+                    memory_tenths_gib: Some(95),
+                    network: Some(NetworkRate {
+                        receive_bps: 2_000_000,
+                        transmit_bps: 1_200,
+                    }),
+                    battery: None,
+                },
+            )
+            .unwrap();
+        assert!(session.state().modules.is_empty());
+
+        let update = session
+            .handle_backend_event(BackendEvent::PolicyTurn(BackendPolicyTurn {
+                id: BackendPolicyTurnId::new(3).unwrap(),
+                drains: None,
+                events: Vec::new(),
+            }))
+            .unwrap();
+        let folded = modules.fold_if_clean(&mut session, update, fixed).unwrap();
+        let state = folded.state.unwrap();
+        assert_eq!(
+            state
+                .modules
+                .iter()
+                .map(|module| module.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["net", "cpu", "mem", "clock"]
+        );
+        assert_eq!(state.modules[1].text, "cpu 80%");
+        assert_eq!(state.modules[2].text, "mem 9.5G");
+    }
+
+    #[test]
+    fn quit_pending_stops_sampler_without_join_or_further_service() {
+        let root = fixture_dir("quit-stops-sampler");
+        let runtime = test_runtime_dir(&root).unwrap();
+        let snapshot_path = runtime.path().join("realm/ledger.json");
+        let bound = runtime.prepare_server_endpoint().unwrap().bind().unwrap();
+        let worker = Worker::start(snapshot_path).unwrap();
+        let session = live_session();
+        let control = bound.activate().unwrap().into_server(Instant::now());
+        let timers = SessionTimers::new().unwrap();
+        let clock = ClockRuntime::utc();
+        let sampler = ModuleSampler::fixture().unwrap();
+        sampler
+            .publish_fixture(ModuleSnapshot {
+                cpu_percent: Some(99),
+                ..ModuleSnapshot::default()
+            })
+            .unwrap();
+        let persistence = PersistenceCoordinator::new(None);
+        let mut owners = super::RuntimeOwners::new(
+            session,
+            control,
+            worker,
+            timers,
+            clock,
+            sampler,
+            persistence,
+        );
+
+        let now = Instant::now();
+        let quit = owners.session.begin_direct_quit().unwrap();
+        owners.apply_update(now, quit, None).unwrap();
+        assert!(owners.sampler.stopped());
+        owners.service_sampler().unwrap();
+        assert!(owners.sampler.try_take_latest().unwrap().is_some());
+        assert!(owners
+            .session
+            .state()
+            .modules
+            .iter()
+            .all(|module| module.id != "cpu"));
+        fs::remove_dir_all(root).unwrap();
     }
 }
