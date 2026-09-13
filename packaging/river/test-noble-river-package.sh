@@ -80,7 +80,9 @@ for companion in \
     libdrm-amdgpu1 \
     libdrm-intel1 \
     libdrm-nouveau2 \
-    libdrm-radeon1; do
+    libdrm-radeon1 \
+    libwayland-cursor0 \
+    libwayland-egl1; do
     cp -R "$tmpdir/canonical" "$tmpdir/$companion"
     sed -i \
         "s/^Depends:.*/Depends: libinput-bin (>= 1.25.0), $companion/" \

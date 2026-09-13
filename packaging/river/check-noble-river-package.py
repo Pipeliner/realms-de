@@ -23,7 +23,7 @@ LIBRARY_FILE = re.compile(r"[^/]+\.so(?:\.[0-9]+)*\Z")
 DECLARED_DOCS = {"changelog.Debian.gz", "copyright"}
 PRIVATE_DEPENDENCIES = (
     re.compile(r"libwlroots(?:[-.0-9].*)?\Z"),
-    re.compile(r"libwayland-(?:client|server)\d+\Z"),
+    re.compile(r"libwayland-(?:client|server|cursor|egl)\d+\Z"),
     re.compile(r"libdrm\d+\Z"),
     re.compile(r"libdrm-(?:amdgpu|intel|nouveau|radeon)\d+\Z"),
     re.compile(r"libinput\d+\Z"),
