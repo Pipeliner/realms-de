@@ -128,6 +128,12 @@ refuses to start without `WAYLAND_DISPLAY` (already enforced by the unit's
    closes the "protocol version drift after a river bump" row of
    [PITFALLS.md](../PITFALLS.md).
 
+   A successful `WmBackend::connect` returns one `BackendConnection` rather
+   than capabilities alone. It contains the `Capabilities`, the actual bound
+   `InterfaceVersion` vector, and `layer_shell_served`. Session consumes and
+   retains this immutable value; a later health request never calls back into
+   the backend to rediscover or reconstruct connection facts.
+
 4. **Bind each of the four companion globals exactly once.** Bind
    `river_layer_shell_v1`, `river_xkb_bindings_v1`,
    `river_input_manager_v1`, and `river_libinput_config_v1` at the table's
