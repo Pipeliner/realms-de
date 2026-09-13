@@ -62,6 +62,97 @@ grep -Fq "input_checker=\"\$probe_input_dir/check_inputs.py\"" \
     "$fixture_script_dir/guest-probe.sh" \
     || fail 'guest probe does not resolve its result checker from the retained input directory'
 
+declare -F wait_for_visible_frame >/dev/null \
+    || fail 'native VM harness has no bounded painted-frame readiness check'
+frame_attempts="$case_root/frame-attempts"
+frame_output="$case_root/framebuffer.ppm"
+frame_diagnostic="$case_root/framebuffer-validation.txt"
+printf '0\n' >"$frame_attempts"
+capture_framebuffer() {
+    local output=$1 count
+    count=$(<"$frame_attempts")
+    count=$((count + 1))
+    printf '%s\n' "$count" >"$frame_attempts"
+    printf 'frame %s\n' "$count" >"$output"
+}
+validate_framebuffer() {
+    local _output=$1 count
+    count=$(<"$frame_attempts")
+    if ((count < 3)); then
+        printf 'FAIL: unpainted framebuffer attempt %s\n' "$count" >&2
+        return 1
+    fi
+}
+sleep 10 &
+qemu_pid=$!
+wait_for_visible_frame "$frame_output" "$frame_diagnostic" 3
+test "$(<"$frame_attempts")" = 3 \
+    || fail 'painted-frame readiness did not retry validation to success'
+test "$(<"$frame_output")" = 'frame 3' \
+    || fail 'painted-frame readiness did not retain its accepted frame'
+test ! -e "$frame_diagnostic" \
+    || fail 'successful painted-frame readiness retained a stale diagnostic'
+stop_qemu "$qemu_pid"
+
+printf '0\n' >"$frame_attempts"
+capture_framebuffer() {
+    local output=$1 count
+    count=$(<"$frame_attempts")
+    count=$((count + 1))
+    printf '%s\n' "$count" >"$frame_attempts"
+    if ((count == 1)); then
+        printf 'complete frame 1\n' >"$output"
+        return 0
+    fi
+    printf 'partial frame %s\n' "$count" >"$output"
+    return 1
+}
+validate_framebuffer() {
+    printf 'FAIL: unpainted framebuffer attempt %s\n' "$(<"$frame_attempts")" >&2
+    return 1
+}
+sleep 10 &
+qemu_pid=$!
+frame_start=$SECONDS
+if wait_for_visible_frame "$frame_output" "$frame_diagnostic" 1 \
+    2>"$case_root/frame-timeout.err"; then
+    fail 'unpainted framebuffer was accepted'
+fi
+((SECONDS - frame_start < 3)) \
+    || fail 'painted-frame readiness exceeded its one deadline'
+test -s "$frame_output" \
+    || fail 'painted-frame failure discarded the last actual frame'
+test "$(<"$frame_output")" = 'complete frame 1' \
+    || fail 'failed screendump replaced the last complete actual frame'
+grep -Fq 'unpainted framebuffer attempt 1' "$frame_diagnostic" \
+    || fail 'painted-frame failure discarded its validation diagnostic'
+grep -Fq 'Frame did not become visibly painted within 1 seconds' \
+    "$case_root/frame-timeout.err" \
+    || fail 'painted-frame deadline diagnostic was lost'
+failed_frame_attempts=$(<"$frame_attempts")
+capture_framebuffer_if_absent "$frame_output"
+test "$(<"$frame_attempts")" = "$failed_frame_attempts" \
+    || fail 'failure cleanup replaced the last actual framebuffer'
+stop_qemu "$qemu_pid"
+
+rm -f -- "$frame_output" "$frame_diagnostic"
+capture_framebuffer() {
+    sleep 0.90
+    return 1
+}
+sleep 10 &
+qemu_pid=$!
+frame_start_ns=$(python3 -c 'import time; print(time.monotonic_ns())')
+if wait_for_visible_frame "$frame_output" "$frame_diagnostic" 1 \
+    2>"$case_root/frame-tight-timeout.err"; then
+    fail 'failed slow screendump was accepted'
+fi
+frame_end_ns=$(python3 -c 'import time; print(time.monotonic_ns())')
+frame_elapsed_ms=$(((frame_end_ns - frame_start_ns) / 1000000))
+((frame_elapsed_ms < 1125)) \
+    || fail "painted-frame deadline overran: ${frame_elapsed_ms}ms"
+stop_qemu "$qemu_pid"
+
 (
     exit 0
 ) &

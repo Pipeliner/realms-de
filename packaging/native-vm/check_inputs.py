@@ -269,6 +269,58 @@ def validate_control_frames(frames: object) -> None:
         raise ValueError("control evidence did not return GetState")
 
 
+def validate_framebuffer(path: Path) -> None:
+    """Require a complete QEMU P6 frame with both Realm UI bands painted."""
+
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"framebuffer is not a regular file: {path}")
+    try:
+        with path.open("rb") as source:
+            if source.readline().rstrip(b"\r\n") != b"P6":
+                raise ValueError("framebuffer is not a P6 image")
+            dimensions = source.readline().split()
+            if len(dimensions) != 2:
+                raise ValueError("framebuffer dimensions are malformed")
+            width, height = (int(value) for value in dimensions)
+            if width <= 0 or height < 128:
+                raise ValueError("framebuffer dimensions are too small")
+            if source.readline().rstrip(b"\r\n") != b"255":
+                raise ValueError("framebuffer is not 8-bit RGB")
+            pixels = source.read()
+    except (OSError, UnicodeError, ValueError) as error:
+        if isinstance(error, ValueError) and str(error).startswith("framebuffer"):
+            raise
+        raise ValueError(f"cannot read framebuffer {path}: {error}") from error
+
+    expected_length = width * height * 3
+    if len(pixels) != expected_length:
+        raise ValueError(
+            f"framebuffer payload length mismatch: expected {expected_length}, got {len(pixels)}"
+        )
+
+    band_pixels = width * 64
+    required_non_black = (band_pixels + 7) // 8
+
+    def count_non_black(payload: bytes) -> int:
+        return sum(
+            payload[index] != 0
+            or payload[index + 1] != 0
+            or payload[index + 2] != 0
+            for index in range(0, len(payload), 3)
+        )
+
+    band_bytes = band_pixels * 3
+    top_non_black = count_non_black(pixels[:band_bytes])
+    bottom_non_black = count_non_black(pixels[-band_bytes:])
+    if top_non_black < required_non_black or bottom_non_black < required_non_black:
+        raise ValueError(
+            "unpainted framebuffer: "
+            f"top band has {top_non_black}/{band_pixels} non-black pixels, "
+            f"bottom band has {bottom_non_black}/{band_pixels}; "
+            f"each requires {required_non_black}"
+        )
+
+
 def _main(arguments: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, default=Path(__file__).with_name("images.json"))
@@ -285,6 +337,8 @@ def _main(arguments: list[str]) -> int:
     doctor_parser.add_argument("path", type=Path)
     control_parser = subparsers.add_parser("control")
     control_parser.add_argument("path", type=Path)
+    framebuffer_parser = subparsers.add_parser("framebuffer")
+    framebuffer_parser.add_argument("path", type=Path)
     options = parser.parse_args(arguments)
 
     if options.command == "url":
@@ -304,6 +358,8 @@ def _main(arguments: list[str]) -> int:
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise ValueError(f"cannot read control evidence: {error}") from error
         validate_control_frames(frames)
+    elif options.command == "framebuffer":
+        validate_framebuffer(options.path)
     return 0
 
 

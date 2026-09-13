@@ -275,6 +275,58 @@ exit 97
         with self.assertRaisesRegex(ValueError, "protocol-v2 Hello"):
             self.module.validate_control_frames(frames)
 
+    def test_framebuffer_requires_visible_top_and_bottom_session_bands(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            width = 128
+            height = 128
+            black = b"\x00\x00\x00"
+            visible = b"\x0a\x0c\x15"
+
+            pointer_only = root / "pointer-only.ppm"
+            pointer_pixels = bytearray(black * (width * height))
+            for index in range(100):
+                offset = ((height // 2) * width + index) * 3
+                pointer_pixels[offset : offset + 3] = b"\xff\xff\xff"
+            pointer_only.write_bytes(
+                f"P6\n{width} {height}\n255\n".encode() + pointer_pixels
+            )
+            with self.assertRaisesRegex(ValueError, "unpainted framebuffer"):
+                self.module.validate_framebuffer(pointer_only)
+
+            painted = root / "painted.ppm"
+            painted_pixels = bytearray(black * (width * height))
+            for row in list(range(8)) + list(range(height - 8, height)):
+                start = row * width * 3
+                painted_pixels[start : start + width * 3] = visible * width
+            painted.write_bytes(
+                f"P6\n{width} {height}\n255\n".encode() + painted_pixels
+            )
+            self.module.validate_framebuffer(painted)
+            self.assertEqual(self.module._main(["framebuffer", str(painted)]), 0)
+
+            top_only = root / "top-only.ppm"
+            top_only.write_bytes(
+                f"P6\n{width} {height}\n255\n".encode()
+                + painted_pixels[: width * 8 * 3]
+                + black * (width * (height - 8))
+            )
+            with self.assertRaisesRegex(ValueError, "unpainted framebuffer"):
+                self.module.validate_framebuffer(top_only)
+
+            bottom_only = root / "bottom-only.ppm"
+            bottom_only.write_bytes(
+                f"P6\n{width} {height}\n255\n".encode()
+                + black * (width * (height - 8))
+                + painted_pixels[-width * 8 * 3 :]
+            )
+            with self.assertRaisesRegex(ValueError, "unpainted framebuffer"):
+                self.module.validate_framebuffer(bottom_only)
+
+            painted.write_bytes(painted.read_bytes() + b"trailing")
+            with self.assertRaisesRegex(ValueError, "payload length"):
+                self.module.validate_framebuffer(painted)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -128,6 +128,16 @@ bounded harness contract.
    fixture must not silently accept either state.
 7. The host captures the emulated framebuffer plus doctor, state, logind,
    process, package, systemd-user and journal evidence before bounded shutdown.
+   Unit and control readiness may precede the compositor's first painted frame,
+   so a merely non-empty screendump is insufficient. For at most 15 seconds in
+   total, the host captures and validates successive QEMU P6 screendumps while
+   QEMU remains alive. A valid frame has an exact 8-bit RGB payload, is at least
+   128 pixels high, and has non-black pixels in at least one eighth of both its
+   top 64-row band and its bottom 64-row band. This observable boundary rejects
+   an unpainted framebuffer containing only the QEMU pointer while admitting
+   the Realm bar and key strip seen in both native guests. The last frame and
+   its validation diagnostic are retained when the deadline expires. This is
+   visible-session evidence, not OCR or an interactive-application claim.
    Fedora additionally records `getenforce`; its value is diagnostic evidence,
    not a security gate.
 
@@ -137,9 +147,9 @@ bounded harness contract.
 |---|---|---|
 | N1 | Given either declared image, when one byte or the expected digest changes, then admission fails before the overlay or VM is created | pure image-manifest fixture plus VM download log |
 | N2 | Given same-run producer artifacts, when an artifact is absent, duplicated, renamed, from another commit, or has the wrong package identity, then the VM fails before guest installation; the VM workflow contains no build command | pure artifact-inventory fixture plus workflow review |
-| N3 | Given the Ubuntu artifact pair and pinned Ubuntu image, when SDDM autologins `alice`, then logind reports a non-remote Wayland session from the installed Realm entry, `/proc` identifies the private River and installed Realm WM, all three Realm user units are active, `GetState` succeeds, doctor meets §Guest contract 6, and evidence is retained | `native-session-vm (ubuntu-24.04-x86_64)` |
-| N4 | Given the Fedora RPM and pinned Fedora image, when SDDM autologins `alice`, then the same session/control/doctor assertions pass with Fedora's `/usr/bin/river`; the evidence records the unchanged SELinux mode without inspecting AVCs or claiming policy compatibility | `native-session-vm (fedora-44-x86_64)` |
-| N5 | Given a runner without `/dev/kvm`, with `/dev/kvm` still inaccessible after the narrowly scoped runner-UID ACL, a dead QEMU process, unreachable SSH, failed login, probe inputs lost across reboot, or incomplete probe, then the matrix entry fails rather than elevating QEMU, falling back to TCG, skipping, or reporting reduced evidence; cleanup remains bounded and uploads diagnostics on failure | VM harness reboot-retention and timeout/failure fixtures, workflow KVM-admission fixture, and artifact step with `if: always()` |
+| N3 | Given the Ubuntu artifact pair and pinned Ubuntu image, when SDDM autologins `alice`, then logind reports a non-remote Wayland session from the installed Realm entry, `/proc` identifies the private River and installed Realm WM, all three Realm user units are active, `GetState` succeeds, doctor meets §Guest contract 6, the framebuffer meets §Guest contract 7, and evidence is retained | `native-session-vm (ubuntu-24.04-x86_64)` |
+| N4 | Given the Fedora RPM and pinned Fedora image, when SDDM autologins `alice`, then the same session/control/doctor/framebuffer assertions pass with Fedora's `/usr/bin/river`; the evidence records the unchanged SELinux mode without inspecting AVCs or claiming policy compatibility | `native-session-vm (fedora-44-x86_64)` |
+| N5 | Given a runner without `/dev/kvm`, with `/dev/kvm` still inaccessible after the narrowly scoped runner-UID ACL, a dead QEMU process, unreachable SSH, failed login, probe inputs lost across reboot, incomplete probe, or a framebuffer that remains unpainted through the one frame deadline, then the matrix entry fails rather than elevating QEMU, falling back to TCG, skipping, or reporting reduced evidence; cleanup remains bounded, the last frame is retained, and diagnostics upload on failure | VM harness reboot-retention, frame-readiness, and timeout/failure fixtures, workflow KVM-admission fixture, and artifact step with `if: always()` |
 
 ## Evidence boundary
 

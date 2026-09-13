@@ -76,6 +76,92 @@ require_command() {
     }
 }
 
+monotonic_milliseconds() {
+    local uptime seconds fraction
+    IFS=' ' read -r uptime _ < /proc/uptime
+    seconds=${uptime%%.*}
+    fraction=${uptime#*.}000
+    printf '%d\n' "$((10#$seconds * 1000 + 10#${fraction:0:3}))"
+}
+
+milliseconds_as_seconds() {
+    local milliseconds=$1
+    printf '%d.%03d\n' "$((milliseconds / 1000))" "$((milliseconds % 1000))"
+}
+
+validate_framebuffer() {
+    local output=$1 timeout_duration=${2:-5}
+    timeout "$timeout_duration" python3 "$check_inputs" framebuffer "$output"
+}
+
+capture_framebuffer_if_absent() {
+    local output=$1
+    [[ -s "$output" ]] || capture_framebuffer "$output"
+}
+
+wait_for_visible_frame() {
+    local output=$1 diagnostic=$2 timeout_seconds=$3
+    local candidate="${output}.candidate" candidate_diagnostic="${diagnostic}.candidate"
+    local capture_diagnostic="${diagnostic}.capture"
+    local now deadline remaining pause validation_duration validation_status
+    now=$(monotonic_milliseconds)
+    deadline=$((now + timeout_seconds * 1000))
+    rm -f -- "$candidate" "$candidate_diagnostic" "$capture_diagnostic"
+    while :; do
+        now=$(monotonic_milliseconds)
+        remaining=$((deadline - now))
+        ((remaining > 0)) || break
+        if ! kill -0 "$qemu_pid" 2>/dev/null; then
+            printf 'QEMU exited before the framebuffer became visibly painted\n' >&2
+            return 1
+        fi
+        rm -f -- "$candidate" "$candidate_diagnostic" "$capture_diagnostic"
+        if capture_framebuffer "$candidate" "$deadline" 2>"$capture_diagnostic"; then
+            now=$(monotonic_milliseconds)
+            remaining=$((deadline - now))
+            if ((remaining > 0)); then
+                validation_duration=$(milliseconds_as_seconds "$remaining")
+                validation_status=0
+                validate_framebuffer "$candidate" "$validation_duration" \
+                    2>"$candidate_diagnostic" || validation_status=$?
+            else
+                validation_status=124
+                printf 'FAIL: framebuffer deadline expired before validation\n' \
+                    >"$candidate_diagnostic"
+            fi
+            if ((validation_status == 0)); then
+                mv -f -- "$candidate" "$output"
+                rm -f -- "$diagnostic" "$candidate_diagnostic" "$capture_diagnostic"
+                return 0
+            fi
+            [[ -s "$candidate_diagnostic" ]] || printf \
+                'FAIL: framebuffer validation exited %s without a diagnostic\n' \
+                "$validation_status" >"$candidate_diagnostic"
+            mv -f -- "$candidate" "$output"
+            mv -f -- "$candidate_diagnostic" "$diagnostic"
+        else
+            rm -f -- "$candidate"
+            if [[ ! -s "$output" ]]; then
+                [[ -s "$capture_diagnostic" ]] || printf \
+                    'FAIL: framebuffer capture did not complete\n' \
+                    >"$capture_diagnostic"
+                mv -f -- "$capture_diagnostic" "$diagnostic"
+            fi
+        fi
+        rm -f -- "$candidate" "$candidate_diagnostic" "$capture_diagnostic"
+        now=$(monotonic_milliseconds)
+        remaining=$((deadline - now))
+        ((remaining > 0)) || break
+        pause=$((remaining < 250 ? remaining : 250))
+        sleep "$(milliseconds_as_seconds "$pause")"
+    done
+    rm -f -- "$candidate" "$candidate_diagnostic" "$capture_diagnostic"
+    printf 'Frame did not become visibly painted within %s seconds\n' \
+        "$timeout_seconds" >&2
+    [[ -s "$diagnostic" ]] && cat "$diagnostic" >&2
+    return 1
+}
+
 run_native_session_vm() (
     set -euo pipefail
     if (($# != 3)); then
@@ -118,7 +204,7 @@ run_native_session_vm() (
     run_root=$(mktemp -d "${RUNNER_TEMP:-/tmp}/realm-native-vm.XXXXXX")
     cleanup_native_vm() {
         if [[ -n "$qemu_pid" ]] && kill -0 "$qemu_pid" 2>/dev/null; then
-            capture_framebuffer "$evidence_dir/framebuffer.ppm" || true
+            capture_framebuffer_if_absent "$evidence_dir/framebuffer.ppm" || true
             timeout "$cleanup_timeout" ssh "${ssh_options[@]}" alice@127.0.0.1 \
                 'sudo journalctl -b --no-pager' \
                 > "$evidence_dir/cleanup-journal.txt" 2>&1 || true
@@ -128,15 +214,26 @@ run_native_session_vm() (
         rm -rf -- "$run_root"
     }
     capture_framebuffer() {
-        local output=$1 deadline=$((SECONDS + 2))
+        local output=$1 deadline=${2:-} now remaining pause timeout_duration
+        if [[ -z "$deadline" ]]; then
+            now=$(monotonic_milliseconds)
+            deadline=$((now + 12000))
+        fi
         [[ -n "$qemu_pid" ]] || return 1
-        while [[ ! -e "$monitor" ]] && kill -0 "$qemu_pid" 2>/dev/null \
-            && ((SECONDS < deadline)); do
-            sleep 0.05
+        while [[ ! -e "$monitor" ]] && kill -0 "$qemu_pid" 2>/dev/null; do
+            now=$(monotonic_milliseconds)
+            remaining=$((deadline - now))
+            ((remaining > 0)) || return 1
+            pause=$((remaining < 50 ? remaining : 50))
+            sleep "$(milliseconds_as_seconds "$pause")"
         done
         [[ -e "$monitor" ]] || return 1
+        now=$(monotonic_milliseconds)
+        remaining=$((deadline - now))
+        ((remaining > 0)) || return 1
+        timeout_duration=$(milliseconds_as_seconds "$remaining")
         printf 'screendump %s\n' "$output" \
-            | timeout 10 socat - "UNIX-CONNECT:$monitor"
+            | timeout "$timeout_duration" socat - "UNIX-CONNECT:$monitor"
     }
     trap cleanup_native_vm EXIT
 
@@ -251,8 +348,10 @@ run_native_session_vm() (
         return "$probe_status"
     fi
 
-    capture_framebuffer "$evidence_dir/framebuffer.ppm"
-    test -s "$evidence_dir/framebuffer.ppm"
+    wait_for_visible_frame \
+        "$evidence_dir/framebuffer.ppm" \
+        "$evidence_dir/framebuffer-validation.txt" \
+        15
     printf '%s\n' "$target" > "$evidence_dir/target.txt"
 
     stop_qemu "$qemu_pid"
