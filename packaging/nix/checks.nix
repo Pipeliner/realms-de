@@ -483,6 +483,11 @@ EOF
       # state before the tiled-desktop framebuffer capture is accepted.
       # SPEC 0027: dispatch success alone is insufficient. Press the real
       # browser binding and require both Firefox and a compositor-owned window.
+      selected_browser = machine.succeed(
+          "systemd-run --user --machine=alice@ --wait --pipe --quiet --collect "
+          "${pkgs.xdg-utils}/bin/xdg-settings get default-web-browser"
+      ).strip()
+      assert selected_browser == "realm-browser-test.desktop", selected_browser
       machine.send_key("meta_l-b")
       machine.wait_until_succeeds("pgrep -u alice -f firefox", timeout=STATE_TIMEOUT)
       browser_raw, _browser_state = wait_for_state(
