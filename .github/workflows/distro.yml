@@ -332,6 +332,7 @@ jobs:
           python3 packaging/native-vm/check_workflow.py .github/workflows/distro.yml
           python3 packaging/native-vm/test_check_workflow.py
           python3 packaging/native-vm/test_check_inputs.py
+          python3 packaging/systemd/test-session-ordering.py
 
   build:
     name: ${{ matrix.name }}

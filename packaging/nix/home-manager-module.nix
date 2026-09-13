@@ -79,6 +79,7 @@ in
       Unit = {
         Description = "realm desktop session";
         BindsTo = [ "graphical-session.target" ];
+        Before = [ "graphical-session.target" ];
         Wants = [ "graphical-session-pre.target" ];
         After = [ "graphical-session-pre.target" ];
       };
@@ -87,8 +88,10 @@ in
     systemd.user.services.realm-wm = {
       Unit = {
         Description = "realm window manager and session daemon";
-        PartOf = [ "graphical-session.target" ];
-        After = [ "graphical-session.target" ];
+        PartOf = [
+          "realm-session.target"
+          "graphical-session.target"
+        ];
         ConditionEnvironment = "WAYLAND_DISPLAY";
         StartLimitIntervalSec = 30;
         StartLimitBurst = 5;
@@ -129,11 +132,11 @@ in
     systemd.user.services.realm-bar = {
       Unit = {
         Description = "realm bar";
-        PartOf = [ "graphical-session.target" ];
-        After = [
+        PartOf = [
+          "realm-session.target"
           "graphical-session.target"
-          "realm-wm.service"
         ];
+        After = [ "realm-wm.service" ];
         Wants = [ "realm-wm.service" ];
         ConditionEnvironment = "WAYLAND_DISPLAY";
         StartLimitIntervalSec = 30;
