@@ -41,9 +41,10 @@ REALM_STAGE := $(CURDIR)/debian/realm-workspace
 REALM_STAGER := $(CURDIR)/packaging/tool-sources/stage-realm-workspace.py
 REALM_KIT_CHECKER := $(CURDIR)/packaging/tool-sources/check-native-source-kit.py
 
-# Keep Cargo state and build outputs package-local. CARGO_HOME starts empty;
-# dependency resolution comes exclusively from REALM_STAGE/vendor.
-export CARGO_HOME = $(CURDIR)/debian/.cargo-home
+# Keep Cargo state and build outputs package-local. The staged .cargo directory
+# is CARGO_HOME so test-launched Cargo processes outside the source ancestry
+# inherit the same retained source replacement as the top-level invocation.
+export CARGO_HOME = $(REALM_STAGE)/.cargo
 export CARGO_TARGET_DIR = $(CURDIR)/debian/cargo-target
 # Debian's own rustc/cargo are dfsg-repacked; realm only needs a compiler new
 # enough for its MSRV.
@@ -75,8 +76,8 @@ override_dh_auto_configure:
 	python3 "$(REALM_KIT_CHECKER)" debian "$(CURDIR)"
 
 override_dh_auto_build:
-	rm -rf "$(CARGO_HOME)" "$(CARGO_TARGET_DIR)"
-	mkdir -p "$(CARGO_HOME)" "$(CARGO_TARGET_DIR)"
+	rm -rf "$(REALM_STAGE)" "$(CARGO_TARGET_DIR)"
+	mkdir -p "$(CARGO_TARGET_DIR)"
 	@set -e; \
 	realm_source="$$(python3 "$(REALM_STAGER)" "$(REALM_BUNDLE)" "$(REALM_STAGE)")"; \
 	cd "$$realm_source"; \

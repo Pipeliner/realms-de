@@ -38,7 +38,7 @@ Source0:        %{name}-%{version}.tar.gz
 %global realm_bundle %{_builddir}/%{name}-%{version}/packaging/tool-sources/bundles/realm-workspace
 %global realm_stage %{_builddir}/%{name}-%{version}/.realm-workspace
 %global realm_source %{realm_stage}/source
-%global realm_cargo_home %{_builddir}/%{name}-%{version}/.cargo-home
+%global realm_cargo_home %{realm_stage}/.cargo
 %global realm_target_dir %{_builddir}/%{name}-%{version}/.cargo-target
 
 # realm's MSRV is 1.89 (Cargo.toml). The BuildRequires below is the mechanical
@@ -112,8 +112,8 @@ behaviour on Fedora remain unverified.
 %autosetup
 python3 packaging/tool-sources/check-native-source-kit.py rpm \
     %{_builddir}/%{name}-%{version}
-rm -rf %{realm_cargo_home} %{realm_target_dir}
-mkdir -p %{realm_cargo_home} %{realm_target_dir}
+rm -rf %{realm_stage} %{realm_target_dir}
+mkdir -p %{realm_target_dir}
 python3 packaging/tool-sources/stage-realm-workspace.py \
     %{realm_bundle} %{realm_stage}
 
