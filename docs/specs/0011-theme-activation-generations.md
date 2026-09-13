@@ -1,8 +1,8 @@
 # SPEC 0011 — Immutable theme activation generations
 
 - **Status:** Accepted (2026-08-29; fixed-consumer bootstrap, packaged-Foot
-  parser, retained terminal-profile, and terminal-descendant GTK/Qt
-  refinements 2026-09-13)
+  parser, retained terminal-profile, read-only btop, and terminal-descendant
+  GTK/Qt refinements 2026-09-13)
 - **Milestone:** M1
 - **Decision:** [ADR 0017](../adr/0017-immutable-theme-activation-generations.md)
 - **Issue:** [#131](https://github.com/Pipeliner/realms-de/issues/131)
@@ -399,6 +399,15 @@ regular file descriptor. Validation retains the opened root/parents while it
 reads each listed output. This protects Realm from pathname races and symlink
 redirection, but does not expand ADR 0017's same-UID threat model.
 
+The built-in terminal profile's `btop/btop.conf` is a consumer-writeback risk,
+not mutable runtime state. Publication creates that staging inode at exact mode
+0400, writes it only through the already-held publisher descriptor, and fsyncs
+it before the tree is committed. This lets the selected btop read the file but
+prevents its ordinary config-save path from changing the generation. Other
+output and control-file modes are unchanged; the manifest format remains v1,
+and this cooperative measure does not claim protection against a hostile
+same-UID process replacing paths below its own generation directory.
+
 ## Theme-apply integration (L4 refinement)
 
 The supported theme-apply path is generation-only.  It does not use
@@ -675,6 +684,7 @@ candidate with a partially validated or mixed generation.
 | G15 | Given an old complete N or a pre-profile valid N, when apply publishes N+1, Foot exits and more generations are published, then production apply/recovery/startup exposes no generation-reclamation operation and every valid committed tree remains byte-for-byte present. Terminal against the old complete N continues to consume N; terminal against the pre-profile N refuses the missing exact output before exec and the explicit apply path makes a later complete generation launchable. The test-only GC model is not linked as a production API. |
 | G16 | Given a clean first login that publishes a generation from the current built-in catalogue, when the installed Foot parser checks that generation's `foot/foot.ini`, then it accepts the complete file without a rejected configuration key. The check neither repairs nor replaces an existing valid historical generation. |
 | G17 | Given a newly applied complete N and a terminal selected on N, when real packaged GTK 3, GTK 4 and Qt 6 applications start as its descendants, then GTK opens N's named-theme CSS and qt6ct resolves the literal `$REALM_GENERATION` value in its configuration to N's manifest-listed colour scheme; the observed windows render with N-derived palette values. The fixture proves exact file consumption and a nonempty real application frame, not environment presence alone. Given an existing user qt6ct configuration, Realm leaves it byte-for-byte unchanged and reports no Realm-palette claim for that Qt process. After current switches to N+1 and Foot exits, a surviving descendant can still consume N because production generation reclamation is unavailable. This criterion makes no claim for Fuzzel/browser/portal/D-Bus launches or Qt 5/Kvantum. |
+| G18 | Given a built-in apply containing `btop/btop.conf`, when publication commits the generation, then that output is exact mode 0400 before selection, an ordinary same-UID write-open is refused, and selection still reads the manifest-bound bytes. A pre-profile generation without that output and all other existing output/control modes remain unchanged. |
 
 ## Boundaries
 
