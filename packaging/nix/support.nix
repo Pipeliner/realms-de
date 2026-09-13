@@ -108,6 +108,7 @@ rec {
         "yazi-cli"
       ];
       strictDeps = true;
+      dontUpdateAutotoolsGnuConfigScripts = true;
       preBuild = ''
         export CFLAGS="''${CFLAGS-} -std=gnu17"
       '';

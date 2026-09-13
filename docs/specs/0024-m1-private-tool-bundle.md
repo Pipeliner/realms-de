@@ -42,6 +42,14 @@ runtime tools around the retained unwrapped binary. Evaluation and the
 installed-session fixture SHALL assert the exact `25.4.8` version, and its
 build has no fetch path beyond the already retained archives.
 
+The retained Nix build SHALL disable Nix's automatic Autotools GNU-config
+script update phase for this derivation. The vendored `config.sub` and
+`config.guess` files are Cargo directory-source inputs whose checksums are
+bound by the retained vendor closure; rewriting them before Cargo's checksum
+validation is neither an update nor an admissible build adaptation. This does
+not disable Cargo's checksum verification or permit another vendored-file
+mutation.
+
 ## Offline bundle contract
 
 For each selected tool, the retained build input SHALL contain, and the

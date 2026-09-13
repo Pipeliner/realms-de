@@ -9,6 +9,7 @@ manager=$root/configs/templates/yazi.toml
 keymap=$root/configs/templates/yazi-keymap.toml
 profile=$root/configs/templates/zshrc
 btop=$root/configs/templates/btop.conf
+support=$root/packaging/nix/support.nix
 
 require() {
     grep -F -q "$1" "$template" || {
@@ -60,3 +61,7 @@ grep -F -q 'eval "$(starship init zsh)"' "$profile"
 grep -F -q 'command btop --config="$REALM_GENERATION/btop/btop.conf"' "$profile"
 grep -F -q 'color_theme = "realm"' "$btop"
 grep -F -q 'shown_boxes = "cpu mem net proc"' "$btop"
+grep -F -q 'dontUpdateAutotoolsGnuConfigScripts = true;' "$support" || {
+    echo "retained Nix Yazi permits automatic vendor mutation" >&2
+    exit 1
+}
