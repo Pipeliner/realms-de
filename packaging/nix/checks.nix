@@ -13,6 +13,7 @@
   nixosModule,
   sourceRevision,
   vmControlHelper,
+  portalVmHelper,
 }:
 {
   # The session wrapper is the file most likely to break a login, and the only
@@ -38,6 +39,7 @@
           ${src + "/packaging/debian/toolchain-path.sh"} \
           ${src + "/packaging/debian/test-toolchain-path.sh"}
         bash ${src + "/packaging/session/test-runtime-dir-mode.sh"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_portal_vm_helper.py"}
         touch $out
       '';
 
@@ -134,6 +136,9 @@ EOF
           enable = true;
           user = "alice";
         };
+        # Only the VM bypasses the interactive output chooser. The installed
+        # module keeps xdpw's normal chooser for users and hardware acceptance.
+        xdg.portal.wlr.settings.screencast.chooser_type = "none";
         virtualisation.memorySize = 2048;
         virtualisation.resolution = {
           x = 1920;
@@ -144,6 +149,7 @@ EOF
         };
         environment.systemPackages = [
           vmControlHelper
+          portalVmHelper
           pkgs.foot
         ];
       };
@@ -153,6 +159,7 @@ EOF
       let
         desktops = nodes.machine.config.services.displayManager.sessionData.desktops;
       in
+      assert nodes.machine.config.services.pipewire.enable;
       ''
       import datetime as dt
       import hashlib
@@ -255,6 +262,32 @@ EOF
                   "if test -f /home/alice/.local/state/realm/session.log; then "
                   "tail -n 120 /home/alice/.local/state/realm/session.log; "
                   "else echo 'realm session log absent'; fi; ps -fu alice",
+              ),
+          ]
+          for label, command in commands:
+              try:
+                  status, output = machine.execute(command, timeout=DIAGNOSTIC_TIMEOUT)
+                  machine.log(f"{label} (exit {status}):\n{output}")
+              except Exception as error:
+                  machine.log(f"{label} unavailable: {error}")
+
+      def log_portal_diagnostics():
+          commands = [
+              (
+                  "portal and PipeWire user unit status",
+                  "systemctl --user --machine=alice@ --no-pager --full status "
+                  "xdg-desktop-portal.service xdg-desktop-portal-gtk.service "
+                  "xdg-desktop-portal-wlr.service pipewire.socket "
+                  "pipewire.service wireplumber.service",
+              ),
+              (
+                  "portal and PipeWire user journal",
+                  "journalctl -b --no-pager -n 240 _UID=1000 "
+                  "_SYSTEMD_USER_UNIT=xdg-desktop-portal.service "
+                  "_SYSTEMD_USER_UNIT=xdg-desktop-portal-gtk.service "
+                  "_SYSTEMD_USER_UNIT=xdg-desktop-portal-wlr.service "
+                  "_SYSTEMD_USER_UNIT=pipewire.service "
+                  "_SYSTEMD_USER_UNIT=wireplumber.service",
               ),
           ]
           for label, command in commands:
@@ -381,6 +414,45 @@ EOF
           f"tr '\\0' '\\n' < /proc/{wm_pid}/environ | sed -n 's/^WAYLAND_DISPLAY=//p'"
       ).strip()
       assert imported_wayland == daemon_wayland and imported_wayland
+
+      # Exercise the actual installed proxy, GTK and wlr backends, and the
+      # per-user PipeWire graph. The helper retains one D-Bus connection so the
+      # request/session handles remain owned by the same caller. Receiving a
+      # node id is not enough: it maps and hashes one nonempty video buffer from
+      # the restricted FD returned by OpenPipeWireRemote.
+      try:
+          machine.wait_until_succeeds(
+              "systemctl --user --machine=alice@ is-active --quiet pipewire.socket",
+              timeout=STATE_TIMEOUT,
+          )
+          portal_raw = machine.succeed(
+              shlex.join([
+                  "sudo",
+                  "-u",
+                  "alice",
+                  "env",
+                  "XDG_RUNTIME_DIR=/run/user/1000",
+                  "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+                  f"WAYLAND_DISPLAY={imported_wayland}",
+                  "realm-portal-vm",
+              ]),
+              timeout=STATE_TIMEOUT,
+          )
+          portal = json.loads(portal_raw)
+          assert portal["filechooser"]["elapsed_ms"] <= 2000, portal
+          assert portal["settings"]["reply_type"] == "(a{sa{sv}})", portal
+          assert portal["screencast"]["node_id"] > 0, portal
+          assert portal["screencast"]["buffer_bytes"] > 0, portal
+          assert portal["screencast"]["width"] > 0, portal
+          assert portal["screencast"]["height"] > 0, portal
+          assert len(portal["screencast"]["sha256"]) == 64, portal
+          machine.succeed(
+              "systemctl --user --machine=alice@ is-active --quiet pipewire.service"
+          )
+      except Exception:
+          log_portal_diagnostics()
+          raise
+      write_artifact("portal-roundtrip.json", portal_raw)
 
       # Use the library client itself. The initial state proves Hello and
       # GetState reached the production server; no realmctl command is added.
