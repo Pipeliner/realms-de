@@ -148,6 +148,42 @@ mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
 expect_fail missing-doctor-evidence "$fixture_root" \
     'live VM artifact must retain realmctl doctor JSON'
 
+fixture_root=$(make_fixture missing-vm-evidence-build)
+sed "/\"\\.#checks\\.\$system\\.session-boots-evidence\"/d" \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-vm-evidence-build "$fixture_root" \
+    'Nix CI must build the VM evidence producer before the public status gate'
+
+fixture_root=$(make_fixture evidence-upload-not-always)
+sed "s/if: always() && steps.reference-build.outputs.vm_artifacts == 'true'/if: steps.reference-build.outputs.vm_artifacts == 'true'/" \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail evidence-upload-not-always "$fixture_root" \
+    'live VM evidence upload must run after a failed public status gate'
+
+fixture_root=$(make_fixture missing-driver-log)
+sed '/realm-session-boots\/driver\.log/d' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-driver-log "$fixture_root" \
+    'live VM evidence upload must retain the driver log and exact status'
+
+fixture_root=$(make_fixture missing-public-status-gate)
+sed '/check-vm-evidence-status\.sh/d' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail missing-public-status-gate "$fixture_root" \
+    'public session-boots must gate the retained evidence driver status'
+
+fixture_root=$(make_fixture fresh-run-command-wrappers)
+sed -e 's/test\.overrideTestDerivation/pkgs.runCommand/' \
+    -e 's/session-boots-evidence\.overrideTestDerivation/pkgs.runCommand/' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail fresh-run-command-wrappers "$fixture_root" \
+    'public session-boots must gate the retained evidence driver status'
+
 fixture_root=$(make_fixture missing-prompt-regex-import)
 sed '/^      import re$/d' \
     "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"

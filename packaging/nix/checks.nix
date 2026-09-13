@@ -27,7 +27,7 @@ let
 in
 assert realmYazi != null;
 assert realmYazi.version == "25.4.8";
-{
+rec {
   # The session wrapper is the file most likely to break a login, and the only
   # shell in the repo. Keep it clean.
   shellcheck =
@@ -42,7 +42,9 @@ assert realmYazi.version == "25.4.8";
           ${src + "/packaging/check-font-policy.sh"} \
           ${src + "/packaging/font-policy-test.sh"} \
           ${src + "/packaging/nix/check-root-flake-ci.sh"} \
+          ${src + "/packaging/nix/check-vm-evidence-status.sh"} \
           ${src + "/packaging/nix/test-root-flake-ci.sh"} \
+          ${src + "/packaging/nix/test-vm-evidence-status.sh"} \
           ${src + "/docs/check-readme-truth-snapshot.sh"} \
           ${src + "/docs/test-readme-truth-snapshot.sh"} \
           ${src + "/docs/check-contribution-templates.sh"} \
@@ -55,6 +57,7 @@ assert realmYazi.version == "25.4.8";
         bash ${src + "/packaging/session/test-runtime-dir-mode.sh"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_portal_vm_helper.py"}
         bash ${src + "/packaging/session/test-portal-warmup.sh"}
+        sh ${src + "/packaging/nix/test-vm-evidence-status.sh"}
         touch $out
       '';
 
@@ -200,9 +203,11 @@ EOF
 
   # `pkgs.testers.nixosTest`, not the old top-level `nixosTest` alias, which
   # nixpkgs now refuses.
-  session-boots = pkgs.testers.nixosTest {
-    name = "realm-session-boots";
-    enableOCR = true;
+  session-boots-evidence =
+    let
+      test = pkgs.testers.nixosTest {
+        name = "realm-session-boots";
+        enableOCR = true;
 
     nodes.machine =
       { config, pkgs, ... }:
@@ -1044,8 +1049,10 @@ EOF
       ).splitlines()
       assert btop_args == [
           "btop",
-          f"--config={generation_root}/btop/btop.conf",
-          f"--themes-dir={generation_root}/btop/themes",
+          "--config",
+          f"{generation_root}/btop/btop.conf",
+          "--themes-dir",
+          f"{generation_root}/btop/themes",
       ], btop_args
       machine.wait_for_text("CPU", timeout=OCR_TIMEOUT)
       machine.fail(
@@ -1251,5 +1258,36 @@ EOF
           f"test ! -d /proc/{river_pid}", timeout=EXIT_TIMEOUT
       )
     '';
-  };
+      };
+    in
+    test.overrideTestDerivation (old: {
+      name = "realm-session-boots-evidence";
+      nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.coreutils ];
+      buildCommand = ''
+        mkdir -p "$out"
+        export LOGFILE=/dev/null
+        set +e
+        set -o pipefail
+        ${test.driver}/bin/nixos-test-driver -o "$out" 2>&1 \
+          | tee "$out/driver.log"
+        status=''${PIPESTATUS[0]}
+        set -e
+        printf 'realm-session-boots-status/v1\nexit_code=%s\n' "$status" \
+          > "$out/test-status"
+        exit 0
+      '';
+    });
+
+  # Keep the public check authoritative. The evidence producer retains output
+  # from the one real driver run even when it fails; this gate rejects absent,
+  # malformed, or nonzero status and exposes that same output on success.
+  session-boots = session-boots-evidence.overrideTestDerivation (_old: {
+    name = "realm-session-boots";
+    buildCommand = ''
+      sh ${src + "/packaging/nix/check-vm-evidence-status.sh"} \
+        ${session-boots-evidence}/test-status
+      mkdir -p "$out"
+      cp -R ${session-boots-evidence}/. "$out/"
+    '';
+  });
 }

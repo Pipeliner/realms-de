@@ -160,6 +160,10 @@ pub fn templates() -> Vec<Template> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
     use super::templates;
 
     #[test]
@@ -182,8 +186,8 @@ mod tests {
                     concat!(
                         "eval \"$(starship init zsh)\"\n",
                         "btop() {\n",
-                        "  command btop --config=\"$REALM_GENERATION/btop/btop.conf\" \\\n",
-                        "    --themes-dir=\"$REALM_GENERATION/btop/themes\" \"$@\"\n",
+                        "  command btop --config \"$REALM_GENERATION/btop/btop.conf\" \\\n",
+                        "    --themes-dir \"$REALM_GENERATION/btop/themes\" \"$@\"\n",
                         "}\n",
                     )
                     .to_owned(),
@@ -196,7 +200,7 @@ mod tests {
                 (
                     "yazi-keymap",
                     "yazi/keymap.toml".into(),
-                    "[manager]\nprepend_keymap = [\n  { on = \"<C-p>\", run = \"shell 'btop --config=\\\"$REALM_GENERATION/btop/btop.conf\\\" --themes-dir=\\\"$REALM_GENERATION/btop/themes\\\"' --block\", desc = \"Open Realm system monitor\" },\n]\n".to_owned(),
+                    "[manager]\nprepend_keymap = [\n  { on = \"<C-p>\", run = \"shell 'btop --config \\\"$REALM_GENERATION/btop/btop.conf\\\" --themes-dir \\\"$REALM_GENERATION/btop/themes\\\"' --block\", desc = \"Open Realm system monitor\" },\n]\n".to_owned(),
                 ),
                 (
                     "btop-config",
@@ -205,6 +209,87 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn rendered_btop_launchers_pass_separate_pinned_cli_arguments() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        let argv_file = root.path().join("argv");
+        let generation = root.path().join("generation with spaces");
+
+        let btop = bin.join("btop");
+        fs::write(
+            &btop,
+            "#!/bin/sh\nprintf '%s\\n' btop \"$@\" > \"$REALM_BTOP_ARGV_OUT\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&btop, fs::Permissions::from_mode(0o700)).unwrap();
+        let starship = bin.join("starship");
+        fs::write(&starship, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&starship, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let expected = [
+            "btop".to_owned(),
+            "--config".to_owned(),
+            generation.join("btop/btop.conf").display().to_string(),
+            "--themes-dir".to_owned(),
+            generation.join("btop/themes").display().to_string(),
+        ];
+        let run = |script: &str, caller_args: &[&str]| {
+            if argv_file.exists() {
+                fs::remove_file(&argv_file).unwrap();
+            }
+            let status = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(script)
+                .env("PATH", &bin)
+                .env("REALM_GENERATION", &generation)
+                .env("REALM_BTOP_ARGV_OUT", &argv_file)
+                .status()
+                .unwrap();
+            assert!(status.success(), "btop launcher failed: {script}");
+            assert!(
+                argv_file.is_file(),
+                "btop launcher exited without invoking the argv stub: {script}"
+            );
+            let actual = fs::read_to_string(&argv_file)
+                .unwrap()
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let expected = expected
+                .iter()
+                .cloned()
+                .chain(caller_args.iter().map(|arg| (*arg).to_owned()))
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "unexpected argv from: {script}");
+        };
+
+        let zshrc = templates()
+            .into_iter()
+            .find(|template| template.id == "zsh-profile")
+            .unwrap();
+        let zshrc_path = root.path().join("zshrc");
+        fs::write(&zshrc_path, zshrc.source).unwrap();
+        let zsh_script = format!(". '{}'; btop 'caller argument'", zshrc_path.display());
+        run(&zsh_script, &["caller argument"]);
+
+        let keymap = templates()
+            .into_iter()
+            .find(|template| template.id == "yazi-keymap")
+            .unwrap();
+        let command = keymap
+            .source
+            .split_once("run = \"shell '")
+            .unwrap()
+            .1
+            .split_once("' --block\"")
+            .unwrap()
+            .0
+            .replace("\\\"", "\"");
+        run(&command, &[]);
     }
 
     #[test]

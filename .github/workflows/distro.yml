@@ -321,14 +321,15 @@ jobs:
           system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
           nix build --print-build-logs ".#checks.$system.portal-helper-imports"
           if [ -e /dev/kvm ]; then
-            echo "KVM present — running the full flake check, VM boot test included."
-            nix flake check --print-build-logs
+            echo "KVM present — retaining the VM result before applying its status gate."
             nix build --print-build-logs \
-              ".#checks.$system.session-boots" \
-              --out-link result-session-boots
+              ".#checks.$system.session-boots-evidence" \
+              --out-link result-session-boots-evidence
             mkdir -p "$RUNNER_TEMP/realm-session-boots"
-            cp -RL result-session-boots/. "$RUNNER_TEMP/realm-session-boots/"
+            cp -RL result-session-boots-evidence/. "$RUNNER_TEMP/realm-session-boots/"
             echo "vm_artifacts=true" >> "$GITHUB_OUTPUT"
+            echo "Running the full flake check; session-boots gates the retained driver status."
+            nix flake check --print-build-logs
           else
             echo "::notice::no /dev/kvm on this runner; the NixOS VM boot test is skipped. Everything else is checked."
             echo "The VM boot test needs a KVM-capable runner." >> "$GITHUB_STEP_SUMMARY"
@@ -342,7 +343,7 @@ jobs:
           fi
 
       - name: Upload live Realm VM evidence
-        if: steps.reference-build.outputs.vm_artifacts == 'true'
+        if: always() && steps.reference-build.outputs.vm_artifacts == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: realm-live-vm-${{ github.sha }}
@@ -358,3 +359,5 @@ jobs:
             ${{ runner.temp }}/realm-session-boots/control-grimoire-state.json
             ${{ runner.temp }}/realm-session-boots/control-quit.json
             ${{ runner.temp }}/realm-session-boots/portal-roundtrip.json
+            ${{ runner.temp }}/realm-session-boots/driver.log
+            ${{ runner.temp }}/realm-session-boots/test-status
