@@ -170,7 +170,7 @@ fn session_wrapper_passes_only_discovery_deadline_remainder_to_probe() {
     let runtime = tempfile::tempdir().unwrap();
     let functions = session_functions(&runtime);
     let capture = runtime.path().join("timeout");
-    let status = Command::new("/bin/bash")
+    let status = Command::new("bash")
         .arg("-c")
         .arg(
             r#"
@@ -211,7 +211,7 @@ fn session_wrapper_passes_only_discovery_deadline_remainder_to_probe() {
 fn session_wrapper_aborts_probe_when_compositor_dies() {
     let runtime = tempfile::tempdir().unwrap();
     let functions = session_functions(&runtime);
-    let mut child = Command::new("/bin/bash")
+    let mut child = Command::new("bash")
         .arg("-c")
         .arg(
             r#"
