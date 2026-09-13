@@ -479,7 +479,7 @@ The only fixed consumer identifiers and invocations are:
 
 | Consumer | Exact child argv | Required manifest output |
 |---|---|---|
-| `terminal` | `foot`, `--config=<N>/foot/foot.ini`, `--override=key-bindings.spawn-terminal=none`, `zsh` | the terminal-profile output set below |
+| `terminal` | `foot`, `--config=<selected Foot config below N>`, `--override=key-bindings.spawn-terminal=none`, `zsh` | the terminal-profile output set below |
 | `launcher` | `fuzzel`, `--config=<N>/fuzzel/fuzzel.ini` | `fuzzel/fuzzel.ini` |
 
 Here `<N>` is the absolute path returned by the one validated
@@ -492,7 +492,7 @@ from the packaged session's inherited `PATH`; packaging must make `foot`,
 rejected generation is a visible launch failure, never permission to omit
 `--config=`.
 The terminal executor validates this complete manifest-listed set before exec:
-`foot/foot.ini`, `zsh/.zshrc`, `starship.toml`, `yazi/yazi.toml`,
+`foot/foot.ini`, `foot/foot-modern.ini`, `zsh/.zshrc`, `starship.toml`, `yazi/yazi.toml`,
 `yazi/keymap.toml`, `yazi/theme.toml`, `btop/btop.conf`, and
 `btop/themes/realm.theme`. The terminal-descendant GTK/Qt tranche additionally
 requires `share/themes/realm/gtk-3.0/gtk.css`,
@@ -553,6 +553,30 @@ UI consumes N: an application that fuzzel starts remains ADR 0018's explicitly
 unverified direct launch and must not be reported as a Realm profile or as
 generation-selected.
 
+The two Foot outputs are byte-identical except that the legacy file has the
+section header `[colors]` and the modern file has `[colors-dark]`. Foot 1.16,
+as packaged by Ubuntu 24.04, accepts only the legacy header. Foot 1.26 and
+newer accept the modern header and otherwise write a deprecation notification
+for `[colors]` into the new terminal's PTY before starting zsh; `--log-level`
+does not suppress that user notification.
+
+The fixed-consumer child therefore chooses between these two immutable files
+before exec. It starts one one-second monotonic deadline, runs the inherited
+`foot` first with exact argv `foot`, `--check-config`,
+`--config=<N>/foot/foot-modern.ini`, and suppresses only that exploratory
+probe's stdout and stderr. Exit 0 selects the modern file. An immediate
+nonzero exit runs the same executable with exact argv `foot`,
+`--check-config`, `--config=<N>/foot/foot.ini`; this legacy probe retains its
+normal diagnostics, and exit 0 selects the legacy file. Both probes share the
+original deadline rather than receiving one second each. A spawn failure,
+timeout, or two nonzero results kills and reaps any live probe and reports a
+clear launch failure; it never executes Foot with a user config, without
+`--config=`, or with an unvalidated generated file. The selected config is
+below the already leased and fully validated N and is the exact config passed
+to Foot's final exec. Probe waiting happens only in the private fixed-consumer
+child, never on the session event loop. Final Foot launch diagnostics remain
+visible.
+
 The terminal's exact command-line override disables foot's default
 `spawn-terminal` action independently of the selected generation's template
 bytes; users open another terminal through Realm's terminal binding. This is
@@ -572,12 +596,14 @@ Consumer fixtures must prove these boundaries against the packaged
 versions; a package whose `--config=PATH`,
 `--override=[SECTION.]KEY=VALUE`, or `spawn-terminal=none` grammar differs is
 unsupported rather than launched without the exact binding.
-The `foot/foot.ini` published from the current built-in catalogue must also
-pass the packaged Foot version's non-graphical
-`--check-config --config=<N>/foot/foot.ini` parser before the VM accepts the
-terminal launch path. A Foot process that maps a window while reporting a
-rejected configuration key is not evidence of a coherent newly generated
-themed terminal. This parser check does not reinterpret or repair an existing
+The selected Foot output published from the current built-in catalogue must
+pass the packaged Foot version's non-graphical probe above before the VM
+accepts the terminal launch path. The installed VM must select
+`foot-modern.ini` where the packaged parser accepts it and must retain no
+`[colors]` deprecation notification in the terminal framebuffer. A Foot
+process that maps a window while reporting a rejected configuration key is not
+evidence of a coherent newly generated themed terminal. This parser check does
+not reinterpret or repair an existing
 valid sealed generation: bootstrap retains its historical bytes under the
 rules below, and explicit catalogue update or migration selection remains
 issue #134's responsibility.
@@ -683,9 +709,9 @@ candidate with a partially validated or mixed generation.
 | G11 | Given a successful apply or rollback pointer commit, when existing processes continue running, then Realm sends no signal, command, or notification and only later launches may select the newly current generation. |
 | G12 | Given `Committed`, `CommittedWithCleanupPending`, or `OutcomeAmbiguous`, when `realmctl theme apply` reports the result, then the first two exit 0 and name the selected future-launch generation (with a cleanup warning for the second), while the ambiguous result exits 6, claims no activation, safely reports its candidate/cause, and performs no automatic recovery or retry. |
 | G13 | Given a fresh login whose final configuration root is absent below an existing safely opened parent, a present configuration root with cleanly absent current, a valid current, malformed current, or an absent pointer with recovery evidence, when session bootstrap ensures current, then only clean absence descriptor-relatively creates the final root if needed and performs one serialized built-in apply; valid current is byte-for-byte retained without apply or palette seed, and every malformed/inconsistent case fails readiness without repair, retry, newest-generation selection, or unthemed fallback. A concurrent valid apply that wins the lock is retained rather than overwritten. |
-| G14 | Given either fixed consumer and a later pointer switch from N to N+1, when Realm launches it, then its exact argv contains one `--config=` path below its fully validated selected N, terminal argv also contains the exact `spawn-terminal=none` override and final `zsh`, its process lease exists durably before exec and remains live for that unchanged PID until the consumer exits, and it never reads an ordinary mutable foot/fuzzel config as fallback. Terminal validates the complete output set and exports only N-derived selectors before exec; zsh/Starship/Yazi/btop visibly consume N, while the fuzzel-started application is explicitly not reported as generation-selected. |
+| G14 | Given either fixed consumer and a later pointer switch from N to N+1, when Realm launches it, then its exact argv contains one `--config=` path below its fully validated selected N, terminal argv also contains the exact selected legacy-or-modern Foot path, `spawn-terminal=none` override and final `zsh`, its process lease exists durably before exec and remains live for that unchanged PID until the consumer exits, and it never reads an ordinary mutable foot/fuzzel config as fallback. Terminal validates the complete output set and exports only N-derived selectors before exec; zsh/Starship/Yazi/btop visibly consume N, while the fuzzel-started application is explicitly not reported as generation-selected. |
 | G15 | Given an old complete N or a pre-profile valid N, when apply publishes N+1, Foot exits and more generations are published, then production apply/recovery/startup exposes no generation-reclamation operation and every valid committed tree remains byte-for-byte present. Terminal against the old complete N continues to consume N; terminal against the pre-profile N refuses the missing exact output before exec and the explicit apply path makes a later complete generation launchable. The test-only GC model is not linked as a production API. |
-| G16 | Given a clean first login that publishes a generation from the current built-in catalogue, when the installed Foot parser checks that generation's `foot/foot.ini`, then it accepts the complete file without a rejected configuration key. The check neither repairs nor replaces an existing valid historical generation. |
+| G16 | Given a clean first login that publishes a generation from the current built-in catalogue, when the inherited Foot parser checks the two byte-equivalent section variants under one one-second deadline, then Realm selects modern on its exit 0, otherwise selects legacy only on its exit 0, kills and reaps a timed-out probe, and refuses two invalid variants without a user-config fallback. The final argv names that exact manifest-listed selected file; modern probe diagnostics alone are suppressed, final launch and legacy rejection diagnostics remain visible, and the check neither repairs nor replaces an existing valid historical generation. The installed modern-Foot VM selects `foot-modern.ini` and its terminal framebuffer contains no legacy-section deprecation notification. |
 | G17 | Given a newly applied complete N and a terminal selected on N, when real packaged GTK 3, GTK 4 and Qt 6 applications start as its descendants, then GTK opens N's named-theme CSS and qt6ct resolves the literal `$REALM_GENERATION` value in its configuration to N's manifest-listed colour scheme; the observed windows render with N-derived palette values. The fixture proves exact file consumption and a nonempty real application frame, not environment presence alone. Given an existing user qt6ct configuration, Realm leaves it byte-for-byte unchanged and reports no Realm-palette claim for that Qt process. After current switches to N+1 and Foot exits, a surviving descendant can still consume N because production generation reclamation is unavailable. This criterion makes no claim for Fuzzel/browser/portal/D-Bus launches or Qt 5/Kvantum. |
 | G18 | Given a built-in apply containing `btop/btop.conf`, when publication commits the generation, then that output is exact mode 0400 before selection, an ordinary same-UID write-open is refused, and selection still reads the manifest-bound bytes. A pre-profile generation without that output and all other existing output/control modes remain unchanged. |
 | G19 | Given a generation path containing spaces, when the generated zsh wrapper or Yazi `Ctrl+p` command launches the pinned btop, then both produce exactly `btop`, `--config`, `<N>/btop/btop.conf`, `--themes-dir`, `<N>/btop/themes` before any caller arguments; neither emits an equals-form option that btop 1.4.7 rejects. |

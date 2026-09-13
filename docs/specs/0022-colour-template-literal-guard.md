@@ -17,8 +17,9 @@ Realm placeholder.
 
 ## Scope
 
-**In:** the thirteen source files currently embedded by
-`realm_theme::templates()`: `gtk3.css`, `gtk4.css`, `foot.ini`, `zshrc`,
+**In:** the fourteen source files currently embedded by
+`realm_theme::templates()`: `gtk3.css`, `gtk4.css`, `foot.ini`,
+`foot-modern.ini`, `zshrc`,
 `yazi.toml`, `yazi-keymap.toml`, `yazi-theme.toml`, `btop.conf`, `btop.theme`,
 `starship.toml`, `fuzzel.ini`, `qt6ct-colors.conf`, and `qt6ct.conf`; exact
 diagnostics; hostile fixtures; and the palette CI workflow.
@@ -53,7 +54,7 @@ allowlists.
    records outside that direct vector are not catalogue evidence and cause a
    refusal. The source guard is lexical only: a compiled `realm_theme` unit
    test separately proves the actual `templates()` id-to-source-byte mapping
-   against the fifteen qualified built-in includes, including byte identity of
+   against the sixteen qualified built-in includes, including byte identity of
    both GTK aliases, so macro expansion cannot substitute different compiled
    sources while preserving lexical text.
 2. Every diagnostic names the repository-relative path, one-based line, and
@@ -75,7 +76,8 @@ allowlists.
    spellings without claiming to parse CSS or named colours. Placeholder
    expressions such as `{{ border.seam.rgba(border.seam_alpha) }}` remain valid
    source syntax.
-4. In `foot.ini`, only colour-key values in the `[colors]` section are colour
+4. In `foot.ini` and `foot-modern.ini`, only colour-key values in the
+   respective `[colors]` and `[colors-dark]` sections are colour
    positions. The required key set includes Foot's two-value `cursor` colour;
    `[cursor]` contains cursor shape settings and does not own a `color` key.
    The one non-colour setting in `[colors]` is exactly `alpha=1.0`; another key
@@ -84,10 +86,11 @@ allowlists.
    `.bare`, or it fails. A raw contiguous six- or eight-ASCII-hex-digit
    candidate, a placeholder without `.bare`, and extra non-whitespace bytes
    fail. Other Foot sections and numeric settings are not colour positions.
-   The shipped section remains `[colors]`: it is the common accepted grammar
-   of Ubuntu 24.04's Foot 1.16 and newer Foot releases. Foot 1.26 introduced
-   `[colors-dark]`, so using that newer spelling in the one shared generated
-   file would make the supported Ubuntu parser reject the configuration.
+   The two sources are byte-identical except for that one section header.
+   Ubuntu 24.04's Foot 1.16 consumes `[colors]`; Foot 1.26 and newer consume
+   `[colors-dark]` without writing a legacy-section deprecation notification
+   into the new terminal. Activation selects only a parser-accepted variant as
+   SPEC 0011 defines.
 5. In `fuzzel.ini`, every value in `[colors]` is exactly one complete Realm
    placeholder expression ending in `.bare`, immediately followed by lowercase
    ASCII `ff`, with optional surrounding whitespace only. A raw `RRGGBBAA`, a
