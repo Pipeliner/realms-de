@@ -417,6 +417,9 @@ jobs:
         run: |
           set -euo pipefail
           system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+          nix eval --raw ".#checks.$system.session-boots-evidence.driver.testScript" \
+            > "$RUNNER_TEMP/realm-session-boots.py"
+          python3 -m py_compile "$RUNNER_TEMP/realm-session-boots.py"
           nix build --print-build-logs ".#checks.$system.portal-helper-imports"
           if [ -e /dev/kvm ]; then
             echo "KVM present — retaining the VM result before applying its status gate."

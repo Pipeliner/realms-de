@@ -33,6 +33,24 @@ fi
 workflow="$root/.github/workflows/distro.yml"
 [ -f "$workflow" ] || fail 'distro workflow is required'
 
+# These are literal workflow source snippets, not shell expansions here. The
+# first Nix build in this workflow must follow the evaluated-script parse.
+# shellcheck disable=SC2016
+if ! awk '
+    index($0, "nix eval --raw \".#checks.$system.session-boots-evidence.driver.testScript\"") {
+        evaluation = NR
+    }
+    index($0, "python3 -m py_compile \"$RUNNER_TEMP/realm-session-boots.py\"") {
+        parse = NR
+    }
+    index($0, "nix build --print-build-logs") && !build { build = NR }
+    END {
+        exit(evaluation && parse && build && evaluation < parse && parse < build ? 0 : 1)
+    }
+' "$workflow"; then
+    fail 'Nix CI must parse its evaluated root VM Python before the KVM build'
+fi
+
 if grep -F -q -e 'steps.flake.outputs.present' "$workflow"; then
     fail 'Nix CI must not condition on flake presence'
 fi

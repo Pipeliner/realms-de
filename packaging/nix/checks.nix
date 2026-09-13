@@ -844,29 +844,29 @@ EOF
               else ":"
           )
           inner_script = f"""
-set -eu
-features="$(${pkgs.systemd}/bin/busctl --user get-property org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus Features)"
-assertion_bus_id="$(${pkgs.systemd}/bin/busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetId)"
-case "$features" in
-  *SystemdActivation*)
-    printf '%s\n' "fresh bus unexpectedly delegates activation: $features" >&2
-    exit 97
-    ;;
-esac
-printf '%s\n' "$assertion_bus_id" > {shlex.quote(bus_path)}
-printf '%s\n' "$features" > {shlex.quote(features_path)}
-export HOME=/home/alice
-export XDG_RUNTIME_DIR=/run/user/1000
-export WAYLAND_DISPLAY={shlex.quote(imported_wayland)}
-export DISPLAY={shlex.quote(direct_display)}
-export XDG_CURRENT_DESKTOP=realm
-export XDG_SESSION_TYPE=wayland
-export XDG_SESSION_DESKTOP=realm
-export XCURSOR_THEME=Adwaita
-export XCURSOR_SIZE=24
-{import_command}
-exec ${realm}/bin/realmctl --json doctor > {shlex.quote(report_path)} 2> {shlex.quote(error_path)}
-"""
+          set -eu
+          features="$(${pkgs.systemd}/bin/busctl --user get-property org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus Features)"
+          assertion_bus_id="$(${pkgs.systemd}/bin/busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetId)"
+          case "$features" in
+            *SystemdActivation*)
+              printf '%s\n' "fresh bus unexpectedly delegates activation: $features" >&2
+              exit 97
+              ;;
+          esac
+          printf '%s\n' "$assertion_bus_id" > {shlex.quote(bus_path)}
+          printf '%s\n' "$features" > {shlex.quote(features_path)}
+          export HOME=/home/alice
+          export XDG_RUNTIME_DIR=/run/user/1000
+          export WAYLAND_DISPLAY={shlex.quote(imported_wayland)}
+          export DISPLAY={shlex.quote(direct_display)}
+          export XDG_CURRENT_DESKTOP=realm
+          export XDG_SESSION_TYPE=wayland
+          export XDG_SESSION_DESKTOP=realm
+          export XCURSOR_THEME=Adwaita
+          export XCURSOR_SIZE=24
+          {import_command}
+          exec ${realm}/bin/realmctl --json doctor > {shlex.quote(report_path)} 2> {shlex.quote(error_path)}
+          """
           direct_command = shlex.join([
               "systemd-run",
               "--user",

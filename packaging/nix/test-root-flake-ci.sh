@@ -69,6 +69,32 @@ expect_fail() {
 fixture_root=$(make_fixture canonical)
 expect_pass canonical-root-flake-contract "$fixture_root"
 
+fixture_root=$(make_fixture missing-evaluated-vm-python)
+# These mutation patterns deliberately match literal workflow variables.
+# shellcheck disable=SC2016
+sed '/nix eval --raw ".#checks\.\$system\.session-boots-evidence\.driver\.testScript"/d' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-evaluated-vm-python "$fixture_root" \
+    'Nix CI must parse its evaluated root VM Python before the KVM build'
+
+fixture_root=$(make_fixture missing-vm-python-compile)
+# shellcheck disable=SC2016
+sed '/python3 -m py_compile "$RUNNER_TEMP\/realm-session-boots.py"/d' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-vm-python-compile "$fixture_root" \
+    'Nix CI must parse its evaluated root VM Python before the KVM build'
+
+fixture_root=$(make_fixture vm-python-parse-after-build)
+# shellcheck disable=SC2016
+sed '/system=$(nix eval --impure --raw --expr/a\
+          nix build --print-build-logs ".#checks.$system.preflight-order-decoy"' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail vm-python-parse-after-build "$fixture_root" \
+    'Nix CI must parse its evaluated root VM Python before the KVM build'
+
 for artifact in \
     realm-gtk3-toolkit.png \
     realm-gtk4-toolkit.png \

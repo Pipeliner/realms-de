@@ -565,6 +565,11 @@ Each row is one happy path and becomes one test.
 | B16 | Given `theme apply` returns `CommittedWithCleanupPending { generation, cause }`, when the CLI reports it, then it exits 0, reports exactly that generation as selected for future launches, and emits the safely escaped committed-cleanup warning | `realmctl::tests::cleanup_pending_reports_selected_generation_with_escaped_warning` |
 | B17 | Given `theme apply` returns `OutcomeAmbiguous { candidate, cause }`, when the CLI reports it, then it exits 6, emits no human stdout, safely reports the candidate and unconfirmed activation, claims no success, and performs no recovery or retry | `realmctl::tests::ambiguous_reports_no_success_stdout_and_escaped_cause` |
 
+B12's VM source has its own preflight obligation: CI evaluates the exact
+`testScript` passthru through locked Nix and requires the resulting Python to
+parse before the KVM build. A nested shell literal may not silently reduce the
+indented string's common indentation and shift the complete driver body.
+
 ## Budgets
 
 From [ARCHITECTURE.md §4](../ARCHITECTURE.md):
