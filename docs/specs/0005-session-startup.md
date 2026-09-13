@@ -3,9 +3,10 @@
 - **Status:** Draft — the NixOS session-discovery contract, startup step 3,
   XWayland display discovery and publication, and current-incarnation
   doctor-health handoff are accepted; §4's systemd startup ordering and dual
-  teardown anchors are accepted; SPEC 0029 separately accepts the bounded native
-  x86_64 graphical-login proof. Open questions below remain unresolved
-  (`needs-human`)
+  teardown anchors, host-policy/lock-before-suspend boundary, and 5-minute
+  dim/10-minute lock defaults are accepted; SPEC 0029 separately accepts the
+  bounded native x86_64 graphical-login proof. Open questions below remain
+  unresolved where noted (`needs-human`)
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
   [ADR 0013](../adr/0013-river-window-management-backend.md),
@@ -82,7 +83,8 @@ the session through NixOS display-manager session data, and assert both the
 `realm.desktop` identity and its rewritten `Exec` target. A test that uses no
 display manager may test package contents directly, but must not claim to test
 NixOS session discovery.
-- Choosing the lock screen and the idle defaults — see **Open questions**.
+- The 5-minute dim and 10-minute lock/blank defaults are accepted. Remaining
+  locker implementation details are tracked separately in **Open questions**.
 
 ## Behaviour
 
@@ -848,8 +850,9 @@ register yet. They are recorded here as findings for a human to add.
 
 ## Open questions
 
-- **OQ-1 — the lock screen and the idle defaults. `needs-human`, and this one
-  matters most.** Carried forward from ADR 0011, sharpened by ADR 0013.
+- **OQ-1 — resolved for MVP.** Dim after 5 minutes and lock/blank after 10
+  minutes; host lid policy remains authoritative and lock-before-suspend is
+  required. Remaining locker implementation details stay below.
 
   *Locker.* river 0.4 implements `ext-session-lock-v1` and reports
   `session_locked`/`session_unlocked` to the window manager, so realm can disable

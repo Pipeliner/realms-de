@@ -416,6 +416,10 @@ rejects_injected_fetch() {
     fi
     if ! grep '^forbidden|command=git|' "$log" >/dev/null; then
         fail "$name injected fetch did not reach the network-command sentinel"
+        echo "$name runner output:" >&2
+        sed -n '1,120p' "$output" >&2 || true
+        echo "$name sentinel log:" >&2
+        sed -n '1,120p' "$log" >&2 || true
     fi
     if grep '^cargo|' "$log" >/dev/null; then
         fail "$name continued to Cargo after the injected fetch failed"

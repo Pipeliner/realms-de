@@ -285,9 +285,9 @@ limits table.** A human should confirm they accept that trade.
 
 ### Idle policy
 
-A human must set the **idle defaults**: how long until the screen blanks, how
-long until lock, and whether lid-close locks unconditionally. These are
-user-visible security defaults and should not be guessed.
+The accepted idle defaults are: dim after 5 minutes of inactivity and lock/
+blank after 10 minutes. These defaults are independent of the host lid policy;
+host-initiated suspend follows the lock-before-suspend path.
 
 The dependency SPEC 0005 could not confirm is now **resolved**: river does
 implement `ext-idle-notify-v1`. `river/InputManager.zig` creates a
