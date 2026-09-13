@@ -802,18 +802,18 @@ register yet. They are recorded here as findings for a human to add.
   client a hard requirement rather than a preference: a locker that draws a
   layer-shell overlay instead depends on realm serving `river-layer-shell-v1` and
   on realm granting it exclusive focus, so a crash in *realm* would expose the
-  desktop. Rejected alternatives remain documented for reversal: **gtklock**
-  (proper `ext-session-lock-v1`; GTK, which we
-  already theme); **waylock** (same protocol, minimal, but Zig — a toolchain we
-  otherwise removed from the workspace by ADR 0013); **swaylock**, only in
-  versions that speak `ext-session-lock-v1`, older ones must be excluded;
-  **`realm-ward`**, our own, which is the worst class of bug to get wrong and is
-  not before M6. Realm selects distro-native swaylock 1.7 or newer for M3:
+  desktop. Realm selects distro-native swaylock 1.7 or newer for M3:
   Ubuntu 24.04 supplies 1.7.2, Fedora 44 supplies 1.8.5 and locked nixpkgs
   supplies 1.8.6. All three use the supported protocol line without a private
   tool build. NixOS must explicitly enable the `swaylock` PAM service; every
   target must use a PAM-backed build. Swayidle is the matching idle client and
   uses its documented `-w` plus `swaylock -f` readiness pairing.
+
+  Other considered clients remain documented for reversal: **gtklock**
+  (proper `ext-session-lock-v1`; GTK, which Realm already themes), **waylock**
+  (same protocol, minimal, but Zig — a toolchain otherwise removed by ADR
+  0013), and **`realm-ward`**, Realm's own locker, which is the worst class of
+  bug to get wrong and is not before M6.
 
   *Idle client (resolved).* river 0.4.8's input manager creates wlroots'
   idle-notifier global, and swayidle consumes that compositor idle protocol.
