@@ -3,7 +3,11 @@
 - **Status:** Accepted (2026-08-29)
 - **Amendment:** Accepted (2026-09-01): one retained-source RPM build lane
   accompanies the one Cargo-smoke lane; exactly those two Fedora-family
-  containers use the admitted image, and neither is runtime-install evidence.
+  containers use the admitted image.
+- **Amendment:** Accepted (2026-09-13): the existing RPM lane clean-installs
+  its exact output into an empty Fedora 44 installroot with normal DNF
+  dependency resolution, then executes the installed Realm CLI and River; this
+  remains distinct from graphical-session evidence.
 - **Milestone:** M0 support-claim correction; M3 Fedora runtime acceptance is separate
 - **Decision:** [ADR 0015](../adr/0015-fedora-44-pre-alpha-baseline.md)
 - **Issue:** [#138](https://github.com/Pipeliner/realms-de/issues/138)
@@ -18,9 +22,9 @@ claim with one truthful, explicitly versioned Fedora target without pretending
 that the pre-alpha RPM installs a complete desktop.
 
 In this specification, **Fedora baseline** means the sole Fedora release used
-for Realm's current pre-alpha Cargo smoke and native-packaging preparation. It
-does not mean that the M3 clean-install, login, portal, SELinux, upgrade, or
-daily-driver acceptance obligations have passed.
+for Realm's current pre-alpha Cargo smoke, native-package build, and bounded
+empty-installroot acceptance. It does not mean that the M3 graphical login,
+portal, SELinux, upgrade, or daily-driver acceptance obligations have passed.
 
 ## Scope
 
@@ -31,6 +35,10 @@ daily-driver acceptance obligations have passed.
 - declining Fedora 43 and any implicit future-release support;
 - using Fedora's official Fedora 44 base image for exactly one Fedora
   Cargo-smoke lane and exactly one retained-source RPM build lane;
+- clean-installing the exact RPM emitted by that build into an empty Fedora 44
+  installroot through normal DNF dependency resolution, then executing the
+  installed Realm CLI against the installed palette and the installed River
+  version probe;
 - recording Fedora's official `river` package as the Fedora 44 packaging
   candidate; and
 - recording the exact Fedora baseline identity and EOL in one small local
@@ -46,8 +54,8 @@ daily-driver acceptance obligations have passed.
 - immutable generation retention, upgrade, rollback, and teardown semantics
   ([#131](https://github.com/Pipeliner/realms-de/issues/131) and
   [#132](https://github.com/Pipeliner/realms-de/issues/132));
-- a Fedora VM, graphical login, portal, SELinux, RPM clean-install, or complete
-  M2/M3 support claim;
+- a Fedora VM, graphical login, portal, SELinux, or complete M2/M3 support
+  claim;
 - additional architectures, runners, KVM procurement, or self-hosted CI;
 - a scheduled live-network canary or a release-admission/retirement SLA;
 - an offline Fedora 41 fixture, unless a later issue names a concrete
@@ -147,12 +155,28 @@ not as a reproducible Fedora package snapshot.
 The Cargo lane builds and tests the Rust workspace with the repository
 toolchain. The RPM lane runs the retained-source-kit producer, copies its
 `Source0` and RPM spec into the RPM build tree, and invokes `rpmbuild -bb
---nodeps`; it does not install the resulting RPM. It is truthful to describe
-those Cargo and retained-source RPM build facts. Together, they are build
-evidence only: neither establishes RPM clean-install or dependency-graph
-support, runtime dependency availability, graphical-session or SELinux
-support, support for either architecture in the image index, or a working Realm
-desktop.
+--nodeps`. After the build, that same lane selects exactly one output whose
+queried RPM name is `realm`, creates a new empty installroot, and asks DNF to
+install that exact local RPM with the normal Fedora 44 repositories and
+dependency resolution. The install command must not use `--nodeps`,
+`--skip-broken`, `--allowerasing`, or another dependency-suppression escape.
+The lane compares the built and installed NEVRA, then enters the installroot
+and runs:
+
+```text
+/usr/bin/realmctl theme lint --palette /usr/share/realm/palette.toml
+/usr/bin/river -version
+```
+
+This is evidence that the emitted Realm RPM and the dependency transaction
+selected by normal DNF install into an otherwise empty Fedora 44 filesystem,
+and that those two installed executable/data probes ran. The retained-source
+build remains offline as required by SPEC 0024; only the subsequent install
+step may use Fedora's live official repositories to resolve dependencies. The
+pinned base/current-packages boundary still applies. This evidence does not
+establish a graphical session or login, portal behavior, SELinux behavior,
+GPU/hardware compatibility, support for every architecture in the image
+index, upgrades, or a daily-drivable Realm desktop.
 
 ### 4. Fedora's native River package
 
@@ -226,9 +250,9 @@ Fedora 44 installation without promising application-state migration.
 ### 6. Closure boundary
 
 Passing this specification establishes a truthful Fedora 44 **pre-alpha
-baseline only**. Repository text must continue to say that the present RPM does
-not install a working desktop while the required binaries and runtime evidence
-are absent.
+baseline only**. Repository text may report the exact empty-installroot and
+installed-command evidence, but must continue to say that graphical login,
+portal and SELinux behavior remain unverified.
 
 A clean, complete, daily-drivable Fedora support claim remains blocked on the
 accepted outcomes of #134 and #135 and on the relevant M2/M3 RPM,
@@ -245,13 +269,13 @@ test module, but each row remains independently observable.
 | # | Given / When / Then | Test or evidence |
 |---|---|---|
 | A1 | Given the machine-checked inventory of live Fedora claims, when `status = "pre-alpha"` it is validated, then the only admitted release is exactly `44`; when `status = "unsupported"`, no Fedora release is admitted; `41`, `42`, `43`, `44+`, `latest`, Rawhide, and implicit newer releases are always rejected as current Realm targets | *Planned (#138):* `fedora_baseline::only_fedora_44_is_a_live_target`; includes one failing fixture per rejected form and one unsupported-state fixture |
-| A2 | Given the repository workflow files, when `status = "pre-alpha"`, then exactly one `fedora-44-cargo-smoke` Cargo lane and exactly one `fedora-rpm-package` retained-source RPM build lane resolve to the exact official Fedora 44 digest above; no other Fedora-family container image is present anywhere under `.github/workflows/`, regardless of scalar or mapping YAML syntax. The RPM lane runs the retained-source-kit producer, copies `Source0` and the RPM spec into the build tree, and invokes `rpmbuild -bb --nodeps`, but does not clean-install the resulting package. Cargo and RPM build facts are allowed; neither lane is graphical-session or SELinux evidence. When `status = "unsupported"`, it contains no required Fedora lane; neither state adds a Fedora 41/Fedora 43 lane, runner, or architecture claim | `packaging/fedora/test-check-projections.sh`: `fedora_baseline::required_ci_uses_one_pinned_f44_cargo_smoke_and_one_retained_source_rpm_build` |
+| A2 | Given the repository workflow files, when `status = "pre-alpha"`, then exactly one `fedora-44-cargo-smoke` Cargo lane and exactly one `fedora-rpm-package` retained-source RPM build lane resolve to the exact official Fedora 44 digest above; no other Fedora-family container image is present anywhere under `.github/workflows/`, regardless of scalar or mapping YAML syntax. The RPM lane runs the retained-source producer and `rpmbuild -bb --nodeps`, then selects exactly one built RPM named `realm`, installs that exact file into a new empty Fedora 44 installroot using normal DNF dependency resolution without `--nodeps`, `--skip-broken`, `--allowerasing`, or dependency suppression, proves its built and installed NEVRA match, and chroots to run `/usr/bin/realmctl theme lint --palette /usr/share/realm/palette.toml` plus `/usr/bin/river -version`. This is clean-install and bounded installed-command evidence only; neither lane is graphical-session, portal, SELinux, GPU/hardware, upgrade, or daily-driver evidence. When `status = "unsupported"`, it contains no required Fedora lane; neither state adds a Fedora 41/Fedora 43 lane, runner, or architecture claim | `packaging/fedora/test-check-projections.sh`: `fedora_baseline::required_ci_uses_one_pinned_f44_cargo_smoke_and_one_exact_rpm_installroot` |
 | A3 | Given the Fedora RPM metadata, when it is inspected, then it identifies Fedora 44, requires Fedora's `river >= 0.4.0`, contains no `realm-river` alternative or false “River unavailable on Fedora” claim, and continues to state that the package is pre-alpha and not a working desktop | *Planned (#138):* `fedora_baseline::rpm_metadata_matches_the_f44_pre_alpha_contract` |
 | A4 | Given a disposable Fedora 44 environment using only official Fedora repositories, when the review probe queries lifecycle/package metadata, then the evidence records Bodhi `F44` as current with EOL 2027-06-02 and records the resolved River NEVRA; the record labels these observations as time-scoped and does not call the River/Realm pairing tested | Review evidence attached to #138 or its pull request; network observation, not a deterministic CI gate |
 | A5 | Given the strict local baseline record and an injected evaluation date, when the lifecycle guard runs for 2027-06-01 it passes, when it runs for 2027-06-02 or a later date with `status = "pre-alpha"` it fails, and when Fedora is explicitly `unsupported` it permits retirement only if the support-claim guard finds no required lane/current claim | *Planned (#138):* `fedora_baseline::lifecycle_boundary_is_offline_and_inclusive_at_eol`; fixed-date fixtures and no network |
 | A6 | Given a seeded stale live-support claim such as `Fedora 41+`, when the consistency guard runs, then it fails; given an exact reviewed historical exception in a superseded ADR or third-party history, then it passes without treating that text as current support | *Planned (#138):* `fedora_baseline::stale_live_claims_fail_and_exact_history_exceptions_pass` |
 | A7 | Given ADR 0010, ADR 0013, the ADR index, and `.claude/memory/10-decisions.md`, when decision projections are checked, then the affected Fedora baseline/vendoring clauses point to ADR 0015, the Fedora half of the shared package-verification question is resolved while Ubuntu remains open, and the stale memory entries are struck plus replaced rather than erased | *Planned (#138):* `fedora_baseline::decision_projections_record_partial_supersession` plus document review |
-| A8 | Given current user-facing and normative documentation, when the consistency guard and doc review run, then Fedora 41 is absent from live Realm support/install examples, Fedora 44 is described as the sole pre-alpha baseline, no text upgrades the Cargo smoke to RPM/session evidence, and no direct Fedora 41 to Fedora 44 OS upgrade is called supported | *Planned (#138):* `fedora_baseline::docs_state_the_evidence_level_truthfully` plus review of rendered Markdown |
+| A8 | Given current user-facing and normative documentation, when the consistency guard and doc review run, then Fedora 41 is absent from live Realm support/install examples, Fedora 44 is described as the sole pre-alpha baseline, the exact RPM installroot evidence is distinguished from graphical-session, portal and SELinux evidence, and no direct Fedora 41 to Fedora 44 OS upgrade is called supported | *Planned (#138):* `fedora_baseline::docs_state_the_evidence_level_truthfully` plus review of rendered Markdown |
 | A9 | Given the completed #138 diff, when scope is reviewed, then it contains no Yazi/Starship source decision, package publishing/signing infrastructure, extra Fedora lane, KVM/native-runner acquisition, scheduled network job, Fedora 41 fixture, generation rollback design, or `flake.lock` strategy | Required reviewer checklist on the #138 pull request |
 | A10 | Given all #138 changes, when existing repository formatting, lint, unit, workflow, and documentation checks run, then they remain green | Existing repository verification suite |
 
@@ -284,11 +308,11 @@ record when later work uses it.
 
 ## Budgets
 
-#138 retains the one Cargo-smoke lane and adds the one specified retained-source
-RPM build lane; it does not add a third Fedora lane, runner class,
-native-architecture matrix, VM, or scheduled job. No new timing budget is
-introduced. M2/M3 runtime and VM budgets remain owned by their accepted
-contracts.
+#138 retains the one Cargo-smoke lane and the one specified retained-source RPM
+lane. The installroot check is a post-build step in that existing RPM lane; it
+does not add a third Fedora lane, runner class, native-architecture matrix, VM,
+or scheduled job. No new timing budget is introduced. M2/M3 runtime and VM
+budgets remain owned by their accepted contracts.
 
 ## Failure modes
 
@@ -299,7 +323,8 @@ contracts.
 | A later Fedora release becomes supported through `+`, `latest`, or Rawhide | A1 |
 | A base-image digest is called a reproducible package snapshot | A2, A8 |
 | Fedora package availability is described as tested Realm runtime compatibility | A3, A4, A8 |
-| The RPM build is treated as clean-install, graphical-session, or SELinux evidence | A2, A8 |
+| The bounded installroot probes are treated as graphical-session, portal, SELinux, GPU/hardware, upgrade, or daily-driver evidence | A2, A8 |
+| The installroot step installs a different RPM, suppresses dependency failures, or probes host files instead of chroot-installed files | A2 |
 | Partial supersession leaves the ADR index or operational decision memory stale | A7 |
 | #138 silently decides package trust, runner, rollback, or Nix policy | A9 |
 | Historical evidence is destroyed merely to satisfy a global string search | A6's exact exception model and A7 |

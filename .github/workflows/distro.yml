@@ -113,8 +113,9 @@ jobs:
           cd "$RUNNER_TEMP/realm-native-kits/realm-debian-0.1.0"
           dpkg-buildpackage -us -uc -b -d
 
-  # This lane builds the retained-source RPM only; it does not clean-install
-  # the result or exercise a graphical session or SELinux.
+  # This lane builds the retained-source RPM, clean-installs that exact output
+  # into an empty Fedora 44 installroot, and probes installed commands. It does not
+  # exercise a graphical session, portals, hardware, or SELinux.
   fedora-rpm-package:
     name: Fedora 44 retained-source RPM build
     runs-on: ubuntu-24.04
@@ -133,6 +134,32 @@ jobs:
           rpmbuild -bb --nodeps \
             --define "_topdir $RUNNER_TEMP/rpmbuild" \
             "$RUNNER_TEMP/rpmbuild/SPECS/realm.spec"
+      - name: Clean-install exact RPM and probe installed commands
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' -t realm_rpms < <(
+            find "$RUNNER_TEMP/rpmbuild/RPMS" -type f -name '*.rpm' -print0 |
+              while IFS= read -r -d '' candidate; do
+                if [ "$(rpm -qp --queryformat "%{NAME}" "$candidate")" = realm ]; then
+                  printf '%s\0' "$candidate"
+                fi
+              done
+          )
+          if [ "${#realm_rpms[@]}" -ne 1 ]; then
+            printf 'expected exactly one built realm RPM, found %s\n' "${#realm_rpms[@]}" >&2
+            exit 1
+          fi
+          realm_rpm=${realm_rpms[0]}
+          built_nevra=$(rpm -qp --queryformat "%{NEVRA}" "$realm_rpm")
+          install_root="$RUNNER_TEMP/realm-fedora-installroot"
+          test ! -e "$install_root"
+          mkdir "$install_root"
+          dnf -y --installroot="$install_root" --releasever=44 --use-host-config install "$realm_rpm"
+          installed_nevra=$(rpm --root "$install_root" -q --queryformat "%{NEVRA}" realm)
+          test "$installed_nevra" = "$built_nevra"
+          chroot "$install_root" /usr/bin/realmctl theme lint --palette /usr/share/realm/palette.toml
+          chroot "$install_root" /usr/bin/river -version
 
   fedora-baseline-contract:
     name: Fedora baseline contract

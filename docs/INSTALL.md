@@ -2,8 +2,11 @@
 
 > **realm 0.1.0 is pre-alpha.** The native recipes now require the complete
 > Realm runtime payload — `realmctl`, `realm-wm`, and `realm-bar` — plus the
-> session contract. Native clean installation, River resolution and graphical
-> login remain unverified; a successful package build is not that evidence.
+> session contract. Fedora CI clean-installs the exact built RPM into an empty
+> Fedora 44 root with normal DNF dependency resolution, then runs the installed
+> Realm CLI against the installed palette and probes installed River. Debian
+> installation and Fedora graphical login remain unverified; a package build
+> alone is not that evidence.
 >
 > A failed `realm-wm` unit returns the user to the display manager rather than
 > leaving bare river. That failure policy remains required while live native
@@ -25,9 +28,9 @@ target ([ARCHITECTURE.md §5](ARCHITECTURE.md)):
 
 | Platform | Delivery | State today |
 |---|---|---|
-| NixOS / Nix | flake: `packages.default`, `nixosModules.realm`, `homeManagerModules.realm` | Reference build. Evaluates; VM test asserts the contract, not the desktop |
+| NixOS / Nix | flake: `packages.default`, `nixosModules.realm`, `homeManagerModules.realm` | Reference build; its installed display-manager session boots River and the Realm desktop in the QEMU VM. This is not physical-hardware evidence |
 | Ubuntu 24.04 LTS + | `.deb` from `packaging/debian/` | Builds; three runtime dependencies are not in the Ubuntu archive (below) |
-| Fedora 44 (pre-alpha) | RPM from the retained-only source kit | Builds in a pinned Fedora 44 image; package installation and the graphical session are unverified |
+| Fedora 44 (pre-alpha) | RPM from the retained-only source kit | Builds in a pinned Fedora 44 image; its exact output clean-installs into an empty Fedora 44 root and its installed CLI/palette and River probes pass. Graphical login, portals and SELinux remain unverified |
 
 Anything else is best-effort. The flake is the definition; the deb and the rpm
 follow from the same tree.
@@ -201,10 +204,13 @@ fails the package build.
 ## Fedora 44 (pre-alpha)
 
 There is no Realm Fedora repository. The tracked RPM is pre-alpha and does not
-install a working desktop. Fedora 44 has one pinned Cargo-smoke lane and one
-pinned retained-source RPM-build lane; the latter builds the RPM from the
-retained-only source kit without clean-installing it. Package installation and
-a graphical session remain unverified. To investigate the package locally:
+yet have a verified graphical login. Fedora 44 has one pinned Cargo-smoke lane
+and one pinned retained-source RPM lane; the latter builds the RPM from the
+retained-only source kit, installs that exact output into an empty Fedora 44
+root with normal DNF dependency resolution, verifies its NEVRA, and runs the
+installed Realm CLI/palette and River version probes. This does not exercise a
+graphical session, portals, SELinux, or physical hardware. To investigate the
+package locally:
 
 ```sh
 sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts

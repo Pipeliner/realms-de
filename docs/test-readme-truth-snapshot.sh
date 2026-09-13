@@ -182,6 +182,13 @@ sed 's/Tracked pre-alpha contract/Planned. Not started/' "$fixture_root/README.m
 mv "$fixture_root/README.next" "$fixture_root/README.md"
 expect_fail stale-session-claim "$fixture_root" 'README must not call tracked session assets planned/not started'
 
+fixture_root=$(make_fixture stale-fedora-installroot-status)
+sed 's/the exact Fedora RPM verified in an empty installroot/the Fedora RPM build retained but installation unverified/' \
+    "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail stale-fedora-installroot-status "$fixture_root" \
+    'README status must name the Fedora RPM installroot evidence'
+
 fixture_root=$(make_fixture missing-ci-invocation)
 sed '/\.\/docs\/test-readme-truth-snapshot\.sh/d' \
     "$fixture_root/.github/workflows/ci.yml" >"$fixture_root/ci.next.yml"
