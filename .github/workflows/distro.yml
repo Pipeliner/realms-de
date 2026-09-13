@@ -1,7 +1,8 @@
 # NixOS, Ubuntu and Fedora remain the intended M3 targets, but this workflow's
 # Fedora 44 is the sole pre-alpha baseline. Its retained-only source kit is
-# built through the tracked RPM spec, but the workflow does not install the RPM,
-# start a graphical session, exercise SELinux, or establish architecture support.
+# built through the tracked RPM spec. The bounded native VM matrix consumes the
+# exact producer artifacts to prove one graphical login on each named x86_64
+# cloud image; it does not rebuild packages, exercise hardware, or gate SELinux.
 #
 # The ordinary distro jobs build and test the Rust workspace. The bounded
 # Ubuntu River job builds the feature-bearing private source closure selected
@@ -150,6 +151,19 @@ jobs:
           sudo chroot "$root" env -u LD_LIBRARY_PATH \
             PATH=/usr/lib/realm/bin:/usr/bin:/bin \
             XDG_RUNTIME_DIR=/tmp HOME=/root realm-session --check
+      - name: Retain exact Ubuntu native VM packages
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/realm-native-artifacts/ubuntu"
+          cp "$RUNNER_TEMP/realm-native-kits/realm_0.1.0_amd64.deb" \
+            "$RUNNER_TEMP/realm-river_0.4.8-1_amd64.deb" \
+            "$RUNNER_TEMP/realm-native-artifacts/ubuntu/"
+      - name: Upload exact Ubuntu native VM packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: realm-native-ubuntu-${{ github.sha }}
+          if-no-files-found: error
+          path: ${{ runner.temp }}/realm-native-artifacts/ubuntu/
 
   ubuntu-debian-package:
     name: Ubuntu 24.04 Debian package
@@ -222,6 +236,78 @@ jobs:
           test "$installed_nevra" = "$built_nevra"
           chroot "$install_root" /usr/bin/realmctl theme lint --palette /usr/share/realm/palette.toml
           chroot "$install_root" /usr/bin/river -version
+          mkdir -p "$RUNNER_TEMP/realm-native-artifacts/fedora"
+          cp "$realm_rpm" "$RUNNER_TEMP/realm-native-artifacts/fedora/"
+      - name: Upload exact Fedora native VM package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: realm-native-fedora-${{ github.sha }}
+          if-no-files-found: error
+          path: ${{ runner.temp }}/realm-native-artifacts/fedora/
+
+  native-session-vm:
+    # SPEC 0029: exact emulated login evidence only; not hardware, full
+    # application usability, daily-driver, or SELinux-policy evidence.
+    name: native graphical session (${{ matrix.target }})
+    needs: [ubuntu-river-debian, fedora-rpm-package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [ubuntu-24.04-x86_64, fedora-44-x86_64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate native VM workflow contract
+        run: |
+          set -euo pipefail
+          python3 packaging/native-vm/test_check_inputs.py
+          python3 packaging/native-vm/test_check_workflow.py
+          python3 packaging/native-vm/test_control_get_state.py
+          packaging/native-vm/test_run_native_session_vm.sh
+          packaging/native-vm/test_guest_probe.sh
+      - name: Install KVM harness prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes \
+            cloud-image-utils \
+            qemu-system-x86 \
+            qemu-utils \
+            rpm \
+            socat
+      - name: Prepare failure evidence
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/realm-native-vm-evidence"
+          printf '%s\n' '${{ matrix.target }}' \
+            > "$RUNNER_TEMP/realm-native-vm-evidence/target.txt"
+      - name: Download exact Ubuntu producer artifact
+        if: matrix.target == 'ubuntu-24.04-x86_64'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: realm-native-ubuntu-${{ github.sha }}
+          path: ${{ runner.temp }}/realm-native-packages
+      - name: Download exact Fedora producer artifact
+        if: matrix.target == 'fedora-44-x86_64'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: realm-native-fedora-${{ github.sha }}
+          path: ${{ runner.temp }}/realm-native-packages
+      - name: Boot installed Realm graphical session
+        run: |
+          set -euo pipefail
+          packaging/native-vm/run-native-session-vm.sh \
+            '${{ matrix.target }}' \
+            "$RUNNER_TEMP/realm-native-packages" \
+            "$RUNNER_TEMP/realm-native-vm-evidence"
+      - name: Upload native graphical-session evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: realm-native-session-${{ matrix.target }}-${{ github.sha }}
+          if-no-files-found: error
+          path: ${{ runner.temp }}/realm-native-vm-evidence/
 
   fedora-baseline-contract:
     name: Fedora baseline contract
@@ -237,6 +323,9 @@ jobs:
           ./packaging/fedora/test-check-projections.sh
           ./packaging/font-policy-test.sh
           ./packaging/check-font-policy.sh
+          python3 packaging/native-vm/check_workflow.py .github/workflows/distro.yml
+          python3 packaging/native-vm/test_check_workflow.py
+          python3 packaging/native-vm/test_check_inputs.py
 
   build:
     name: ${{ matrix.name }}
