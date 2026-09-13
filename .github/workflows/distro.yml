@@ -65,7 +65,6 @@ jobs:
             libxcb-res0-dev \
             libxcb-xfixes0-dev \
             libxcb1-dev \
-            meson \
             ninja-build \
             patchelf \
             pkg-config \

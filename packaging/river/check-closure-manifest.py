@@ -18,6 +18,7 @@ except ModuleNotFoundError:  # Python 3.10 development hosts; Noble has 3.12.
 
 ARCHIVE_NAMES = {
     "zig",
+    "meson",
     "wayland",
     "wayland-protocols",
     "libdrm",

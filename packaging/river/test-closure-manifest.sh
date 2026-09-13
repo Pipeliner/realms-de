@@ -86,6 +86,14 @@ PY
 }
 
 expect_pass canonical "$checker" --repo-root "$repo_root" "$manifest"
+if ! "$checker" --repo-root "$repo_root" --emit archives "$manifest" \
+    | grep -Fx -- $'meson\tmeson-1.4.0.tar.gz\thttps://github.com/mesonbuild/meson/releases/download/1.4.0/meson-1.4.0.tar.gz\t8fd6630c25c27f1489a8a0392b311a60481a3c161aa699b330e25935b750138d' \
+        >/dev/null; then
+    echo "not ok $((pass_count + 1)) - canonical Meson build-tool pin is absent" >&2
+    exit 1
+fi
+pass_count=$((pass_count + 1))
+printf 'ok %s - canonical Meson build-tool pin\n' "$pass_count"
 
 for case in missing extra duplicate digest lock zig-hash; do
     mutated="$tmpdir/$case.toml"

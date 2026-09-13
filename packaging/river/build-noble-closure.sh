@@ -74,11 +74,14 @@ meson_install() {
     shift
     local source_dir
     source_dir=$(extract_source "$selected_name")
-    meson setup "$cache/build/$selected_name" "$source_dir" \
+    "${meson_cmd[@]}" setup "$cache/build/$selected_name" "$source_dir" \
         --wrap-mode=nofallback --prefix "$prefix" --libdir lib "$@"
-    meson compile -C "$cache/build/$selected_name"
-    meson install -C "$cache/build/$selected_name"
+    "${meson_cmd[@]}" compile -C "$cache/build/$selected_name"
+    "${meson_cmd[@]}" install -C "$cache/build/$selected_name"
 }
+
+meson_source=$(extract_source meson)
+meson_cmd=(python3 "$meson_source/meson.py")
 
 meson_install wayland \
     -Ddocumentation=false -Ddocbook_validation=false -Ddtd_validation=false \
