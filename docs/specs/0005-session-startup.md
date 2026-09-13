@@ -2,8 +2,9 @@
 
 - **Status:** Draft — the NixOS session-discovery contract, startup step 3,
   XWayland display discovery and publication, current-incarnation
-  doctor-health handoff, and distro-native swayidle/swaylock selection are
-  accepted; the idle and lid-close defaults below remain unresolved
+  doctor-health handoff, distro-native swayidle/swaylock selection, and the
+  host-policy/lock-before-suspend lid boundary are accepted; the idle blank and
+  lock timeouts below remain unresolved
   (`needs-human`)
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
@@ -81,8 +82,9 @@ the session through NixOS display-manager session data, and assert both the
 `realm.desktop` identity and its rewritten `Exec` target. A test that uses no
 display manager may test package contents directly, but must not claim to test
 NixOS session discovery.
-- Choosing the idle and lid-close defaults — see **Open questions**. The locker
-  and idle client selection is accepted below.
+- Choosing the idle blank and lock timeouts — see **Open questions**. The
+  locker, idle client and host-policy/lock-before-suspend lid boundary are
+  accepted below.
 
 ## Behaviour
 
@@ -409,7 +411,7 @@ is guaranteed installed on any of the three targets. It connects to
         realm-wm.service   realm-bar.service   xdg-desktop-portal.service
         (the window manager)   (Wants=daemon)    (upstream; PartOf= the target)
                      │
-             realm-idle.service  ← blocked on OQ-1
+             realm-idle.service  ← idle timeouts remain OQ-1
 ```
 
 | Unit | `[Unit]` | `[Service]` | `[Install]` |
@@ -701,7 +703,7 @@ gate (ADR 0011's guard).
 | `units/wm` | `realm-wm.service` `ActiveState=active`; `ConditionResult` reported separately | **N1** — a condition-skipped unit read as success | VM |
 | `units/bar` | `realm-bar.service` active or cleanly restarting | Bar gone unnoticed | VM |
 | `units/restart-policy` | The shipped units carry the policy in §4 | A crashed bar taking the session down | **CI** |
-| `units/idle-lock` | An idle and a lock unit are part of `graphical-session.target` | Lid closes, session stays unlocked | VM *(blocked on OQ-1)* |
+| `units/idle-lock` | An idle and a lock unit are part of `graphical-session.target`; the idle unit follows host lid policy and locks through logind's before-sleep path | Host-initiated suspend reaches sleep before lock readiness | VM *(idle-timeout assertions blocked on OQ-1)* |
 | `wm/attached` | realm holds river's window-management global; on refusal reports a possible foreign holder, and names it only when independent evidence identifies it | **N2** — inert compositor, or a restart loop against a stale holder | VM |
 | `wm/layer-shell` | realm is serving `river-layer-shell-v1` | The bar never appears, and it looks like the bar's fault | VM |
 | `wm/capabilities` | `Capabilities`, including `unsupported` ([INTERFACES.md §1](../INTERFACES.md)) | A backend gap that looks like a bug | VM |
@@ -753,7 +755,7 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A13a | Given the installed graphical VM with its test-only noninteractive ScreenCast chooser and per-user PipeWire service, when the pre-VM packaged-helper import check loads Gio, GStreamer, and GstApp and one persistent portal client subscribes on the exact token-derived FileChooser request path before `OpenFile`, publishes a VM-only readiness marker only after that exact handle returns within 2 s, and keeps waiting while the driver observes the actual managed and rendered chooser and activates its explicit `_Cancel` action through the real `Alt+C` GTK mnemonic, then the exact request emits user-cancel response code 1 within the finite VM state/UI deadlines; the same client reads `Settings.ReadAll`, completes the ScreenCast request/session sequence, and opens the restricted PipeWire remote; a missing, success, or catch-all FileChooser response is rejected, the Settings reply has its specified map type, one nonempty video buffer is consumed from the returned node, and the uploaded VM evidence retains the FileChooser response plus the node id, mapped byte count, dimensions, and digest in `portal-roundtrip.json`; this does not replace A13's separate `realmctl doctor --portal-roundtrip` Close probe and does not satisfy A15 | VM | `packaging/nix/test_portal_vm_helper.py` — `import-only`, `filechooser-rendered-cancel-response`; `packaging/nix/test-root-flake-ci.sh` — `portal-helper-imports`, `portal-evidence-upload` |
 | A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
-| A16 | Given a real laptop, when the lid is closed, then the session locks within the configured delay and the screen is blank on reopen until authentication | **HARDWARE** *(blocked on OQ-1)* | |
+| A16 | Given a real laptop whose host lid policy initiates suspend, or an equivalent host-initiated suspend, when logind announces before-sleep, then Realm completes lock readiness before suspend proceeds and the session remains compositor-locked on resume until authentication. Given a host policy that ignores the lid, Realm neither suspends nor locks solely because the lid closed | **HARDWARE** | |
 | A17 | Given an installed NixOS VM session running the pinned XWayland-enabled River, when a purpose-built session-bus service is activated and acquires its configured bus name, then the non-empty `DISPLAY` inherited by `realm-wm`, the systemd user manager and that D-Bus-activated service is identical; the service invokes the pinned xmessage package's public `bin/xmessage` wrapper and the child executable resolves to that same package's exact `bin/.xmessage-wrapped` payload selected by locked nixpkgs' X file-search wrapper hook; Realm reports one additional managed X11 window; and the test reaps the client. This proves discovery, both publication paths and XWayland window management, but does not claim Xresources or scaling behaviour. | VM | |
 
 **Split: 17 criteria — 4 CI, 11 VM, 2 HARDWARE.**
@@ -787,7 +789,7 @@ Rows this component is responsible for not causing, from
 | `XDG_CURRENT_DESKTOP` unset | Session integration | Step 1; `env/desktop/*`; A5 |
 | No portal backend installed | Session integration | §5 named dependencies and `realm-portals.conf`; `portal/config`; A13 |
 | Session dies with a client | Session integration | §4 `PartOf`/`Wants`, never `BindsTo`/`Requires`; A12 |
-| No lock/idle handling | Session integration | §4 `realm-idle.service`; `units/idle-lock`; A16 — **blocked on OQ-1** |
+| No lock/idle handling | Session integration | §4 `realm-idle.service`; `units/idle-lock`; A16; idle-timeout assertions remain blocked on OQ-1 |
 | XWayland apps unstyled or scaled wrong | Session integration | §3 XWayland; `env/xwayland` |
 | Cursor theme unset | Session integration | Steps 1 and 5; `env/cursor`; A7 |
 | `realm-session` dies | river | §2 supervision policy and ledger recovery; A10 |
@@ -828,8 +830,8 @@ register yet. They are recorded here as findings for a human to add.
 
 ## Open questions
 
-- **OQ-1 — the idle and lid-close defaults. `needs-human`, and this one matters
-  most.** Locker selection is resolved; policy remains open.
+- **OQ-1 — the idle blank and lock timeouts. `needs-human`.** Locker selection
+  and the lid/suspend boundary are resolved; these two durations remain open.
 
   *Locker (resolved).* river 0.4 implements `ext-session-lock-v1` and reports
   `session_locked`/`session_unlocked` to the window manager, so realm can disable
@@ -854,13 +856,20 @@ register yet. They are recorded here as findings for a human to add.
   idle-notifier global, and swayidle consumes that compositor idle protocol.
   This settles tool compatibility, not the policy below.
 
-  *Defaults.* Candidates: (a) no idle action by default; (b) blank at 5 min,
-  lock at 10 min, lid-close always locks; (c) lock at 15 min, lid-close locks
-  unless on external power. A proposal, not a decision: (b). **These are
-  user-visible security defaults and must not be guessed.** A laptop that does
-  not lock on lid-close is a security failure; a laptop that locks after 60
-  seconds is one whose owner disables locking entirely, which is worse than
-  either. A human decides, and A16 stays unproven until they do.
+  *Lid and suspend boundary (resolved).* Realm follows host lid policy. It does
+  not install an independent lid listener or force a suspend decision. Swayidle
+  must use logind's before-sleep path and wait for `swaylock -f` readiness before
+  releasing the delay path, whether suspend was caused by the lid or another
+  host policy. If the host ignores the lid, Realm does too. On resume the
+  compositor-owned lock remains until authentication.
+
+  *Idle defaults (unresolved).* Candidates remain: (a) no idle action by
+  default; (b) blank at 5 min and lock at 10 min; (c) lock at 15 min. A
+  proposal, not a decision: (b). **These are user-visible defaults and must not
+  be guessed.** A desktop that locks after 60 seconds is one whose owner may
+  disable locking entirely, which is worse than a deliberate default. A human
+  still decides these two durations; that does not reopen A16's suspend-order
+  contract.
 
 - **OQ-2 — ScreenCast under river 0.4.** Does river 0.4.8 still export
   `wlr-screencopy-unstable-v1`, and does `xdg-desktop-portal-wlr` work when

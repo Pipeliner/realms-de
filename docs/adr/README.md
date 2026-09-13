@@ -55,13 +55,13 @@ named, with its options and a recommendation, rather than guessed at.
 |---|---|---|
 | [0013](0013-river-window-management-backend.md) | `river-window-management-v1` is declared stable with a compatibility pledge, but river is pre-1.0 and its last release cycle was extremely breaking. What do we do if the pledge does not hold? | Pin and follow, with an accelerated `realm-compositor` as the standing mitigation |
 | [0010](0010-nix-flake-as-reference-build.md) | Where do the `.deb` and `.rpm` actually live: GitHub Releases, a self-hosted apt repo plus Copr, or official distro repositories? Who holds the signing key? | Releases for M3; a repo and Copr once there are users to upgrade |
-| [0011](0011-session-integration-contract.md) | Which lock screen ships? `ext-session-lock-v1` is now a hard requirement, so the real choice is waylock (small attack surface, colour-only theming) versus gtklock (looks like realm, drags GTK into the lock path). SPEC 0005 and `docs/integration/session-services.md` disagree | waylock, with the fidelity loss recorded in ADR 0005's limits table |
-| [0011](0011-session-integration-contract.md) | Idle policy defaults: blank timeout, lock timeout, and whether lid-close locks unconditionally | Not to be guessed; these are user-visible security defaults |
+| [0011](0011-session-integration-contract.md) | Idle policy defaults: blank timeout and lock timeout | Not to be guessed; these are user-visible defaults |
 
 ### Resolved
 
 | ADR | Question | Resolution |
 |---|---|---|
+| [0011](0011-session-integration-contract.md) | Which lock screen and idle client ship, and does Realm override host lid policy? | **Resolved for M3:** distro-native swaylock 1.7+ with PAM and swayidle; Realm follows host lid policy and completes lock readiness before host-initiated suspend, without an independent lid listener. Idle blank/lock durations remain open. |
 | ~~[0002](0002-borrow-a-compositor-first.md)~~ | niri cannot express triptych, even or stow — ship the approximation, restrict layouts, or reopen river? | **Resolved by [0013](0013-river-window-management-backend.md).** river was reopened for a stronger reason than the one 0002 considered; no approximation is needed |
 | ~~[0002](0002-borrow-a-compositor-first.md)~~ | Does stow map to a hidden niri workspace, or refuse `mod+s`? | **Resolved by [0013](0013-river-window-management-backend.md).** `river_window_v1::hide`/`show` maps stow exactly, and with matching semantics |
 | [0013](0013-river-window-management-backend.md) | Does Fedora require a vendored River because its supported package lacks `river-window-management-v1`? | **Resolved for the Fedora 44 pre-alpha baseline by [0015](0015-fedora-44-pre-alpha-baseline.md).** Fedora's official repositories exposed `river-0.4.8-1.fc44` during the 2026-08-29 review; runtime compatibility remains an M2 test obligation |

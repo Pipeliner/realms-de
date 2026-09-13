@@ -118,16 +118,20 @@ generated from the same `palette.toml` (ADR 0005).
 
 **8. Ship an idle and lock unit.**
 
-An idle daemon and a lock screen, started as part of the session, wired to
-lid-close and to `loginctl lock-session`. A laptop that closes its lid and stays
-unlocked is a security failure, not a missing feature.
+An idle daemon and a lock screen are started as part of the session and wired
+to `loginctl lock-session` and logind's before-sleep path. The host's logind
+policy remains authoritative for the lid switch: Realm neither forces suspend
+nor adds an independent lid listener. When that host policy decides to suspend
+for a lid close or any other reason, Realm must acquire the documented delay
+path and complete `swaylock -f` readiness before allowing suspend to proceed.
+If the host policy ignores a lid close, Realm does not reinterpret it.
 
 The locker **must** be an `ext-session-lock-v1` client, never a layer-shell
 overlay: under [ADR 0013](0013-river-window-management-backend.md) an overlay
 locker would depend on `realm-session` serving layer shell, so a crash in realm
 would expose the desktop. Realm selects the distro-native PAM build of
 **swaylock**, version 1.7 or newer, and **swayidle** as the idle client. The idle
-timeout and lid-close policy remain the user-visible decision below.
+blank and lock timeouts remain the user-visible decision below.
 
 **9. `realmctl doctor` verifies every one of the above.**
 
@@ -296,11 +300,18 @@ The M3 decision above supersedes the prior waylock recommendation and SPEC
 0005's gtklock recommendation. Either remains a reversible later choice, but
 neither blocks the distro-native swaylock path.
 
-### Idle policy
+### Idle and suspend policy
 
-A human must still set the **idle defaults**: how long until the screen blanks,
-how long until lock, and whether lid-close locks unconditionally. These are
-user-visible security defaults and are not settled by the locker selection.
+The lid boundary is resolved: Realm follows host lid policy and does not add a
+second lid-switch policy. Whenever logind is about to suspend, including a
+suspend selected by that host lid policy, Realm locks before suspend completes.
+On resume the compositor-owned lock remains until authentication. This decision
+does not choose whether a particular host suspends, docks, or ignores a closed
+lid.
+
+A human must still set the **idle defaults**: how long until the screen blanks
+and how long until it locks. Those two user-visible defaults are not settled by
+the locker or lid-policy decisions.
 
 The dependency SPEC 0005 could not confirm is now **resolved**: river does
 implement `ext-idle-notify-v1`. `river/InputManager.zig` creates a
