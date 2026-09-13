@@ -86,10 +86,14 @@ remains unproven until the later hardware obligation.
    symlinked or non-regular input is fatal. Output publication is one
    no-replace rename after complete validation; a partial destination is never
    accepted as a kit.
-4. Package compilation runs in a fresh user and network namespace with no
-   usable interface and consumes only the kit. Every Meson setup keeps
-   `--wrap-mode=nofallback`; River keeps Zig `--system`. Namespace creation or
-   verification failure is fatal, with no connected retry.
+4. The retained source kit's package-build entrypoint captures the parent
+   network namespace and enters a fresh user and network namespace before it
+   invokes `dpkg-buildpackage`. The package rules require that captured parent
+   identity and the closure builder verifies that its current namespace
+   differs and has no usable interface before compilation. Invoking the rules
+   without the entrypoint or failing namespace creation/verification is fatal,
+   with no connected retry. Every Meson setup keeps `--wrap-mode=nofallback`;
+   River keeps Zig `--system`.
 
 ## Staged build and runtime projection (L4)
 
