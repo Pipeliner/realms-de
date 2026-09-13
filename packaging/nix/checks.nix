@@ -22,7 +22,8 @@
       ''
         shellcheck --shell=bash \
           ${src + "/packaging/session/realm-session"} \
-          ${src + "/packaging/session/test-runtime-dir-mode.sh"}
+          ${src + "/packaging/session/test-runtime-dir-mode.sh"} \
+          ${src + "/packaging/session/test-portal-warmup.sh"}
         shellcheck --shell=sh \
           ${src + "/packaging/check-font-policy.sh"} \
           ${src + "/packaging/font-policy-test.sh"} \
@@ -38,6 +39,7 @@
           ${src + "/packaging/debian/toolchain-path.sh"} \
           ${src + "/packaging/debian/test-toolchain-path.sh"}
         bash ${src + "/packaging/session/test-runtime-dir-mode.sh"}
+        bash ${src + "/packaging/session/test-portal-warmup.sh"}
         touch $out
       '';
 
@@ -432,11 +434,9 @@ EOF
       # the same published graphical-session environment as supervised units.
       # This is the healthy-session acceptance path for the complete fixed
       # check set; skips remain explicit data rather than omitted checks.
-      # Cold portal activation is itself bounded here before the healthy-state
-      # assertion; doctor still performs and times its own live property read.
-      machine.succeed(
-          "systemctl --user --machine=alice@ start xdg-desktop-portal.service"
-      )
+      # The session entry enqueues cold portal activation after its environment
+      # imports. Waiting here verifies that production path; the fixture does
+      # not manually start the service before doctor.
       machine.wait_for_unit(
           "xdg-desktop-portal.service", user="alice", timeout=STARTUP_TIMEOUT
       )

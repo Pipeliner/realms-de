@@ -217,6 +217,18 @@ That asymmetry is precisely why this bug survives manual testing.
 
 `DISPLAY` is handled separately; see §3.
 
+#### Step 4a — Start portal activation without blocking startup
+
+After both environment imports, and before any other session client starts, a
+reachable systemd user manager receives
+`systemctl --user start --no-block xdg-desktop-portal.service`. This starts the
+cold portal activation while River and Realm continue toward readiness; the
+entry must not wait for the portal on the compositor/window-manager critical
+path. Failure to enqueue the service is non-fatal and is logged; the bounded
+`doctor` portal checks remain the authority for the resulting user-visible
+failure. A no-systemd session retains ordinary D-Bus activation and its already
+degraded supervision contract.
+
 #### Step 5 — Mirror the cursor into gsettings
 
 ```sh
@@ -683,7 +695,7 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | # | Given / When / Then | Where | Test |
 |---|---|---|---|
 | A1 | Given a stub compositor that creates `$XDG_RUNTIME_DIR/wayland-9` after 3 s and a pre-existing `wayland-0`, when the entry runs, then it discovers `wayland-9` (not `wayland-0`, not a guess), proceeds only after discovery, and completes within the deadline | CI | |
-| A2 | Given the session entry source, when the ordering test runs, then the identity exports precede the compositor start, and the two imports precede every client start, every `gsettings` call and every other D-Bus touch | CI | |
+| A2 | Given the session entry source, when the ordering test runs, then the identity exports precede the compositor start, the two imports precede every client start, every `gsettings` call and every other D-Bus touch, and portal warm-up is enqueued with `--no-block` after those imports but before the session target | CI | `packaging/session/test-portal-warmup.sh` |
 | A3 | Given the entry's import-variable list and `doctor`'s list, when the consistency test runs, then they name the same variables; a separate assertion keeps both client units' intentionally narrower `ConditionEnvironment=WAYLAND_DISPLAY` guard | CI | |
 | A4 | Given a container with no reachable `systemd --user` and no `dbus-update-activation-environment`, when the entry runs against a stub compositor, then it logs exactly one `DEGRADED NO-SYSTEMD-USER` line and one `DEGRADED NO-DBUS-ACTIVATION` line, starts the clients directly under the bounded respawn loop, and does not hang | CI | |
 | A5 | Given a booted session, when `systemctl --user show-environment` is read and a VM-only D-Bus-activated probe reports its own inherited environment, then every imported variable is present in both with values equal to the compositor's `/proc/<pid>/environ`; `doctor` itself continues to label D-Bus activation values unobservable and uses the portal proxy | VM | |

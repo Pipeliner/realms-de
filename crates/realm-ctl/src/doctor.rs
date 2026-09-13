@@ -787,23 +787,36 @@ fn apply_environment_checks(
 }
 
 fn session_entry_import_check() -> Check {
-    let mut candidates = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(bin) = exe.parent() {
-            candidates.push(bin.join(".realm-session-wrapped"));
-            candidates.push(bin.join("realm-session"));
+    let installed_bin = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let fallbacks = [
+        PathBuf::from("/usr/bin/realm-session"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/session/realm-session"),
+    ];
+    session_entry_import_check_from_installation(installed_bin.as_deref(), fallbacks)
+}
+
+fn session_entry_import_check_from_installation(
+    installed_bin: Option<&Path>,
+    fallbacks: impl IntoIterator<Item = PathBuf>,
+) -> Check {
+    if let Some(bin) = installed_bin {
+        let wrapped = bin.join(".realm-session-wrapped");
+        if wrapped.is_file() {
+            return session_entry_import_check_from_candidates([wrapped]);
+        }
+        let direct = bin.join("realm-session");
+        if direct.is_file() {
+            return session_entry_import_check_from_candidates([direct]);
         }
     }
-    candidates.push(PathBuf::from("/usr/bin/realm-session"));
-    candidates
-        .push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/session/realm-session"));
-    session_entry_import_check_from_candidates(candidates)
+    session_entry_import_check_from_candidates(fallbacks)
 }
 
 fn session_entry_import_check_from_candidates(
     candidates: impl IntoIterator<Item = PathBuf>,
 ) -> Check {
-    let mut first_malformed = None;
     for path in candidates {
         let Ok(contents) = std::fs::read_to_string(&path) else {
             continue;
@@ -816,18 +829,15 @@ fn session_entry_import_check_from_candidates(
                 format!("{} matches the accepted import list", path.display()),
             );
         }
-        first_malformed.get_or_insert(path);
-    }
-    let Some(path) = first_malformed else {
-        return Check::skipped(
+        return Check::new(
             "env/list-matches-entry",
-            "installed session entry was not available for the CI import-list check",
+            Status::Fail,
+            format!("{} import list differs or is malformed", path.display()),
         );
-    };
-    Check::new(
+    }
+    Check::skipped(
         "env/list-matches-entry",
-        Status::Fail,
-        format!("{} import list differs or is malformed", path.display()),
+        "installed session entry was not available for the CI import-list check",
     )
 }
 
@@ -2185,9 +2195,28 @@ SESSION_ENV_VARS=(
         )
         .unwrap();
 
-        let check = session_entry_import_check_from_candidates([shim, payload]);
+        let check = session_entry_import_check_from_installation(Some(temp.path()), []);
         assert_eq!(check.status, Status::Ok);
         assert!(check.summary.contains(".realm-session-wrapped"));
+    }
+
+    #[test]
+    fn malformed_installed_payload_is_not_masked_by_a_valid_fallback() {
+        let temp = tempfile::tempdir().unwrap();
+        let shim = temp.path().join("realm-session");
+        let payload = temp.path().join(".realm-session-wrapped");
+        let fallback = temp.path().join("source-realm-session");
+        std::fs::write(&shim, "#!/bin/sh\nexec .realm-session-wrapped \"$@\"\n").unwrap();
+        std::fs::write(&payload, "SESSION_ENV_VARS=(\nWAYLAND_DISPLAY\n)\n").unwrap();
+        std::fs::write(
+            &fallback,
+            "SESSION_ENV_VARS=(\nWAYLAND_DISPLAY\nXDG_CURRENT_DESKTOP\nXDG_SESSION_TYPE\nXDG_SESSION_DESKTOP\nXDG_RUNTIME_DIR\nXCURSOR_THEME\nXCURSOR_SIZE\n)\n",
+        )
+        .unwrap();
+
+        let check = session_entry_import_check_from_installation(Some(temp.path()), [fallback]);
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.summary.contains(payload.to_str().unwrap()));
     }
 
     #[test]
