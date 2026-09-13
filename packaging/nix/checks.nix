@@ -353,8 +353,45 @@ EOF
       ).strip()
       assert imported_wayland == daemon_wayland and imported_wayland
 
+      # Run the installed diagnostic inside the user manager so it receives
+      # the same published graphical-session environment as supervised units.
+      # This is the healthy-session acceptance path for the complete fixed
+      # check set; skips remain explicit data rather than omitted checks.
+      doctor_raw = machine.succeed(
+          "systemd-run --user --machine=alice@ --wait --pipe --quiet --collect "
+          "${realm}/bin/realmctl --json doctor"
+      )
+      doctor = json.loads(doctor_raw)
+      assert len(doctor["checks"]) == 32, doctor
+      assert [check["id"] for check in doctor["checks"]] == [
+          "session/socket", "session/protocol-version", "session/degraded",
+          "wm/attached", "wm/layer-shell", "wm/capabilities",
+          "wm/protocol-version", "env/identity",
+          "env/wayland-display/process", "env/wayland-display/systemd",
+          "env/wayland-display/dbus", "env/desktop/systemd",
+          "env/desktop/dbus", "env/agree", "env/stale", "env/cursor",
+          "env/xwayland", "env/list-matches-entry", "units/target",
+          "units/wm", "units/bar", "units/restart-policy",
+          "units/idle-lock", "portal/answers", "portal/config",
+          "portal/filechooser", "portal/screencast", "palette/lint",
+          "theme/outputs", "fonts/glyphs", "fonts/attribution",
+          "tools/floors",
+      ]
+      assert all(check["status"] != "fail" for check in doctor["checks"]), doctor
+      doctor_by_id = {check["id"]: check for check in doctor["checks"]}
+      assert {
+          check["id"] for check in doctor["checks"] if check["status"] == "skip"
+      } == {"units/idle-lock", "portal/filechooser", "tools/floors"}, doctor
+      for check_id in [
+          "session/socket", "session/protocol-version", "wm/attached",
+          "wm/layer-shell", "portal/answers", "portal/config",
+          "portal/screencast",
+      ]:
+          assert doctor_by_id[check_id]["status"] == "ok", doctor
+      write_artifact("realmctl-doctor.json", doctor_raw)
+
       # Use the library client itself. The initial state proves Hello and
-      # GetState reached the production server; no realmctl command is added.
+      # GetState reached the production server independently of realmctl.
       initial_raw, initial = control("state")
       assert initial["reply"] == "state", initial
       assert initial["data"]["whichkey"] is True, initial
