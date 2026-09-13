@@ -57,6 +57,10 @@ impl FixedConsumer {
                 "yazi/theme.toml",
                 "btop/btop.conf",
                 "btop/themes/realm.theme",
+                "share/themes/realm/gtk-3.0/gtk.css",
+                "share/themes/realm/gtk-4.0/gtk.css",
+                "qt6ct/qt6ct.conf",
+                "qt6ct/colors/realm.conf",
             ],
             Self::Launcher => &["fuzzel/fuzzel.ini"],
         }
@@ -82,6 +86,30 @@ fn config_argument(path: &Path) -> OsString {
     argument
 }
 
+fn prepend_xdg_search_root(
+    generation: &Path,
+    suffix: Option<&str>,
+    variable: &str,
+    default: &str,
+) -> Result<OsString, String> {
+    let generation = generation
+        .to_str()
+        .filter(|value| !value.contains(':'))
+        .ok_or_else(|| "generation path cannot be represented in XDG search lists".to_owned())?;
+    let mut value = OsString::from(generation);
+    if let Some(suffix) = suffix {
+        value.push("/");
+        value.push(suffix);
+    }
+    value.push(":");
+    value.push(
+        std::env::var_os(variable)
+            .filter(|inherited| !inherited.is_empty())
+            .unwrap_or_else(|| OsString::from(default)),
+    );
+    Ok(value)
+}
+
 /// Lease current for this process and replace it with the fixed consumer.
 pub fn exec_from_env(consumer: FixedConsumer) -> Result<(), String> {
     let root = config_root_from_env()?;
@@ -93,6 +121,19 @@ pub fn exec_from_env(consumer: FixedConsumer) -> Result<(), String> {
             .map_err(|error| format!("required output {output} is unavailable: {error}"))?;
     }
     let generation = selection.path();
+    let toolkit_environment = if consumer == FixedConsumer::Terminal {
+        Some((
+            prepend_xdg_search_root(
+                generation,
+                Some("share"),
+                "XDG_DATA_DIRS",
+                "/usr/local/share:/usr/share",
+            )?,
+            prepend_xdg_search_root(generation, None, "XDG_CONFIG_DIRS", "/etc/xdg")?,
+        ))
+    } else {
+        None
+    };
     let config = config_argument(&generation.join(consumer.outputs()[0]));
     let mut command = Command::new(consumer.executable());
     command.arg(config);
@@ -103,7 +144,11 @@ pub fn exec_from_env(consumer: FixedConsumer) -> Result<(), String> {
             .env("REALM_GENERATION", generation)
             .env("ZDOTDIR", generation.join("zsh"))
             .env("STARSHIP_CONFIG", generation.join("starship.toml"))
-            .env("YAZI_CONFIG_HOME", generation.join("yazi"));
+            .env("YAZI_CONFIG_HOME", generation.join("yazi"))
+            .env("GTK_THEME", "realm")
+            .env("XDG_DATA_DIRS", &toolkit_environment.as_ref().unwrap().0)
+            .env("QT_QPA_PLATFORMTHEME", "qt6ct")
+            .env("XDG_CONFIG_DIRS", &toolkit_environment.as_ref().unwrap().1);
     }
     let error = command.exec();
     drop(selection);

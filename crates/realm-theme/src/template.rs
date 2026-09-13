@@ -93,6 +93,18 @@ pub fn templates() -> Vec<Template> {
             reload: gtk_restyle(),
         },
         Template {
+            id: "gtk4-profile",
+            source: ::core::include_str!("../../../configs/templates/gtk4.css"),
+            target: PathBuf::from("share/themes/realm/gtk-4.0/gtk.css"),
+            reload: Reload::None,
+        },
+        Template {
+            id: "gtk3-profile",
+            source: ::core::include_str!("../../../configs/templates/gtk3.css"),
+            target: PathBuf::from("share/themes/realm/gtk-3.0/gtk.css"),
+            reload: Reload::None,
+        },
+        Template {
             id: "foot",
             source: ::core::include_str!("../../../configs/templates/foot.ini"),
             target: PathBuf::from("foot/foot.ini"),
@@ -155,6 +167,12 @@ pub fn templates() -> Vec<Template> {
             target: PathBuf::from("qt6ct/colors/realm.conf"),
             reload: Reload::None,
         },
+        Template {
+            id: "qt6ct-config",
+            source: ::core::include_str!("../../../configs/templates/qt6ct.conf"),
+            target: PathBuf::from("qt6ct/qt6ct.conf"),
+            reload: Reload::None,
+        },
     ]
 }
 
@@ -208,6 +226,39 @@ mod tests {
     }
 
     #[test]
+    fn terminal_toolkit_profile_has_named_gtk_themes_and_qt6ct_default() {
+        let actual = templates()
+            .into_iter()
+            .filter_map(|template| {
+                ["gtk4-profile", "gtk3-profile", "qt6ct-config"]
+                    .contains(&template.id)
+                    .then(|| (template.id, template.target, template.source.to_owned()))
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    "gtk4-profile",
+                    "share/themes/realm/gtk-4.0/gtk.css".into(),
+                    ::core::include_str!("../../../configs/templates/gtk4.css").to_owned(),
+                ),
+                (
+                    "gtk3-profile",
+                    "share/themes/realm/gtk-3.0/gtk.css".into(),
+                    ::core::include_str!("../../../configs/templates/gtk3.css").to_owned(),
+                ),
+                (
+                    "qt6ct-config",
+                    "qt6ct/qt6ct.conf".into(),
+                    ::core::include_str!("../../../configs/templates/qt6ct.conf").to_owned(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn compiled_catalogue_embeds_the_declared_template_sources() {
         let actual: Vec<(&str, &str)> = templates()
             .into_iter()
@@ -222,6 +273,14 @@ mod tests {
                 ),
                 (
                     "gtk3",
+                    ::core::include_str!("../../../configs/templates/gtk3.css")
+                ),
+                (
+                    "gtk4-profile",
+                    ::core::include_str!("../../../configs/templates/gtk4.css")
+                ),
+                (
+                    "gtk3-profile",
                     ::core::include_str!("../../../configs/templates/gtk3.css")
                 ),
                 (
@@ -263,6 +322,10 @@ mod tests {
                 (
                     "qt6ct",
                     ::core::include_str!("../../../configs/templates/qt6ct-colors.conf")
+                ),
+                (
+                    "qt6ct-config",
+                    ::core::include_str!("../../../configs/templates/qt6ct.conf")
                 ),
             ],
         );

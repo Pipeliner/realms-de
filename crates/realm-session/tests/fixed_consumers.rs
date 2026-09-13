@@ -1,4 +1,6 @@
+use std::ffi::OsString;
 use std::fs;
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
@@ -87,7 +89,7 @@ fn install_stopping_stub(directory: &Path, name: &str) {
     let path = directory.join(name);
     fs::write(
         &path,
-        "#!/bin/sh\n: > \"$REALM_TEST_PID\"\n: > \"$REALM_TEST_ARGS\"\n: > \"$REALM_TEST_SELECTORS\"\nwhile [ ! -e \"$REALM_TEST_PID_GATE\" ]; do :; done\nprintf '%s\\n' \"$$\" > \"$REALM_TEST_PID\"\nprintf '%s\\n' \"$@\" > \"$REALM_TEST_ARGS\"\nprintf '%s\\n' \"${REALM_GENERATION-unset}\" \"${ZDOTDIR-unset}\" \"${STARSHIP_CONFIG-unset}\" \"${YAZI_CONFIG_HOME-unset}\" > \"$REALM_TEST_SELECTORS\"\nwhile [ ! -e \"$REALM_TEST_STOP_GATE\" ]; do :; done\nkill -STOP \"$$\"\n",
+        "#!/bin/sh\n: > \"$REALM_TEST_PID\"\n: > \"$REALM_TEST_ARGS\"\n: > \"$REALM_TEST_SELECTORS\"\nwhile [ ! -e \"$REALM_TEST_PID_GATE\" ]; do :; done\nprintf '%s\\n' \"$$\" > \"$REALM_TEST_PID\"\nprintf '%s\\n' \"$@\" > \"$REALM_TEST_ARGS\"\nprintf '%s\\n' \"${REALM_GENERATION-unset}\" \"${ZDOTDIR-unset}\" \"${STARSHIP_CONFIG-unset}\" \"${YAZI_CONFIG_HOME-unset}\" \"${GTK_THEME-unset}\" \"${XDG_DATA_DIRS-unset}\" \"${QT_QPA_PLATFORMTHEME-unset}\" \"${XDG_CONFIG_DIRS-unset}\" > \"$REALM_TEST_SELECTORS\"\nwhile [ ! -e \"$REALM_TEST_STOP_GATE\" ]; do :; done\nkill -STOP \"$$\"\n",
     )
     .unwrap();
     fs::set_permissions(path, PermissionsExt::from_mode(0o700)).unwrap();
@@ -104,6 +106,8 @@ fn spawn_consumer(root: &Path, stub_dir: &Path, kind: &str) -> RunningStub {
         .env("XDG_CONFIG_HOME", root)
         .env_remove("HOME")
         .env("PATH", stub_dir)
+        .env("XDG_DATA_DIRS", "/existing/data:/second/data")
+        .env("XDG_CONFIG_DIRS", "/existing/config:/second/config")
         .env("REALM_TEST_PID", &pid_path)
         .env("REALM_TEST_ARGS", &args_path)
         .env("REALM_TEST_SELECTORS", &selectors_path)
@@ -178,9 +182,28 @@ fn fixed_consumers_exec_exact_generation_argv_environment_and_hold_the_ordinary_
                 generation_path.join("zsh").display().to_string(),
                 generation_path.join("starship.toml").display().to_string(),
                 generation_path.join("yazi").display().to_string(),
+                "realm".to_owned(),
+                format!(
+                    "{}/share:/existing/data:/second/data",
+                    generation_path.display()
+                ),
+                "qt6ct".to_owned(),
+                format!(
+                    "{}:/existing/config:/second/config",
+                    generation_path.display()
+                ),
             ]
         } else {
-            vec!["unset".to_owned(); 4]
+            vec![
+                "unset".to_owned(),
+                "unset".to_owned(),
+                "unset".to_owned(),
+                "unset".to_owned(),
+                "unset".to_owned(),
+                "/existing/data:/second/data".to_owned(),
+                "unset".to_owned(),
+                "/existing/config:/second/config".to_owned(),
+            ]
         };
         assert_eq!(
             fs::read_to_string(&running.selectors_path)
@@ -213,6 +236,39 @@ fn fixed_consumers_exec_exact_generation_argv_environment_and_hold_the_ordinary_
             generation_path.is_dir(),
             "a later apply removed N after Foot exited"
         );
+    }
+}
+
+#[test]
+fn terminal_refuses_generation_paths_that_xdg_lists_cannot_represent() {
+    let parent = tempfile::tempdir().unwrap();
+    let empty_path = tempfile::tempdir().unwrap();
+    let roots = [
+        parent.path().join("colon:root"),
+        parent
+            .path()
+            .join(OsString::from_vec(b"non-utf8-\xff".to_vec())),
+    ];
+
+    for root in roots {
+        fs::create_dir(&root).unwrap();
+        realm_theme::apply(&root).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_realm-wm"))
+            .args(["--fixed-consumer", "terminal"])
+            .env("XDG_CONFIG_HOME", &root)
+            .env_remove("HOME")
+            .env("PATH", empty_path.path())
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("generation path cannot be represented in XDG search lists"),
+            "unrepresentable generation path was not rejected before exec"
+        );
+        assert!(lease_names(&root).is_empty());
     }
 }
 
