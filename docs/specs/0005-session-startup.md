@@ -462,6 +462,11 @@ The reasoning behind each relationship, because these are easy to copy wrongly:
 
 ### 5. Portals
 
+**Accepted slice (2026-09-13):** the backend-routing, package-dependency,
+functional A13a VM-fixture, and A15 hardware-boundary requirements in this
+section are Accepted independently of this specification's remaining open
+questions.
+
 **Backend selection.** `xdg-desktop-portal` (≥ 1.18, which all three targets
 ship) reads, in order: `$XDG_CONFIG_HOME/xdg-desktop-portal/realm-portals.conf`,
 then `.../portals.conf`, then `/etc/xdg-desktop-portal/realm-portals.conf`, then
@@ -498,10 +503,12 @@ nothing in Firefox", with no error anywhere.
 
 **`xdg-desktop-portal-wlr` requires the compositor to serve
 `wlr-screencopy-unstable-v1`** and, for output selection, a chooser
-(`slurp` for the default `simple` chooser). *Whether river 0.4.8 still exports
-`wlr-screencopy-unstable-v1`, and whether xdpw functions when window management
-lives outside the compositor, is unverified.* This is **OQ-2** and it is the
-reason A15 is a hardware row.
+(`slurp` for the default `simple` chooser), plus a live per-user PipeWire
+service. Merely installing the PipeWire client library linked by xdpw does not
+start that service. The NixOS module enables it explicitly. The VM guard may
+select xdpw's `none` chooser only in its node configuration so one emulated
+output is selected without synthetic pointer input; the shipped chooser policy
+remains unchanged.
 
 **Verification, not assumption.** A portal that answers on D-Bus is not proof
 that it works.
@@ -514,16 +521,43 @@ that it works.
   ```
   It must answer immediately. A pause of about twenty-five seconds *is* the
   D-Bus activation timeout and *is* the diagnosis.
-- Round trip, on demand and in the VM test — `realmctl doctor --portal-roundtrip`:
+- Round trip, on demand — `realmctl doctor --portal-roundtrip`:
   issue `org.freedesktop.portal.FileChooser.OpenFile` (signature `ssa{sv}` →
-  object path), assert a handle within two seconds, then close it via
-  `org.freedesktop.portal.Request.Close`. This opens a real dialog, which is why
-  it is not the default. *The exact `busctl call` spelling is derived from the
-  interface signature and should be confirmed once in the VM test rather than
-  trusted from here.*
-- ScreenCast: `doctor` asserts the `org.freedesktop.portal.ScreenCast` interface
-  is present and that the configured impl is one that implements it. Whether a
-  frame actually arrives is a hardware test with a human at the keyboard.
+  object path), assert the returned handle within two seconds, then close it
+  via `org.freedesktop.portal.Request.Close`. This opens a real dialog, which is
+  why it is not the default. *The exact `busctl call` spelling is derived from
+  the interface signature and should be confirmed once in the VM test rather
+  than trusted from here.*
+- The installed VM fixture subscribes to `Request.Response` on the
+  token-derived path before issuing `OpenFile`. After the exact request handle
+  returns within two seconds, the helper atomically publishes that handle and
+  elapsed time in a VM-only readiness marker while retaining the same D-Bus
+  connection. The driver then requires the chooser to be both a managed River
+  window and visibly rendered, activates its explicit `_Cancel` action through
+  the real `Alt+C` GTK mnemonic, and requires the
+  exact request path to emit user-cancel response code 1 within the existing
+  finite VM state/UI deadlines. A missing, success, or catch-all failure
+  response does not satisfy the fixture. This is an A13a VM-fixture refinement,
+  not an additional `realmctl doctor` obligation: A13 and the on-demand command
+  retain their separate `Request.Close` probe.
+- Settings: the installed VM calls `org.freedesktop.portal.Settings.ReadAll`
+  and requires its typed result rather than treating interface introspection as
+  a reply. This is an A13a fixture obligation, not a new `realmctl doctor`
+  check id; SPEC 0006's fixed 32-check surface remains unchanged.
+- ScreenCast: `doctor` still asserts the interface and configured implementation.
+  The stronger installed-VM guard completes `CreateSession`, `SelectSources`,
+  and `Start`, obtains the restricted remote from `OpenPipeWireRemote`, and
+  consumes a nonempty video buffer from the returned PipeWire node. This proves
+  one emulated River output can reach one portal client through xdpw and
+  PipeWire. The VM evidence upload retains the resulting
+  `portal-roundtrip.json`, including the positive node id, mapped buffer byte
+  count, frame dimensions, and buffer digest, so the frame assertion remains
+  inspectable after the runner exits. Before starting the expensive VM, an
+  independently buildable check executes the same packaged helper in
+  import-only mode and requires its pinned Gio, GStreamer, and GstApp
+  namespaces to load; source presence is not sufficient. It does **not** prove
+  a real browser exposes the chooser or that a physical machine captures a
+  useful stream; A15 remains hardware-only.
 
 ### 6. Non-systemd and non-D-Bus paths
 
@@ -675,7 +709,7 @@ gate (ADR 0011's guard).
 | `portal/answers` | `org.freedesktop.portal.Desktop` responds without a pause | The 25 s hang | VM |
 | `portal/config` | A `realm-portals.conf` is found and names a backend per interface | Behaviour that changes with what is installed | **CI** (file) / VM (effect) |
 | `portal/filechooser` | `--portal-roundtrip`: a handle within 2 s | "Open File does nothing" | VM |
-| `portal/screencast` | The interface exists and the configured impl implements it | Screen share silently produces nothing | VM; the real capture is **HARDWARE** |
+| `portal/screencast` | The interface/configured implementation checks pass and the installed VM consumes a nonempty buffer from the restricted PipeWire node returned by a complete ScreenCast request sequence | Screen share silently produces nothing | VM; the browser picker and physical-machine capture remain **HARDWARE** |
 | `session/socket` | `$XDG_RUNTIME_DIR/realm/ctl.sock` answers `Hello` | — | VM |
 | `session/protocol-version` | Matches `realm_core::ipc::PROTOCOL_VERSION` | Bar and session disagree | **CI** |
 | `session/degraded` | Reports each `DEGRADED` code in this incarnation from the bounded handoff above, never by scanning historical logs | A degraded session pretending to be healthy | **CI** (degraded paths) |
@@ -716,6 +750,7 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A11 | Given a stale window manager already holding river's window-management global, when `realm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed; it names the holding process only if an independent observation identifies it, otherwise it states that the holder identity is unavailable | VM | |
 | A12 | Given a running session, when `realm-bar` is killed, then it is restarted, and `realm-session.target` and `realm-wm.service` both stay `active` throughout | VM | |
 | A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the effective configuration and installed `.portal` metadata name the required backends without claiming the running portal disclosed its selected backend identity | VM | |
+| A13a | Given the installed graphical VM with its test-only noninteractive ScreenCast chooser and per-user PipeWire service, when the pre-VM packaged-helper import check loads Gio, GStreamer, and GstApp and one persistent portal client subscribes on the exact token-derived FileChooser request path before `OpenFile`, publishes a VM-only readiness marker only after that exact handle returns within 2 s, and keeps waiting while the driver observes the actual managed and rendered chooser and activates its explicit `_Cancel` action through the real `Alt+C` GTK mnemonic, then the exact request emits user-cancel response code 1 within the finite VM state/UI deadlines; the same client reads `Settings.ReadAll`, completes the ScreenCast request/session sequence, and opens the restricted PipeWire remote; a missing, success, or catch-all FileChooser response is rejected, the Settings reply has its specified map type, one nonempty video buffer is consumed from the returned node, and the uploaded VM evidence retains the FileChooser response plus the node id, mapped byte count, dimensions, and digest in `portal-roundtrip.json`; this does not replace A13's separate `realmctl doctor --portal-roundtrip` Close probe and does not satisfy A15 | VM | `packaging/nix/test_portal_vm_helper.py` — `import-only`, `filechooser-rendered-cancel-response`; `packaging/nix/test-root-flake-ci.sh` — `portal-helper-imports`, `portal-evidence-upload` |
 | A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
 | A16 | Given a real laptop, when the lid is closed, then the session locks within the configured delay and the screen is blank on reopen until authentication | **HARDWARE** *(blocked on OQ-1)* | |

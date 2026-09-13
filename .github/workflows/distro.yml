@@ -3,9 +3,9 @@
 # built through the tracked RPM spec, but the workflow does not install the RPM,
 # start a graphical session, exercise SELinux, or establish architecture support.
 #
-# Today these jobs build and test the Rust workspace. The point is scaffolding:
-# when realm-session pulls in Wayland, D-Bus and systemd, the distro that
-# disagrees will say so on the commit that broke it.
+# The ordinary distro jobs build and test the Rust workspace. The bounded
+# Ubuntu River job builds the feature-bearing private source closure selected
+# by ADR 0022 into its native package and clean-installs it with Realm.
 name: distro
 
 on:
@@ -26,6 +26,131 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  ubuntu-river-debian:
+    name: Ubuntu 24.04 private River Debian integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Noble closure build prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes \
+            bison \
+            build-essential \
+            cargo-1.89 \
+            ca-certificates \
+            curl \
+            debhelper \
+            debootstrap \
+            fonts-dejavu-core \
+            git \
+            hwdata \
+            iproute2 \
+            libcap-dev \
+            libegl-dev \
+            libevdev-dev \
+            libexpat1-dev \
+            libffi-dev \
+            libgbm-dev \
+            libgl-dev \
+            libgles-dev \
+            libmtdev-dev \
+            libpciaccess-dev \
+            libpthread-stubs0-dev \
+            libseat-dev \
+            libudev-dev \
+            libwacom-dev \
+            libx11-dev \
+            libxcb-composite0-dev \
+            libxcb-ewmh-dev \
+            libxcb-icccm4-dev \
+            libxcb-render0-dev \
+            libxcb-res0-dev \
+            libxcb-xfixes0-dev \
+            libxcb1-dev \
+            ninja-build \
+            patchelf \
+            pkg-config \
+            python3 \
+            rustc-1.89 \
+            xkb-data \
+            xwayland \
+            xz-utils \
+            zstd
+      - name: Validate and acquire pinned closure sources
+        run: |
+          set -euo pipefail
+          packaging/river/test-closure-manifest.sh
+          packaging/river/test-private-resolutions.sh
+          packaging/river/test-noble-river-source-kit.sh
+          packaging/river/test-noble-river-package.sh
+          packaging/river/test-noble-river-package-build.sh
+          packaging/session/test-private-tool-path.sh
+          packaging/river/acquire-noble-closure.sh \
+            packaging/river/sources.toml \
+            "$RUNNER_TEMP/realm-river-cache"
+      - name: Build retained packages offline
+        run: |
+          set -euo pipefail
+          packaging/river/build-noble-river-source-kit.sh \
+            packaging/river/sources.toml \
+            "$RUNNER_TEMP/realm-river-cache" \
+            "$RUNNER_TEMP/realm-river-0.4.8"
+          "$RUNNER_TEMP/realm-river-0.4.8/packaging/river/run-noble-river-package-build.sh" \
+            "$RUNNER_TEMP/realm-river-0.4.8"
+          "$GITHUB_WORKSPACE/packaging/river/check-noble-river-package.py" \
+            "$RUNNER_TEMP/realm-river_0.4.8-1_amd64.deb"
+          cd "$GITHUB_WORKSPACE"
+          packaging/tool-sources/build-native-source-kits.sh \
+            "$RUNNER_TEMP/realm-native-kits"
+          cd "$RUNNER_TEMP/realm-native-kits/realm-debian-0.1.0"
+          dpkg-buildpackage -us -uc -b
+          test -f "$RUNNER_TEMP/realm-native-kits/realm_0.1.0_amd64.deb"
+      - name: Clean-install Realm with its private River
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/noble-root"
+          sudo debootstrap --variant=minbase noble "$root" http://archive.ubuntu.com/ubuntu
+          sudo mount --types proc proc "$root/proc"
+          trap 'sudo umount "$root/proc"' EXIT
+          printf '%s\n' \
+            'deb http://archive.ubuntu.com/ubuntu noble main universe' \
+            'deb http://archive.ubuntu.com/ubuntu noble-updates main universe' \
+            | sudo tee "$root/etc/apt/sources.list" >/dev/null
+          sudo cp "$RUNNER_TEMP/realm-river_0.4.8-1_amd64.deb" \
+            "$root/tmp/realm-river.deb"
+          sudo cp "$RUNNER_TEMP/realm-native-kits/realm_0.1.0_amd64.deb" \
+            "$root/tmp/realm.deb"
+          sudo chroot "$root" apt-get update
+          sudo chroot "$root" apt-get install --yes \
+            /tmp/realm-river.deb /tmp/realm.deb
+          sudo chroot "$root" dpkg-query -W realm realm-river
+          version=$(sudo chroot "$root" env -u LD_LIBRARY_PATH \
+            /usr/lib/realm/bin/river -version)
+          [[ "$version" == '0.4.8 +xwayland' ]]
+          sudo test -f \
+            "$root/usr/lib/realm/share/libinput/10-generic-keyboard.quirks"
+          resolution_log="$RUNNER_TEMP/noble-installed-resolution.log"
+          : >"$resolution_log"
+          sudo chroot "$root" env -u LD_LIBRARY_PATH \
+            ldd /usr/lib/realm/bin/river >>"$resolution_log"
+          while IFS= read -r -d '' object; do
+            logical=${object#"$root"}
+            sudo chroot "$root" env -u LD_LIBRARY_PATH \
+              ldd "$logical" >>"$resolution_log"
+          done < <(find "$root/usr/lib/realm/lib" -type f -name '*.so*' -print0)
+          if grep -F 'not found' "$resolution_log"; then
+            echo 'installed private closure has an unresolved ELF dependency' >&2
+            exit 1
+          fi
+          packaging/river/check-private-resolutions.py \
+            /usr/lib/realm "$resolution_log"
+          sudo chroot "$root" env -u LD_LIBRARY_PATH \
+            PATH=/usr/lib/realm/bin:/usr/bin:/bin \
+            XDG_RUNTIME_DIR=/tmp HOME=/root realm-session --check
+
   ubuntu-debian-package:
     name: Ubuntu 24.04 Debian package
     runs-on: ubuntu-24.04
@@ -194,6 +319,7 @@ jobs:
         run: |
           set -euo pipefail
           system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+          nix build --print-build-logs ".#checks.$system.portal-helper-imports"
           if [ -e /dev/kvm ]; then
             echo "KVM present — running the full flake check, VM boot test included."
             nix flake check --print-build-logs
@@ -229,3 +355,4 @@ jobs:
             ${{ runner.temp }}/realm-session-boots/control-tiled-state.json
             ${{ runner.temp }}/realm-session-boots/control-grimoire-state.json
             ${{ runner.temp }}/realm-session-boots/control-quit.json
+            ${{ runner.temp }}/realm-session-boots/portal-roundtrip.json

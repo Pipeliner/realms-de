@@ -96,7 +96,11 @@ realm's own choice for M3 is `xdg-desktop-portal-gtk` for `FileChooser` and
 contract. The toolkit file chooser remains supported through M3; do not replace
 it with a terminal chooser (ADR 0007). Ship
 `configs/portal/realm-portals.conf` mapping each interface for
-`XDG_CURRENT_DESKTOP=realm`.
+`XDG_CURRENT_DESKTOP=realm`. ScreenCast also requires a live per-user PipeWire
+service: installing a PipeWire client library with the portal backend is not a
+substitute. The NixOS module enables that service; native package dependencies
+must provide an equivalent usable service before their ScreenCast path is
+claimed.
 
 **6. Set the cursor theme and size in both places.**
 
@@ -192,6 +196,13 @@ is not reversible: it is imposed by how D-Bus activation works.
   A health check that has never been seen to fail is not a health check.
 - *Planned (M3):* a portal round-trip test in the VM asserting a `FileChooser`
   request answers within two seconds, which is what the hang violates.
+- The installed graphical VM additionally calls `Settings.ReadAll`, completes
+  `ScreenCast.CreateSession`, `SelectSources`, and `Start`, opens the returned
+  restricted PipeWire remote, and consumes one nonempty video buffer from the
+  returned node. The VM alone may set xdpw's noninteractive `none` chooser so
+  this remains deterministic. That bypass is test-only: it does not satisfy the
+  separate real-browser proof that a person sees the source picker and receives
+  a useful stream on physical hardware.
 - *Planned (M3):* a consistency test asserting the variable list in the session
   entry matches the list the doctor checks.
 
