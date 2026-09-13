@@ -8,6 +8,7 @@ rules="$repo_root/packaging/debian/rules"
 control="$repo_root/packaging/debian/control"
 workflow="$repo_root/.github/workflows/distro.yml"
 install_guide="$repo_root/docs/INSTALL.md"
+mvp_contract="$repo_root/docs/MVP.md"
 markdown_tick='`'
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
@@ -92,6 +93,9 @@ grep -F 'rustc-1.89/cargo-1.89' "$rules" >/dev/null \
 grep -F 'All package builds and verification run in CI only.' \
   "$install_guide" >/dev/null \
   || fail "install guide does not state the CI-only packaging boundary"
+grep -F 'All packaging builds and verification run in CI only.' \
+  "$mvp_contract" >/dev/null \
+  || fail "MVP sequencing does not state the complete CI-only packaging boundary"
 for forbidden in \
   'packaging/tool-sources/build-native-source-kits.sh' \
   'dpkg-buildpackage' \
