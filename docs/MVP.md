@@ -64,6 +64,9 @@ state, and record the source commit and capture environment alongside the assets
 Replace the README concept hero only after that inspection; captions must state
 what was actually running. A VM or headless compositor capture is acceptable
 when identified as such. Use a clean demo session without personal data.
+Capture dimensions must come from the PNG IHDR, not the requested VM mode.
+Preserve original capture evidence; document any discovered metadata error
+alongside it instead of silently rewriting historical provenance.
 
 For the launch slice, bounded fail-closed restart is the recovery mechanism for
 an uncertain post-admission compositor result. Neutral repair turns,

@@ -21,7 +21,7 @@ make_fixture() {
     name=$1
     fixture_root="$tmp_dir/$name"
     mkdir -p "$fixture_root/.github/workflows" \
-        "$fixture_root/docs" \
+        "$fixture_root/docs/assets" \
         "$fixture_root/crates" \
         "$fixture_root/packaging/session" \
         "$fixture_root/packaging/systemd" \
@@ -38,6 +38,12 @@ make_fixture() {
     cp "$repo_root/README.md" "$fixture_root/README.md"
     cp "$repo_root/docs/ROADMAP.md" "$fixture_root/docs/ROADMAP.md"
     cp "$repo_root/.github/workflows/ci.yml" "$fixture_root/.github/workflows/ci.yml"
+    cp "$repo_root/docs/assets/capture-provenance.json" "$fixture_root/docs/assets/capture-provenance.json"
+    cp "$repo_root/docs/assets/capture-review.md" "$fixture_root/docs/assets/capture-review.md"
+    cp "$repo_root/docs/assets/control-grimoire-state.json" "$fixture_root/docs/assets/control-grimoire-state.json"
+    cp "$repo_root/docs/assets/control-tiled-state.json" "$fixture_root/docs/assets/control-tiled-state.json"
+    cp "$repo_root/docs/assets/realm-grimoire.png" "$fixture_root/docs/assets/realm-grimoire.png"
+    cp "$repo_root/docs/assets/realm-tiled-desktop.png" "$fixture_root/docs/assets/realm-tiled-desktop.png"
     : >"$fixture_root/flake.nix"
     : >"$fixture_root/packaging/session/realm.desktop"
     : >"$fixture_root/packaging/session/realm-session"
@@ -110,9 +116,42 @@ expect_fail missing-bar-entrypoint "$fixture_root" \
     'README truth snapshot artifact is missing: crates/realm-bar/src/main.rs'
 
 fixture_root=$(make_fixture stale-bar-status)
-sed '/Live compositor verification pending/d' "$fixture_root/README.md" >"$fixture_root/README.next"
+sed 's/Implemented and verified in the installed NixOS QEMU VM/Implemented with contract tests; live compositor verification pending/' \
+    "$fixture_root/README.md" >"$fixture_root/README.next"
 mv "$fixture_root/README.next" "$fixture_root/README.md"
-expect_fail stale-bar-status "$fixture_root" 'README must distinguish implemented bar from pending live verification'
+expect_fail stale-bar-status "$fixture_root" \
+    'README must name installed NixOS VM verification for realm-bar'
+
+fixture_root=$(make_fixture missing-tiled-capture)
+rm "$fixture_root/docs/assets/realm-tiled-desktop.png"
+expect_fail missing-tiled-capture "$fixture_root" \
+    'README truth snapshot artifact is missing: docs/assets/realm-tiled-desktop.png'
+
+fixture_root=$(make_fixture changed-tiled-capture)
+printf 'changed\n' >>"$fixture_root/docs/assets/realm-tiled-desktop.png"
+expect_fail changed-tiled-capture "$fixture_root" \
+    'README tiled capture SHA-256 differs from preserved provenance'
+
+fixture_root=$(make_fixture rewritten-original-provenance)
+sed 's/1920x1080/1280x800/' "$fixture_root/docs/assets/capture-provenance.json" \
+    >"$fixture_root/docs/assets/capture-provenance.next"
+mv "$fixture_root/docs/assets/capture-provenance.next" \
+    "$fixture_root/docs/assets/capture-provenance.json"
+expect_fail rewritten-original-provenance "$fixture_root" \
+    'README original capture provenance must remain byte-for-byte preserved'
+
+fixture_root=$(make_fixture requested-resolution-as-capture-size)
+sed 's/1280×800/1920×1080/' "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail requested-resolution-as-capture-size "$fixture_root" \
+    'README capture caption must report PNG-IHDR-derived 1280x800 dimensions'
+
+fixture_root=$(make_fixture missing-capture-review-link)
+sed 's@docs/assets/capture-review.md@docs/assets/missing-review.md@' \
+    "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail missing-capture-review-link "$fixture_root" \
+    'README capture caption must link the visual review correction'
 
 fixture_root=$(make_fixture missing-blocker)
 sed '/issues\/168/d' "$fixture_root/README.md" >"$fixture_root/README.next"
@@ -219,11 +258,11 @@ expect_fail missing-wm-binary "$fixture_root" \
     'README truth snapshot artifact is missing: crates/realm-session/src/bin/realm-wm.rs'
 
 fixture_root=$(make_fixture stale-wm-status)
-sed '/Daemon and real River adapter implemented; live compositor verification pending/d' \
+sed 's/Daemon and real River adapter verified in the installed NixOS QEMU VM/Daemon and real River adapter implemented; live compositor verification pending/' \
     "$fixture_root/README.md" >"$fixture_root/README.next"
 mv "$fixture_root/README.next" "$fixture_root/README.md"
 expect_fail stale-wm-status "$fixture_root" \
-    'README must distinguish implemented realm-wm from pending live verification'
+    'README must name installed NixOS VM verification for realm-wm'
 
 fixture_root=$(make_fixture missing-nix-module)
 rm "$fixture_root/packaging/nix/nixos-module.nix"

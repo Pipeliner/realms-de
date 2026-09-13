@@ -294,7 +294,7 @@ start_compositor() {
 
 	# The abort path (realm-session --abort, run by realm-session-abort.service)
 	# needs to find this process.
-	mkdir -p "$XDG_RUNTIME_DIR/realm" 2>/dev/null || true
+	(umask 0077; mkdir -m 700 "$XDG_RUNTIME_DIR/realm") 2>/dev/null || true
 	pid_file="$XDG_RUNTIME_DIR/realm/session.pid"
 	printf '%s\n' "$MAIN_PID" >"$pid_file" 2>/dev/null || pid_file=''
 }
