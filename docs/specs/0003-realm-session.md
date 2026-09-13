@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-09-10; control-transport and nonblocking backend
   transaction corrections 2026-09-11; Task 3 MVP fail-closed, provenance, and
   evidence-ownership corrections 2026-09-12; bounded Wayland transport API
-  clarification 2026-09-12)
+  clarification 2026-09-12; doctor health boundary 2026-09-13)
 - **Milestone:** M2
 - **Issues:** [#36](https://github.com/Pipeliner/realms-de/issues/36),
   [#38](https://github.com/Pipeliner/realms-de/issues/38),
@@ -1565,6 +1565,7 @@ invent another Session entry point or silently reinterpret a retired request:
 | `Hello` | SPEC 0007 handshake state, never Ready dispatch | server `Hello`, then Ready or close on version mismatch |
 | `GetState` | `Session::state()` | immediate `State` from the last visible boundary |
 | `GetKeymap` | `Session::keymap()` | immediate `Keymap` from the exact binding vocabulary configured for this Session; the adapter never substitutes `Keymap::default()` |
+| `GetHealth` | `Session`'s immutable connection health plus #38's monotonic incarnation clock | immediate `Health`; no backend call, filesystem read, transaction mutation, persistence or publication |
 | `Subscribe` | SPEC 0007 plus `Session::state()` | immediate initial State becomes the subscription's protected current frame |
 | `SwitchOrbit(n)`, `MoveToOrbit(n)` | validate `OrbitId::from_human(n)`, then the matching typed Session desired operation | invalid one-based input is application Error; otherwise synchronous Ok/Error or retained ticket completion |
 | `Focus`, `Swap`, `Banish`, `Stow`, `Fullscreen`, `SetLayout`, `Undo` | the matching typed Session desired operation | synchronous Ok/Error or retained ticket completion |
@@ -1573,6 +1574,31 @@ invent another Session entry point or silently reinterpret a retired request:
 | `ShowLedger(Some(n))` | validate `OrbitId::from_human(n)`, then `Session::visible_ledger(Some(orbit))` | invalid one-based input is application Error; valid input returns exactly that orbit |
 | `ReloadTheme` | no Session or worker call | immediate application Error; supported theme apply is process-local to `realmctl` |
 | `Quit` | `Session::begin_direct_quit()` | exact direct-Quit barrier below |
+
+`SessionHealth` contains only live-daemon facts: the session build and wire
+versions, backend name and `Capabilities`, the actual interface names and
+versions bound during this connection, whether the layer-shell service is
+active, the session entry's current-incarnation `DEGRADED` codes, and monotonic
+uptime in integer milliseconds. River retains the negotiated bind versions
+when connection succeeds; the health path does not rediscover globals or
+invent a compositor package version. `Session` owns the immutable backend and
+degradation facts. #38 captures the daemon-entry `Instant`, computes
+`uptime_ms` with saturation at `u64::MAX`, and supplies it while dispatching
+`GetHealth`. The response remains available only after Live because the
+control listener is inactive before then.
+
+The session entry passes the exact pid-named health-handoff path defined by
+SPEC 0005. `realm-wm` reads at most 4,096 bytes once, before connecting to River,
+and accepts only its versioned ASCII grammar, matching entry pid, unique known
+codes, regular-file type and mode `0600`. Missing, malformed, oversized or
+unsafe input is retained as a typed unavailable-handoff condition in health,
+not collapsed to an empty code list. This one startup read occurs before Realm
+is on River's input path; no control request reads the filesystem.
+
+Palette resolution and font coverage are deliberately absent from
+`SessionHealth`: the daemon neither selects the generation used by a new CLI
+invocation nor owns a text renderer. SPEC 0006's `doctor` owns those probes and
+honours its own global `--palette` override.
 
 `Session::request_spawn` is valid only in Live while the semantic transaction
 state is idle. It returns `NotReady` during recovery or any active
@@ -1812,6 +1838,7 @@ Each row is one happy path and becomes one test.
 | A28 | Given a mutating socket request, its initial typed result is closed: an application-class pre-admission Err queues immediate Error, a fatal-class Err terminates without ordinary response, `Ok` with no pending action is synchronously final, and `Some(ticket)` is admission only. Until a successful ticketed chain reaches its final clean boundary no ordinary reply or update field exposes the transaction. At that boundary one `SessionUpdate` atomically co-releases repeat directive, persistence value, visible state, original action result, ordered bounded effects, and any `QuitAfter`; Task 3 proves no early exposure and effect-vector/Quit ordering only. #38 owns temporal persistence, publication, response-receipt, effect consumption, and response-before-shutdown ordering. Any post-admission failure emits none of these ordinary outputs | `session::tests::ticketless_local_update_is_final_without_action_completion`, `session::tests::final_boundary_coreleases_state_completion_and_ordered_effects`, `session::tests::spawn_then_quit_preserves_pre_quit_effect_order`, `session::tests::quit_then_spawn_suppresses_post_quit_effect`, `session::tests::staged_effect_cap_applies_across_drain_chain`; #38 `realm_session::tests::mixed_action_and_quit_drains_response_before_shutdown` |
 | A28a | Given every wire `Request`, when a Ready peer dispatches it, then the §7 table selects exactly one typed owner and total result. Direct Spawn is accepted only by Live+Idle `Session::request_spawn`, rejects empty vector/program, reserves one worker slot before Ok, and means admission rather than process success. Orbit-bearing mutations and ShowLedger reject invalid one-based values as application Error before Session mutation; valid ShowLedger reads the last visible boundary. ReloadTheme returns application Error without Session/worker work. Hello and Subscribe remain transport-state operations, and Quit remains the only preemptive Session operation | `session::tests::direct_spawn_is_ticketless_effect_only_and_rejects_invalid_command`, `session::tests::direct_spawn_is_not_ready_during_active_transaction`; #38 `realm_session::tests::request_dispatch_table_is_total`, `realm_session::tests::spawn_response_reserves_worker_before_acknowledgement`, `realm_session::tests::invalid_orbit_and_retired_reload_are_application_errors` |
 | A28b | Given nullable, overlong, control-character-heavy, or repeatedly changing app ids/titles, when Session admits the observation and later builds ShowLedger or `RealmState::focused_title`, then null becomes empty, app id/title normalization counts JSON escape expansion against the exact 40/80-byte caps, truncates only at a Unicode-scalar boundary with a final U+2026, and replacement does not accumulate storage. The worst-case 256-window all-orbit `Response::Ledger`, including maximum-width ids and LF, bounded-encodes below `MAX_FRAME_BYTES` rather than cloning or serializing an attacker-sized response on the event loop | `session::tests::visible_metadata_is_json_bounded_at_ingress`, `session::tests::repeated_title_changes_replace_bounded_metadata`, `session::tests::maximum_show_ledger_fits_one_control_frame` |
+| A28c | Given a Live session whose backend negotiated the five supported River interfaces and a valid or rejected current-incarnation degradation handoff, when `GetHealth` is dispatched, then the immediate `Health` reports only the immutable owned backend/session facts and monotonic saturated uptime, performs no backend service or filesystem I/O, and never substitutes palette, glyph, compositor-package-version or historical-log claims | #38 `realm_session::tests::get_health_reports_owned_negotiated_facts_without_side_effects`; `realm_session::tests::startup_degraded_handoff_is_bounded_incarnation_specific_and_total` |
 | A29 | Given absent, wrong-version, malformed, semantically invalid, exact-65,535-byte, oversized, growing, and valid `SessionSnapshotV1` files, when the bounded pathname worker and pure classifier run, then absence and invalid/oversized content start fresh without partial state, valid content is accepted, no allocation follows untrusted metadata, at most 65,536 bytes are read to detect overflow, and a non-`NotFound` read error is fatal | `session::tests::snapshot_validation_is_closed_and_total`, `snapshot::tests::classifies_completed_snapshot_reads_without_file_io`; #38 `realm_session::tests::snapshot_worker_reads_at_most_limit_plus_one`, `realm_session::tests::snapshot_worker_rejects_growth_beyond_exact_limit`, `realm_session::tests::snapshot_worker_read_error_prevents_listener_activation` |
 | A30 | Given a valid snapshot and an initial replay, when restored, duplicate, and new identities plus optional ordinary/exclusive-focus observations arrive before `InitialReplayComplete`, then the first open occurrence retains report order, latest metadata/focus state wins, each identity is assigned exactly once after the barrier, no projection/state/snapshot is produced, and event order deterministically fixes new ids. A replay workarea is impossible for a conforming River backend and is rejected before assignment/response. A later selected-output workarea becomes authoritative and is the sole trigger for the first complete projection. Focus never changes ledger policy; any other replay event forbidden by §6 is a protocol error rather than deferred work | `session::tests::initial_replay_is_silent_and_rebinds_each_identity_once`, `session::tests::initial_replay_is_projection_free_and_stays_unpublished`, `session::tests::initial_replay_rejects_workarea_before_assignment`, `session::tests::pre_barrier_non_replay_events_are_protocol_errors`, `session::tests::first_selected_workarea_projects_and_publishes_once`; #40 `backend::tests::initial_replay_without_workarea_finishes_then_projects_first_selected_workarea` |
 | A31 | Given snapshotted identities that do not all reappear plus new identities, when `InitialReplayComplete` is the final item of the first policy turn, then missing windows are removed before new windows are summoned in report order, undo is empty, and that exact turn receives one projection-free response with bindings disabled and next-key Preserve. Neither `Complete` nor a finished pending drain enters Live. A later selected-output workarea requires a forced complete projection; `Complete` enters Live immediately, while `Pending` withholds revision-1 state, persistence, listener activation, and readiness through its successful drain/follow-up chain. If a Pending bootstrap's correctly tagged drain turn carries the first workarea, that turn emits the forced projection and enters Live only at its own clean boundary. Before workarea, compositor facts accumulate privately into revision 1 while binding input is fatal before reduction/response. Any post-admission bootstrap or workarea-projection failure is fatal without publication/readiness | `session::tests::bootstrap_replay_and_first_workarea_gate_live_until_final_boundary`, `session::tests::pre_workarea_authoritative_turns_accumulate_until_revision_one`, `session::tests::pre_workarea_binding_input_is_fatal_before_reduction`, `session::tests::bootstrap_pending_failure_is_fatal_without_publication`; binary listener/readiness evidence remains in #38 |
