@@ -150,9 +150,12 @@ EOF
               if reply is not RequestNameReply.PRIMARY_OWNER:
                   raise SystemExit("D-Bus probe did not acquire its configured name")
 
+              title = "Realm X11 Probe A17-" + str(os.getpid())
               child = await asyncio.create_subprocess_exec(
                   "${pkgs.xmessage}"
                   "/bin/xmessage",
+                  "-title",
+                  title,
                   "-center",
                   "Realm X11 Probe",
               )
@@ -160,7 +163,8 @@ EOF
               marker.write_text(
                   "display=" + display + "\n"
                   "service_pid=" + str(os.getpid()) + "\n"
-                  "child_pid=" + str(child.pid) + "\n",
+                  "child_pid=" + str(child.pid) + "\n"
+                  "title=" + title + "\n",
                   encoding="utf-8",
               )
               await child.wait()
@@ -225,7 +229,9 @@ EOF
       import datetime as dt
       import hashlib
       import json
+      import re
       import shlex
+      import time
       from pathlib import Path
       from test_driver.errors import RequestedAssertionFailed
 
@@ -249,7 +255,7 @@ EOF
           output = machine.succeed(as_alice("realm-vm-control", *argv))
           return output, json.loads(output)
 
-      def wait_for_state(predicate, description):
+      def wait_for_state(predicate, description, timeout=STATE_TIMEOUT):
           observed_raw = None
           observed = None
 
@@ -270,8 +276,81 @@ EOF
                   machine.log(f"last state while waiting for {description}: {observed!r}")
               return False
 
-          retry(matches, timeout=STATE_TIMEOUT)
+          retry(matches, timeout=timeout)
           return observed_raw, observed
+
+      def remaining_timeout(deadline, description):
+          remaining = deadline - time.monotonic()
+          assert remaining > 0, f"{description} exhausted the shared X11 deadline"
+          return dt.timedelta(seconds=remaining)
+
+      def x11_tree(display):
+          return machine.execute(
+              as_alice(
+                  "env",
+                  f"DISPLAY={display}",
+                  "${pkgs.xwininfo}/bin/xwininfo",
+                  "-root",
+                  "-tree",
+              )
+          )
+
+      def x11_window_ids(tree, title):
+          pattern = re.compile(
+              r'^\s*(0x[0-9a-fA-F]+) "' + re.escape(title) + r'":',
+              re.MULTILINE,
+          )
+          return pattern.findall(tree)
+
+      def x11_window_stats(display, window_id):
+          return machine.execute(
+              as_alice(
+                  "env",
+                  f"DISPLAY={display}",
+                  "${pkgs.xwininfo}/bin/xwininfo",
+                  "-id",
+                  window_id,
+                  "-stats",
+              )
+          )
+
+      def log_x11_diagnostics(display, title, child_pid):
+          tree_status, tree = x11_tree(display)
+          machine.log(f"X11 root tree (exit {tree_status}):\n{tree}")
+          for window_id in x11_window_ids(tree, title):
+              stats_status, stats = x11_window_stats(display, window_id)
+              machine.log(
+                  f"X11 window {window_id} stats (exit {stats_status}):\n{stats}"
+              )
+          stderr_status, stderr = machine.execute(
+              "journalctl -b --no-pager -o cat "
+              f"_PID={shlex.quote(child_pid)}"
+          )
+          machine.log(
+              f"X11 child journal/stderr (exit {stderr_status}):\n{stderr}"
+          )
+
+      def wait_for_x11_mapping(display, title, child_pid, deadline):
+          def mapped(_last_try):
+              status, tree = x11_tree(display)
+              window_ids = x11_window_ids(tree, title) if status == 0 else []
+              if len(window_ids) == 1:
+                  stats_status, stats = x11_window_stats(
+                      display,
+                      window_ids[0],
+                  )
+                  if stats_status == 0 and "Map State: IsViewable" in stats:
+                      return True
+              return False
+
+          try:
+              retry(
+                  mapped,
+                  timeout=remaining_timeout(deadline, "X11 window mapping"),
+              )
+          except Exception:
+              log_x11_diagnostics(display, title, child_pid)
+              raise
 
       def wait_for_single_user_process(name):
           quoted = shlex.quote(name)
@@ -485,6 +564,7 @@ EOF
       baseline_windows = sum(
           cell["windows"] for cell in baseline["data"]["orbits"]
       )
+      x11_deadline = time.monotonic() + STATE_TIMEOUT.total_seconds()
       machine.succeed(
           as_alice(
               "env",
@@ -498,7 +578,10 @@ EOF
           )
       )
       marker = "/run/user/1000/realm-xwayland-probe"
-      machine.wait_until_succeeds(f"test -s {marker}", timeout=STATE_TIMEOUT)
+      machine.wait_until_succeeds(
+          f"test -s {marker}",
+          timeout=remaining_timeout(x11_deadline, "D-Bus activation marker"),
+      )
       activated_display = machine.succeed(
           f"sed -n 's/^display=//p' {marker}"
       ).strip()
@@ -508,6 +591,9 @@ EOF
       x11_pid = machine.succeed(
           f"sed -n 's/^child_pid=//p' {marker}"
       ).strip()
+      x11_title = machine.succeed(
+          f"sed -n 's/^title=//p' {marker}"
+      ).strip()
       assert activated_display == imported_display, (
           activated_display,
           imported_display,
@@ -515,12 +601,24 @@ EOF
       x11_exe = machine.succeed(f"readlink /proc/{x11_pid}/exe").strip()
       expected_x11_exe = "${pkgs.xmessage}/bin/.xmessage-wrapped"
       assert x11_exe == expected_x11_exe, (x11_exe, expected_x11_exe)
-      wait_for_state(
-          lambda response: sum(
-              cell["windows"] for cell in response["data"]["orbits"]
-          ) == baseline_windows + 1,
-          "D-Bus-activated X11 window",
+      assert x11_title == f"Realm X11 Probe A17-{service_pid}", x11_title
+      wait_for_x11_mapping(
+          activated_display,
+          x11_title,
+          x11_pid,
+          x11_deadline,
       )
+      try:
+          wait_for_state(
+              lambda response: sum(
+                  cell["windows"] for cell in response["data"]["orbits"]
+              ) == baseline_windows + 1,
+              "D-Bus-activated X11 window",
+              timeout=remaining_timeout(x11_deadline, "Realm X11 observation"),
+          )
+      except Exception:
+          log_x11_diagnostics(activated_display, x11_title, x11_pid)
+          raise
       machine.wait_for_text("Realm X11 Probe", timeout=OCR_TIMEOUT)
       machine.succeed(f"kill -TERM {x11_pid}")
       machine.wait_until_succeeds(
