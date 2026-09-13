@@ -228,3 +228,4 @@ jobs:
             ${{ runner.temp }}/realm-session-boots/control-tiled-state.json
             ${{ runner.temp }}/realm-session-boots/control-grimoire-state.json
             ${{ runner.temp }}/realm-session-boots/control-quit.json
+            ${{ runner.temp }}/realm-session-boots/portal-roundtrip.json

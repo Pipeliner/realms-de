@@ -94,4 +94,11 @@ mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
 expect_fail missing-fixture-suite "$fixture_root" \
     'normal Nix CI must invoke the root-flake fixture suite'
 
+fixture_root=$(make_fixture missing-portal-evidence-upload)
+sed '/realm-session-boots\/portal-roundtrip\.json/d' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-portal-evidence-upload "$fixture_root" \
+    'live VM evidence upload must retain portal-roundtrip.json'
+
 printf 'PASS: %d root-flake CI guard fixtures\n' "$tests_run"

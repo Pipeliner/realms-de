@@ -511,8 +511,12 @@ that it works.
   and `Start`, obtains the restricted remote from `OpenPipeWireRemote`, and
   consumes a nonempty video buffer from the returned PipeWire node. This proves
   one emulated River output can reach one portal client through xdpw and
-  PipeWire. It does **not** prove a real browser exposes the chooser or that a
-  physical machine captures a useful stream; A15 remains hardware-only.
+  PipeWire. The VM evidence upload retains the resulting
+  `portal-roundtrip.json`, including the positive node id, mapped buffer byte
+  count, frame dimensions, and buffer digest, so the frame assertion remains
+  inspectable after the runner exits. It does **not** prove a real browser
+  exposes the chooser or that a physical machine captures a useful stream; A15
+  remains hardware-only.
 
 ### 6. Non-systemd and non-D-Bus paths
 
@@ -705,7 +709,7 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A11 | Given a stale window manager already holding river's window-management global, when `realm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed; it names the holding process only if an independent observation identifies it, otherwise it states that the holder identity is unavailable | VM | |
 | A12 | Given a running session, when `realm-bar` is killed, then it is restarted, and `realm-session.target` and `realm-wm.service` both stay `active` throughout | VM | |
 | A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the effective configuration and installed `.portal` metadata name the required backends without claiming the running portal disclosed its selected backend identity | VM | |
-| A13a | Given the installed graphical VM with its test-only noninteractive output chooser and per-user PipeWire service, when one persistent portal client calls `FileChooser.OpenFile` and closes its returned request, reads `Settings.ReadAll`, completes the ScreenCast request/session sequence, and opens the restricted PipeWire remote, then the FileChooser handle arrives within 2 s, the Settings reply has its specified map type, and one nonempty video buffer is consumed from the returned node; this does not satisfy A15 | VM | |
+| A13a | Given the installed graphical VM with its test-only noninteractive output chooser and per-user PipeWire service, when one persistent portal client calls `FileChooser.OpenFile` and closes its returned request, reads `Settings.ReadAll`, completes the ScreenCast request/session sequence, and opens the restricted PipeWire remote, then the FileChooser handle arrives within 2 s, the Settings reply has its specified map type, one nonempty video buffer is consumed from the returned node, and the uploaded VM evidence retains the node id, mapped byte count, dimensions, and digest in `portal-roundtrip.json`; this does not satisfy A15 | VM | `packaging/nix/test-root-flake-ci.sh` — `portal-evidence-upload` |
 | A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
 | A16 | Given a real laptop, when the lid is closed, then the session locks within the configured delay and the screen is blank on reopen until authentication | **HARDWARE** *(blocked on OQ-1)* | |

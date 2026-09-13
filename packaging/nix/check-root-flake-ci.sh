@@ -37,4 +37,8 @@ if ! grep -F -q -e './packaging/nix/test-root-flake-ci.sh' "$workflow"; then
     fail 'normal Nix CI must invoke the root-flake fixture suite'
 fi
 
+if ! grep -F -q -e "\${{ runner.temp }}/realm-session-boots/portal-roundtrip.json" "$workflow"; then
+    fail 'live VM evidence upload must retain portal-roundtrip.json'
+fi
+
 echo 'root-flake CI contract: pass'
