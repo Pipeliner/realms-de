@@ -414,6 +414,7 @@ jobs:
         run: |
           set -euo pipefail
           system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+          nix build --print-build-logs ".#checks.$system.portal-helper-imports"
           if [ -e /dev/kvm ]; then
             echo "KVM present — running the full flake check, VM boot test included."
             nix flake check --print-build-logs
@@ -449,3 +450,4 @@ jobs:
             ${{ runner.temp }}/realm-session-boots/control-tiled-state.json
             ${{ runner.temp }}/realm-session-boots/control-grimoire-state.json
             ${{ runner.temp }}/realm-session-boots/control-quit.json
+            ${{ runner.temp }}/realm-session-boots/portal-roundtrip.json
