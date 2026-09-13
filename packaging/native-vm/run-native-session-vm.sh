@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+readonly realm_native_vm_guest_probe_dir=/var/tmp/realm-native-vm
+
 require_kvm() {
     local device=${1:-/dev/kvm}
     if [[ ! -c "$device" || ! -r "$device" || ! -w "$device" ]]; then
@@ -222,14 +224,15 @@ run_native_session_vm() (
     wait_for_ssh "$qemu_pid" 180 timeout 5 \
         ssh "${ssh_options[@]}" alice@127.0.0.1 true
     timeout 180 ssh "${ssh_options[@]}" alice@127.0.0.1 \
-        'cloud-init status --wait && mkdir -p /tmp/realm-native-packages /tmp/realm-native-vm'
+        "cloud-init status --wait && install -d -m 0700 /tmp/realm-native-packages $realm_native_vm_guest_probe_dir"
     timeout 120 scp "${scp_options[@]}" "${packages[@]}" \
         alice@127.0.0.1:/tmp/realm-native-packages/
     timeout 60 scp "${scp_options[@]}" \
         "$guest_probe" "$control_probe" "$check_inputs" \
-        alice@127.0.0.1:/tmp/realm-native-vm/
+        "alice@127.0.0.1:$realm_native_vm_guest_probe_dir/"
     timeout "$install_timeout" ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
-        /tmp/realm-native-vm/guest-probe.sh install "$target" /tmp/realm-native-packages
+        "$realm_native_vm_guest_probe_dir/guest-probe.sh" install "$target" \
+        /tmp/realm-native-packages
 
     timeout 30 ssh "${ssh_options[@]}" alice@127.0.0.1 \
         'sudo systemctl reboot' || true
@@ -238,7 +241,7 @@ run_native_session_vm() (
     wait_for_ssh "$qemu_pid" 180 timeout 5 \
         ssh "${ssh_options[@]}" alice@127.0.0.1 true
     timeout 180 ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
-        /tmp/realm-native-vm/guest-probe.sh probe "$target" \
+        "$realm_native_vm_guest_probe_dir/guest-probe.sh" probe "$target" \
         /tmp/realm-native-evidence || probe_status=$?
     timeout 60 scp "${scp_options[@]}" -r \
         alice@127.0.0.1:/tmp/realm-native-evidence/. "$evidence_dir/" || true

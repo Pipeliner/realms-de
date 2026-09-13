@@ -27,6 +27,27 @@ if grep -Fq 'local-hostname:' "$fixture_script_dir/run-native-session-vm.sh"; th
     fail 'NoCloud seed still requests a cosmetic hostname'
 fi
 
+guest_root="$case_root/reboot-guest"
+retained_probe_dir=${realm_native_vm_guest_probe_dir:-/tmp/realm-native-vm}
+test "$retained_probe_dir" = /var/tmp/realm-native-vm \
+    || fail 'post-reboot probe inputs are not assigned to the accepted persistent path'
+install -d -m 0700 "$guest_root$retained_probe_dir"
+mkdir -p "$guest_root/tmp"
+test "$(stat -c '%a' "$guest_root$retained_probe_dir")" = 700 \
+    || fail 'staged guest probe directory is not private'
+printf 'fixture probe\n' >"$guest_root$retained_probe_dir/guest-probe.sh"
+rm -rf -- "$guest_root/tmp"
+test -f "$guest_root$retained_probe_dir/guest-probe.sh" \
+    || fail 'simulated reboot discarded the staged guest probe'
+grep -Fq \
+    "install -d -m 0700 /tmp/realm-native-packages \$realm_native_vm_guest_probe_dir" \
+    "$fixture_script_dir/run-native-session-vm.sh" \
+    || fail 'native VM harness does not create the accepted private probe directory'
+if grep -Fq '/tmp/realm-native-vm/guest-probe.sh' \
+    "$fixture_script_dir/run-native-session-vm.sh"; then
+    fail 'native VM harness still invokes post-reboot probe code from /tmp'
+fi
+
 (
     exit 0
 ) &

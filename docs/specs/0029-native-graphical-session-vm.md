@@ -92,6 +92,12 @@ bounded harness contract.
    the downloaded local Realm package(s), their dependencies, and SDDM. No
    dependency suppression is allowed. SDDM is configured only inside the
    disposable guest to autologin `alice` into the installed `realm.desktop`.
+   The host stages the three per-run probe inputs in the exact
+   `alice`-owned, mode-`0700` directory `/var/tmp/realm-native-vm` before the
+   install. That directory must retain those exact inputs across the required
+   reboot; `/tmp` is not an admissible home for post-reboot probe code. Package
+   inputs may remain under `/tmp/realm-native-packages` because they are
+   consumed before reboot.
 3. After reboot, the probe selects `alice`'s non-remote logind session and
    requires `Type=wayland`. The installed session entry must name Realm and
    execute the installed `/usr/bin/realm-session`; no copied checkout session
@@ -123,7 +129,7 @@ bounded harness contract.
 | N2 | Given same-run producer artifacts, when an artifact is absent, duplicated, renamed, from another commit, or has the wrong package identity, then the VM fails before guest installation; the VM workflow contains no build command | pure artifact-inventory fixture plus workflow review |
 | N3 | Given the Ubuntu artifact pair and pinned Ubuntu image, when SDDM autologins `alice`, then logind reports a non-remote Wayland session from the installed Realm entry, `/proc` identifies the private River and installed Realm WM, all three Realm user units are active, `GetState` succeeds, doctor meets §Guest contract 6, and evidence is retained | `native-session-vm (ubuntu-24.04-x86_64)` |
 | N4 | Given the Fedora RPM and pinned Fedora image, when SDDM autologins `alice`, then the same session/control/doctor assertions pass with Fedora's `/usr/bin/river`; the evidence records the unchanged SELinux mode without inspecting AVCs or claiming policy compatibility | `native-session-vm (fedora-44-x86_64)` |
-| N5 | Given a runner without `/dev/kvm`, with `/dev/kvm` still inaccessible after the narrowly scoped runner-UID ACL, a dead QEMU process, unreachable SSH, failed login, or incomplete probe, then the matrix entry fails rather than elevating QEMU, falling back to TCG, skipping, or reporting reduced evidence; cleanup remains bounded and uploads diagnostics on failure | VM harness timeout/failure fixtures, workflow KVM-admission fixture, and artifact step with `if: always()` |
+| N5 | Given a runner without `/dev/kvm`, with `/dev/kvm` still inaccessible after the narrowly scoped runner-UID ACL, a dead QEMU process, unreachable SSH, failed login, probe inputs lost across reboot, or incomplete probe, then the matrix entry fails rather than elevating QEMU, falling back to TCG, skipping, or reporting reduced evidence; cleanup remains bounded and uploads diagnostics on failure | VM harness reboot-retention and timeout/failure fixtures, workflow KVM-admission fixture, and artifact step with `if: always()` |
 
 ## Evidence boundary
 
