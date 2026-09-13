@@ -9,7 +9,7 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 sed '/^main() {$/,$d' "$session" >"$tmp/session-functions.sh"
 
-PORTAL_CALLS="$tmp/calls" /bin/bash -c '
+PORTAL_CALLS="$tmp/calls" bash -c '
     . "$1"
     have_systemd_user=1
     systemctl() { printf "%s\n" "$*" >>"$PORTAL_CALLS"; }
@@ -22,7 +22,7 @@ PORTAL_CALLS="$tmp/calls" /bin/bash -c '
 }
 
 rm "$tmp/calls"
-PORTAL_CALLS="$tmp/calls" /bin/bash -c '
+PORTAL_CALLS="$tmp/calls" bash -c '
     . "$1"
     have_systemd_user=0
     systemctl() { printf "%s\n" "$*" >>"$PORTAL_CALLS"; }
@@ -38,7 +38,7 @@ PORTAL_CALLS="$tmp/calls" /bin/bash -c '
 # ordered trace proves warm-up remains after both imports and before gsettings,
 # degradation publication, and the session target.
 sed '/^main "$@"$/d' "$session" >"$tmp/session-main.sh"
-PORTAL_ORDER="$tmp/order" /bin/bash -c '
+PORTAL_ORDER="$tmp/order" bash -c '
     . "$1"
     record() { printf "%s\n" "$1" >>"$PORTAL_ORDER"; }
     setup_log() { :; }
@@ -78,7 +78,7 @@ target'
 
 # A missing or refused portal service is diagnosed later by doctor; enqueue
 # failure itself must not abort the desktop startup path.
-PORTAL_LOG="$tmp/failure-log" /bin/bash -c '
+PORTAL_LOG="$tmp/failure-log" bash -c '
     . "$1"
     have_systemd_user=1
     systemctl() { return 1; }
