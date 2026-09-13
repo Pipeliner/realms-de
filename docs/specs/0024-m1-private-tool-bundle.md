@@ -145,11 +145,14 @@ network. The retained source-replacement configuration SHALL remain visible to
 Cargo subprocesses launched by package-relevant tests, including generated
 trybuild projects outside the staged source tree: native recipes SHALL expose
 the staged `.cargo` directory as inherited `CARGO_HOME`, not rely only on
-top-level ancestor probing. A test fixture SHALL run the actual `debian/rules`
-build path and the Fedora RPM build phase with networking disabled and empty
-Cargo registry/Git caches, reject a closure/configuration/lockfile mismatch,
-and fail when an adversarial injected-fetch attempt is present in either
-recipe.
+top-level ancestor probing. Compile-fail checks in that package test path SHALL
+prove the intended API boundary from the compiler error code and inaccessible
+symbol, without requiring diagnostic prose or note layout to be identical
+across supported Rust versions. A test fixture SHALL run the actual
+`debian/rules` build path and the Fedora RPM build phase with networking
+disabled and empty Cargo registry/Git caches, reject a
+closure/configuration/lockfile mismatch, and fail when an adversarial
+injected-fetch attempt is present in either recipe.
 
 The fixture's disposable build tree SHALL be on a Linux filesystem that
 supports `O_TMPFILE` with file `fsync`, atomic `renameat2` publication/exchange,

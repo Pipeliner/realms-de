@@ -1,0 +1,14 @@
+[package]
+name = "realm-control-client-test-seams"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+realm-control = { path = "../../.." }
+
+[[bin]]
+name = "client-test-seams-are-not-public"
+path = "../client_test_seams_are_not_public.rs"
