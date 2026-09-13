@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-08-26; generation contract reconciled by #159;
   endpoint capability correction 2026-09-10; control-transport correction
-  2026-09-11) —
+  2026-09-11; doctor observability correction 2026-09-13) —
   `theme apply`, `theme lint`, and `theme diff` implemented; remaining command
   surface not yet implemented
 - **Milestone:** M3, with `theme` and the argument surface in M1 and
@@ -69,7 +69,7 @@ choice.
 
 ```
 realmctl [--json] [--palette PATH] <group> <verb> [args]
-realmctl doctor [--json] [--portal-roundtrip]
+realmctl [--json] [--palette PATH] doctor [--portal-roundtrip]
 realmctl --version
 ```
 
@@ -77,8 +77,11 @@ The control endpoint is always the fixed descendant resolved by SPEC 0007;
 `realmctl` has no `--socket` or `REALM_SOCKET` override. Isolated tests use its
 non-production `RuntimeDirResolver`, never an arbitrary socket path.
 `--palette` overrides the palette search order (`$XDG_CONFIG_HOME/realm/palette.toml`,
-then the shipped `palette.toml`). Both exist so that tests and the NixOS VM can
-point at a fixture without an environment dance. `--portal-roundtrip` is
+then the shipped `palette.toml`) for theme commands and for `doctor`'s palette,
+theme and font checks. The two global options may appear before or after
+`doctor`; isolated tests may instead inject their non-production resolvers.
+The override and `--portal-roundtrip` let tests and the NixOS VM point at a
+fixture without an environment dance. `--portal-roundtrip` is
 `doctor`-only and is named by [SPEC 0005](0005-session-startup.md) §8: it makes
 a real `FileChooser.OpenFile` call, which opens a dialog, so it is opt-in.
 
@@ -285,19 +288,19 @@ the tool's absence *is* the finding.
 | `env/identity` | `XDG_CURRENT_DESKTOP=realm`, `XDG_SESSION_TYPE=wayland`, `XDG_SESSION_DESKTOP=realm` in this process | `std::env` | *"Portals will pick the wrong backend and screen share will silently fail."* |
 | `env/wayland-display/process` | `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` in this process | `std::env` | *"You are not inside a realm session."* Remedy: run this from a terminal in the session |
 | `env/wayland-display/systemd` | it reached the systemd user manager | `Environment` property on `org.freedesktop.systemd1.Manager` | *"User units come up displayless; nothing is themed after login."* Remedy: the `import-environment` line, step 3 of the session entry |
-| `env/wayland-display/dbus` | it reached the **D-Bus activation environment** | functional: activate the portal and read `org.freedesktop.portal.FileChooser` `version`, 2 s deadline. There is no public API that reads the activation environment back, so the honest test is whether an activated service works | *"File dialogs will hang for about 25 seconds and then fail."* Remedy: `dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP XDG_RUNTIME_DIR`, run before anything touches the bus |
-| `env/desktop/systemd`, `env/desktop/dbus` | `XDG_CURRENT_DESKTOP=realm` in both | as above | *"Screen share will offer no sources, with no error anywhere."* |
-| `env/agree` | all three views hold the *same* values, not merely non-empty ones | process, systemd, bus, compared | *"The import ran too early, or ran twice with different values."* Prints the three views side by side; a disagreement is the whole diagnosis |
+| `env/wayland-display/dbus` | the bounded functional outcome of activating the portal in place of an unreadable D-Bus activation value | activate the portal and read `org.freedesktop.portal.FileChooser` `version`, 2 s deadline. There is no public API that reads the activation environment back, so this is a usability proxy, not evidence of any exact value | *"File dialogs will hang for about 25 seconds and then fail."* Reports only the failed activation/property observation. Possible causes name an absent or stale activation environment, a broken portal service, and a missing or broken selected backend; the first remedy is the `dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP XDG_RUNTIME_DIR` step, run before anything touches the bus |
+| `env/desktop/systemd`, `env/desktop/dbus` | `XDG_CURRENT_DESKTOP=realm` reached systemd exactly; the D-Bus id reports only the functional portal-proxy outcome because its exact activation value is unreadable | systemd's exact `Environment` property; for D-Bus, the same functional portal proxy as above, explicitly marked `value unobservable` | *"Screen share will offer no sources, with no error anywhere."* The D-Bus result never claims that the proxy proves which desktop value was inherited or which policy was selected |
+| `env/agree` | the process and systemd views hold the same exact values; the D-Bus activation channel is reported separately as a functional proxy | process and systemd compared; D-Bus value shown as `unobservable` beside the proxy result | *"The import ran too early, or ran twice with different values."* Prints the two observable views side by side and fails on their disagreement; it never claims that three exact values agreed |
 | `env/stale` | systemd's `WAYLAND_DISPLAY` names a socket that exists | the property, then `stat` under `$XDG_RUNTIME_DIR` | `systemd --user` and the session bus outlive a logout, always when lingering, so a login can inherit a display name pointing at a dead socket. *"Symptoms identical to never importing it at all."* Remedy: `systemctl --user unset-environment WAYLAND_DISPLAY`, then log in again |
-| `env/cursor` | `XCURSOR_THEME`/`XCURSOR_SIZE` in all three views, the theme resolving to a directory containing `cursors/` under `~/.icons`, `~/.local/share/icons` or `/usr/share/icons`, and gsettings agreeing | env, the systemd property, the icon search path, the GSettings value | *"The cursor will be the default black X11 arrow, or invisible over some surfaces, or will change size as it crosses a window."* Names both places, because setting one leaves it wrong in the other |
-| `env/xwayland` | `DISPLAY` in all three views when XWayland is up, and the integer-scale policy in force | connect to the X11 socket directly | `warn`. Reports honestly that the session entry's `DISPLAY` import is a known gap where the compositor does not hand its `:N` back. *"X11 apps absent, or blurred on a scaled output."* |
+| `env/cursor` | `XCURSOR_THEME`/`XCURSOR_SIZE` agree in the process and systemd views, the theme resolves to a directory containing `cursors/` under the icon search path, and GSettings agrees | process env, the systemd property, the icon search path, the GSettings value; the D-Bus activation values remain unobservable and are not claimed | *"The cursor will be the default black X11 arrow, or invisible over some surfaces, or will change size as it crosses a window."* Names the observable places, because setting one leaves it wrong in the other |
+| `env/xwayland` | `DISPLAY` agrees in the process and systemd views when XWayland is up, its socket answers, and the integer-scale policy is in force | compare the observable values and connect to the X11 socket directly; report the D-Bus activation value as unobservable rather than inventing it | `warn`. Reports honestly that the session entry's `DISPLAY` import is a known gap where the compositor does not hand its `:N` back. *"X11 apps absent, or blurred on a scaled output."* |
 | `env/list-matches-entry` | `doctor`'s variable list is identical to the session entry's | both lists, compared; a **CI** check with no session needed | *"A variable was added in one place and forgotten in the other."* SPEC 0005 A3 |
 | `units/target` | `realm-session.target` is active and its `.wants` symlinks exist | `ActiveState` over D-Bus | *"A target that starts nothing and reports success."* |
 | `units/wm` | the window manager's unit is `ActiveState=active`, with `ConditionResult` reported **separately** | both properties | an unmet `ConditionEnvironment=` leaves a unit `inactive (dead)` with `ConditionResult=no`, and `systemctl start` still exits 0 with nothing in `--failed`. *"Nothing started and nothing complained."* Prints the condition that was not met |
 | `units/bar` | `realm-bar.service` is active or cleanly restarting | `ActiveState`, `NRestarts` | *"The bar is gone and nothing said so."* |
 | `units/restart-policy` | the shipped units carry SPEC 0005 §4's policy | the unit files; a **CI** check | *"A crashed bar takes the session with it."* |
 | `units/idle-lock` | an idle and a lock unit are part of `graphical-session.target` | the dependency list over D-Bus | `skip` until the lock-screen `needs-human` question in ADR 0011 is answered, and says so. *"The lid closes and the session stays unlocked."* |
-| `wm/attached` | realm holds river's window-management global, and names the holder if it does not | `GetHealth`; otherwise the process holding it, with its pid and command line | river answers `unavailable` to a second window-management client, so the supervised window manager never starts and a naive restart policy loops forever, burying the message. *"An inert compositor: windows are never placed."* |
+| `wm/attached` | a live health response proves realm holds river's window-management global; a refusal reports a possible foreign holder without inventing its identity | `GetHealth`; outside a live session, exit 69 and independently available process evidence. River's `unavailable` response does not identify the holder, so a pid or command line is printed only when a separate observation proves it | river answers `unavailable` to a second window-management client, so the supervised window manager never starts and a naive restart policy loops forever, burying the message. Without independent holder evidence, prints *"another window manager may hold river's global; holder identity unavailable"*. *"An inert compositor: windows are never placed."* |
 | `wm/layer-shell` | realm is serving `river-layer-shell-v1` | `GetHealth`'s flag, plus `units/bar` | *"The bar never appears, and it looks like the bar's fault rather than the window manager's."* Points at ADR 0013 |
 | `wm/capabilities` | the backend's name and the `Capabilities` it reports, `unsupported` included | `GetHealth` | any `unsupported` entry — `"unclipped-dimension-quantisation"` is the one river can produce — is a `warn` naming the realm behaviour that will not work. *"A backend gap that looks like a bug."* |
 | `wm/protocol-version` | the bound interface versions match the pinned river | `GetHealth`'s interface list | *"A routine river upgrade breaks the session."* Remedy: install the pinned river 0.4.x realm ships |
@@ -313,6 +316,12 @@ the tool's absence *is* the finding.
 | `fonts/glyphs` | the glyph inventory against the chain in `palette.toml` | build the database from `typography.family` + `typography.fallback`, then `glyphs::Probe::run`; print `Probe::summary()` verbatim | **`warn`**, never `FAIL`: the runes are non-essential by ADR 0012 and realm degrades to digits rather than tofu. *"Orbit runes draw as the digits 1–6 and the bar looks plain."* Prints `substituting for ᚠᚢᚦ…` and the package to install |
 | `fonts/attribution` | **which** family supplied each at-risk glyph — the six runes and `𓂃` | the resolved chain, per codepoint | `warn` when a family outside `typography.fallback` supplied one. *"Runes render in colour at the wrong size."* This is how an emoji font hijacking the symbol range becomes visible instead of merely puzzling |
 | `tools/floors` | the reused tools are installed and at their version floors | each tool's own `--version` | `warn` naming the tool and the package. *"charon, horus or thoth will be missing or unthemed"* (ADR 0007) |
+
+The report order is fixed independently of the explanatory table above:
+`session`, `wm`, `environment`, `units`, `portal`, `palette`, `theme`, `fonts`,
+then `tools`. Within each group, checks retain their relative order from the
+table. Human and JSON output contain the same 32 ids in that order, including
+every `skip`; neither sorting nor probe completion order may change it.
 
 **One name is unsettled.** SPEC 0005 §8 gives `units/wm` the unit
 `realm-wm.service`; the session entry names it `realm-wm.service`. The
@@ -339,18 +348,20 @@ things:
 #### Output shape
 
 ```
-realm doctor — realm-ctl 0.1.0, protocol 1
-2026-08-26T14:32:11+01:00 · Fedora 44 · kernel 6.12.4 · river 0.4.1 · realm-wm 0.1.0
+realmctl doctor - realmctl 0.1.0, protocol 1
+2026-08-26T14:32:11+01:00 | Fedora 44 | kernel 6.12.4
+  river 0.4.1 | realm-wm 0.1.0
 
 session
-  ok    socket            /run/user/1000/realm/ctl.sock — realm-wm 0.1.0
+  ok    socket            /run/user/1000/realm/ctl.sock - realm-wm 0.1.0
   ok    protocol-version  1 == 1
   ok    degraded          no DEGRADED codes in this session
 
 wm
-  ok    attached          realm-wm holds river's window-management global (pid 914)
+  ok    attached          realm-wm holds river's window-management global
+                          (pid 914)
   ok    layer-shell       river-layer-shell-v1 served; realm-bar.service active
-  warn  capabilities      river — unsupported: unclipped-dimension-quantisation
+  warn  capabilities      river - unsupported: unclipped-dimension-quantisation
   ok    protocol-version  river_window_manager_v1 v5, river_xkb_bindings_v1 v3
 
 environment
@@ -358,19 +369,21 @@ environment
   ok    wayland/process   WAYLAND_DISPLAY=wayland-1
   ok    wayland/systemd   present
   FAIL  wayland/dbus      portal did not answer within 2000 ms
-        └ symptom  file dialogs hang for about 25 seconds, then fail;
-                   screen sharing offers nothing
-          cause    WAYLAND_DISPLAY is missing from the D-Bus activation
-                   environment
-          fix      dbus-update-activation-environment --systemd \
-                     WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE \
-                     XDG_SESSION_DESKTOP XDG_RUNTIME_DIR
+        symptom  file dialogs hang for about 25 seconds, then fail;
+                 screen sharing offers nothing
+        cause    D-Bus-activated portal did not become usable; activation
+                 environment, portal service, or selected backend may be broken
+        fix      ensure the session entry runs, before first bus use:
+                 dbus-update-activation-environment --systemd \
+                   WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE \
+                   XDG_SESSION_DESKTOP XDG_RUNTIME_DIR
+                 then verify the portal service and selected backend packages
 
 fonts
   warn  glyphs            fonts: 24/37 glyphs covered; substituting for ᚠᚢᚦᚨᚱᚲ𓂃
-        └ symptom  orbit runes draw as the digits 1-6; the bar looks plain
-          fix      install Symbols Nerd Font Mono, or Symbola
-  ok    attribution       runes ← Symbols Nerd Font Mono (chain position 2)
+        symptom  orbit runes draw as the digits 1-6; the bar looks plain
+        fix      install Symbols Nerd Font Mono, or Symbola
+  ok    attribution       runes <- Symbols Nerd Font Mono (chain position 2)
 
 32 checks: 28 ok, 3 warn, 1 failed, 0 skipped
 ```
@@ -395,9 +408,10 @@ therefore pasteable as-is.
     {"id": "env/wayland-display/dbus", "group": "environment", "status": "fail",
      "summary": "portal did not answer within 2000 ms",
      "symptom": "file dialogs hang for about 25 seconds, then fail",
-     "cause": "WAYLAND_DISPLAY is missing from the D-Bus activation environment",
-     "remedy": "dbus-update-activation-environment --systemd …",
-     "data": {"deadline_ms": 2000, "elapsed_ms": 2000}}
+     "cause": "D-Bus-activated portal did not become usable; activation environment, portal service, or selected backend may be broken",
+     "remedy": "publish the documented activation environment before first bus use, then verify the portal service and selected backend packages",
+     "data": {"deadline_ms": 2000, "elapsed_ms": 2000,
+              "activation_environment_values": "unobservable"}}
   ],
   "summary": {"ok": 28, "warn": 3, "fail": 1, "skip": 0}
 }
@@ -474,7 +488,7 @@ Each row is one happy path and becomes one test.
 | B9 | Given a session with three windows in orbit 1, when `ledger show 1 --json` runs, then stdout is exactly one object that deserialises as `Response::Ledger` with the windows in ledger order and the focused one marked | |
 | B10 | Given a running session, when `run foot -e yazi` runs, then it sends `Request::Spawn(["foot","-e","yazi"])`, exits 0 without waiting, and reports the argv as accepted rather than launched | |
 | B11 | Given a healthy session, when `doctor` runs, then every check reports `ok` or `warn`, the header names the tool, protocol, distribution, kernel and compositor versions, and it exits 0 | |
-| B12 | Given `WAYLAND_DISPLAY` absent from the D-Bus activation environment, when `doctor` runs, then `env/wayland-display/dbus` fails within its 2 s deadline, prints the 25-second-hang symptom and the `dbus-update-activation-environment` remedy, and the command exits 1 | |
+| B12 | Given the session entry deliberately suppresses the D-Bus activation-environment import and no earlier activation supplied the graphical-session values, when `doctor` runs and its portal proxy cannot become usable, then `env/wayland-display/dbus` fails within its 2 s deadline, prints the 25-second-hang symptom, reports the observed portal failure without claiming to have read a missing variable, names the activation environment, portal service and selected backend as possible causes, prints the `dbus-update-activation-environment` remedy, and exits 1 | |
 | B13 | Given no session running and a font stack that covers ASCII only, when `doctor` runs, then its optional session probe resolves at most one `RuntimeDir` and reuses one `ClientEndpoint`, the session checks are `skip` with a banner, `fonts/glyphs` warns with `Probe::summary()`'s wording, and it exits 0 rather than 3 | |
 | B14 | Given no session bus and no session running, when `doctor` runs, then the D-Bus and portal checks are `skip` and not `fail`, and it exits 0 | |
 | B15 | Given `theme apply` returns `Committed(generation)`, when the CLI reports it, then it exits 0 and reports exactly that generation as selected for future launches | `theme_cli::apply_reports_selected_future_generation_without_reload_or_session` |
@@ -539,9 +553,20 @@ check.
   remedy is pasted often enough to be worth automating.*
 - **Reading the D-Bus activation environment directly.** The functional probe
   is a proxy; it cannot distinguish "the variable is missing" from "the backend
-  is broken", and it says so in its output.
+  is broken", and it says so in its output. Exact process and systemd values
+  are compared; D-Bus activation values are labelled `unobservable`, never
+  inferred from a successful or failed proxy.
   *Recommendation: keep the functional probe, since it tests what the user
   actually experiences, and revisit if a bus API appears.*
+- **Numeric version floors for reused tools.** The accepted check exists, but
+  no cross-target compatible minima have been accepted. The retained-source
+  inventory currently records yazi 26.8.15 and starship 1.26.0 for prospective
+  Debian/Fedora routes; NixOS uses the locked nixpkgs packages, and no verified
+  btop minimum is recorded. Those concrete package selections are evidence to
+  test, not floors to copy. Before implementing `tools/floors`, verify the
+  shipped theme keys against the supported package versions on all three
+  targets and accept the resulting minima. Until then the numeric comparison
+  remains explicitly unresolved rather than guessed.
 - **Resolved by SPEC 0003:** `Capabilities` lives in `realm_core::ipc` beside
   the other wire types, with owned unsupported-capability names. The backend,
   health response, and `doctor` share that one type.
