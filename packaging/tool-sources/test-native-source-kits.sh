@@ -17,18 +17,56 @@ fi
 # SPEC 0024 requires the retained source authority to move whenever workspace
 # source or Cargo build/test input moves. Keep this guard in the source checkout
 # before the Git-free kit producer is placed behind sentinels below.
-bundle_commit=$(sed -n 's/^commit = "\([0-9a-f][0-9a-f]*\)"$/\1/p' \
-    "$bundle/bundle.toml")
-if [ -z "$bundle_commit" ] \
-    || ! git -C "$root" cat-file -e "$bundle_commit^{commit}" 2>/dev/null; then
-    echo "Realm workspace bundle does not name a reachable source commit" >&2
+check_realm_workspace_freshness() {
+    repository=$1
+    bundle_root=$2
+    bundle_commit=$(sed -n 's/^commit = "\([0-9a-f][0-9a-f]*\)"$/\1/p' \
+        "$bundle_root/bundle.toml")
+    if [ -z "$bundle_commit" ] \
+        || ! git -C "$repository" cat-file -e "$bundle_commit^{commit}" 2>/dev/null; then
+        echo "Realm workspace bundle does not name a reachable source commit" >&2
+        return 1
+    fi
+    if ! git -C "$repository" diff --quiet "$bundle_commit" HEAD -- \
+        . ':(exclude)packaging/tool-sources/bundles/**'; then
+        echo "Realm workspace bundle is stale relative to retained source inputs" >&2
+        git -C "$repository" diff --name-only "$bundle_commit" HEAD -- \
+            . ':(exclude)packaging/tool-sources/bundles/**' >&2
+        return 1
+    fi
+}
+
+check_realm_workspace_freshness "$root" "$bundle"
+
+freshness_fixture=$tmp/freshness-fixture
+fixture_bundle=$freshness_fixture/packaging/tool-sources/bundles/realm-workspace
+mkdir -p "$freshness_fixture/packaging/session"
+printf '#!/bin/sh\nexec river\n' > \
+    "$freshness_fixture/packaging/session/realm-session"
+git -C "$freshness_fixture" init -q
+git -C "$freshness_fixture" add packaging/session/realm-session
+git -C "$freshness_fixture" -c user.name='Realm test' \
+    -c user.email='realm-test@example.invalid' commit -qm 'seed packaged wrapper'
+fixture_source_commit=$(git -C "$freshness_fixture" rev-parse HEAD)
+mkdir -p "$fixture_bundle"
+printf '[bundle]\ncommit = "%s"\n' "$fixture_source_commit" > \
+    "$fixture_bundle/bundle.toml"
+git -C "$freshness_fixture" add packaging/tool-sources/bundles/realm-workspace/bundle.toml
+git -C "$freshness_fixture" -c user.name='Realm test' \
+    -c user.email='realm-test@example.invalid' commit -qm 'bind source authority'
+printf '# wrapper behaviour changed\n' >> \
+    "$freshness_fixture/packaging/session/realm-session"
+git -C "$freshness_fixture" add packaging/session/realm-session
+git -C "$freshness_fixture" -c user.name='Realm test' \
+    -c user.email='realm-test@example.invalid' commit -qm 'change packaged wrapper'
+if output=$(check_realm_workspace_freshness \
+    "$freshness_fixture" "$fixture_bundle" 2>&1); then
+    echo "Realm workspace freshness guard accepted a changed packaged wrapper" >&2
     exit 1
-fi
-if ! git -C "$root" diff --quiet "$bundle_commit" HEAD -- \
-    Cargo.toml Cargo.lock crates configs/templates palette.toml; then
-    echo "Realm workspace bundle is stale relative to Cargo build/test inputs" >&2
-    git -C "$root" diff --name-only "$bundle_commit" HEAD -- \
-        Cargo.toml Cargo.lock crates configs/templates palette.toml >&2
+elif ! printf '%s\n' "$output" | \
+    grep -F 'packaging/session/realm-session' >/dev/null; then
+    echo "Realm workspace freshness guard omitted the changed wrapper diagnostic" >&2
+    printf '%s\n' "$output" >&2
     exit 1
 fi
 
