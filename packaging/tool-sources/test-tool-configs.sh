@@ -81,8 +81,8 @@ grep -F -q '${pkgs.util-linux}/bin/setsid --wait yazi --version' "$checks" || {
     echo "Nix VM Yazi identity probe is not detached from the driver terminal" >&2
     exit 1
 }
-grep -F -q '</dev/null >/tmp/realm-yazi-version 2>&1' "$checks" || {
-    echo "Nix VM Yazi identity probe does not isolate all standard streams" >&2
+grep -F -q '</dev/null >/tmp/realm-yazi-version 2>&1 &&' "$checks" || {
+    echo "Nix VM Yazi identity probe does not preserve producer failure" >&2
     exit 1
 }
 
