@@ -71,6 +71,13 @@ sed -i 's/{{ background\.void\.bare }}/112233/' "$fixture/configs/templates/foot
 expect_fail foot-raw-colour 'foot.ini' "$checker" --root "$fixture"
 cp "$root/configs/templates/foot.ini" "$fixture/configs/templates/foot.ini"
 
+sed -i '/^cursor={{ background\.void\.bare }} {{ accent\.violet\.bare }}$/d' \
+    "$fixture/configs/templates/foot.ini"
+sed -i '/^style=block$/a color={{ background.void.bare }} {{ accent.violet.bare }}' \
+    "$fixture/configs/templates/foot.ini"
+expect_fail foot-misplaced-cursor-colour 'foot.ini' "$checker" --root "$fixture"
+cp "$root/configs/templates/foot.ini" "$fixture/configs/templates/foot.ini"
+
 sed -i 's/{{ background\.pane\.bare }}ff/0a0b0cff/' "$fixture/configs/templates/fuzzel.ini"
 expect_fail fuzzel-raw-colour 'fuzzel.ini' "$checker" --root "$fixture"
 sed -i 's/0a0b0cff/{{ background.pane.bare }}ff/' "$fixture/configs/templates/fuzzel.ini"
