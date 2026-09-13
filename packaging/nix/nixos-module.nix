@@ -109,6 +109,7 @@ in
     # symlink exists on the built system rather than trusting this.
     systemd.packages = [ cfg.package ];
     systemd.user.services.realm-wm.wantedBy = [ "realm-session.target" ];
+    systemd.user.services.realm-wm.path = [ cfg.package ] ++ support.reusedTools pkgs;
     systemd.user.services.realm-bar.wantedBy = [ "realm-session.target" ];
 
     environment.etc."realm/palette.toml".source = cfg.paletteFile;
