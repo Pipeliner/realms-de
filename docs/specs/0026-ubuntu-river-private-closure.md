@@ -29,16 +29,18 @@ signing, uploaded binary artifacts or automatic dependency updates.
 
 ## Selected source authority
 
-The selected versions match nixpkgs revision
+The selected runtime and compositor versions match nixpkgs revision
 `9fbb54b33e91ee4ca368e35a78e0613c720600b3`, which is fixed by the repository's
 `flake.lock`. The CI acquisition manifest records the URLs and raw archive
 SHA-256 values below. Nix's normalized source hashes remain corroborating
 recipe evidence; they do not replace the raw archive hashes consumed by this
-probe.
+probe. Meson 1.4.0 is the exact build-tool floor declared by the selected
+libxkbcommon source; Noble's Meson 1.3.2 is insufficient.
 
 | Input | Version / identity | Upstream archive | SHA-256 | Role |
 |---|---|---|---|---|
 | Zig x86_64 Linux | 0.16.0 | `https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz` | `70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00` | acquisition and River build only |
+| Meson | 1.4.0 | `https://github.com/mesonbuild/meson/releases/download/1.4.0/meson-1.4.0.tar.gz` | `8fd6630c25c27f1489a8a0392b311a60481a3c161aa699b330e25935b750138d` | build tool only |
 | Wayland | 1.26.0 | `https://gitlab.freedesktop.org/wayland/wayland/-/releases/1.26.0/downloads/wayland-1.26.0.tar.xz` | `64176eaa46e4969903e286f8e5ef8331affc17fdf03ac9b58381d2b23162b7a3` | private runtime and `wayland-scanner` |
 | wayland-protocols | 1.49 | `https://gitlab.freedesktop.org/wayland/wayland-protocols/-/releases/1.49/downloads/wayland-protocols-1.49.tar.xz` | `ec4c8f74942d6dff7ace8b4ce4764f0ef9ff618a935d974ea77edee2ad240b14` | build-time protocol data |
 | libdrm | 2.4.134 | `https://dri.freedesktop.org/libdrm/libdrm-2.4.134.tar.xz` | `ac5e74d157830eb8bee44c6a6bf3ad49774ef0dd2a72bdad74a8f20308b52a95` | private runtime |
@@ -68,9 +70,10 @@ compilation.
 
 ## Noble system boundary
 
-Noble supplies dependencies whose versions already meet wlroots 0.20.2's
-requirements: Meson 1.3.2, libinput 1.25.0, libseat 0.8.0, Mesa EGL/GLES/GBM,
-XCB/Xfixes 1.15 and Xwayland 23.2.6. The CI job also installs their development
+Noble supplies runtime dependencies whose versions already meet wlroots
+0.20.2's requirements: libinput 1.25.0, libseat 0.8.0, Mesa EGL/GLES/GBM,
+XCB/Xfixes 1.15 and Xwayland 23.2.6. It also supplies Ninja and Python for the
+selected Meson 1.4.0 source entry point. The CI job installs their development
 closure: build-essential, pkg-config, ninja-build, Python, bison, patchelf,
 libffi, expat, libpciaccess, pthread stubs, udev, libevdev, libcap, GL/EGL/GLES,
 GBM, X11, the XCB composite/EWMH/ICCCM/render/res/xfixes packages, hwdata,
@@ -110,11 +113,14 @@ The private source set is required because Noble remains below these floors:
    `--wrap-mode=nofallback`; River uses
    `zig build --system <cache>/zig-fetch-root/zig-pkg`, whose upstream contract
    disables network access.
-4. Builds install into one new private prefix with `bin/`, `lib/`, `include/`
-   and `share/`. `PATH` and `PKG_CONFIG_PATH` put that prefix ahead of Noble for
-   all later builds. The order is:
-   Wayland; wayland-protocols; libdrm, pixman, libxkbcommon and libdisplay-info;
-   wlroots; River.
+4. The digest-checked Meson 1.4.0 archive is extracted into the cache and every
+   Meson setup, compile and install command invokes that source tree's
+   `meson.py` directly. The build does not use Noble's insufficient Meson 1.3.2
+   or install a Python package from the network. Builds install into one new
+   private prefix with `bin/`, `lib/`, `include/` and `share/`. `PATH` and
+   `PKG_CONFIG_PATH` put that prefix ahead of Noble for all later builds. The
+   source build order is: Wayland; wayland-protocols; libdrm, pixman,
+   libxkbcommon and libdisplay-info; wlroots; River.
 5. Wayland builds its scanner with documentation and tests disabled;
    wayland-protocols builds with tests disabled. libxkbcommon disables its
    tools, X11/Wayland utilities, docs and registry while retaining the core
