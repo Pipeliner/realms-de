@@ -93,6 +93,8 @@ in
       cfg.package
       cfg.compositor
       sessionPackage
+      pkgs.adwaita-icon-theme
+      pkgs.gsettings-desktop-schemas
     ]
     ++ [ pkgs.slurp ] # xdg-desktop-portal-wlr's default output chooser
     ++ support.reusedTools pkgs;
@@ -129,6 +131,14 @@ in
     # The wrapper exports them per session instead.
     services.dbus.enable = true;
     programs.dconf.enable = true;
+    # A bare Realm system has no GNOME desktop manager to add these paths. The
+    # cursor contract nevertheless needs both Adwaita's files and the desktop
+    # interface schema in every graphical-session process, including the
+    # systemd-run doctor probe.
+    environment.sessionVariables.XDG_DATA_DIRS = [
+      "${pkgs.adwaita-icon-theme}/share"
+      "${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}"
+    ];
     security.polkit.enable = true;
     hardware.graphics.enable = lib.mkDefault true;
     # xdg-desktop-portal-wlr hands ScreenCast clients a restricted PipeWire
@@ -155,6 +165,8 @@ in
       wlr.enable = true;
       config.realm = {
         default = [ "gtk" ];
+        "org.freedesktop.impl.portal.Settings" = [ "gtk" ];
+        "org.freedesktop.impl.portal.Inhibit" = [ "none" ];
         "org.freedesktop.impl.portal.ScreenCast" = [ "wlr" ];
         "org.freedesktop.impl.portal.Screenshot" = [ "wlr" ];
       };

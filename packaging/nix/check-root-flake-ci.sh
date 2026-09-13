@@ -57,4 +57,8 @@ if ! grep -F -q -e 'f"(if {portal_command} > {portal_output_path} "' "$checks" \
     fail 'portal VM must record helper status after success or failure'
 fi
 
+if ! grep -F -q -e 'realm-session-boots/realmctl-doctor.json' "$workflow"; then
+    fail 'live VM artifact must retain realmctl doctor JSON'
+fi
+
 echo 'root-flake CI contract: pass'

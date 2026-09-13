@@ -141,4 +141,11 @@ if [ "$(cat "$failure_status")" != 7 ]; then
 fi
 printf 'ok %d - portal-failure-status-behaviour\n' "$tests_run"
 
+fixture_root=$(make_fixture missing-doctor-evidence)
+sed '/realm-session-boots\/realmctl-doctor\.json/d' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-doctor-evidence "$fixture_root" \
+    'live VM artifact must retain realmctl doctor JSON'
+
 printf 'PASS: %d root-flake CI guard fixtures\n' "$tests_run"

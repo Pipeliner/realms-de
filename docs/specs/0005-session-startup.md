@@ -1,8 +1,9 @@
 # SPEC 0005 — Session startup and desktop integration
 
-- **Status:** Draft — the NixOS session-discovery contract, startup step 3, and
-  current-incarnation doctor-health handoff are accepted; open questions below
-  remain unresolved (`needs-human`)
+- **Status:** Draft — the NixOS session-discovery contract, startup step 3,
+  XWayland display discovery and publication, and current-incarnation
+  doctor-health handoff are accepted; open questions below remain unresolved
+  (`needs-human`)
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
   [ADR 0013](../adr/0013-river-window-management-backend.md),
@@ -217,6 +218,18 @@ That asymmetry is precisely why this bug survives manual testing.
 
 `DISPLAY` is handled separately; see §3.
 
+#### Step 4a — Start portal activation without blocking startup
+
+After both environment imports, and before any other session client starts, a
+reachable systemd user manager receives
+`systemctl --user start --no-block xdg-desktop-portal.service`. This starts the
+cold portal activation while River and Realm continue toward readiness; the
+entry must not wait for the portal on the compositor/window-manager critical
+path. Failure to enqueue the service is non-fatal and is logged; the bounded
+`doctor` portal checks remain the authority for the resulting user-visible
+failure. A no-systemd session retains ordinary D-Bus activation and its already
+degraded supervision contract.
+
 #### Step 5 — Mirror the cursor into gsettings
 
 ```sh
@@ -361,16 +374,22 @@ only: X11 has no protocol for fractional scale and applying one produces blur
 (`docs/PITFALLS.md`). X11 client colours come from a generated `Xresources`
 (ADR 0005, SPEC 0002).
 
+**Accepted slice (2026-09-13):** discovery and publication of XWayland's
+`DISPLAY`, its explicit degraded outcome, and the installed-VM propagation and
+window proof in A17 are Accepted independently of the remaining M3 draft. This
+slice does not accept or claim the still-unverified Xresources and integer-scale
+behaviour.
+
 `DISPLAY` is discovered by the same snapshot-and-diff technique as the Wayland
 socket, against `/tmp/.X11-unix/X*`: snapshot before starting river, and take
-the new entry afterwards. `X<N>` yields `DISPLAY=:<N>`. wlroots creates the
-listening socket up front even in lazy mode, so this resolves at compositor
-start rather than at first X client. If no new socket appears within the same
-deadline, `DEGRADED NO-XWAYLAND` is logged and `DISPLAY` is simply absent from
-both imports — a stated gap rather than an imported empty string. *Unverified
-for river 0.4.8: whether river enables XWayland by default and whether the
-socket is created eagerly must be confirmed on a real river before this is
-relied upon.*
+the new entry afterwards. `X<N>` yields `DISPLAY=:<N>`. After Wayland liveness
+is established, X socket discovery has its own bounded two-second window: forty
+polls separated by 50 ms. If no new socket appears, `DEGRADED NO-XWAYLAND` is
+logged and `DISPLAY` is simply absent from both imports — a stated degraded
+outcome rather than an imported empty string. When discovery succeeds,
+`DISPLAY` is exported by the entry and appended to the one variable list that
+is then published to both the systemd user manager and the D-Bus activation
+environment before any Realm client starts.
 
 `doctor` must not shell out to `xlsclients` or `xdpyinfo` to check this: neither
 is guaranteed installed on any of the three targets. It connects to
@@ -717,7 +736,7 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | # | Given / When / Then | Where | Test |
 |---|---|---|---|
 | A1 | Given a stub compositor that creates `$XDG_RUNTIME_DIR/wayland-9` after 3 s and a pre-existing `wayland-0`, when the entry runs, then it discovers `wayland-9` (not `wayland-0`, not a guess), proceeds only after discovery, and completes within the deadline | CI | |
-| A2 | Given the session entry source, when the ordering test runs, then the identity exports precede the compositor start, and the two imports precede every client start, every `gsettings` call and every other D-Bus touch | CI | |
+| A2 | Given the session entry source, when the ordering test runs, then the identity exports precede the compositor start, the two imports precede every client start, every `gsettings` call and every other D-Bus touch, and portal warm-up is enqueued with `--no-block` after those imports but before the session target | CI | `packaging/session/test-portal-warmup.sh` |
 | A3 | Given the entry's import-variable list and `doctor`'s list, when the consistency test runs, then they name the same variables; a separate assertion keeps both client units' intentionally narrower `ConditionEnvironment=WAYLAND_DISPLAY` guard | CI | |
 | A4 | Given a container with no reachable `systemd --user` and no `dbus-update-activation-environment`, when the entry runs against a stub compositor, then it logs exactly one `DEGRADED NO-SYSTEMD-USER` line and one `DEGRADED NO-DBUS-ACTIVATION` line, starts the clients directly under the bounded respawn loop, and does not hang | CI | |
 | A5 | Given a booted session, when `systemctl --user show-environment` is read and a VM-only D-Bus-activated probe reports its own inherited environment, then every imported variable is present in both with values equal to the compositor's `/proc/<pid>/environ`; `doctor` itself continues to label D-Bus activation values unobservable and uses the portal proxy | VM | |
@@ -733,6 +752,7 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
 | A16 | Given a real laptop, when the lid is closed, then the session locks within the configured delay and the screen is blank on reopen until authentication | **HARDWARE** *(blocked on OQ-1)* | |
+| A17 | Given an installed NixOS VM session running the pinned XWayland-enabled River, when a purpose-built session-bus service is activated and acquires its configured bus name, then the non-empty `DISPLAY` inherited by `realm-wm`, the systemd user manager and that D-Bus-activated service is identical; the service invokes the pinned xmessage package's public `bin/xmessage` wrapper and the child executable resolves to that same package's exact `bin/.xmessage-wrapped` payload selected by locked nixpkgs' X file-search wrapper hook; Realm reports one additional managed X11 window; and the test reaps the client. This proves discovery, both publication paths and XWayland window management, but does not claim Xresources or scaling behaviour. | VM | |
 
 **Split: 17 criteria — 4 CI, 11 VM, 2 HARDWARE.**
 

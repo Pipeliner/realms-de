@@ -23,8 +23,10 @@
       ''
         shellcheck --shell=bash \
           ${src + "/packaging/session/realm-session"} \
-          ${src + "/packaging/session/test-runtime-dir-mode.sh"}
+          ${src + "/packaging/session/test-runtime-dir-mode.sh"} \
+          ${src + "/packaging/session/test-portal-warmup.sh"}
         shellcheck --shell=sh \
+          ${src + "/packaging/session/realm-browser"} \
           ${src + "/packaging/check-font-policy.sh"} \
           ${src + "/packaging/font-policy-test.sh"} \
           ${src + "/packaging/nix/check-root-flake-ci.sh"} \
@@ -40,6 +42,7 @@
           ${src + "/packaging/debian/test-toolchain-path.sh"}
         bash ${src + "/packaging/session/test-runtime-dir-mode.sh"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_portal_vm_helper.py"}
+        bash ${src + "/packaging/session/test-portal-warmup.sh"}
         touch $out
       '';
 
@@ -58,7 +61,49 @@
   # either workspace binary in the package output.
   packaged-binaries = pkgs.runCommand "realm-packaged-binaries" { } ''
     test -x ${realm}/bin/realmctl
+    test -x ${realm}/bin/realm-browser
     test -x ${realm}/bin/realm-sdd
+    touch $out
+  '';
+
+  # The installed command owns the narrow command path needed by its two
+  # expressly permitted external probes. A systemd transient service supplies
+  # no interactive-shell path, so exercise the same condition directly.
+  realmctl-command-runtime = pkgs.runCommand "realmctl-command-runtime" {
+    nativeBuildInputs = [ pkgs.jq ];
+  } ''
+    mkdir -m 700 "$TMPDIR/runtime" "$TMPDIR/home"
+    set +e
+    env -i \
+      HOME="$TMPDIR/home" \
+      XDG_RUNTIME_DIR="$TMPDIR/runtime" \
+      XDG_DATA_DIRS=${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name} \
+      PATH=/not-an-installed-command-path \
+      ${realm}/bin/realmctl --json --palette ${src + "/palette.toml"} doctor \
+      >"$TMPDIR/report.json"
+    status=$?
+    set -e
+    echo "doctor command-path fixture exit: $status"
+    cat "$TMPDIR/report.json"
+    case "$status" in
+      0|1) ;;
+      *) exit 1 ;;
+    esac
+    ! grep -F 'error:not found' "$TMPDIR/report.json"
+    jq -e '.checks | map(select(.id == "tools/floors")) |
+      length == 1 and .[0].group == "tools" and .[0].status == "skip"' \
+      "$TMPDIR/report.json"
+    touch $out
+  '';
+
+  # Keep the bare-session cursor inputs independently buildable. Pinned
+  # nixpkgs' GLib setup hook moves schemas below share/gsettings-schemas/$name,
+  # and its desktop-manager modules publish that package-named directory in
+  # XDG_DATA_DIRS. Assert both package layouts before the slower VM exercises
+  # the live gsettings/cursor agreement through `realmctl doctor`.
+  desktop-session-data = pkgs.runCommand "realm-desktop-session-data" { } ''
+    test -f ${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}/glib-2.0/schemas/gschemas.compiled
+    test -d ${pkgs.adwaita-icon-theme}/share/icons/Adwaita/cursors
     touch $out
   '';
 
@@ -135,6 +180,58 @@ EOF
 
     nodes.machine =
       { config, pkgs, ... }:
+      let
+        xwaylandProbe = pkgs.writers.writePython3Bin "realm-xwayland-dbus-probe" {
+          libraries = [ pkgs.python3Packages.dbus-next ];
+        } ''
+          import asyncio
+          import os
+          from pathlib import Path
+
+          from dbus_next.aio import MessageBus
+          from dbus_next.constants import RequestNameReply
+
+
+          async def main():
+              display = os.environ.get("DISPLAY")
+              runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+              if not display or not runtime_dir:
+                  raise SystemExit("D-Bus activation omitted DISPLAY or XDG_RUNTIME_DIR")
+
+              bus = await MessageBus().connect()
+              reply = await bus.request_name("org.realm.XWaylandProbe")
+              if reply is not RequestNameReply.PRIMARY_OWNER:
+                  raise SystemExit("D-Bus probe did not acquire its configured name")
+
+              child = await asyncio.create_subprocess_exec(
+                  "${pkgs.xmessage}"
+                  "/bin/xmessage",
+                  "-center",
+                  "Realm X11 Probe",
+              )
+              marker = Path(runtime_dir) / "realm-xwayland-probe"
+              marker.write_text(
+                  "display=" + display + "\n"
+                  "service_pid=" + str(os.getpid()) + "\n"
+                  "child_pid=" + str(child.pid) + "\n",
+                  encoding="utf-8",
+              )
+              await child.wait()
+              bus.disconnect()
+
+
+          asyncio.run(main())
+        '';
+        xwaylandProbeService = pkgs.writeTextFile {
+          name = "realm-xwayland-dbus-service";
+          destination = "/share/dbus-1/services/org.realm.XWaylandProbe.service";
+          text = ''
+            [D-BUS Service]
+            Name=org.realm.XWaylandProbe
+            Exec=${xwaylandProbe}/bin/realm-xwayland-dbus-probe
+          '';
+        };
+      in
       {
         imports = [ nixosModule ];
         programs.realm.enable = true;
@@ -155,11 +252,25 @@ EOF
         users.users.alice = {
           isNormalUser = true;
         };
+        services.dbus.packages = [ xwaylandProbeService ];
         environment.systemPackages = [
           vmControlHelper
           portalVmHelper
           pkgs.foot
+          pkgs.firefox
+          (pkgs.makeDesktopItem {
+            name = "realm-browser-test";
+            desktopName = "Realm Browser Test";
+            exec = "${pkgs.firefox}/bin/firefox --no-remote about:blank";
+            mimeTypes = [ "text/html" "x-scheme-handler/http" "x-scheme-handler/https" ];
+          })
         ];
+        environment.etc."xdg/mimeapps.list".text = ''
+          [Default Applications]
+          text/html=realm-browser-test.desktop
+          x-scheme-handler/http=realm-browser-test.desktop
+          x-scheme-handler/https=realm-browser-test.desktop
+        '';
       };
 
     testScript =
@@ -374,6 +485,14 @@ EOF
           "grep -q '^org.freedesktop.impl.portal.ScreenCast=wlr$' "
           "/etc/xdg/xdg-desktop-portal/realm-portals.conf"
       )
+      machine.succeed(
+          "grep -q '^org.freedesktop.impl.portal.Settings=gtk$' "
+          "/etc/xdg/xdg-desktop-portal/realm-portals.conf"
+      )
+      machine.succeed(
+          "grep -q '^org.freedesktop.impl.portal.Inhibit=none$' "
+          "/etc/xdg/xdg-desktop-portal/realm-portals.conf"
+      )
 
       # The palette every themed surface is generated from.
       machine.succeed("test -f /etc/realm/palette.toml")
@@ -429,8 +548,128 @@ EOF
       ).strip()
       assert imported_wayland == daemon_wayland and imported_wayland
 
+      # Run the installed diagnostic inside the user manager so it receives
+      # the same published graphical-session environment as supervised units.
+      # This is the healthy-session acceptance path for the complete fixed
+      # check set; skips remain explicit data rather than omitted checks.
+      # The session entry enqueues cold portal activation after its environment
+      # imports. Waiting here verifies that production path; the fixture does
+      # not manually start the service before doctor.
+      machine.wait_for_unit(
+          "xdg-desktop-portal.service", user="alice", timeout=STARTUP_TIMEOUT
+      )
+      doctor_raw = machine.succeed(
+          "systemd-run --user --machine=alice@ --wait --pipe --quiet --collect "
+          "${realm}/bin/realmctl --json doctor"
+      )
+      doctor = json.loads(doctor_raw)
+      assert len(doctor["checks"]) == 32, doctor
+      assert [check["id"] for check in doctor["checks"]] == [
+          "session/socket", "session/protocol-version", "session/degraded",
+          "wm/attached", "wm/layer-shell", "wm/capabilities",
+          "wm/protocol-version", "env/identity",
+          "env/wayland-display/process", "env/wayland-display/systemd",
+          "env/wayland-display/dbus", "env/desktop/systemd",
+          "env/desktop/dbus", "env/agree", "env/stale", "env/cursor",
+          "env/xwayland", "env/list-matches-entry", "units/target",
+          "units/wm", "units/bar", "units/restart-policy",
+          "units/idle-lock", "portal/answers", "portal/config",
+          "portal/filechooser", "portal/screencast", "palette/lint",
+          "theme/outputs", "fonts/glyphs", "fonts/attribution",
+          "tools/floors",
+      ]
+      assert all(check["status"] != "fail" for check in doctor["checks"]), doctor
+      doctor_by_id = {check["id"]: check for check in doctor["checks"]}
+      assert {
+          check["id"] for check in doctor["checks"] if check["status"] == "skip"
+      } == {"units/idle-lock", "portal/filechooser", "tools/floors"}, doctor
+      for check_id in [
+          "session/socket", "session/protocol-version", "wm/attached",
+          "wm/layer-shell", "portal/answers", "portal/config",
+          "portal/screencast",
+      ]:
+          assert doctor_by_id[check_id]["status"] == "ok", doctor
+      write_artifact("realmctl-doctor.json", doctor_raw)
+      # XWayland is useful only if the wrapper learns its assigned DISPLAY and
+      # publishes it before either launcher starts. The purpose-built D-Bus
+      # service acquires its configured name before recording its activation
+      # environment and opening a real X11 window, so a failed activation
+      # cannot look like a successful propagation proof.
+      imported_display = machine.succeed(
+          "systemctl --user --machine=alice@ show-environment | sed -n 's/^DISPLAY=//p'"
+      ).strip()
+      daemon_display = machine.succeed(
+          f"tr '\\0' '\\n' < /proc/{wm_pid}/environ | sed -n 's/^DISPLAY=//p'"
+      ).strip()
+      assert imported_display == daemon_display and imported_display
+      assert imported_display.startswith(":"), imported_display
+      machine.succeed(
+          f"test -S /tmp/.X11-unix/X{shlex.quote(imported_display[1:])}"
+      )
+      machine.succeed(
+          "grep -F -q 'xwayland display discovered: DISPLAY=' "
+          "/home/alice/.local/state/realm/session.log"
+      )
+      machine.fail(
+          "grep -F -q 'DEGRADED NO-XWAYLAND' "
+          "/home/alice/.local/state/realm/session.log"
+      )
+
+      baseline_raw, baseline = control("state")
+      baseline_windows = sum(
+          cell["windows"] for cell in baseline["data"]["orbits"]
+      )
+      machine.succeed(
+          as_alice(
+              "env",
+              "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+              "dbus-send",
+              "--session",
+              "--type=method_call",
+              "--dest=org.realm.XWaylandProbe",
+              "/org/realm/XWaylandProbe",
+              "org.realm.XWaylandProbe.Open",
+          )
+      )
+      marker = "/run/user/1000/realm-xwayland-probe"
+      machine.wait_until_succeeds(f"test -s {marker}", timeout=STATE_TIMEOUT)
+      activated_display = machine.succeed(
+          f"sed -n 's/^display=//p' {marker}"
+      ).strip()
+      service_pid = machine.succeed(
+          f"sed -n 's/^service_pid=//p' {marker}"
+      ).strip()
+      x11_pid = machine.succeed(
+          f"sed -n 's/^child_pid=//p' {marker}"
+      ).strip()
+      assert activated_display == imported_display, (
+          activated_display,
+          imported_display,
+      )
+      x11_exe = machine.succeed(f"readlink /proc/{x11_pid}/exe").strip()
+      expected_x11_exe = "${pkgs.xmessage}/bin/.xmessage-wrapped"
+      assert x11_exe == expected_x11_exe, (x11_exe, expected_x11_exe)
+      wait_for_state(
+          lambda response: sum(
+              cell["windows"] for cell in response["data"]["orbits"]
+          ) == baseline_windows + 1,
+          "D-Bus-activated X11 window",
+      )
+      machine.wait_for_text("Realm X11 Probe", timeout=OCR_TIMEOUT)
+      machine.succeed(f"kill -TERM {x11_pid}")
+      machine.wait_until_succeeds(
+          f"test ! -d /proc/{x11_pid} && test ! -d /proc/{service_pid}",
+          timeout=STATE_TIMEOUT,
+      )
+      wait_for_state(
+          lambda response: sum(
+              cell["windows"] for cell in response["data"]["orbits"]
+          ) == baseline_windows,
+          "D-Bus-activated X11 window close",
+      )
+
       # Use the library client itself. The initial state proves Hello and
-      # GetState reached the production server; no realmctl command is added.
+      # GetState reached the production server independently of realmctl.
       initial_raw, initial = control("state")
       assert initial["reply"] == "state", initial
       assert initial["data"]["whichkey"] is True, initial
@@ -541,6 +780,10 @@ EOF
       generation_root = (
           f"/home/alice/.config/realm/generated/generations/{generation}"
       )
+      machine.succeed(
+          "sudo -u alice ${pkgs.foot}/bin/foot --check-config "
+          f"--config={generation_root}/foot/foot.ini"
+      )
 
       machine.send_key("meta_l-ret")
       terminal_pid = wait_for_single_user_process("foot")
@@ -601,6 +844,31 @@ EOF
 
       # Three ordinary Wayland application windows must enter compositor-backed
       # state before the tiled-desktop framebuffer capture is accepted.
+      # SPEC 0027: dispatch success alone is insufficient. Press the real
+      # browser binding and require both Firefox and a compositor-owned window.
+      selected_browser = machine.succeed(
+          "systemd-run --user --machine=alice@ --wait --pipe --quiet --collect "
+          "${pkgs.xdg-utils}/bin/xdg-settings get default-web-browser"
+      ).strip()
+      assert selected_browser == "realm-browser-test.desktop", selected_browser
+      machine.send_key("meta_l-b")
+      machine.wait_until_succeeds("pgrep -u alice -f firefox", timeout=STATE_TIMEOUT)
+      browser_raw, _browser_state = wait_for_state(
+          lambda response: sum(
+              cell["windows"] for cell in response["data"]["orbits"]
+          ) == 1,
+          "default-binding browser window",
+      )
+      write_artifact("control-browser-state.json", browser_raw)
+      machine.screenshot("realm-browser")
+      machine.send_key("meta_l-q")
+      wait_for_state(
+          lambda response: sum(
+              cell["windows"] for cell in response["data"]["orbits"]
+          ) == 0,
+          "browser window closes through the default binding",
+      )
+
       for number in range(1, 4):
           command = (
               f"printf 'Realm VM sample {number}\\nordinary Wayland application\\n'; "
