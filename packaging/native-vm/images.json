@@ -1,0 +1,13 @@
+{
+  "schema": "realm-native-vm-images/v1",
+  "targets": {
+    "ubuntu-24.04-x86_64": {
+      "url": "https://cloud-images.ubuntu.com/releases/noble/release-20260911/ubuntu-24.04-server-cloudimg-amd64.img",
+      "sha256": "612b2c0cc1bc413a6cb8c38fd611794caf0f2b436c50013d8b3794db12ad7354"
+    },
+    "fedora-44-x86_64": {
+      "url": "https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
+      "sha256": "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f"
+    }
+  }
+}
