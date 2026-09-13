@@ -172,6 +172,115 @@ class PortalClient:
     def close(self, path: str, interface: str) -> None:
         self.call(interface, "Close", None, "()", path=path, timeout_ms=2_000)
 
+    def filechooser_roundtrip(
+        self, parameters: Any, token: str, *, timeout_ms: int = 2_000
+    ) -> dict[str, Any]:
+        """Open and close one chooser without losing an early Response race."""
+        expected_path = request_path(self.unique_name, token)
+        response: dict[str, Any] = {}
+        response_wait_loop: Any = None
+
+        def on_response(
+            _connection: Any,
+            _sender: str,
+            object_path: str,
+            _interface: str,
+            _signal: str,
+            parameters_value: Any,
+            _user_data: Any,
+        ) -> None:
+            response.update(
+                code=parameters_value.get_child_value(0).get_uint32(),
+                results=_deep_unpack(parameters_value.get_child_value(1)),
+                path=object_path,
+            )
+            if response_wait_loop is not None:
+                response_wait_loop.quit()
+
+        subscription = self.connection.signal_subscribe(
+            PORTAL_BUS,
+            REQUEST_INTERFACE,
+            "Response",
+            expected_path,
+            None,
+            self.gio.DBusSignalFlags.NONE,
+            on_response,
+        )
+
+        def completed_response() -> dict[str, Any]:
+            if response.get("path") != expected_path:
+                raise RuntimeError(
+                    "FileChooser request disappeared without an exact Response"
+                )
+            code = response.get("code")
+            if code not in {0, 1}:
+                raise RuntimeError(f"FileChooser returned failure response {code!r}")
+            return {
+                "handle": expected_path,
+                "elapsed_ms": elapsed_ms,
+                "completion": "response",
+                "response_code": code,
+            }
+
+        try:
+            started = time.monotonic()
+            reply = self.call(
+                "org.freedesktop.portal.FileChooser",
+                "OpenFile",
+                parameters,
+                "(o)",
+                timeout_ms=timeout_ms,
+            )
+            elapsed_ms = round((time.monotonic() - started) * 1000)
+            returned_path = reply.unpack()[0]
+            if returned_path != expected_path or elapsed_ms > timeout_ms:
+                raise RuntimeError(
+                    f"FileChooser returned {returned_path!r} after {elapsed_ms} ms; "
+                    f"expected {expected_path!r} within {timeout_ms} ms"
+                )
+
+            if response:
+                return completed_response()
+
+            try:
+                self.close(expected_path, REQUEST_INTERFACE)
+            except Exception as error:
+                remote_error = self.gio.DBusError.get_remote_error(error)
+                if remote_error != "org.freedesktop.DBus.Error.UnknownMethod":
+                    raise
+
+                if not response:
+                    wait_timed_out = False
+                    response_wait_loop = self.glib.MainLoop()
+
+                    def on_wait_timeout() -> bool:
+                        nonlocal wait_timed_out
+                        wait_timed_out = True
+                        response_wait_loop.quit()
+                        return self.glib.SOURCE_REMOVE
+
+                    timeout_source = self.glib.timeout_add(250, on_wait_timeout)
+                    try:
+                        response_wait_loop.run()
+                    finally:
+                        response_wait_loop = None
+                        if not wait_timed_out:
+                            self.glib.source_remove(timeout_source)
+
+                if not response:
+                    raise RuntimeError(
+                        "FileChooser request disappeared without an exact Response"
+                    ) from error
+                return completed_response()
+
+            return {
+                "handle": expected_path,
+                "elapsed_ms": elapsed_ms,
+                "completion": "closed",
+            }
+        finally:
+            self.connection.signal_unsubscribe(subscription)
+
 
 def _options(glib: Any, **values: Any) -> dict[str, Any]:
     encoded: dict[str, Any] = {}
@@ -274,23 +383,10 @@ def run() -> dict[str, Any]:
 
     file_token = "realm_file"
     file_options = _options(GLib, handle_token=file_token)
-    started = time.monotonic()
-    file_reply = portal.call(
-        "org.freedesktop.portal.FileChooser",
-        "OpenFile",
+    filechooser = portal.filechooser_roundtrip(
         GLib.Variant("(ssa{sv})", ("", "Realm portal VM", file_options)),
-        "(o)",
-        timeout_ms=2_000,
+        file_token,
     )
-    elapsed_ms = round((time.monotonic() - started) * 1000)
-    file_handle = file_reply.unpack()[0]
-    expected_file_handle = request_path(portal.unique_name, file_token)
-    if file_handle != expected_file_handle or elapsed_ms > 2_000:
-        raise RuntimeError(
-            f"FileChooser returned {file_handle!r} after {elapsed_ms} ms; "
-            f"expected {expected_file_handle!r} within 2000 ms"
-        )
-    portal.close(file_handle, REQUEST_INTERFACE)
 
     settings_reply = portal.call(
         "org.freedesktop.portal.Settings",
@@ -367,10 +463,7 @@ def run() -> dict[str, Any]:
         portal.close(session_handle, SESSION_INTERFACE)
 
     return {
-        "filechooser": {
-            "handle": file_handle,
-            "elapsed_ms": elapsed_ms,
-        },
+        "filechooser": filechooser,
         "settings": {
             "reply_type": settings_reply.get_type_string(),
             "namespaces": sorted(settings),

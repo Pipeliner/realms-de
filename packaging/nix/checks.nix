@@ -454,6 +454,9 @@ EOF
           )
           portal = json.loads(portal_raw)
           assert portal["filechooser"]["elapsed_ms"] <= 2000, portal
+          assert portal["filechooser"]["completion"] in {"closed", "response"}, portal
+          if portal["filechooser"]["completion"] == "response":
+              assert portal["filechooser"]["response_code"] in {0, 1}, portal
           assert portal["settings"]["reply_type"] == "(a{sa{sv}})", portal
           assert portal["screencast"]["node_id"] > 0, portal
           assert portal["screencast"]["buffer_bytes"] > 0, portal
