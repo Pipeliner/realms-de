@@ -429,6 +429,19 @@ EOF
           "default-binding terminal close",
       )
 
+      machine.succeed(
+          "install -d -o alice -g users -m 0755 "
+          "/home/alice/.local/share/applications"
+      )
+      machine.succeed(
+          "printf '%s\\n' '[Desktop Entry]' 'Type=Application' "
+          "'Name=Realm Launch Ready' 'Exec=${pkgs.coreutils}/bin/true' "
+          "> /home/alice/.local/share/applications/realm-launch-ready.desktop && "
+          "chown alice:users "
+          "/home/alice/.local/share/applications/realm-launch-ready.desktop && "
+          "chmod 0644 "
+          "/home/alice/.local/share/applications/realm-launch-ready.desktop"
+      )
       machine.send_key("meta_l-d")
       launcher_pid = wait_for_single_user_process("fuzzel")
       assert_fixed_consumer(
@@ -437,6 +450,7 @@ EOF
           ["fuzzel", f"--config={generation_root}/fuzzel/fuzzel.ini"],
           generation,
       )
+      machine.wait_for_text("Realm Launch Ready", timeout=OCR_TIMEOUT)
       machine.send_key("esc")
       machine.wait_until_succeeds(
           f"test ! -d /proc/{launcher_pid}", timeout=STATE_TIMEOUT
