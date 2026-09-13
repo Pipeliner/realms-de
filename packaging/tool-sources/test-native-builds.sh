@@ -181,6 +181,7 @@ run_debian() {
         REALM_REAL_CARGO="$real_cargo" \
         REALM_REAL_RUSTC="$real_rustc" \
         REALM_RUST_VERSIONED_ROOT="$versioned_root" \
+        REALM_RUNTIME_PATH=/usr/bin:/bin \
         RUSTC="$real_rustc" \
         RUSTC_WRAPPER= \
         RUSTC_WORKSPACE_WRAPPER= \
@@ -257,6 +258,7 @@ run_rpm() {
         REALM_SENTINEL_LOG="$log" \
         REALM_REAL_CARGO="$real_cargo" \
         REALM_REAL_RUSTC="$real_rustc" \
+        REALM_RUNTIME_PATH=/usr/bin:/bin \
         RUSTC="$real_rustc" \
         RUSTC_WRAPPER= \
         RUSTC_WORKSPACE_WRAPPER= \
@@ -429,12 +431,19 @@ accepts_offline_cargo() {
             'Ya 25.4.8 (99ea3b74c4260a724b43af812df0f68ef59395b7 2025-04-08)' ]; then
             fail "$name package has unexpected ya version metadata: $ya_version"
         fi
-        if [ "$starship_version" != 'starship 1.23.0' ]; then
+        starship_version_first=$(printf '%s\n' "$starship_version" | sed -n '1p')
+        if [ "$starship_version_first" != 'starship 1.23.0' ]; then
             fail "$name package has unexpected Starship version: $starship_version"
         fi
         case $name in
-            Debian) debian_yazi_binary=$package_root/usr/lib/realm/bin/yazi ;;
-            RPM) rpm_yazi_binary=$package_root/usr/lib/realm/bin/yazi ;;
+            Debian)
+                debian_yazi_version=$yazi_version
+                debian_ya_version=$ya_version
+                ;;
+            RPM)
+                rpm_yazi_version=$yazi_version
+                rpm_ya_version=$ya_version
+                ;;
         esac
     fi
     if ! grep -F 'test result: ok.' "$output" >/dev/null; then
@@ -536,9 +545,10 @@ export REALM_EXPECTED_SOURCE REALM_EXPECTED_CARGO_HOME REALM_EXPECTED_CARGO_CONF
 accepts_offline_cargo RPM run_rpm "$tmp/rpm-valid" \
     "$tmp/rpm-valid.log" "$tmp/rpm-valid.out"
 
-if [ -n "${debian_yazi_binary:-}" ] && [ -n "${rpm_yazi_binary:-}" ] \
-    && ! cmp "$debian_yazi_binary" "$rpm_yazi_binary"; then
-    fail "Yazi retained build differs across isolated native build directories"
+if [ -n "${debian_yazi_version:-}" ] && [ -n "${rpm_yazi_version:-}" ] \
+    && { [ "$debian_yazi_version" != "$rpm_yazi_version" ] \
+        || [ "$debian_ya_version" != "$rpm_ya_version" ]; }; then
+    fail "Yazi retained metadata differs across isolated native build directories"
 fi
 
 make_rpm_tree "$tmp/rpm-fetch"

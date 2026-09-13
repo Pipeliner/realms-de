@@ -9,6 +9,10 @@ manager=$root/configs/templates/yazi.toml
 keymap=$root/configs/templates/yazi-keymap.toml
 profile=$root/configs/templates/zshrc
 btop=$root/configs/templates/btop.conf
+support=$root/packaging/nix/support.nix
+debian_rules=$root/packaging/debian/rules
+fedora_spec=$root/packaging/fedora/realm.spec
+native_fixture=$root/packaging/tool-sources/test-native-builds.sh
 
 require() {
     grep -F -q "$1" "$template" || {
@@ -60,3 +64,35 @@ grep -F -q 'eval "$(starship init zsh)"' "$profile"
 grep -F -q 'command btop --config="$REALM_GENERATION/btop/btop.conf"' "$profile"
 grep -F -q 'color_theme = "realm"' "$btop"
 grep -F -q 'shown_boxes = "cpu mem net proc"' "$btop"
+grep -F -q 'dontUpdateAutotoolsGnuConfigScripts = true;' "$support" || {
+    echo "retained Nix Yazi permits automatic vendor mutation" >&2
+    exit 1
+}
+
+for recipe in "$debian_rules" "$fedora_spec"; do
+    grep -F -q 'REALM_RUNTIME_PATH' "$recipe" || {
+        echo "native runtime validation inherits build instrumentation: $recipe" >&2
+        exit 1
+    }
+    grep -F -q 'env -u CARGO_HOME -u CARGO_TARGET_DIR' "$recipe" || {
+        echo "native runtime validation retains build-only Cargo selectors: $recipe" >&2
+        exit 1
+    }
+done
+
+runtime_path_count=$(grep -F -c 'REALM_RUNTIME_PATH=/usr/bin:/bin' "$native_fixture" || true)
+if [ "$runtime_path_count" -ne 2 ]; then
+    echo "native fixture does not supply an uninstrumented runtime PATH" >&2
+    exit 1
+fi
+grep -F -q "starship_version_first=\$(printf '%s\\n' \"\$starship_version\" | sed -n '1p')" \
+    "$native_fixture" || {
+    echo "native fixture does not isolate Starship's stable version line" >&2
+    exit 1
+}
+# These dollars are the literal shell operands whose removal is under test.
+# shellcheck disable=SC2016
+if grep -F -q 'cmp "$debian_yazi_binary" "$rpm_yazi_binary"' "$native_fixture"; then
+    echo "native fixture compares distro-specific Yazi ELF bytes" >&2
+    exit 1
+fi
