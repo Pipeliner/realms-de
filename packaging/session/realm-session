@@ -125,6 +125,7 @@ REALM_CALLER_PATH="$(strip_private_path "${PATH:-}")"
 # stderr, but on a failed login the user can only ever read the file.
 log_file=''
 degraded_codes=()
+degraded_file=''
 
 setup_log() {
 	local dir="${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/realm"
@@ -511,6 +512,35 @@ apply_cursor_settings() {
 	return 0
 }
 
+# Publish only this entry incarnation's finalized degradation set. The daemon
+# reads this bounded record once before it connects to River; doctor never has
+# to infer current state from the append-only session log.
+publish_degraded_handoff() {
+	local code path="$XDG_RUNTIME_DIR/realm/degraded.$MAIN_PID"
+	# Publish this unique path even if record creation fails. That makes a
+	# missing current record observable as unavailable and prevents a readable
+	# path retained from an earlier incarnation from being mistaken for current.
+	degraded_file="$path"
+	export REALM_DEGRADED_FILE="$path"
+	if ! (umask 0077; {
+		printf 'version=1\n'
+		printf 'pid=%s\n' "$MAIN_PID"
+		for code in "${degraded_codes[@]}"; do
+			printf 'code=%s\n' "$code"
+		done
+	} >"$path") 2>/dev/null; then
+		log "could not write current-session degradation handoff; realm-wm health will report it unavailable"
+		rm -f "$path" 2>/dev/null || true
+	elif ! chmod 0600 "$path" 2>/dev/null; then
+		rm -f "$path"
+		log "could not secure current-session degradation handoff; realm-wm health will report it unavailable"
+	fi
+	if ((have_systemd_user)); then
+		systemctl --user set-environment "REALM_DEGRADED_FILE=$path" ||
+			log "could not publish the degradation handoff to the systemd user manager; realm-wm health will report it unavailable"
+	fi
+}
+
 cursor_theme_resolves() {
 	local dir base
 	local -a roots=(
@@ -713,6 +743,7 @@ cleanup() {
 		kill "$compositor_pid" 2>/dev/null || true
 	fi
 	[[ -n "$pid_file" ]] && rm -f "$pid_file" "${XDG_RUNTIME_DIR:-/nonexistent}/realm/wm-abort.reason"
+	[[ -n "$degraded_file" ]] && rm -f "$degraded_file"
 	# Reap the runtime directory only if it is empty. The spec says to remove
 	# it; a bare `rm -rf` would also take a control socket or a ledger snapshot
 	# that something is still holding during a slow stop, and an empty-only
@@ -817,6 +848,7 @@ main() {
 	discover_x_display
 	import_session_environment
 	apply_cursor_settings
+	publish_degraded_handoff
 	trap cleanup EXIT INT TERM HUP
 	start_session_units
 
