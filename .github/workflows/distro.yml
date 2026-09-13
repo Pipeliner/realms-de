@@ -297,6 +297,8 @@ jobs:
       - name: Boot installed Realm graphical session
         run: |
           set -euo pipefail
+          id
+          ls -l /dev/kvm || true
           packaging/native-vm/run-native-session-vm.sh \
             '${{ matrix.target }}' \
             "$RUNNER_TEMP/realm-native-packages" \
