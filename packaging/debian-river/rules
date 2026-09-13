@@ -1,0 +1,34 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+REALM_LOGICAL_PREFIX := /usr/lib/realm
+REALM_STAGE := $(CURDIR)/debian/realm-river-stage
+REALM_MANIFEST := $(CURDIR)/packaging/river/sources.toml
+REALM_INPUT := $(CURDIR)/closure-input
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	@set -e; \
+	parent_netns="$$(readlink /proc/self/ns/net)"; \
+	unshare --user --map-root-user --net -- \
+		"$(CURDIR)/packaging/river/build-noble-package-closure.sh" \
+		"$(REALM_MANIFEST)" "$(REALM_INPUT)" "$(REALM_STAGE)" "$$parent_netns"
+
+override_dh_auto_build:
+	:
+
+override_dh_auto_test:
+	:
+
+override_dh_auto_install:
+	install -d "$(CURDIR)/debian/realm-river$(REALM_LOGICAL_PREFIX)"
+	cp -a "$(REALM_STAGE)$(REALM_LOGICAL_PREFIX)/." \
+		"$(CURDIR)/debian/realm-river$(REALM_LOGICAL_PREFIX)/"
+
+override_dh_shlibdeps:
+	dh_shlibdeps -l"$(CURDIR)/debian/realm-river$(REALM_LOGICAL_PREFIX)/lib"
+
+override_dh_auto_clean:
+	rm -rf "$(REALM_STAGE)"
