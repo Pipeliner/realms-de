@@ -1,0 +1,19 @@
+#!/bin/sh
+# SPEC 0027: launch the user's configured browser without choosing a brand.
+set -eu
+
+fail() {
+    printf '%s\n' "realm-browser: $1" >&2
+    exit 1
+}
+
+[ "$#" -eq 0 ] || fail 'this command takes no arguments'
+browser=$(xdg-settings get default-web-browser) ||
+    fail 'could not query the default browser; configure an installed browser'
+case "$browser" in
+    ''|-*|*/*|*[[:space:]]*) fail 'default browser is not a valid desktop-file ID' ;;
+    *.desktop) ;;
+    *) fail 'default browser is not a desktop-file ID' ;;
+esac
+
+gtk-launch "$browser" || fail 'could not launch the configured browser'

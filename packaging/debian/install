@@ -7,6 +7,7 @@
 #
 # The wrapper is committed executable, and dh_install preserves that.
 debian/realm-workspace/source/packaging/session/realm-session             usr/bin
+debian/realm-workspace/source/packaging/session/realm-browser             usr/bin
 debian/realm-workspace/source/packaging/session/realm.desktop             usr/share/wayland-sessions
 debian/realm-workspace/source/packaging/systemd/realm-session.target      usr/lib/systemd/user
 debian/realm-workspace/source/packaging/systemd/realm-wm.service          usr/lib/systemd/user
