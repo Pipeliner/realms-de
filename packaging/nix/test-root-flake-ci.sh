@@ -148,4 +148,39 @@ mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
 expect_fail missing-doctor-evidence "$fixture_root" \
     'live VM artifact must retain realmctl doctor JSON'
 
+fixture_root=$(make_fixture missing-direct-dbus-control)
+sed '/direct_activation_control = direct_activation_doctor(import_environment=True)/d' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail missing-direct-dbus-control "$fixture_root" \
+    'doctor VM must compare imported and omitted fresh direct D-Bus activation'
+
+fixture_root=$(make_fixture missing-direct-dbus-failure-verdict)
+sed '/assert omitted_dbus\["status"\] == "fail"/d' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail missing-direct-dbus-failure-verdict "$fixture_root" \
+    'doctor VM must compare imported and omitted fresh direct D-Bus activation'
+
+fixture_root=$(make_fixture missing-direct-dbus-deadline)
+sed '/"--property=RuntimeMaxSec=5s",/d' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail missing-direct-dbus-deadline "$fixture_root" \
+    'direct D-Bus doctor probes must retain their bounded control-group cleanup'
+
+fixture_root=$(make_fixture missing-direct-dbus-stop-grace)
+sed '/"--property=TimeoutStopSec=1s",/d' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail missing-direct-dbus-stop-grace "$fixture_root" \
+    'direct D-Bus doctor probes must retain their bounded control-group cleanup'
+
+fixture_root=$(make_fixture missing-direct-dbus-evidence)
+sed '/realm-session-boots\/realmctl-doctor-direct-dbus-omitted\.json/d' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-direct-dbus-evidence "$fixture_root" \
+    'live VM artifact must retain both direct D-Bus doctor reports and diagnostics'
+
 printf 'PASS: %d root-flake CI guard fixtures\n' "$tests_run"
