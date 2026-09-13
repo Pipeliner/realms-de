@@ -738,14 +738,11 @@ EOF
               "TERM=foot",
               f"STARSHIP_CONFIG={generation_root}/starship.toml",
               "STARSHIP_SHELL=zsh",
-              "${pkgs.starship}/bin/starship",
-              "prompt",
-              "--status",
-              "0",
-              "--cmd-duration",
-              "0",
-              "--keymap",
-              "viins",
+              "${pkgs.zsh}/bin/zsh",
+              "-dfc",
+              "prompt=\"$(${pkgs.starship}/bin/starship prompt "
+              + "--status 0 --cmd-duration 0 --keymap viins)\"; "
+              + "print -Pnr -- \"$prompt\"",
           ])
       )
       plain_prompt = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", prompt)

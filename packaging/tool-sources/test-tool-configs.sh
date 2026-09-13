@@ -8,6 +8,7 @@ template=$root/configs/templates/yazi-theme.toml
 manager=$root/configs/templates/yazi.toml
 keymap=$root/configs/templates/yazi-keymap.toml
 profile=$root/configs/templates/zshrc
+starship=$root/configs/templates/starship.toml
 btop=$root/configs/templates/btop.conf
 support=$root/packaging/nix/support.nix
 checks=$root/packaging/nix/checks.nix
@@ -63,6 +64,23 @@ grep -F -q 'btop --config=\"$REALM_GENERATION/btop/btop.conf\"' "$keymap"
 grep -F -q 'eval "$(starship init zsh)"' "$profile"
 # shellcheck disable=SC2016
 grep -F -q 'command btop --config="$REALM_GENERATION/btop/btop.conf"' "$profile"
+python3 - "$starship" <<'PY'
+import sys
+
+lines = open(sys.argv[1], encoding="utf-8").read().splitlines()
+start = lines.index("[character]") + 1
+end = next(
+    (index for index in range(start, len(lines)) if lines[index].startswith("[")),
+    len(lines),
+)
+character = lines[start:end]
+assert 'format = "$symbol"' in character, character
+for field in ("success_symbol", "error_symbol", "vimcmd_symbol"):
+    assert any(
+        line.startswith(field + " = ") and line.endswith(' "')
+        for line in character
+    ), field
+PY
 grep -F -q 'color_theme = "realm"' "$btop"
 grep -F -q 'shown_boxes = "cpu mem net proc"' "$btop"
 grep -F -q 'dontUpdateAutotoolsGnuConfigScripts = true;' "$support" || {
