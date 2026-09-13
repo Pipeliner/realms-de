@@ -2,8 +2,8 @@
 #
 # `shellcheck` and `package` build on any Linux builder; `session-boots` is a
 # NixOS VM test and needs /dev/kvm. CI (.github/workflows/distro.yml) falls back
-# to `nix flake check --no-build` plus the two buildable checks when KVM is
-# absent, so those two must stay independently buildable.
+# to `nix flake check --no-build` plus selected buildable checks when KVM is
+# absent, so those checks must stay independently buildable.
 {
   pkgs,
   lib,
@@ -20,6 +20,10 @@ let
   realmYazi = lib.findFirst (
     package: lib.getName package == "yazi"
   ) null (support.reusedTools pkgs);
+  xwaylandWindowObservation = pkgs.writers.writePython3Bin
+    "realm-xwayland-window-observation"
+    { }
+    (builtins.readFile ./xwayland_window_observation.py);
 in
 assert realmYazi != null;
 assert realmYazi.version == "25.4.8";
@@ -114,6 +118,20 @@ assert realmYazi.version == "25.4.8";
     test -d ${pkgs.adwaita-icon-theme}/share/icons/Adwaita/cursors
     touch $out
   '';
+
+  xwayland-window-observation = pkgs.runCommand
+    "realm-xwayland-window-observation-tests"
+    {
+      nativeBuildInputs = [
+        pkgs.coreutils
+        pkgs.python3
+      ];
+    }
+    ''
+      PYTHONDONTWRITEBYTECODE=1 ${pkgs.python3}/bin/python3 \
+        ${src + "/packaging/nix/test_xwayland_window_observation.py"}
+      touch $out
+    '';
 
   # The local agent-SDD validator reads Git objects at runtime.  Its package
   # wrapper must supply Git without adding it to the desktop session wrapper.
@@ -299,7 +317,6 @@ EOF
       import datetime as dt
       import hashlib
       import json
-      import re
       import shlex
       import time
       from pathlib import Path
@@ -354,64 +371,68 @@ EOF
           assert remaining > 0, f"{description} exhausted the shared X11 deadline"
           return dt.timedelta(seconds=remaining)
 
-      def x11_tree(display):
-          return machine.execute(
+      def x11_observation(display, title, timeout=DIAGNOSTIC_TIMEOUT):
+          status, output = machine.execute(
               as_alice(
-                  "env",
-                  f"DISPLAY={display}",
+                  "${xwaylandWindowObservation}"
+                  "/bin/realm-xwayland-window-observation",
+                  "--timeout-bin",
+                  "${pkgs.coreutils}/bin/timeout",
+                  "--xwininfo-bin",
                   "${pkgs.xwininfo}/bin/xwininfo",
-                  "-root",
-                  "-tree",
-              )
+                  "--display",
+                  display,
+                  "--title",
+                  title,
+                  "--command-timeout",
+                  "2s",
+              ),
+              timeout=timeout,
           )
+          if status != 0:
+              return {
+                  "observer_status": status,
+                  "observer_output": output,
+                  "tree": {"status": None, "output": ""},
+                  "window_ids": [],
+                  "stats": [],
+                  "viewable": False,
+              }
+          return json.loads(output)
 
-      def x11_window_ids(tree, title):
-          pattern = re.compile(
-              r'^\s*(0x[0-9a-fA-F]+) "' + re.escape(title) + r'":',
-              re.MULTILINE,
-          )
-          return pattern.findall(tree)
-
-      def x11_window_stats(display, window_id):
-          return machine.execute(
-              as_alice(
-                  "env",
-                  f"DISPLAY={display}",
-                  "${pkgs.xwininfo}/bin/xwininfo",
-                  "-id",
-                  window_id,
-                  "-stats",
-              )
-          )
-
-      def log_x11_diagnostics(display, title, child_pid):
-          tree_status, tree = x11_tree(display)
-          machine.log(f"X11 root tree (exit {tree_status}):\n{tree}")
-          for window_id in x11_window_ids(tree, title):
-              stats_status, stats = x11_window_stats(display, window_id)
+      def log_x11_diagnostics(observation, child_pid):
+          tree = observation["tree"]
+          machine.log(f"X11 root tree (exit {tree['status']}):\n{tree['output']}")
+          for stats in observation["stats"]:
               machine.log(
-                  f"X11 window {window_id} stats (exit {stats_status}):\n{stats}"
+                  f"X11 window {stats['window_id']} stats "
+                  f"(exit {stats['status']}):\n{stats['output']}"
+              )
+          if "observer_status" in observation:
+              machine.log(
+                  f"X11 observer (exit {observation['observer_status']}):\n"
+                  f"{observation['observer_output']}"
               )
           stderr_status, stderr = machine.execute(
               "journalctl -b --no-pager -o cat "
-              f"_PID={shlex.quote(child_pid)}"
+              f"_PID={shlex.quote(child_pid)}",
+              timeout=DIAGNOSTIC_TIMEOUT,
           )
           machine.log(
               f"X11 child journal/stderr (exit {stderr_status}):\n{stderr}"
           )
 
       def wait_for_x11_mapping(display, title, child_pid, deadline):
+          last_observation = None
+
           def mapped(_last_try):
-              status, tree = x11_tree(display)
-              window_ids = x11_window_ids(tree, title) if status == 0 else []
-              if len(window_ids) == 1:
-                  stats_status, stats = x11_window_stats(
-                      display,
-                      window_ids[0],
-                  )
-                  if stats_status == 0 and "Map State: IsViewable" in stats:
-                      return True
-              return False
+              nonlocal last_observation
+              last_observation = x11_observation(
+                  display,
+                  title,
+                  timeout=remaining_timeout(deadline, "X11 window mapping"),
+              )
+              return last_observation["viewable"]
 
           try:
               retry(
@@ -419,8 +440,11 @@ EOF
                   timeout=remaining_timeout(deadline, "X11 window mapping"),
               )
           except Exception:
-              log_x11_diagnostics(display, title, child_pid)
+              if last_observation is None:
+                  last_observation = x11_observation(display, title)
+              log_x11_diagnostics(last_observation, child_pid)
               raise
+          return last_observation
 
       def wait_for_single_user_process(name):
           quoted = shlex.quote(name)
@@ -769,7 +793,7 @@ EOF
       expected_x11_exe = "${pkgs.xmessage}/bin/.xmessage-wrapped"
       assert x11_exe == expected_x11_exe, (x11_exe, expected_x11_exe)
       assert x11_title == f"Realm X11 Probe A17-{service_pid}", x11_title
-      wait_for_x11_mapping(
+      x11_mapping = wait_for_x11_mapping(
           activated_display,
           x11_title,
           x11_pid,
@@ -784,7 +808,12 @@ EOF
               timeout=remaining_timeout(x11_deadline, "Realm X11 observation"),
           )
       except Exception:
-          log_x11_diagnostics(activated_display, x11_title, x11_pid)
+          x11_observation_after_projection = x11_observation(
+              activated_display,
+              x11_title,
+          )
+          log_x11_diagnostics(x11_observation_after_projection, x11_pid)
+          machine.log(f"X11 mapping-boundary observation:\n{x11_mapping!r}")
           raise
       machine.wait_for_text("Realm X11 Probe", timeout=OCR_TIMEOUT)
       machine.succeed(f"kill -TERM {x11_pid}")

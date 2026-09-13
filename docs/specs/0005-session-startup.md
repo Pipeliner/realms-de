@@ -400,8 +400,12 @@ X11 launch/mapping failure; a failure after it is a River/Realm window-managemen
 failure. Mapping and Realm observation share the existing 60-second VM window
 starting before activation; they are not two sequential waits. On either
 failure, the evidence retains the root window tree and the exact child's
-journal-backed stderr. A live child pid alone is not evidence that an X11
-window mapped.
+journal-backed stderr. Every root-tree and window-attribute query, including a
+diagnostic query after failure, runs through locked nixpkgs' `coreutils timeout`
+with a two-second termination deadline and a one-second forced-kill grace; the
+driver command is also capped by the shared remaining time. An unresponsive X
+server cannot extend the observation wait without bound. A live child pid alone
+is not evidence that an X11 window mapped.
 
 `doctor` must not shell out to `xlsclients` or `xdpyinfo` to check this: neither
 is guaranteed installed on any of the three targets. It connects to
