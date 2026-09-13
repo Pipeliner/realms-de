@@ -82,7 +82,9 @@ jobs:
           components: rustfmt
       # No cache: rustfmt never compiles the crate, so there is nothing to reuse.
       - name: Require the Realm project namespace
-        run: scripts/check-project-namespace
+        run: |
+          scripts/check-project-namespace
+          python3 scripts/test-check-project-namespace.py
       - run: cargo fmt --all --check
 
   clippy:
@@ -161,6 +163,7 @@ jobs:
           ./docs/test-github-body-safety.sh
           ./docs/check-github-body-safety.sh
           ./docs/test-colour-template-literals.sh
+          python3 packaging/tool-sources/test-ci-rebind.py
           ./packaging/tool-sources/test-intake.sh
           ./packaging/tool-sources/test-bundle-linkage.sh
           ./packaging/tool-sources/test-no-live-fetch.sh
