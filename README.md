@@ -67,8 +67,10 @@
 - **Three intended M3 targets, evidence kept honest.** NixOS, Ubuntu and Fedora
   remain the installation targets. Today Fedora 44 is the sole Fedora
   pre-alpha baseline. Its two required pinned-image lanes are a Cargo smoke and
-  a retained-source RPM build; the latter builds `Source0` but does not
-  clean-install its result. Neither is graphical-session or SELinux acceptance.
+  a retained-source RPM build; the latter installs its exact output into an
+  empty Fedora 44 root through normal DNF dependency resolution and probes the
+  installed Realm CLI, palette and River. This is not graphical-session,
+  portal, hardware, or SELinux acceptance.
   [ADR 0015](docs/adr/0015-fedora-44-pre-alpha-baseline.md)
 
 Behaviour is written down before it is written in Rust: every non-trivial
@@ -129,7 +131,7 @@ What exists, honestly:
 | `realm-session` | **Daemon and real River adapter verified in the installed NixOS QEMU VM.** The display-manager session reaches live River 0.4.8; the packaged `realm-wm` manages three ordinary Wayland windows, serves control state, and completes exact Quit shutdown. Contract and real-socket fixtures also pass. |
 | `realm-bar` | **Implemented and verified in the installed NixOS QEMU VM.** The packaged layer-shell bar consumes live session state; the captures show its orbit state, which-key strip, and grimoire reached through a real keybinding. |
 | `realm-hecate`, `realm-odin`, `realm-compositor` | **Planned, post-MVP.** The MVP uses themed external clients and River. |
-| Package/session/portal assets | **Tracked pre-alpha contract; installed NixOS reference path verified in a VM.** Its session entry, wrapper, systemd units and Nix module produce the captured desktop. Physical-hardware, native-package installation, and functional portal verification remain pending. |
+| Package/session/portal assets | **Tracked pre-alpha contract; installed NixOS reference path verified in a VM and the exact Fedora RPM verified in an empty installroot.** The NixOS session entry, wrapper, systemd units and module produce the captured desktop; the Fedora check resolves the RPM transaction and runs its installed CLI/palette and River probes. Debian installation, Fedora graphical login, physical hardware, and functional portal verification remain pending. |
 | Images | **Two real VM screenshots, plus design assets.** The PNGs above are unchanged compositor-framebuffer captures; the hand-drawn SVGs and design handoff's HTML prototypes remain diagrams and concepts. |
 
 Crates join the Cargo workspace only when they gain a real implementation, so a
@@ -143,8 +145,10 @@ is in [docs/ROADMAP.md](docs/ROADMAP.md). **M3 is the MVP.**
 
 You should not treat realm as log-in ready on physical hardware yet. The
 installed NixOS package has completed an automated display-manager login and
-graphical River session in the reference QEMU VM. That does not prove native
-package installation, portals, final application theming or hardware support.
+graphical River session in the reference QEMU VM. Fedora CI also installs the
+exact built RPM into an empty root and probes the installed Realm CLI, palette,
+and River. Those checks do not prove Debian installation, Fedora graphical
+login, portals, final application theming, or hardware support.
 `cargo test` exercises the implemented pre-alpha libraries and real local
 socket fixtures; the packaged graphical proof is the NixOS VM check.
 
