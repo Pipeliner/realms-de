@@ -318,8 +318,11 @@ EOF
       # and layer-shell globals, the control listener, and the combined loop
       # are live rather than merely that exec(2) succeeded.
       try:
-          machine.wait_for_unit(
-              "realm-session.target", user="alice", timeout=STARTUP_TIMEOUT
+          # Login and the wrapper run asynchronously after multi-user.target.
+          # wait_for_unit rejects an inactive target before its start job exists.
+          machine.wait_until_succeeds(
+              "systemctl --user --machine=alice@ is-active --quiet realm-session.target",
+              timeout=STARTUP_TIMEOUT,
           )
           machine.wait_for_unit(
               "realm-wm.service", user="alice", timeout=STARTUP_TIMEOUT
