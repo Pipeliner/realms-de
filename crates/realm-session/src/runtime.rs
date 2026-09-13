@@ -1275,6 +1275,7 @@ mod tests {
     use std::os::fd::{AsFd, BorrowedFd};
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixStream;
+    use std::process::Command;
     use std::sync::mpsc;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1664,6 +1665,30 @@ mod tests {
 
     #[test]
     fn production_startup_theme_preparation_seeds_once_and_refuses_malformed_current() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "runtime::tests::startup_theme_preparation_subprocess",
+                "--nocapture",
+            ])
+            .env("REALM_STARTUP_THEME_FIXTURE", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated startup-theme fixture failed: {output:?}"
+        );
+    }
+
+    #[test]
+    fn startup_theme_preparation_subprocess() {
+        if std::env::var_os("REALM_STARTUP_THEME_FIXTURE").is_none() {
+            return;
+        }
+        // fork/exec inherits whichever process-wide umask a parallel endpoint
+        // fixture held at spawn time. This exact subprocess has no peer tests,
+        // so establish the ordinary production-login mask before bootstrap.
+        rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o022));
         let root = fixture_dir("startup-theme");
         let first = super::prepare_startup_theme(&root).unwrap();
         let current = fs::read(root.join("realm/generated/current")).unwrap();

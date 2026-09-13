@@ -751,12 +751,9 @@ mod tests {
         assert!(worker.reserve_process_jobs(1).is_err());
         worker.cancel(remaining);
 
-        for signal in ["-TERM", "-CONT"] {
-            assert!(std::process::Command::new("/bin/kill")
-                .args([signal, &long.to_string()])
-                .status()
-                .unwrap()
-                .success());
+        let long = rustix::process::Pid::from_raw(i32::try_from(long).unwrap()).unwrap();
+        for signal in [rustix::process::Signal::TERM, rustix::process::Signal::CONT] {
+            rustix::process::kill_process(long, signal).unwrap();
         }
         let released_deadline = Instant::now() + Duration::from_secs(2);
         loop {
