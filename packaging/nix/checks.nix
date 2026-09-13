@@ -52,6 +52,17 @@
     touch $out
   '';
 
+  # Keep the bare-session cursor inputs independently buildable. Pinned
+  # nixpkgs' GLib setup hook moves schemas below share/gsettings-schemas/$name,
+  # and its desktop-manager modules publish that package-named directory in
+  # XDG_DATA_DIRS. Assert both package layouts before the slower VM exercises
+  # the live gsettings/cursor agreement through `realmctl doctor`.
+  desktop-session-data = pkgs.runCommand "realm-desktop-session-data" { } ''
+    test -f ${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}/glib-2.0/schemas/gschemas.compiled
+    test -d ${pkgs.adwaita-icon-theme}/share/icons/Adwaita/cursors
+    touch $out
+  '';
+
   # The local agent-SDD validator reads Git objects at runtime.  Its package
   # wrapper must supply Git without adding it to the desktop session wrapper.
   realm-sdd-git-runtime =
