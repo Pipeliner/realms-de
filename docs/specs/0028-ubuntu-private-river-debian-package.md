@@ -120,7 +120,11 @@ remains unproven until the later hardware obligation.
 3. Debhelper projects only the package-and-path contract's runtime files and
    derives the remaining Noble shared-library dependencies. It must not emit a
    dependency on one of the private library families carried by the same
-   package.
+   package. The package rules explicitly omit optional `dh_dwz` multi-file
+   DWARF optimization: the retained shared objects have their runpaths patched
+   before projection, and Noble's `dwz` rejects that legitimate section order.
+   Ordinary `dh_strip`, dependency derivation, package validation and installed
+   ELF/version probes remain required.
 4. The ordinary `realm` Debian package and this `realm-river` package are built
    separately. Neither source kit is nested inside the other, and changing the
    compositor package does not weaken the Realm workspace bundle's existing
@@ -132,7 +136,7 @@ remains unproven until the later hardware obligation.
 |---|---|---|
 | D1 | Given the canonical acquired cache and missing/extra/symlink/cache-mutation fixtures, when the source-kit producer runs, then only the exact retained input becomes a complete kit and no network sentinel is invoked. | `packaging/river/test-noble-river-source-kit.sh` |
 | D2 | Given the Debian metadata and a staged fixture tree, when package ownership is projected, then the exact runtime payload is below `/usr/lib/realm`, no `/usr/bin/river`, development file, global udev rule/callout or build input enters the binary package, and metadata names amd64 `realm-river` 0.4.8-1 with versioned River provision. | `packaging/river/test-noble-river-package.sh` |
-| D3 | Given the package build, when compilation runs, then the namespace/network checks, exact wlroots features, private libinput 1.31.3, staged all-object recursive ELF resolution and exact version probe pass before `dpkg-buildpackage` succeeds; no pre-install claim is made for logical-prefix data lookup. | `.github/workflows/distro.yml` — `ubuntu-river-debian` build log |
+| D3 | Given the package build, when compilation runs, then the namespace/network checks, exact wlroots features, private libinput 1.31.3, staged all-object recursive ELF resolution and exact version probe pass before `dpkg-buildpackage` succeeds; package rules omit only optional `dh_dwz` while retaining ordinary stripping, and no pre-install claim is made for logical-prefix data lookup. | `packaging/river/test-noble-river-package-build.sh`; `.github/workflows/distro.yml` — `ubuntu-river-debian` build log |
 | D4 | Given a fresh Noble minbase root, when `realm-river` and `realm` are installed together with archive dependencies, then dpkg reports both configured, `realm`'s River dependency is satisfied by `realm-river`, selected libinput quirks exist at the compiled `/usr/lib/realm/share/libinput` path, `/usr/lib/realm/bin/river -version` prints exactly `0.4.8 +xwayland`, resolution stays private with `LD_LIBRARY_PATH` unset, and Realm's existing private-PATH fixture plus installed `realm-session --check` find that default compositor. | `.github/workflows/distro.yml` — `ubuntu-river-debian`; `packaging/session/test-private-tool-path.sh` |
 | D5 | Given the successful job, when support claims are inspected, then they say only that the two native packages build and clean-install on amd64 Noble; graphical login, DRM/input hardware and package publication remain unverified. | SPEC 0028 boundary and `docs/INSTALL.md` |
 

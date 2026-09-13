@@ -3,11 +3,17 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 builder="$repo_root/packaging/river/run-noble-river-package-build.sh"
+rules="$repo_root/packaging/debian-river/rules"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
 [[ -x "$builder" ]] || {
     echo 'Noble River package-build entrypoint is missing' >&2
+    exit 1
+}
+make_tab=$'\t'
+grep -A1 -Fx 'override_dh_dwz:' "$rules" | grep -Fqx "${make_tab}:" || {
+    echo 'Noble River rules do not narrowly omit optional dwz processing' >&2
     exit 1
 }
 

@@ -25,6 +25,9 @@ override_dh_auto_install:
 	cp -a "$(REALM_STAGE)$(REALM_LOGICAL_PREFIX)/." \
 		"$(CURDIR)/debian/realm-river$(REALM_LOGICAL_PREFIX)/"
 
+override_dh_dwz:
+	:
+
 override_dh_shlibdeps:
 	dh_shlibdeps -l"$(CURDIR)/debian/realm-river$(REALM_LOGICAL_PREFIX)/lib"
 
