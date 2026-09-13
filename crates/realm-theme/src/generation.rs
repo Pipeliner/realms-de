@@ -3184,11 +3184,21 @@ fn write_synced_file<F: PublicationFilesystem>(
     bytes: &[u8],
     filesystem: &mut F,
 ) -> std::result::Result<(), String> {
+    write_synced_file_with_mode(parent, name, bytes, Mode::RUSR | Mode::WUSR, filesystem)
+}
+
+fn write_synced_file_with_mode<F: PublicationFilesystem>(
+    parent: &OwnedFd,
+    name: &str,
+    bytes: &[u8],
+    mode: Mode,
+    filesystem: &mut F,
+) -> std::result::Result<(), String> {
     let fd = openat(
         parent,
         name,
         OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::RUSR | Mode::WUSR,
+        mode,
     )
     .map_err(|error| error.to_string())?;
     let mut file = std::fs::File::from(fd);
@@ -3226,7 +3236,12 @@ fn write_output<F: PublicationFilesystem>(
         .map_err(|error| error.to_string())?;
     }
     let name = final_name.to_str().ok_or("output filename must be UTF-8")?;
-    write_synced_file(&parent, name, bytes, filesystem)?;
+    let mode = if path == Path::new("btop/btop.conf") {
+        Mode::RUSR
+    } else {
+        Mode::RUSR | Mode::WUSR
+    };
+    write_synced_file_with_mode(&parent, name, bytes, mode, filesystem)?;
     filesystem.sync(parent.as_fd())
 }
 
