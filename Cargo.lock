@@ -793,6 +793,7 @@ dependencies = [
  "realm-theme",
  "serde_json",
  "tempfile",
+ "wayland-client",
 ]
 
 [[package]]

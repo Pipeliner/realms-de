@@ -306,11 +306,40 @@ start_compositor() {
 # appeared" and of file dialogs that hang for 25 s and then fail. Worse,
 # `systemctl --user import-environment WAYLAND_DISPLAY` on an unset variable is
 # not an error: it is a silent no-op indistinguishable from success.
-wait_for_display() {
-	local attempts=$((REALM_WAIT_SECONDS * 20)) # 50 ms poll
-	local found='' name
+MONOTONIC_MILLIS=0
+DURATION_MILLIS=0
 
-	while ((attempts-- > 0)); do
+read_monotonic_millis() {
+	local uptime whole fraction
+	IFS=' ' read -r uptime _ </proc/uptime ||
+		fatal NO-SOCKET "could not read the monotonic startup clock from /proc/uptime"
+	whole="${uptime%%.*}"
+	fraction="${uptime#*.}000"
+	MONOTONIC_MILLIS=$((10#$whole * 1000 + 10#${fraction:0:3}))
+}
+
+parse_duration_millis() {
+	local value="$1" whole fraction
+	[[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+		fatal NO-SOCKET "REALM_WAIT_SECONDS must be a positive decimal number"
+	whole="${value%%.*}"
+	if [[ "$value" == *.* ]]; then
+		fraction="${value#*.}000"
+	else
+		fraction=000
+	fi
+	DURATION_MILLIS=$((10#$whole * 1000 + 10#${fraction:0:3}))
+	((DURATION_MILLIS > 0)) ||
+		fatal NO-SOCKET "REALM_WAIT_SECONDS must be greater than zero"
+}
+
+wait_for_display() {
+	local found='' name deadline remaining probe_timeout probe_pid
+	parse_duration_millis "$REALM_WAIT_SECONDS"
+	read_monotonic_millis
+	deadline=$((MONOTONIC_MILLIS + DURATION_MILLIS))
+
+	while :; do
 		if ! kill -0 "$compositor_pid" 2>/dev/null; then
 			fatal NO-SOCKET "the compositor exited during startup — see its own output above"
 		fi
@@ -320,6 +349,8 @@ wait_for_display() {
 			break
 		done < <(wayland_sockets)
 		[[ -n "$found" ]] && break
+		read_monotonic_millis
+		((MONOTONIC_MILLIS < deadline)) || break
 		sleep 0.05
 	done
 
@@ -327,12 +358,37 @@ wait_for_display() {
 		fatal NO-SOCKET "no new wayland socket appeared in $XDG_RUNTIME_DIR within ${REALM_WAIT_SECONDS}s — the compositor started but never came up"
 
 	export WAYLAND_DISPLAY="$found"
+	read_monotonic_millis
+	remaining=$((deadline - MONOTONIC_MILLIS))
+	((remaining > 0)) ||
+		fatal NO-SOCKET "no time remained to probe $WAYLAND_DISPLAY within ${REALM_WAIT_SECONDS}s"
+	printf -v probe_timeout '%d.%03d' "$((remaining / 1000))" "$((remaining % 1000))"
 
 	# Phase 2: liveness. The socket file appearing proves bind(2), not that the
 	# compositor is dispatching, and step 4 relies on the stronger claim. The
 	# probe connects, binds wl_registry and round-trips.
 	if have "$REALM_CTL"; then
-		if "$REALM_CTL" wait-display --timeout "$REALM_WAIT_SECONDS" >/dev/null 2>&1; then
+		"$REALM_CTL" wait-display --timeout "$probe_timeout" >/dev/null 2>&1 &
+		probe_pid=$!
+		while kill -0 "$probe_pid" 2>/dev/null; do
+			if ! kill -0 "$compositor_pid" 2>/dev/null; then
+				kill "$probe_pid" 2>/dev/null || true
+				wait "$probe_pid" 2>/dev/null || true
+				fatal NO-SOCKET "the compositor exited during the Wayland liveness probe — see its own output above"
+			fi
+			read_monotonic_millis
+			if ((MONOTONIC_MILLIS >= deadline)); then
+				kill "$probe_pid" 2>/dev/null || true
+				wait "$probe_pid" 2>/dev/null || true
+				fatal NO-SOCKET "$WAYLAND_DISPLAY exists but did not answer a wayland round trip within ${REALM_WAIT_SECONDS}s"
+			fi
+			sleep 0.05
+		done
+		if ! kill -0 "$compositor_pid" 2>/dev/null; then
+			wait "$probe_pid" 2>/dev/null || true
+			fatal NO-SOCKET "the compositor exited during the Wayland liveness probe — see its own output above"
+		fi
+		if wait "$probe_pid"; then
 			log "wayland socket live: WAYLAND_DISPLAY=$WAYLAND_DISPLAY (compositor pid $compositor_pid)"
 		else
 			fatal NO-SOCKET "$WAYLAND_DISPLAY exists but did not answer a wayland round trip within ${REALM_WAIT_SECONDS}s"
