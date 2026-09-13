@@ -402,6 +402,14 @@ things:
   their configuration from a TTY, and failing them for the absence of something
   they did not ask for would train them to ignore the output.
 
+The isolated Nix command-path fixture is not a healthy-session fixture. It
+deliberately supplies no portal routing/backend metadata, so unrelated checks
+may yield diagnostic exit 1. It SHALL accept only normal diagnostic exit 0 or
+1, retain the JSON report and exit status in the build log, and require the
+structured `tools/floors` row to be `skip` (all tool version commands answered;
+numeric floors remain unresolved). Other command errors remain failures.
+The installed-session VM still requires the complete healthy doctor result.
+
 #### Output shape
 
 ```

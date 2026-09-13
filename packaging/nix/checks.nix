@@ -57,7 +57,9 @@
   # The installed command owns the narrow command path needed by its two
   # expressly permitted external probes. A systemd transient service supplies
   # no interactive-shell path, so exercise the same condition directly.
-  realmctl-command-runtime = pkgs.runCommand "realmctl-command-runtime" { } ''
+  realmctl-command-runtime = pkgs.runCommand "realmctl-command-runtime" {
+    nativeBuildInputs = [ pkgs.jq ];
+  } ''
     mkdir -m 700 "$TMPDIR/runtime" "$TMPDIR/home"
     set +e
     env -i \
@@ -69,9 +71,16 @@
       >"$TMPDIR/report.json"
     status=$?
     set -e
-    test "$status" -eq 0
+    echo "doctor command-path fixture exit: $status"
+    cat "$TMPDIR/report.json"
+    case "$status" in
+      0|1) ;;
+      *) exit 1 ;;
+    esac
     ! grep -F 'error:not found' "$TMPDIR/report.json"
-    grep -F '"id":"tools/floors","group":"tools","status":"skip"' "$TMPDIR/report.json"
+    jq -e '.checks | map(select(.id == "tools/floors")) |
+      length == 1 and .[0].group == "tools" and .[0].status == "skip"' \
+      "$TMPDIR/report.json"
     touch $out
   '';
 
