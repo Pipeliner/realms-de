@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::Arc;
 use std::time::Instant;
 
-use realm_core::ipc::Capabilities;
+use realm_core::ipc::{Capabilities, InterfaceVersion};
 use realm_core::WinId;
 use rustix::event::{poll, PollFd, PollFlags};
 use wayland_backend::client::{
@@ -37,13 +37,14 @@ use super::river_protocols::{
     river_xkb_bindings_v1::{self, RiverXkbBindingsV1},
 };
 use super::{
-    BackendBindingId, BackendBindingSpec, BackendCapacityResource, BackendContractError,
-    BackendError, BackendEvent, BackendExitPolicy, BackendModifier, BackendNextKeyEdge,
-    BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn, BackendPolicyTurnId,
-    BackendPollInterest, BackendReady, BackendResult, BackendSubmission, BackendTicket,
-    BackendWindowId, WmBackend, KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE_HZ, MAX_BACKEND_INPUT_DEVICES,
-    MAX_BACKEND_LIBINPUT_DEVICES, MAX_BACKEND_OUTPUTS, MAX_BACKEND_SEATS, MAX_CONFIGURED_BINDINGS,
-    MAX_MANAGED_WINDOWS, MAX_POLICY_EVENTS, MAX_POLICY_TEXT_BYTES, MAX_REPLAY_POLICY_EVENTS,
+    BackendBindingId, BackendBindingSpec, BackendCapacityResource, BackendConnection,
+    BackendContractError, BackendError, BackendEvent, BackendExitPolicy, BackendModifier,
+    BackendNextKeyEdge, BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn,
+    BackendPolicyTurnId, BackendPollInterest, BackendReady, BackendResult, BackendSubmission,
+    BackendTicket, BackendWindowId, WmBackend, KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE_HZ,
+    MAX_BACKEND_INPUT_DEVICES, MAX_BACKEND_LIBINPUT_DEVICES, MAX_BACKEND_OUTPUTS,
+    MAX_BACKEND_SEATS, MAX_CONFIGURED_BINDINGS, MAX_MANAGED_WINDOWS, MAX_POLICY_EVENTS,
+    MAX_POLICY_TEXT_BYTES, MAX_REPLAY_POLICY_EVENTS,
 };
 
 const INCOMING_CAPACITY: usize = 512;
@@ -558,6 +559,7 @@ pub struct RiverBackend {
     input_manager: Option<RiverInputManagerV1>,
     libinput_config: Option<RiverLibinputConfigV1>,
     connected: bool,
+    connection_info: Option<BackendConnection>,
     input_devices: HashMap<ObjectId, InputDevice>,
     libinput_devices: HashMap<ObjectId, LibinputDevice>,
     libinput_results: HashSet<ObjectId>,
@@ -638,6 +640,7 @@ impl RiverBackend {
             input_manager: None,
             libinput_config: None,
             connected: false,
+            connection_info: None,
             input_devices: HashMap::new(),
             libinput_devices: HashMap::new(),
             libinput_results: HashSet::new(),
@@ -694,9 +697,9 @@ impl RiverBackend {
 
     /// Discover River's required globals, bind the companion protocols, settle
     /// the two input-policy fences, and bind window management last.
-    pub fn connect(&mut self) -> BackendResult<Capabilities> {
+    pub fn connect(&mut self) -> BackendResult<BackendConnection> {
         if self.connected {
-            return Ok(full_capabilities());
+            return self.connection_info.clone().ok_or_else(protocol_error);
         }
 
         let display = self.connection.display();
@@ -782,16 +785,44 @@ impl RiverBackend {
             return Err(protocol_error());
         }
 
+        let window_manager_version = globals.window_manager.as_ref().unwrap().version.min(5);
         self.window_manager = Some(bind_global::<RiverWindowManagerV1>(
             &registry,
             globals.window_manager.as_ref().unwrap(),
-            globals.window_manager.as_ref().unwrap().version.min(5),
+            window_manager_version,
             &self.incoming_tx,
             ObjectKind::WindowManager,
         )?);
         self.flush_blocking()?;
         self.connected = true;
-        Ok(full_capabilities())
+        let connection = BackendConnection {
+            capabilities: full_capabilities(),
+            bound_interfaces: vec![
+                InterfaceVersion {
+                    name: "river_window_manager_v1".to_owned(),
+                    version: window_manager_version,
+                },
+                InterfaceVersion {
+                    name: "river_xkb_bindings_v1".to_owned(),
+                    version: 3,
+                },
+                InterfaceVersion {
+                    name: "river_layer_shell_v1".to_owned(),
+                    version: 1,
+                },
+                InterfaceVersion {
+                    name: "river_input_manager_v1".to_owned(),
+                    version: 2,
+                },
+                InterfaceVersion {
+                    name: "river_libinput_config_v1".to_owned(),
+                    version: 2,
+                },
+            ],
+            layer_shell_served: true,
+        };
+        self.connection_info = Some(connection.clone());
+        Ok(connection)
     }
 
     /// Register the stable, bounded binding mechanism catalogue.
@@ -2141,7 +2172,7 @@ impl WmBackend for RiverBackend {
         RiverBackend::name(self)
     }
 
-    fn connect(&mut self) -> BackendResult<Capabilities> {
+    fn connect(&mut self) -> BackendResult<BackendConnection> {
         RiverBackend::connect(self)
     }
 

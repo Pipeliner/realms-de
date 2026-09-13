@@ -5,7 +5,7 @@ use std::time::Instant;
 use realm_core::ipc::Capabilities;
 use realm_core::WinId;
 use realm_session::backend::{
-    BackendBindingSpec, BackendContractError, BackendEvent, BackendExitPolicy,
+    BackendBindingSpec, BackendConnection, BackendContractError, BackendEvent, BackendExitPolicy,
     BackendPolicyResponse, BackendPolicyTurnId, BackendPollInterest, BackendReady, BackendResult,
     BackendSubmission, BackendTicket, BackendWindowId, WmBackend,
 };
@@ -17,14 +17,18 @@ impl WmBackend for AcceptedBackend {
         "accepted"
     }
 
-    fn connect(&mut self) -> BackendResult<Capabilities> {
-        Ok(Capabilities {
-            exact_geometry: true,
-            server_side_borders: true,
-            hide_show: true,
-            explicit_ordering: true,
-            fullscreen: true,
-            unsupported: Vec::new(),
+    fn connect(&mut self) -> BackendResult<BackendConnection> {
+        Ok(BackendConnection {
+            capabilities: Capabilities {
+                exact_geometry: true,
+                server_side_borders: true,
+                hide_show: true,
+                explicit_ordering: true,
+                fullscreen: true,
+                unsupported: Vec::new(),
+            },
+            bound_interfaces: Vec::new(),
+            layer_shell_served: false,
         })
     }
 

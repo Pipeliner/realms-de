@@ -205,6 +205,30 @@ EOF
           retry(matches, timeout=STATE_TIMEOUT)
           return observed_raw, observed
 
+      def wait_for_single_user_process(name):
+          quoted = shlex.quote(name)
+          machine.wait_until_succeeds(
+              f'test "$(pgrep -u alice -x -c {quoted})" -eq 1',
+              timeout=STATE_TIMEOUT,
+          )
+          return machine.succeed(f"pgrep -u alice -x -o {quoted}").strip()
+
+      def assert_fixed_consumer(pid, executable, expected_args, generation):
+          actual_executable = machine.succeed(f"readlink /proc/{pid}/exe").strip()
+          assert actual_executable == executable, (actual_executable, executable)
+          actual_args = machine.succeed(
+              f"tr '\\0' '\\n' < /proc/{pid}/cmdline"
+          ).splitlines()
+          assert actual_args == expected_args, (actual_args, expected_args)
+
+          leases = machine.succeed(
+              f"grep -R -l -x 'pid {pid}' /home/alice/.config/realm/generated/leases"
+          ).splitlines()
+          assert len(leases) == 1, leases
+          lease = machine.succeed(f"cat {shlex.quote(leases[0])}")
+          assert f"generation {generation}\n" in lease, lease
+          assert f"pid {pid}\n" in lease, lease
+
       def write_artifact(name, content):
           (Path(machine.out_dir) / name).write_text(content, encoding="utf-8")
 
@@ -342,6 +366,11 @@ EOF
       river_pid = machine.succeed("pgrep -u alice -xo river").strip()
       machine.succeed(f"test \"$(readlink /proc/{wm_pid}/exe)\" = ${realm}/bin/realm-wm")
       machine.succeed(f"test \"$(readlink /proc/{bar_pid}/exe)\" = ${realm}/bin/realm-bar")
+      # The unit supplies its own narrow PATH. Its packaged environment must
+      # therefore carry both fixed consumers rather than relying on the system
+      # profile or an interactive shell.
+      machine.succeed("grep -F -q '${pkgs.foot}/bin' /etc/systemd/user/realm-wm.service")
+      machine.succeed("grep -F -q '${pkgs.fuzzel}/bin' /etc/systemd/user/realm-wm.service")
 
       # Check the user-manager publication against the installed daemon that
       # inherited it. A client started without this value cannot map a surface.
@@ -367,6 +396,73 @@ EOF
           "ordered batteryless MVP system modules",
       )
       write_artifact("control-modules-state.json", modules_raw)
+
+      # Exercise the installed fixed-consumer route through River's real
+      # default bindings. A PATH grep alone cannot prove that Session emits the
+      # typed effect, the worker starts the executor, or the executor selects N.
+      generation = machine.succeed(
+          "cat /home/alice/.config/realm/generated/current"
+      ).strip()
+      generation_root = (
+          f"/home/alice/.config/realm/generated/generations/{generation}"
+      )
+
+      machine.send_key("meta_l-ret")
+      terminal_pid = wait_for_single_user_process("foot")
+      _terminal_raw, terminal_state = wait_for_state(
+          lambda response: sum(
+              cell["windows"] for cell in response["data"]["orbits"]
+          ) == 1,
+          "default-binding terminal window",
+      )
+      assert terminal_state["reply"] == "state", terminal_state
+      assert_fixed_consumer(
+          terminal_pid,
+          "${pkgs.foot}/bin/foot",
+          [
+              "foot",
+              f"--config={generation_root}/foot/foot.ini",
+              "--override=key-bindings.spawn-terminal=none",
+          ],
+          generation,
+      )
+      machine.succeed(f"kill -TERM {terminal_pid}")
+      machine.wait_until_succeeds(
+          f"test ! -d /proc/{terminal_pid}", timeout=STATE_TIMEOUT
+      )
+      wait_for_state(
+          lambda response: sum(
+              cell["windows"] for cell in response["data"]["orbits"]
+          ) == 0,
+          "default-binding terminal close",
+      )
+
+      machine.succeed(
+          "install -d -o alice -g users -m 0755 "
+          "/home/alice/.local/share/applications"
+      )
+      machine.succeed(
+          "printf '%s\\n' '[Desktop Entry]' 'Type=Application' "
+          "'Name=Realm Launch Ready' 'Exec=${pkgs.coreutils}/bin/true' "
+          "> /home/alice/.local/share/applications/realm-launch-ready.desktop && "
+          "chown alice:users "
+          "/home/alice/.local/share/applications/realm-launch-ready.desktop && "
+          "chmod 0644 "
+          "/home/alice/.local/share/applications/realm-launch-ready.desktop"
+      )
+      machine.send_key("meta_l-d")
+      launcher_pid = wait_for_single_user_process("fuzzel")
+      assert_fixed_consumer(
+          launcher_pid,
+          "${pkgs.fuzzel}/bin/fuzzel",
+          ["fuzzel", f"--config={generation_root}/fuzzel/fuzzel.ini"],
+          generation,
+      )
+      machine.wait_for_text("Realm Launch Ready", timeout=OCR_TIMEOUT)
+      machine.send_key("esc")
+      machine.wait_until_succeeds(
+          f"test ! -d /proc/{launcher_pid}", timeout=STATE_TIMEOUT
+      )
 
       # Three ordinary Wayland application windows must enter compositor-backed
       # state before the tiled-desktop framebuffer capture is accepted.

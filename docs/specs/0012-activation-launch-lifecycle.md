@@ -1,6 +1,7 @@
 # SPEC 0012 — Activation launch lifecycle
 
-- **Status:** Accepted (2026-08-30)
+- **Status:** Accepted (2026-08-30; fixed-consumer boundary refinement
+  2026-09-13)
 - **Milestone:** M2
 - **Decisions:** [ADR 0003](../adr/0003-session-daemon-owns-state.md),
   [ADR 0011](../adr/0011-session-integration-contract.md),
@@ -48,9 +49,10 @@ lifecycle server restart.
   existing-owner result or probe.  Accepted SPEC 0013 is the detailed desktop
   admission contract.
 - Exact profile assets, target packages, argument vectors and consumer
-  behaviour remain [#135](https://github.com/Pipeliner/realms-de/issues/135).
-  A launch prepared here treats those inputs as opaque and may use only its
-  sealed generation, persistent state, and inherited descriptors.
+  behaviour beyond SPEC 0011's exact MVP foot/fuzzel fixed consumers remain
+  [#135](https://github.com/Pipeliner/realms-de/issues/135). A profile launch
+  prepared here treats those inputs as opaque and may use only its sealed
+  generation, persistent state, and inherited descriptors.
 - Locker and idle defaults remain SPEC 0005 OQ-1. No clause here selects a
   locker or an idle policy.
 - Public request/response/event DTOs, idempotency keys, frame limits, history
@@ -69,6 +71,73 @@ UI that requests a profile launch; it is session infrastructure and must use the
 same ownership mode. A **profile launch** is the separately owned user
 application resulting from that request. It is never a member, wanted unit, or
 `PartOf=` dependent of `realm-session.target`.
+
+SPEC 0011's two MVP **fixed theme consumers** are a narrower compatibility
+class, not profile launches and not a public launcher facade. `terminal` names
+the one directly executed foot process; `launcher` names the one directly
+executed fuzzel UI process. Their children are not fixed consumers. In
+particular, fuzzel's selected application remains an unverified direct launch
+under ADR 0018. No desktop entry, raw argv, control request, third consumer, or
+caller-selected executable/config path may enter this class.
+
+Within the daemon, the only dispatch authorities are the default terminal
+binding's typed `Action::Terminal` / `SessionEffect::Terminal` path and the
+existing typed `Action::Launcher` / `SessionEffect::Launcher` path.
+`SessionEffect::Spawn`, including `Spawn(["realm-term"])`, remains raw argv and
+does not acquire fixed-consumer meaning merely by matching a string.
+
+The worker dispatches either typed effect by starting its own installed
+`realm-wm` executable with exactly `--fixed-consumer <terminal|launcher>` and no
+other argument. With `--fixed-consumer` present, the binary recognizes only
+that exact two-argument internal mode; a missing value, extra argument, or
+unknown value exits before generation selection or target execution. With no
+arguments it retains the existing daemon entry. This spelling is an internal
+process boundary, not an authentication boundary or a promised public CLI. A
+same-UID caller can invoke it directly and receives the same exact
+fixed-consumer behaviour, but that does not turn the request or any
+fuzzel-launched child into a profile launch.
+
+Each fixed consumer starts as a fresh internal `realm-wm` consumer-exec process.
+That process opens the validated generated store, selects `current` for its own
+PID, confirms the required manifest output, constructs only SPEC 0011's exact
+argv, and directly replaces its own image with the target. Selection therefore
+creates and fsyncs an ordinary process lease before target code runs, and the
+recorded PID/start time/boot ID/UID remain unchanged across successful exec.
+The lease protects N for the complete lifetime of the exact config-consuming
+process; ordinary SPEC 0011 GC removes it only after that identity is stale. If
+exec returns, the still-live executor releases its selection and exits with a
+launch error. There is no shell, pathname retry, unthemed retry, or second exec.
+The daemon's off-loop child reaper from SPEC 0003 reaps that exited direct
+consumer, so a zombie cannot continue satisfying the process-lease liveness
+check and pin N until the daemon itself exits.
+
+The packaged session must make the literal `foot` and `fuzzel` basenames
+reachable in the worker and inherited consumer-exec `PATH`. Native packages use
+their normal `/usr/bin` dependencies. The Nix package prepends the exact
+`support.reusedTools` path, which contains both programs, to the installed
+`realm-wm.service` environment; it does not rely on the system profile or an
+interactive-shell PATH that the user service overrides.
+
+The authoritative installed-session fixture drives River's real default
+`mod4+Return` and `mod4+d` bindings rather than substituting a control `Spawn`.
+For terminal it observes the managed Foot window, the exact selected-N config
+argument and terminal override, and an ordinary process lease naming that Foot
+PID. For launcher it observes the exact selected-N Fuzzel config argument and
+lease PID, then waits for a deterministic fixture desktop-entry label to be
+rendered before sending Escape through the compositor and observing that exact
+owned process disappear. Process existence alone is not surface/readiness
+evidence. Merely finding Foot/Fuzzel in the unit PATH is not runtime evidence
+for either fixed-consumer path.
+
+This fixed-consumer path intentionally does not create or claim this
+specification's profile lifetime owner, launch record, ownership adoption,
+lifecycle lease transfer, durable gate, restart reconciliation, detached
+descendant ownership, or profile status. Those guarantees remain mandatory,
+unchanged, for every admitted profile launch. They are unnecessary for the two
+fixed consumers because only the directly exec'd foot or fuzzel process may
+dereference its selected config; no child inherits or is promised generation
+authority. This is not authority to route a desktop entry or arbitrary
+`Spawn(argv)` around sections 4–7.
 
 Every admitted profile launch has exactly one **lifetime owner**. The owner is
 a small Realm supervisor created before selection, kept behind an exec gate, and
@@ -1015,6 +1084,8 @@ corresponding implementation.
 | A14 | Given each safe crash point before/after owned-directory creation, child fsync, parent fsync, first `lifecycle.lock` exclusive creation, lock fsync, activation-root fsync and `launches/` creation, plus concurrent same-UID initializers and separate unsafe-existing-object fixtures, when initialization retries, then every safe inventory converges from absence to verified current-UID exact-0700 directories and one persistent current-UID zero-length exact-0600 lock inode, all contenders revalidate and acquire that same inode before lifecycle mutation, each created component's child and parent durability precedes dependent mutation, and every unsafe collision fails closed without unlinking, replacing or repairing it. | |
 | A15 | Given valid independent records together with a malformed final record, malformed reserved entry, unsafe record metadata or an exceeded inventory bound, and separate byte-canonical launch-record fixtures whose actual referenced lease is absent, malformed, cross-kind or identity-mismatched or whose actual ownership evidence is inconsistent/unreadable, when a lifecycle client handshakes and subscribes, then under `lifecycle.lock` followed by SPEC 0011's `activation.lock` the server cross-validates every launch through section 5, emits neither an affected record as healthy nor any partial full snapshot or delta for that subscription, reports fatal/uncertain snapshot failure without silently omitting the evidence, leaves permitted internal read-only reconciliation distinct from public full/current truth, and emits a full snapshot only for a fresh subscription after a complete valid bounded record/lease/ownership scan. | |
 | A16 | Given no usable systemd user manager and separate direct-helper fixtures for an unrequested clean WM exit, failed WM or bar exit, clean bar exit, WM status 69 or 78, refusal of the next WM or bar start by the five-in-thirty limit, WM readiness failure, and entry death during `preparing` or `active`, when the direct supervisors or reconciler handle them, then WM clean/failure and bar failure use the one-second bounded restart policy, clean bar exit is not restarted, WM restart-prevent/limit/readiness failure enters idempotent admission-freeze and teardown exactly once, opens no new profile admission and never advances `preparing` to `active`, bar limit exhaustion remains degraded without tearing the session down, and entry death in either state freezes admission, recreates no helper, never resumes or advances `active`, and tears down only revalidated recorded groups in bar-before-WM order. | |
+| A17 | Given the exact `terminal` or `launcher` fixed-consumer request, including terminal against an old valid N whose foot output does not disable `spawn-terminal`, when its fresh internal executor selects N and a concurrent apply commits N+1, then the executor directly becomes foot or fuzzel with the same process identity, uses only N's required config output, terminal disables `spawn-terminal` through its exact argv, and N's process lease remains live until that exact consumer exits. Exec failure releases the process lease and reports failure; no lifecycle record or profile claim is created in either case. After consumer exit the off-loop reaper removes the zombie so ordinary GC can classify the process lease stale. Native dependency paths and the installed Nix service environment make both literal executable basenames reachable without an interactive-shell/system-profile PATH. The installed Nix session drives both default River bindings, observes each exact config/lease PID, waits for deterministic rendered Fuzzel content before Escape, and proves Escape ends the owned Fuzzel process; process existence or a PATH-only check does not satisfy this row. | `fixed_consumers::fixed_consumers_exec_exact_generation_argv_and_hold_the_ordinary_process_lease`, `worker::tests::worker_reaps_a_later_short_child_while_an_older_child_is_alive`; `packaging/nix/checks.nix` real-key fixed-consumer assertions |
+| A18 | Given a desktop identity, raw argv, fuzzel-selected application, extra fixed-consumer argument, or unknown consumer id, when launch dispatch runs, then it cannot enter the fixed-consumer path or inherit its generation claim. Existing sections 4–7 and SPEC 0013 remain the only accepted route to a profile launch. | |
 
 ## Budgets and limits
 
