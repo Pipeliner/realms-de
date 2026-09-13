@@ -506,6 +506,10 @@ EOF
       generation_root = (
           f"/home/alice/.config/realm/generated/generations/{generation}"
       )
+      machine.succeed(
+          "sudo -u alice ${pkgs.foot}/bin/foot --check-config "
+          f"--config={generation_root}/foot/foot.ini"
+      )
 
       machine.send_key("meta_l-ret")
       terminal_pid = wait_for_single_user_process("foot")
