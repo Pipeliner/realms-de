@@ -493,6 +493,8 @@ fn diff_after_palette_edit_is_sorted_and_does_not_mutate_generation_tree() {
             "byte-different gtk-3.0/realm.css",
             "byte-different gtk-4.0/realm.css",
             "byte-different qt6ct/colors/realm.conf",
+            "byte-different share/themes/realm/gtk-3.0/gtk.css",
+            "byte-different share/themes/realm/gtk-4.0/gtk.css",
             "byte-different starship.toml",
             "byte-different yazi/theme.toml",
         ],
