@@ -66,6 +66,23 @@ do
     fi
 done
 
+if ! grep -F -q -e "\".#checks.\$system.portal-helper-imports\"" "$workflow"; then
+    fail 'Nix CI must run the portal helper import smoke before the VM'
+fi
+
+if ! grep -F -q -e "\${{ runner.temp }}/realm-session-boots/portal-roundtrip.json" "$workflow"; then
+    fail 'live VM evidence upload must retain portal-roundtrip.json'
+fi
+
+if ! grep -F -q -e 'machine.send_key("alt-c")' "$checks"; then
+    fail 'portal VM must activate the explicit GTK Cancel response'
+fi
+
+if ! grep -F -q -e 'f"(if {portal_command} > {portal_output_path} "' "$checks" \
+    || ! grep -F -q -e 'f"realm_portal_status=0; else realm_portal_status=$?; fi; "' "$checks"; then
+    fail 'portal VM must record helper status after success or failure'
+fi
+
 if ! grep -F -q -e 'realm-session-boots/realmctl-doctor.json' "$workflow"; then
     fail 'live VM artifact must retain realmctl doctor JSON'
 fi

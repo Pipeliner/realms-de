@@ -3,8 +3,9 @@
 - **Status:** Accepted (ratified 2026-08-28); see Reversal
 - **Deciders:** realm maintainers, repo owner
 - **Supersedes / Superseded by:** **Supersedes [ADR 0002](0002-borrow-a-compositor-first.md)**;
-  Decision 4 is superseded only for Fedora by
-  [ADR 0015](0015-fedora-44-pre-alpha-baseline.md)
+  Decision 4 is superseded for Fedora by
+  [ADR 0015](0015-fedora-44-pre-alpha-baseline.md), and for Ubuntu by
+  [ADR 0022](0022-ubuntu-river-private-closure.md)
 
 ## Context
 
@@ -349,7 +350,6 @@ compositor is not the product. What makes this materially safer than 0002's
 position is that the window management logic is now ours regardless of who
 renders it.
 
-A human should also confirm the **distro version claim** in the Decision above
-before packaging work starts, since the vendoring decision rests on it.
-
-Tracked as a `needs-human` issue (standing order S3).
+The former distro-version question is resolved per target: ADR 0015 selects
+Fedora 44's official package and ADR 0022 selects Ubuntu's private closure. The
+protocol-break response above remains the only `needs-human` question here.

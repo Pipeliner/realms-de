@@ -80,6 +80,13 @@
           src = self;
         };
 
+      portalVmHelper =
+        pkgs:
+        import ./packaging/nix/portal-vm-helper.nix {
+          inherit pkgs lib;
+          src = self;
+        };
+
       sourceRevision = self.rev or self.dirtyRev or "unknown";
 
       nixosModule = import ./packaging/nix/nixos-module.nix { inherit self support; };
@@ -168,6 +175,7 @@
           realm = realmPackage pkgs;
           desktopAdmissionVmTest = desktopAdmissionVmTest pkgs;
           vmControlHelper = vmControlHelper pkgs;
+          portalVmHelper = portalVmHelper pkgs;
         }
       );
 
