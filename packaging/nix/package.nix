@@ -63,6 +63,9 @@
     install -Dm755 target/${pkgs.stdenv.targetPlatform.rust.cargoShortTarget}/release/realm-bar \
       $out/bin/realm-bar
     install -Dm755 ${src + "/packaging/session/realm-session"} $out/bin/realm-session
+    install -Dm755 ${src + "/packaging/session/realm-browser"} $out/bin/realm-browser
+    wrapProgram $out/bin/realm-browser \
+      --prefix PATH : ${lib.makeBinPath [ pkgs.xdg-utils pkgs.gtk3 ]}
 
     # The desktop entry must point at the store path, not /usr/bin.
     install -Dm644 ${src + "/packaging/session/realm.desktop"} \

@@ -1,5 +1,11 @@
 # Installing realm
 
+The `Mod+b` browser shortcut uses your configured default browser. Install a
+browser and set its desktop entry as the default (for example through the
+browser's own default-browser setting). Realm does not choose a browser brand.
+The packaged `realm-browser` helper reports an absent default or a failed
+launch instead of silently choosing another application.
+
 > **realm 0.1.0 is pre-alpha.** The native recipes now require the complete
 > Realm runtime payload — `realmctl`, `realm-wm`, and `realm-bar` — plus the
 > session contract. Fedora CI clean-installs the exact built RPM into an empty
