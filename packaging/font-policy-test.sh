@@ -84,7 +84,7 @@ require_line "$tmp_dir/canonical/packaging/fedora/realm.spec" \
     'BuildRequires:  dejavu-sans-mono-fonts' \
     'Fedora package tests do not declare DejaVu Sans Mono'
 require_line "$tmp_dir/canonical/.github/workflows/distro.yml" \
-    '            fonts-dejavu-core \' \
+    "            fonts-dejavu-core \\" \
     'Ubuntu native-package CI does not install its test font explicitly'
 require_line "$tmp_dir/canonical/.github/workflows/distro.yml" \
     '        run: dnf -y install --setopt=install_weak_deps=False git rpm-build rust cargo systemd-rpm-macros make python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts' \

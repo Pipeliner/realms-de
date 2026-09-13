@@ -82,9 +82,9 @@ for member in \
         }
 done
 
-if grep -F 'skipping $$bin: not built in this revision' \
+if grep -F "skipping \$\$bin: not built in this revision" \
     "$root/packaging/debian/rules" >/dev/null \
-    || grep -F 'if [ -x "%{realm_target_dir}/release/${bin}" ]' \
+    || grep -F "if [ -x \"%{realm_target_dir}/release/\${bin}\" ]" \
         "$root/packaging/fedora/realm.spec" >/dev/null; then
     echo "native package recipes still permit a missing Realm runtime binary" >&2
     exit 1
