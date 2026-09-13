@@ -85,7 +85,7 @@ runs Cargo, `dpkg-buildpackage`, `rpmbuild`, or a Realm source-kit producer.
 6. Installed `realmctl doctor --json` completes under the graphical session
    deadline with no failed checks. Its 32 IDs remain ordered, the exact accepted
    skips are `units/idle-lock`, `portal/filechooser`, and `tools/floors`, and
-   `session/socket`, `wm/protocol-version`, `wm/attached`, `wm/layer-shell`,
+   `session/socket`, `session/protocol-version`, `wm/attached`, `wm/layer-shell`,
    `portal/answers`, and `portal/screencast` are `ok`. Warnings allowed by SPEC
    0006 do not fail this native-login proof.
 7. The host captures the emulated framebuffer plus doctor, state, logind,
