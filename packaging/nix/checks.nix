@@ -135,6 +135,58 @@ EOF
 
     nodes.machine =
       { config, pkgs, ... }:
+      let
+        xwaylandProbe = pkgs.writers.writePython3Bin "realm-xwayland-dbus-probe" {
+          libraries = [ pkgs.python3Packages.dbus-next ];
+        } ''
+          import asyncio
+          import os
+          from pathlib import Path
+
+          from dbus_next.aio import MessageBus
+          from dbus_next.constants import RequestNameReply
+
+
+          async def main():
+              display = os.environ.get("DISPLAY")
+              runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+              if not display or not runtime_dir:
+                  raise SystemExit("D-Bus activation omitted DISPLAY or XDG_RUNTIME_DIR")
+
+              bus = await MessageBus().connect()
+              reply = await bus.request_name("org.realm.XWaylandProbe")
+              if reply is not RequestNameReply.PRIMARY_OWNER:
+                  raise SystemExit("D-Bus probe did not acquire its configured name")
+
+              child = await asyncio.create_subprocess_exec(
+                  "${pkgs.xmessage}"
+                  "/bin/xmessage",
+                  "-center",
+                  "Realm X11 Probe",
+              )
+              marker = Path(runtime_dir) / "realm-xwayland-probe"
+              marker.write_text(
+                  "display=" + display + "\n"
+                  "service_pid=" + str(os.getpid()) + "\n"
+                  "child_pid=" + str(child.pid) + "\n",
+                  encoding="utf-8",
+              )
+              await child.wait()
+              bus.disconnect()
+
+
+          asyncio.run(main())
+        '';
+        xwaylandProbeService = pkgs.writeTextFile {
+          name = "realm-xwayland-dbus-service";
+          destination = "/share/dbus-1/services/org.realm.XWaylandProbe.service";
+          text = ''
+            [D-BUS Service]
+            Name=org.realm.XWaylandProbe
+            Exec=${xwaylandProbe}/bin/realm-xwayland-dbus-probe
+          '';
+        };
+      in
       {
         imports = [ nixosModule ];
         programs.realm.enable = true;
@@ -152,6 +204,7 @@ EOF
         users.users.alice = {
           isNormalUser = true;
         };
+        services.dbus.packages = [ xwaylandProbeService ];
         environment.systemPackages = [
           vmControlHelper
           pkgs.foot
@@ -431,6 +484,84 @@ EOF
           f"tr '\\0' '\\n' < /proc/{wm_pid}/environ | sed -n 's/^WAYLAND_DISPLAY=//p'"
       ).strip()
       assert imported_wayland == daemon_wayland and imported_wayland
+
+      # XWayland is useful only if the wrapper learns its assigned DISPLAY and
+      # publishes it before either launcher starts. The purpose-built D-Bus
+      # service acquires its configured name before recording its activation
+      # environment and opening a real X11 window, so a failed activation
+      # cannot look like a successful propagation proof.
+      imported_display = machine.succeed(
+          "systemctl --user --machine=alice@ show-environment | sed -n 's/^DISPLAY=//p'"
+      ).strip()
+      daemon_display = machine.succeed(
+          f"tr '\\0' '\\n' < /proc/{wm_pid}/environ | sed -n 's/^DISPLAY=//p'"
+      ).strip()
+      assert imported_display == daemon_display and imported_display
+      assert imported_display.startswith(":"), imported_display
+      machine.succeed(
+          f"test -S /tmp/.X11-unix/X{shlex.quote(imported_display[1:])}"
+      )
+      machine.succeed(
+          "grep -F -q 'xwayland display discovered: DISPLAY=' "
+          "/home/alice/.local/state/realm/session.log"
+      )
+      machine.fail(
+          "grep -F -q 'DEGRADED NO-XWAYLAND' "
+          "/home/alice/.local/state/realm/session.log"
+      )
+
+      baseline_raw, baseline = control("state")
+      baseline_windows = sum(
+          cell["windows"] for cell in baseline["data"]["orbits"]
+      )
+      machine.succeed(
+          as_alice(
+              "env",
+              "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+              "dbus-send",
+              "--session",
+              "--type=method_call",
+              "--dest=org.realm.XWaylandProbe",
+              "/org/realm/XWaylandProbe",
+              "org.realm.XWaylandProbe.Open",
+          )
+      )
+      marker = "/run/user/1000/realm-xwayland-probe"
+      machine.wait_until_succeeds(f"test -s {marker}", timeout=STATE_TIMEOUT)
+      activated_display = machine.succeed(
+          f"sed -n 's/^display=//p' {marker}"
+      ).strip()
+      service_pid = machine.succeed(
+          f"sed -n 's/^service_pid=//p' {marker}"
+      ).strip()
+      x11_pid = machine.succeed(
+          f"sed -n 's/^child_pid=//p' {marker}"
+      ).strip()
+      assert activated_display == imported_display, (
+          activated_display,
+          imported_display,
+      )
+      x11_exe = machine.succeed(f"readlink /proc/{x11_pid}/exe").strip()
+      expected_x11_exe = "${pkgs.xmessage}/bin/.xmessage-wrapped"
+      assert x11_exe == expected_x11_exe, (x11_exe, expected_x11_exe)
+      wait_for_state(
+          lambda response: sum(
+              cell["windows"] for cell in response["data"]["orbits"]
+          ) == baseline_windows + 1,
+          "D-Bus-activated X11 window",
+      )
+      machine.wait_for_text("Realm X11 Probe", timeout=OCR_TIMEOUT)
+      machine.succeed(f"kill -TERM {x11_pid}")
+      machine.wait_until_succeeds(
+          f"test ! -d /proc/{x11_pid} && test ! -d /proc/{service_pid}",
+          timeout=STATE_TIMEOUT,
+      )
+      wait_for_state(
+          lambda response: sum(
+              cell["windows"] for cell in response["data"]["orbits"]
+          ) == baseline_windows,
+          "D-Bus-activated X11 window close",
+      )
 
       # Use the library client itself. The initial state proves Hello and
       # GetState reached the production server; no realmctl command is added.
