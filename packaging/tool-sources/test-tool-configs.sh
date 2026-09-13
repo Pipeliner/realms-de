@@ -10,6 +10,7 @@ keymap=$root/configs/templates/yazi-keymap.toml
 profile=$root/configs/templates/zshrc
 btop=$root/configs/templates/btop.conf
 support=$root/packaging/nix/support.nix
+checks=$root/packaging/nix/checks.nix
 debian_rules=$root/packaging/debian/rules
 fedora_spec=$root/packaging/fedora/realm.spec
 native_fixture=$root/packaging/tool-sources/test-native-builds.sh
