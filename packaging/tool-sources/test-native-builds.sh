@@ -296,6 +296,7 @@ accepts_offline_cargo() {
     fixture=$3
     log=$4
     output=$5
+    package_root=
     : >"$log"
     if "$runner" "$fixture" "$log" >"$output" 2>&1; then
         runner_status=0
@@ -319,27 +320,45 @@ accepts_offline_cargo() {
         fail "$name did not use an otherwise-empty Cargo home containing the retained source configuration"
     fi
     cargo_count=$(grep -c '^cargo|' "$log" || true)
-    if [ "$cargo_count" -ne 2 ]; then
-        fail "$name made $cargo_count Cargo invocations instead of build and test only"
+    if [ "$cargo_count" -ne 4 ]; then
+        fail "$name made $cargo_count Cargo invocations instead of three builds and one test"
     fi
     build_count=$(grep -c '|args=build ' "$log" || true)
     test_count=$(grep -c '|args=test ' "$log" || true)
-    if [ "$build_count" -ne 1 ] || [ "$test_count" -ne 1 ]; then
-        fail "$name did not make exactly one Cargo build and one Cargo test invocation"
+    if [ "$build_count" -ne 3 ] || [ "$test_count" -ne 1 ]; then
+        fail "$name did not make exactly three Cargo builds and one Cargo test invocation"
     fi
-    build_invocation=$(grep '|args=build ' "$log" | head -n 1 || true)
+    build_invocation=$(grep '|args=build .*--workspace' "$log" | head -n 1 || true)
     case $build_invocation in
-        *"|args=build --release --frozen --offline --locked --workspace") ;;
+        *"|args=build --release --frozen --offline --locked --workspace|cflags="*) ;;
         *) fail "$name did not run the exact complete staged workspace build" ;;
+    esac
+    yazi_invocation=$(grep '|args=build .*--package yazi-fm' "$log" | head -n 1 || true)
+    case $yazi_invocation in
+        *"|args=build --release --frozen --offline --locked --package yazi-fm --package yazi-cli|cflags="*) ;;
+        *) fail "$name did not run the exact selected Yazi build" ;;
+    esac
+    case $yazi_invocation in
+        *"|cflags="*" -std=gnu17"*) ;;
+        *) fail "$name did not select GNU C17 for the retained Yazi C dependency" ;;
+    esac
+    starship_invocation=$(grep '|args=build .*--bin starship' "$log" | head -n 1 || true)
+    case $starship_invocation in
+        *"|args=build --release --frozen --offline --locked --bin starship|cflags="*) ;;
+        *) fail "$name did not run the exact selected Starship build" ;;
+    esac
+    case "$build_invocation $starship_invocation" in
+        *" -std=gnu17"*) fail "$name leaked the Yazi C standard selection into another build" ;;
+        *) ;;
     esac
     test_invocation=$(grep '|args=test ' "$log" | head -n 1 || true)
     case $test_invocation in
-        *"|args=test --release --frozen --offline --locked --workspace --exclude realm-agent-sdd") ;;
+        *"|args=test --release --frozen --offline --locked --workspace --exclude realm-agent-sdd|cflags="*) ;;
         *) fail "$name did not run the exact package-relevant workspace test selection" ;;
     esac
-    for bin in realmctl realm-wm realm-bar; do
+    for bin in realmctl realm-wm realm-bar yazi ya starship; do
         if ! grep -F -x "cargo-output|binary=$bin|executable=yes" "$log" >/dev/null; then
-            fail "$name Cargo build did not produce the staged workspace $bin"
+            fail "$name Cargo build did not produce $bin"
         fi
     done
     case $name in
@@ -356,6 +375,7 @@ accepts_offline_cargo() {
                         fail "$name package did not contain the staged workspace $bin"
                     fi
                 done
+                package_root=$output.deb-root
                 assert_current_package_guide "$name" "$output.deb-root" \
                     "$output.package-guide"
             fi
@@ -377,28 +397,60 @@ accepts_offline_cargo() {
                     fail "$name package could not be converted for guide inspection"
                 else
                     tar -C "$output.rpm-root" -xzf "$rpm_tar"
+                    package_root=$output.rpm-root
                     assert_current_package_guide "$name" "$output.rpm-root" \
                         "$output.package-guide"
                 fi
             fi
             ;;
     esac
+    if [ -n "${package_root:-}" ]; then
+        for bin in yazi ya starship; do
+            private=$package_root/usr/lib/realm/bin/$bin
+            if [ ! -x "$private" ]; then
+                fail "$name package omitted private $bin"
+            fi
+            if [ -e "$package_root/usr/bin/$bin" ] || [ -L "$package_root/usr/bin/$bin" ]; then
+                fail "$name package took ownership of /usr/bin/$bin"
+            fi
+            resolved=$(PATH="$package_root/usr/lib/realm/bin:/usr/bin:/bin" command -v "$bin" || true)
+            if [ "$resolved" != "$private" ]; then
+                fail "$name Realm session PATH did not resolve private $bin"
+            fi
+        done
+        yazi_version=$("$package_root/usr/lib/realm/bin/yazi" --version 2>&1 || true)
+        ya_version=$("$package_root/usr/lib/realm/bin/ya" --version 2>&1 || true)
+        starship_version=$("$package_root/usr/lib/realm/bin/starship" --version 2>&1 || true)
+        if [ "$yazi_version" != \
+            'Yazi 25.4.8 (99ea3b74c4260a724b43af812df0f68ef59395b7 2025-04-08)' ]; then
+            fail "$name package has unexpected Yazi version metadata: $yazi_version"
+        fi
+        if [ "$ya_version" != \
+            'Ya 25.4.8 (99ea3b74c4260a724b43af812df0f68ef59395b7 2025-04-08)' ]; then
+            fail "$name package has unexpected ya version metadata: $ya_version"
+        fi
+        if [ "$starship_version" != 'starship 1.23.0' ]; then
+            fail "$name package has unexpected Starship version: $starship_version"
+        fi
+        case $name in
+            Debian) debian_yazi_binary=$package_root/usr/lib/realm/bin/yazi ;;
+            RPM) rpm_yazi_binary=$package_root/usr/lib/realm/bin/yazi ;;
+        esac
+    fi
     if ! grep -F 'test result: ok.' "$output" >/dev/null; then
         fail "$name Cargo test did not execute the staged workspace tests"
     fi
     result_count=$(grep -c '^cargo-result|status=0$' "$log" || true)
-    if [ "$result_count" -ne 2 ]; then
-        fail "$name did not complete both real Cargo invocations successfully"
+    if [ "$result_count" -ne 4 ]; then
+        fail "$name did not complete all four real Cargo invocations successfully"
     fi
     grep '^cargo|' "$log" >"$output.cargo"
     while IFS= read -r invocation; do
         case $invocation in
-            *"|cwd=${REALM_EXPECTED_SOURCE}"*) ;;
-            *) fail "$name invoked Cargo outside its staged canonical source" ;;
-        esac
-        case $invocation in
-            *"|home=${REALM_EXPECTED_CARGO_HOME}"*) ;;
-            *) fail "$name did not inherit its retained-config Cargo home" ;;
+            *"|cwd=${REALM_EXPECTED_SOURCE}|home=${REALM_EXPECTED_CARGO_HOME}|"* \
+            | *"|cwd=${REALM_EXPECTED_YAZI_SOURCE}|home=${REALM_EXPECTED_YAZI_CARGO_HOME}|"* \
+            | *"|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|home=${REALM_EXPECTED_STARSHIP_CARGO_HOME}|"*) ;;
+            *) fail "$name invoked Cargo outside a selected retained stage" ;;
         esac
         for flag in --frozen --offline --locked; do
             case " $invocation " in
@@ -438,8 +490,14 @@ REALM_EXPECTED_SOURCE="$tmp/debian-valid/debian/realm-workspace/source"
 REALM_EXPECTED_CARGO_HOME="$tmp/debian-valid/debian/realm-workspace/.cargo"
 REALM_EXPECTED_CARGO_CONFIG="$tmp/debian-valid/packaging/tool-sources/bundles/realm-workspace/config.toml"
 REALM_EXPECTED_TARGET_DIR="$tmp/debian-valid/debian/cargo-target"
+REALM_EXPECTED_YAZI_SOURCE="$tmp/debian-valid/debian/yazi-25.4.8/source"
+REALM_EXPECTED_YAZI_CARGO_HOME="$tmp/debian-valid/debian/yazi-25.4.8/.cargo"
+REALM_EXPECTED_STARSHIP_SOURCE="$tmp/debian-valid/debian/starship-1.23.0/source"
+REALM_EXPECTED_STARSHIP_CARGO_HOME="$tmp/debian-valid/debian/starship-1.23.0/.cargo"
 REALM_EXPECTED_PACKAGE_ROOT="$tmp"
 export REALM_EXPECTED_SOURCE REALM_EXPECTED_CARGO_HOME REALM_EXPECTED_CARGO_CONFIG REALM_EXPECTED_TARGET_DIR \
+    REALM_EXPECTED_YAZI_SOURCE REALM_EXPECTED_YAZI_CARGO_HOME \
+    REALM_EXPECTED_STARSHIP_SOURCE REALM_EXPECTED_STARSHIP_CARGO_HOME \
     REALM_EXPECTED_PACKAGE_ROOT
 accepts_offline_cargo Debian run_debian "$tmp/debian-valid" \
     "$tmp/debian-valid.log" "$tmp/debian-valid.out"
@@ -466,11 +524,22 @@ REALM_EXPECTED_SOURCE="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.realm-workspace/sou
 REALM_EXPECTED_CARGO_HOME="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.realm-workspace/.cargo"
 REALM_EXPECTED_CARGO_CONFIG="$tmp/rpm-valid/top/BUILD/realm-0.1.0/packaging/tool-sources/bundles/realm-workspace/config.toml"
 REALM_EXPECTED_TARGET_DIR="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.cargo-target"
+REALM_EXPECTED_YAZI_SOURCE="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.yazi-25.4.8/source"
+REALM_EXPECTED_YAZI_CARGO_HOME="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.yazi-25.4.8/.cargo"
+REALM_EXPECTED_STARSHIP_SOURCE="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.starship-1.23.0/source"
+REALM_EXPECTED_STARSHIP_CARGO_HOME="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.starship-1.23.0/.cargo"
 REALM_EXPECTED_PACKAGE_ROOT="$tmp/rpm-valid/top/RPMS"
 export REALM_EXPECTED_SOURCE REALM_EXPECTED_CARGO_HOME REALM_EXPECTED_CARGO_CONFIG REALM_EXPECTED_TARGET_DIR \
+    REALM_EXPECTED_YAZI_SOURCE REALM_EXPECTED_YAZI_CARGO_HOME \
+    REALM_EXPECTED_STARSHIP_SOURCE REALM_EXPECTED_STARSHIP_CARGO_HOME \
     REALM_EXPECTED_PACKAGE_ROOT
 accepts_offline_cargo RPM run_rpm "$tmp/rpm-valid" \
     "$tmp/rpm-valid.log" "$tmp/rpm-valid.out"
+
+if [ -n "${debian_yazi_binary:-}" ] && [ -n "${rpm_yazi_binary:-}" ] \
+    && ! cmp "$debian_yazi_binary" "$rpm_yazi_binary"; then
+    fail "Yazi retained build differs across isolated native build directories"
+fi
 
 make_rpm_tree "$tmp/rpm-fetch"
 sed -i '/^%build$/a git fetch https://example.invalid/realm' \

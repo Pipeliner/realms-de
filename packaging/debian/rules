@@ -10,7 +10,9 @@
 #     dpkg-buildpackage -us -uc -b
 #
 # PRE-ALPHA (0.1.0): this workspace builds `realmctl`, `realm-wm`, and
-# `realm-bar`. override_dh_auto_install installs every built Realm binary.
+# `realm-bar`; retained tool bundles build Yazi, `ya`, and Starship.
+# override_dh_auto_install installs the Realm binaries publicly and selected
+# tools under Realm's private executable directory.
 #
 # NEEDS-HUMAN — the vendored river (realm-river) this package depends on is NOT
 # built by these rules, and building it is not a trivial recipe:
@@ -34,12 +36,20 @@
 
 export DH_VERBOSE = 1
 
-# The Debian source kit carries no checkout of the Realm workspace. Both Cargo
-# inputs are staged from the retained, digest-bound authority before use.
+# The Debian source kit carries no checkout of the Realm workspace. All Cargo
+# inputs are staged from retained, digest-bound authorities before use.
 REALM_BUNDLE := $(CURDIR)/packaging/tool-sources/bundles/realm-workspace
 REALM_STAGE := $(CURDIR)/debian/realm-workspace
 REALM_STAGER := $(CURDIR)/packaging/tool-sources/stage-realm-workspace.py
+TOOL_STAGER := $(CURDIR)/packaging/tool-sources/stage-tool-bundle.py
+TOOL_RUNTIME := $(CURDIR)/packaging/tool-sources/test-tool-runtime.py
 REALM_KIT_CHECKER := $(CURDIR)/packaging/tool-sources/check-native-source-kit.py
+YAZI_BUNDLE := $(CURDIR)/packaging/tool-sources/bundles/yazi-25.4.8
+YAZI_STAGE := $(CURDIR)/debian/yazi-25.4.8
+YAZI_TARGET := $(CURDIR)/debian/yazi-target
+STARSHIP_BUNDLE := $(CURDIR)/packaging/tool-sources/bundles/starship-1.23.0
+STARSHIP_STAGE := $(CURDIR)/debian/starship-1.23.0
+STARSHIP_TARGET := $(CURDIR)/debian/starship-target
 
 # Keep Cargo state and build outputs package-local. The staged .cargo directory
 # is CARGO_HOME so test-launched Cargo processes outside the source ancestry
@@ -76,16 +86,31 @@ override_dh_auto_configure:
 	python3 "$(REALM_KIT_CHECKER)" debian "$(CURDIR)"
 
 override_dh_auto_build:
-	rm -rf "$(REALM_STAGE)" "$(CARGO_TARGET_DIR)"
-	mkdir -p "$(CARGO_TARGET_DIR)"
+	rm -rf "$(REALM_STAGE)" "$(CARGO_TARGET_DIR)" \
+		"$(YAZI_STAGE)" "$(YAZI_TARGET)" \
+		"$(STARSHIP_STAGE)" "$(STARSHIP_TARGET)"
+	mkdir -p "$(CARGO_TARGET_DIR)" "$(YAZI_TARGET)" "$(STARSHIP_TARGET)"
 	@set -e; \
 	realm_source="$$(python3 "$(REALM_STAGER)" "$(REALM_BUNDLE)" "$(REALM_STAGE)")"; \
+	yazi_source="$$(python3 "$(TOOL_STAGER)" "$(YAZI_BUNDLE)" "$(YAZI_STAGE)")"; \
+	starship_source="$$(python3 "$(TOOL_STAGER)" "$(STARSHIP_BUNDLE)" "$(STARSHIP_STAGE)")"; \
 	cd "$$realm_source"; \
 	rustc --version | awk '{split($$2,v,"."); if (v[1] < 1 || (v[1] == 1 && v[2] < 89)) { \
 		print "realm: rustc " $$2 " is older than the MSRV 1.89 declared in Cargo.toml."; \
 		print "      Install rustc-1.89/cargo-1.89 (from Noble Updates) or newer."; \
 		exit 1 }}'; \
-	cargo build --release --frozen --offline --locked --workspace
+	cargo build --release --frozen --offline --locked --workspace; \
+	cd "$$yazi_source"; \
+	CARGO_HOME="$(YAZI_STAGE)/.cargo" CARGO_TARGET_DIR="$(YAZI_TARGET)" \
+	CFLAGS="$(CFLAGS) -std=gnu17" \
+	SOURCE_DATE_EPOCH=1744112829 \
+	VERGEN_GIT_SHA=99ea3b74c4260a724b43af812df0f68ef59395b7 \
+	VERGEN_GIT_COMMIT_DATE=2025-04-08 VERGEN_BUILD_DATE=2025-04-08 \
+		cargo build --release --frozen --offline --locked \
+			--package yazi-fm --package yazi-cli; \
+	cd "$$starship_source"; \
+	CARGO_HOME="$(STARSHIP_STAGE)/.cargo" CARGO_TARGET_DIR="$(STARSHIP_TARGET)" \
+		cargo build --release --frozen --offline --locked --bin starship
 
 override_dh_auto_test:
 	# realm-core's tests include the palette lint, so a palette that fails its
@@ -96,7 +121,12 @@ override_dh_auto_test:
 	realm_source="$$(python3 "$(REALM_STAGER)" "$(REALM_BUNDLE)" "$(REALM_STAGE)")"; \
 	cd "$$realm_source"; \
 	cargo test --release --frozen --offline --locked --workspace \
-		--exclude realm-agent-sdd
+		--exclude realm-agent-sdd; \
+	./packaging/tool-sources/test-tool-configs.sh; \
+	python3 "$(TOOL_RUNTIME)" \
+		"$(CARGO_TARGET_DIR)/release/realmctl" \
+		"$(YAZI_TARGET)/release/yazi" "$(YAZI_TARGET)/release/ya" \
+		"$(STARSHIP_TARGET)/release/starship" "$$realm_source"
 
 override_dh_auto_install:
 	# The .wants symlinks, shipped rather than left to [Install] processing.
@@ -115,10 +145,18 @@ override_dh_auto_install:
 	set -e; \
 	for bin in realmctl realm-wm realm-bar; do \
 		install -Dm755 "$(CARGO_TARGET_DIR)/release/$$bin" "debian/realm/usr/bin/$$bin"; \
-	done
+	done; \
+	for bin in yazi ya; do \
+		install -Dm755 "$(YAZI_TARGET)/release/$$bin" \
+			"debian/realm/usr/lib/realm/bin/$$bin"; \
+	done; \
+	install -Dm755 "$(STARSHIP_TARGET)/release/starship" \
+		"debian/realm/usr/lib/realm/bin/starship"
 
 override_dh_auto_clean:
-	rm -rf "$(REALM_STAGE)" "$(CARGO_HOME)" "$(CARGO_TARGET_DIR)"
+	rm -rf "$(REALM_STAGE)" "$(CARGO_HOME)" "$(CARGO_TARGET_DIR)" \
+		"$(YAZI_STAGE)" "$(YAZI_TARGET)" \
+		"$(STARSHIP_STAGE)" "$(STARSHIP_TARGET)"
 
 # No hand-written maintainer scripts, on purpose. The only thing that would need
 # one is enabling the systemd user units, and dh_installsystemduser generates

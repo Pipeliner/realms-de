@@ -12,22 +12,45 @@ struct RunningStub {
     pid_path: PathBuf,
     args_path: PathBuf,
     selectors_path: PathBuf,
+    pid_gate_path: PathBuf,
+    stop_gate_path: PathBuf,
 }
 
 impl RunningStub {
     fn wait_until_stopped(&mut self) -> u32 {
+        let mut released_pid_gate = false;
+        let mut released_stop_gate = false;
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Ok(raw) = fs::read_to_string(&self.pid_path) {
-                return raw.trim().parse().unwrap();
+            if let (Ok(raw_pid), Ok(raw_args), Ok(raw_selectors)) = (
+                fs::read_to_string(&self.pid_path),
+                fs::read_to_string(&self.args_path),
+                fs::read_to_string(&self.selectors_path),
+            ) {
+                if raw_pid.is_empty() && !released_pid_gate {
+                    fs::write(&self.pid_gate_path, b"release\n").unwrap();
+                    released_pid_gate = true;
+                }
+                if let Ok(pid) = raw_pid.trim().parse() {
+                    if !raw_args.is_empty() && !raw_selectors.is_empty() {
+                        if !released_stop_gate {
+                            fs::write(&self.stop_gate_path, b"release\n").unwrap();
+                            released_stop_gate = true;
+                        }
+                        if process_is_stopped(pid) {
+                            return pid;
+                        }
+                    }
+                }
             }
             if let Some(status) = self.child.try_wait().unwrap() {
                 panic!("fixed consumer exited before exec fixture stopped: {status}");
             }
-            assert!(
-                Instant::now() < deadline,
-                "fixed consumer fixture timed out"
-            );
+            if Instant::now() >= deadline {
+                let _ = self.child.kill();
+                let status = self.child.wait();
+                panic!("fixed consumer fixture did not stop before its deadline: {status:?}");
+            }
             thread::sleep(Duration::from_millis(10));
         }
     }
@@ -35,15 +58,36 @@ impl RunningStub {
     fn resume_and_wait(&mut self, pid: u32) -> ExitStatus {
         let pid = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
         rustix::process::kill_process(pid, rustix::process::Signal::CONT).unwrap();
-        self.child.wait().unwrap()
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status;
+            }
+            if Instant::now() >= deadline {
+                let _ = self.child.kill();
+                let status = self.child.wait();
+                panic!("resumed fixed consumer did not exit before its deadline: {status:?}");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
+}
+
+fn process_is_stopped(pid: u32) -> bool {
+    let Ok(status) = fs::read_to_string(format!("/proc/{pid}/status")) else {
+        return false;
+    };
+    status.lines().any(|line| {
+        line.strip_prefix("State:")
+            .is_some_and(|state| state.trim_start().starts_with('T'))
+    })
 }
 
 fn install_stopping_stub(directory: &Path, name: &str) {
     let path = directory.join(name);
     fs::write(
         &path,
-        "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$REALM_TEST_PID\"\nprintf '%s\\n' \"$@\" > \"$REALM_TEST_ARGS\"\nprintf '%s\\n' \"${REALM_GENERATION-unset}\" \"${ZDOTDIR-unset}\" \"${STARSHIP_CONFIG-unset}\" \"${YAZI_CONFIG_HOME-unset}\" > \"$REALM_TEST_SELECTORS\"\nkill -STOP \"$$\"\n",
+        "#!/bin/sh\n: > \"$REALM_TEST_PID\"\n: > \"$REALM_TEST_ARGS\"\n: > \"$REALM_TEST_SELECTORS\"\nwhile [ ! -e \"$REALM_TEST_PID_GATE\" ]; do :; done\nprintf '%s\\n' \"$$\" > \"$REALM_TEST_PID\"\nprintf '%s\\n' \"$@\" > \"$REALM_TEST_ARGS\"\nprintf '%s\\n' \"${REALM_GENERATION-unset}\" \"${ZDOTDIR-unset}\" \"${STARSHIP_CONFIG-unset}\" \"${YAZI_CONFIG_HOME-unset}\" > \"$REALM_TEST_SELECTORS\"\nwhile [ ! -e \"$REALM_TEST_STOP_GATE\" ]; do :; done\nkill -STOP \"$$\"\n",
     )
     .unwrap();
     fs::set_permissions(path, PermissionsExt::from_mode(0o700)).unwrap();
@@ -53,6 +97,8 @@ fn spawn_consumer(root: &Path, stub_dir: &Path, kind: &str) -> RunningStub {
     let pid_path = root.join(format!("{kind}.pid"));
     let args_path = root.join(format!("{kind}.args"));
     let selectors_path = root.join(format!("{kind}.selectors"));
+    let pid_gate_path = root.join(format!("{kind}.pid-gate"));
+    let stop_gate_path = root.join(format!("{kind}.stop-gate"));
     let child = Command::new(env!("CARGO_BIN_EXE_realm-wm"))
         .args(["--fixed-consumer", kind])
         .env("XDG_CONFIG_HOME", root)
@@ -61,6 +107,8 @@ fn spawn_consumer(root: &Path, stub_dir: &Path, kind: &str) -> RunningStub {
         .env("REALM_TEST_PID", &pid_path)
         .env("REALM_TEST_ARGS", &args_path)
         .env("REALM_TEST_SELECTORS", &selectors_path)
+        .env("REALM_TEST_PID_GATE", &pid_gate_path)
+        .env("REALM_TEST_STOP_GATE", &stop_gate_path)
         .spawn()
         .unwrap();
     RunningStub {
@@ -68,6 +116,8 @@ fn spawn_consumer(root: &Path, stub_dir: &Path, kind: &str) -> RunningStub {
         pid_path,
         args_path,
         selectors_path,
+        pid_gate_path,
+        stop_gate_path,
     }
 }
 

@@ -32,6 +32,7 @@ assert realmYazi.version == "25.4.8";
           ${src + "/packaging/session/realm-session"} \
           ${src + "/packaging/session/test-runtime-dir-mode.sh"}
         shellcheck --shell=sh \
+          ${src + "/packaging/session/realm-browser"} \
           ${src + "/packaging/check-font-policy.sh"} \
           ${src + "/packaging/font-policy-test.sh"} \
           ${src + "/packaging/nix/check-root-flake-ci.sh"} \
@@ -56,6 +57,7 @@ assert realmYazi.version == "25.4.8";
   # either workspace binary in the package output.
   packaged-binaries = pkgs.runCommand "realm-packaged-binaries" { } ''
     test -x ${realm}/bin/realmctl
+    test -x ${realm}/bin/realm-browser
     test -x ${realm}/bin/realm-sdd
     touch $out
   '';
@@ -157,7 +159,20 @@ EOF
           pkgs.starship
           pkgs.yazi
           pkgs.btop
+          pkgs.firefox
+          (pkgs.makeDesktopItem {
+            name = "realm-browser-test";
+            desktopName = "Realm Browser Test";
+            exec = "${pkgs.firefox}/bin/firefox --no-remote about:blank";
+            mimeTypes = [ "text/html" "x-scheme-handler/http" "x-scheme-handler/https" ];
+          })
         ];
+        environment.etc."xdg/mimeapps.list".text = ''
+          [Default Applications]
+          text/html=realm-browser-test.desktop
+          x-scheme-handler/http=realm-browser-test.desktop
+          x-scheme-handler/https=realm-browser-test.desktop
+        '';
       };
 
     testScript =
@@ -598,6 +613,31 @@ EOF
 
       # Three ordinary Wayland application windows must enter compositor-backed
       # state before the tiled-desktop framebuffer capture is accepted.
+      # SPEC 0027: dispatch success alone is insufficient. Press the real
+      # browser binding and require both Firefox and a compositor-owned window.
+      selected_browser = machine.succeed(
+          "systemd-run --user --machine=alice@ --wait --pipe --quiet --collect "
+          "${pkgs.xdg-utils}/bin/xdg-settings get default-web-browser"
+      ).strip()
+      assert selected_browser == "realm-browser-test.desktop", selected_browser
+      machine.send_key("meta_l-b")
+      machine.wait_until_succeeds("pgrep -u alice -f firefox", timeout=STATE_TIMEOUT)
+      browser_raw, _browser_state = wait_for_state(
+          lambda response: sum(
+              cell["windows"] for cell in response["data"]["orbits"]
+          ) == 1,
+          "default-binding browser window",
+      )
+      write_artifact("control-browser-state.json", browser_raw)
+      machine.screenshot("realm-browser")
+      machine.send_key("meta_l-q")
+      wait_for_state(
+          lambda response: sum(
+              cell["windows"] for cell in response["data"]["orbits"]
+          ) == 0,
+          "browser window closes through the default binding",
+      )
+
       for number in range(1, 4):
           command = (
               f"printf 'Realm VM sample {number}\\nordinary Wayland application\\n'; "

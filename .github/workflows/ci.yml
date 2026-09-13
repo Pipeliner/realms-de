@@ -31,6 +31,13 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  browser-dispatch:
+    name: browser dispatch
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 packaging/session/test-browser.py
+
   dependency-policy:
     name: dependency policy
     runs-on: ubuntu-24.04
@@ -159,6 +166,7 @@ jobs:
           ./packaging/tool-sources/test-no-live-fetch.sh
           ./packaging/tool-sources/test-native-source-kits.sh
           ./packaging/tool-sources/test-native-cargo-wrapper.sh
+          python3 packaging/fedora/test-source-modes.py
       - name: Prepare lifecycle-capable native package temporary directory
         id: native-temp
         run: |
