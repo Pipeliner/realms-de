@@ -2,7 +2,8 @@
 
 - **Status:** Draft — the NixOS session-discovery contract, startup step 3,
   XWayland display discovery and publication, and current-incarnation
-  doctor-health handoff are accepted; open questions below remain unresolved
+  doctor-health handoff are accepted; SPEC 0029 separately accepts the bounded
+  native x86_64 graphical-login proof. Open questions below remain unresolved
   (`needs-human`)
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
@@ -720,6 +721,11 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A17 | Given an installed NixOS VM session running the pinned XWayland-enabled River, when a purpose-built session-bus service is activated and acquires its configured bus name, then the non-empty `DISPLAY` inherited by `realm-wm`, the systemd user manager and that D-Bus-activated service is identical; the service invokes the pinned xmessage package's public `bin/xmessage` wrapper and the child executable resolves to that same package's exact `bin/.xmessage-wrapped` payload selected by locked nixpkgs' X file-search wrapper hook; Realm reports one additional managed X11 window; and the test reaps the client. This proves discovery, both publication paths and XWayland window management, but does not claim Xresources or scaling behaviour. | VM | |
 
 **Split: 17 criteria — 4 CI, 11 VM, 2 HARDWARE.**
+
+SPEC 0029 adds native-package Ubuntu 24.04 and Fedora 44 graphical-login VM
+evidence without changing these criteria or treating virtio devices as the
+hardware rows. Its doctor subset reuses this specification's required checks;
+its test-only SDDM choice does not select a Realm display-manager dependency.
 
 ## Budgets
 
