@@ -128,6 +128,8 @@ python3 packaging/tool-sources/stage-realm-workspace.py \
     %{realm_bundle} %{realm_stage}
 python3 %{tool_stager} %{yazi_bundle} %{yazi_stage}
 python3 %{tool_stager} %{starship_bundle} %{starship_stage}
+sh packaging/fedora/normalize-source-modes.sh \
+    %{realm_stage} %{yazi_stage} %{starship_stage}
 
 %build
 cd %{realm_source}

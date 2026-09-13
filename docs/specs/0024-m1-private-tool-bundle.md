@@ -206,6 +206,14 @@ meaning on GCC 16 and newer without suppressing incompatible-type diagnostics.
 This compatibility selection applies only to the selected Yazi build, not the
 Realm workspace or Starship builds.
 
+After retained-bundle verification and unpacking, Fedora preparation SHALL
+remove executable permission bits from staged regular Rust source (`*.rs`)
+files before compilation and debug-source collection. Source bytes and retained
+archives remain unchanged; executable scripts and binaries keep their modes.
+Rust inner attributes are not script shebangs. RPM's normal shebang processing
+and debug-source generation remain enabled. A fixture SHALL verify those mode
+and content boundaries, and the native CI RPM build verifies integration.
+
 The Yazi build command SHALL select the `yazi-fm` and `yazi-cli` packages,
 which produce `yazi` and `ya`;
 the Starship build command SHALL select the `starship` binary. Both use their
