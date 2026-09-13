@@ -30,6 +30,23 @@ class NativeVmInputTests(unittest.TestCase):
     def setUp(self):
         self.module = load_module()
 
+    def native_doctor_checks(self):
+        checks = [
+            {"id": check_id, "status": "ok", "summary": "fixture"}
+            for check_id in self.module.CHECK_IDS
+        ]
+        by_id = {check["id"]: check for check in checks}
+        for check_id in {"units/idle-lock", "portal/filechooser"}:
+            by_id[check_id]["status"] = "skip"
+        by_id["tools/floors"].update(
+            status="warn",
+            summary=(
+                "yazi: not found, btop: btop version: 1.3.0, "
+                "starship: not found; install the missing or unparseable tools"
+            ),
+        )
+        return checks
+
     def test_image_bytes_must_match_the_selected_target_digest(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -180,13 +197,7 @@ exit 97
                 )
 
     def test_doctor_requires_ordered_healthy_session_and_exact_skips(self):
-        checks = [
-            {"id": check_id, "status": "ok", "summary": "fixture"}
-            for check_id in self.module.CHECK_IDS
-        ]
-        for check in checks:
-            if check["id"] in self.module.SKIP_IDS:
-                check["status"] = "skip"
+        checks = self.native_doctor_checks()
         report = {"checks": checks}
 
         self.module.validate_doctor(report)
@@ -199,18 +210,48 @@ exit 97
         with self.assertRaisesRegex(ValueError, "unknown status"):
             self.module.validate_doctor(report)
 
+    def test_doctor_accepts_only_the_declared_native_tool_warning(self):
+        checks = self.native_doctor_checks()
+        report = {"checks": checks}
+        by_id = {check["id"]: check for check in checks}
+
+        by_id["tools/floors"]["status"] = "skip"
+        with self.assertRaisesRegex(ValueError, "doctor skip set mismatch"):
+            self.module.validate_doctor(report)
+
+        checks = self.native_doctor_checks()
+        report = {"checks": checks}
+        by_id = {check["id"]: check for check in checks}
+        by_id["tools/floors"]["summary"] = (
+            "yazi: not found, btop: not found, starship: not found; "
+            "install the missing or unparseable tools"
+        )
+        with self.assertRaisesRegex(ValueError, "native tool evidence"):
+            self.module.validate_doctor(report)
+
+        checks = self.native_doctor_checks()
+        report = {"checks": checks}
+        by_id = {check["id"]: check for check in checks}
+        by_id["tools/floors"]["summary"] = (
+            "yazi: yazi 26.8.15, btop: btop version: 1.3.0, "
+            "starship: not found; install the missing or unparseable tools"
+        )
+        with self.assertRaisesRegex(ValueError, "native tool evidence"):
+            self.module.validate_doctor(report)
+
+        checks = self.native_doctor_checks()
+        report = {"checks": checks}
+        by_id = {check["id"]: check for check in checks}
+        by_id["units/bar"]["status"] = "warn"
+        with self.assertRaisesRegex(ValueError, "unexpected doctor warnings"):
+            self.module.validate_doctor(report)
+
     def test_guest_evidence_validation_does_not_require_image_manifest(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             copied_probe = root / "check_inputs.py"
             shutil.copyfile(MODULE_PATH, copied_probe)
-            checks = [
-                {"id": check_id, "status": "ok", "summary": "fixture"}
-                for check_id in self.module.CHECK_IDS
-            ]
-            for check in checks:
-                if check["id"] in self.module.SKIP_IDS:
-                    check["status"] = "skip"
+            checks = self.native_doctor_checks()
             report = root / "doctor.json"
             report.write_text(json.dumps({"checks": checks}), encoding="utf-8")
 

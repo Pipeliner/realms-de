@@ -111,11 +111,21 @@ bounded harness contract.
    `GetState` against that session's production `ctl.sock`; a merely present
    socket is insufficient.
 6. Installed `realmctl doctor --json` completes under the graphical session
-   deadline with no failed checks. Its 32 IDs remain ordered, the exact accepted
-   skips are `units/idle-lock`, `portal/filechooser`, and `tools/floors`, and
-   `session/socket`, `session/protocol-version`, `wm/attached`, `wm/layer-shell`,
-   `portal/answers`, `portal/config`, and `portal/screencast` are `ok`. Warnings
-   allowed by SPEC 0006 do not fail this native-login proof.
+   deadline with no failed checks. Its 32 IDs remain ordered and the exact
+   accepted skips are `units/idle-lock` and `portal/filechooser`.
+   `tools/floors` is the one exact package-boundary warning: its summary names
+   `yazi` and `starship` as not found while reporting an observed, non-missing
+   `btop` version. The finite warning set admitted by this fixture is
+   `session/degraded`, `wm/capabilities`, `env/xwayland`, `palette/lint`,
+   `theme/outputs`, `fonts/glyphs`, `fonts/attribution`, and `tools/floors`,
+   matching SPEC 0006's non-fatal outcomes; a warning on any other row is an
+   error. Any other missing reused tool, an arbitrary additional skip, or a
+   failed check rejects this proof. `session/socket`,
+   `session/protocol-version`, `wm/attached`, `wm/layer-shell`,
+   `portal/answers`, `portal/config`, and `portal/screencast` are `ok`.
+   When native packages deliver Yazi and Starship and `tools/floors` therefore
+   changes to `skip`, this exact package-boundary contract must be updated; the
+   fixture must not silently accept either state.
 7. The host captures the emulated framebuffer plus doctor, state, logind,
    process, package, systemd-user and journal evidence before bounded shutdown.
    Fedora additionally records `getenforce`; its value is diagnostic evidence,
@@ -135,9 +145,11 @@ bounded harness contract.
 
 Passing N3 or N4 proves only the named x86_64 cloud-image login path, the exact
 artifacts from that workflow run, emulated virtio devices and the assertions
-above. It does not close #78's full-week human use, #79's unresolved lid policy,
-#106's SELinux/security-hardening review, #107's direct X11/activation boundary,
-or any hardware-only row in SPEC 0005.
+above. The exact `tools/floors` warning records the current native-package gap;
+it does not prove charon or thoth usable and does not waive SPEC 0024's private
+Yazi/Starship delivery. It does not close #78's full-week human use, #79's
+unresolved lid policy, #106's SELinux/security-hardening review, #107's direct
+X11/activation boundary, or any hardware-only row in SPEC 0005.
 
 ## Open questions
 
