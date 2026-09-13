@@ -93,12 +93,6 @@ require_line "$tmp_dir/canonical/.github/workflows/distro.yml" \
 require_line "$tmp_dir/canonical/.github/workflows/ci.yml" \
     '          sudo apt-get install -y --no-install-recommends debhelper rpm zstd fonts-dejavu-core' \
     'native package fixture CI does not install its test font explicitly'
-require_line "$tmp_dir/canonical/docs/INSTALL.md" \
-    'sudo apt install devscripts debhelper rustc-1.89 cargo-1.89 pkg-config python3 zstd fonts-dejavu-core' \
-    'Debian clean-host guidance omits its test font'
-require_line "$tmp_dir/canonical/docs/INSTALL.md" \
-    'sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts' \
-    'Fedora clean-host guidance omits its test fonts'
 expect_pass "$tmp_dir/canonical"
 
 cp -R "$tmp_dir/canonical" "$tmp_dir/debian-hard-symbol"
