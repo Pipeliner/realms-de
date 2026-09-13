@@ -214,8 +214,10 @@ EOF
               ),
               (
                   "Realm user unit journal",
-                  "journalctl --user --machine=alice@ -b --no-pager -n 200 "
-                  "-u realm-session.target -u realm-wm.service -u realm-bar.service",
+                  "journalctl -b --no-pager -n 200 _UID=1000 "
+                  "_SYSTEMD_USER_UNIT=realm-session.target "
+                  "_SYSTEMD_USER_UNIT=realm-wm.service "
+                  "_SYSTEMD_USER_UNIT=realm-bar.service",
               ),
               (
                   "display manager journal",
