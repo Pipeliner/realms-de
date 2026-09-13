@@ -75,7 +75,12 @@ def observe_window(
         and stats[0]["status"] == 0
         and "Map State: IsViewable" in str(stats[0]["output"])
     )
-    return {"tree": tree, "window_ids": ids, "stats": stats, "viewable": viewable}
+    return {
+        "tree": tree,
+        "window_ids": ids,
+        "stats": stats,
+        "viewable": viewable,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
