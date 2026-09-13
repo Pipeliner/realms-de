@@ -43,6 +43,7 @@ jobs:
             curl \
             git \
             hwdata \
+            iproute2 \
             libcap-dev \
             libegl-dev \
             libevdev-dev \

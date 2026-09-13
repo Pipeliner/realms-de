@@ -18,13 +18,17 @@ if [[ "$current_netns" == "$parent_netns" ]]; then
     echo "closure build: network namespace was not isolated" >&2
     exit 1
 fi
-mapfile -t interfaces < <(find /sys/class/net -mindepth 1 -maxdepth 1 -printf '%f\n')
+mapfile -t interfaces < <(
+    ip -o link show | awk -F ': ' '{ name = $2; sub(/@.*/, "", name); print name }'
+)
 if [[ ${#interfaces[@]} -ne 1 || ${interfaces[0]} != lo ]]; then
-    echo "closure build: isolated namespace has a non-loopback interface" >&2
+    echo "closure build: isolated namespace interface inventory differs: ${interfaces[*]}" >&2
     exit 1
 fi
-lo_flags=$(< /sys/class/net/lo/flags)
-if (( (lo_flags & 1) != 0 )); then
+lo_line=$(ip -o link show dev lo)
+lo_flags=${lo_line#*<}
+lo_flags=${lo_flags%%>*}
+if [[ ",$lo_flags," == *,UP,* ]]; then
     echo "closure build: loopback interface is usable" >&2
     exit 1
 fi
