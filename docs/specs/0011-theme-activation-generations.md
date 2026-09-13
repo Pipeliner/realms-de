@@ -477,8 +477,8 @@ Here `<N>` is the absolute path returned by the one validated
 is one argument, and `zsh` is the final command argument. Realm passes no
 mutable ordinary-config path, no other option, and no fallback invocation. The
 executable basenames are resolved
-from the packaged session's inherited `PATH`; packaging must make the declared
-`foot` and `fuzzel` dependencies reachable there. A missing executable or
+from the packaged session's inherited `PATH`; packaging must make `foot`,
+`fuzzel`, `zsh`, `starship`, `yazi` and `btop` reachable there. A missing executable or
 rejected generation is a visible launch failure, never permission to omit
 `--config=`.
 The terminal executor validates this complete manifest-listed set before exec:
