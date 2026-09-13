@@ -1,6 +1,6 @@
 # SPEC 0022 — Colour-template literal guard
 
-- **Status:** Accepted (2026-08-31)
+- **Status:** Accepted (2026-08-31; Foot cursor-key correction 2026-09-13)
 - **Milestone:** M1
 - **Issue:** [#24](https://github.com/Pipeliner/realms-de/issues/24)
 - **Decisions:** [ADR 0005](../adr/0005-palette-toml-single-source.md), [SPEC 0002](0002-theme-pipeline.md)
@@ -69,8 +69,10 @@ allowlists.
    expressions such as `{{ border.seam.rgba(border.seam_alpha) }}` remain valid
    source syntax.
 4. In `foot.ini`, only colour-key values in the `[colors]` section are colour
-   positions. The one non-colour setting is exactly `alpha=1.0`; another key or
-   alpha spelling fails. Each colour-key value is either one or two
+   positions. The required key set includes Foot's two-value `cursor` colour;
+   `[cursor]` contains cursor shape settings and does not own a `color` key.
+   The one non-colour setting in `[colors]` is exactly `alpha=1.0`; another key
+   or alpha spelling fails. Each colour-key value is either one or two
    whitespace-separated complete Realm placeholder expressions ending in
    `.bare`, or it fails. A raw contiguous six- or eight-ASCII-hex-digit
    candidate, a placeholder without `.bare`, and extra non-whitespace bytes
@@ -107,7 +109,7 @@ allowlists.
 |---|---|---|
 | A1 | Given the exact shipped eight-template inventory and its literal Rust catalogue operands, when the checker runs, then it passes and detects a missing, additional, unclassified, catalogue-divergent, comment-spoofed, raw-string-spoofed, nested-function-spoofed, disabled-top-level-function-spoofed, or disabled-inner-decoy template source; the compiled mapping test also rejects macro-generated source substitution. | `docs/test-colour-template-literals.sh` — `shipped`, `missing-template`, `additional-template`, `catalogue-duplicate-operand`, `catalogue-redirected-source`, `catalogue-comment-spoof`, `catalogue-raw-string-spoof`, `catalogue-raw-byte-string-spoof`, `catalogue-raw-c-string-spoof`, `catalogue-nested-function-spoof`, `catalogue-cfg-disabled-top-level-spoof`, `catalogue-disabled-inner-decoy-spoof`; `template::tests::compiled_catalogue_embeds_the_declared_template_sources` |
 | A2 | Given a GTK template with literal or malformed hex, or case-insensitive boundary-valid `rgb`/`rgba` outside a placeholder across CSS lexical spellings and lines, when the checker runs, then it fails with path, line, and complete token; a placeholder transform passes. | `docs/test-colour-template-literals.sh` — `gtk-rgb-across-crlf`, `gtk-malformed-hex` |
-| A3 | Given a Foot `[colors]` literal or invalid `alpha` setting, a Fuzzel raw/malformed opacity composition, and a Qt raw/incorrect-alpha/empty/unclassified colour field, when the checker runs, then each fails; the shipped placeholder compositions pass. | `docs/test-colour-template-literals.sh` — `foot-invalid-alpha`, `foot-raw-colour`, `fuzzel-raw-colour`, `fuzzel-invalid-opacity`, `qt-raw-colour`, `qt-unclassified-colour-field` |
+| A3 | Given a Foot `[colors]` literal, invalid `alpha`, or the cursor colour misplaced as `[cursor].color`, a Fuzzel raw/malformed opacity composition, and a Qt raw/incorrect-alpha/empty/unclassified colour field, when the checker runs, then each fails; the shipped placeholder compositions pass. | `docs/test-colour-template-literals.sh` — `foot-invalid-alpha`, `foot-raw-colour`, `foot-misplaced-cursor-colour`, `fuzzel-raw-colour`, `fuzzel-invalid-opacity`, `qt-raw-colour`, `qt-unclassified-colour-field` |
 | A4 | Given btop, Yazi, or Starship with a target-position literal or malformed value outside a placeholder, including CRLF and repeated-literal fixtures, when the checker runs, then every violation is reported. | `docs/test-colour-template-literals.sh` — `btop-raw-colour`, `yazi-raw-colour`, `yazi-unquoted-colour`, `starship-literal`, `starship-non-placeholder-style` |
 | A5 | Given the palette CI workflow, when it runs on a pull request, then it invokes the same checker; a hostile fixture proves a checker failure is surfaced. | `docs/test-colour-template-literals.sh` — `ci-invokes-checker` |
 

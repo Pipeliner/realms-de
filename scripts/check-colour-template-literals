@@ -295,6 +295,7 @@ class Checker:
         in_colours = False
         colour_keys = {
             "background", "foreground", "selection-background", "selection-foreground", "urls",
+            "cursor",
             *(f"regular{number}" for number in range(8)),
             *(f"bright{number}" for number in range(8)),
         }
