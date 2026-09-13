@@ -163,14 +163,14 @@
 
       # `checks.session-boots` is a NixOS VM test and needs a KVM-capable
       # builder; `shellcheck`, `package`, `packaged-binaries`, and
-      # `realm-sdd-git-runtime` build
+      # `realm-sdd-git-runtime`, and `xwayland-window-observation` build
       # anywhere. CI (distro.yml) falls back to `nix flake check --no-build`
-      # plus those four when /dev/kvm is absent, so keep them independently
+      # plus those five when /dev/kvm is absent, so keep them independently
       # buildable.
       checks = forAllSystems (
         pkgs:
         import ./packaging/nix/checks.nix {
-          inherit pkgs lib nixosModule sourceRevision;
+          inherit pkgs lib nixosModule sourceRevision support;
           src = self;
           realm = realmPackage pkgs;
           desktopAdmissionVmTest = desktopAdmissionVmTest pkgs;

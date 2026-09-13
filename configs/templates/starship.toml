@@ -20,6 +20,7 @@ $character\
 """
 
 [character]
+format = "$symbol"
 success_symbol = "[{{ glyphs.prompt_sigil_fallback }}](bold fg:{{ pantheon.thoth }})[%](bold fg:{{ pantheon.thoth }}) "
 error_symbol = "[{{ glyphs.prompt_sigil_fallback }}](bold fg:{{ accent.gold }})[%](bold fg:{{ accent.gold }}) "
 vimcmd_symbol = "[{{ glyphs.prompt_sigil_fallback }}](bold fg:{{ accent.violet }})[%](bold fg:{{ accent.violet }}) "

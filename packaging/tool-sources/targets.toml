@@ -7,10 +7,10 @@ starship = "locked-nixpkgs"
 
 [[target]]
 name = "debian"
-yazi = "retained:yazi@26.8.15"
-starship = "retained:starship@1.26.0"
+yazi = "retained:yazi@25.4.8"
+starship = "retained:starship@1.23.0"
 
 [[target]]
 name = "fedora"
-yazi = "retained:yazi@26.8.15"
-starship = "retained:starship@1.26.0"
+yazi = "retained:yazi@25.4.8"
+starship = "retained:starship@1.23.0"
