@@ -420,8 +420,17 @@ EOF
           ("realm-grimoire.png", "control-grimoire-state.json"),
       ]:
           payload = (Path(machine.out_dir) / filename).read_bytes()
+          # The requested VM mode need not be the compositor's actual mode.
+          # Read the PNG IHDR rather than claiming the configured resolution.
+          assert payload[:8] == bytes([137, 80, 78, 71, 13, 10, 26, 10])
+          assert payload[12:16] == b"IHDR" and len(payload) >= 24
+          width = int.from_bytes(payload[16:20], "big")
+          height = int.from_bytes(payload[20:24], "big")
+          assert width > 0 and height > 0
           captures.append({
               "file": filename,
+              "width": width,
+              "height": height,
               "sha256": hashlib.sha256(payload).hexdigest(),
               "state_file": state_file,
           })
@@ -429,7 +438,7 @@ EOF
           "schema": "realm-vm-capture-provenance/v1",
           "source_revision": "${sourceRevision}",
           "realm_package": "${realm}",
-          "environment": "NixOS QEMU framebuffer, River 0.4.8, 1920x1080",
+          "environment": "NixOS QEMU framebuffer, River 0.4.8; dimensions recorded per capture",
           "nixos_version": machine.succeed("nixos-version").strip(),
           "kernel": machine.succeed("uname -srmo").strip(),
           "river_version": machine.succeed("river -version").strip(),
