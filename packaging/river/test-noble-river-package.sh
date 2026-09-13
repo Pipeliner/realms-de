@@ -96,6 +96,8 @@ cat >"$pc_stage/share/pkgconfig/wayland-scanner.pc" <<'EOF'
 prefix=/usr/lib/realm
 wayland_scanner=${prefix}/bin/wayland-scanner
 pkgdatadir=${prefix}/share/wayland
+absolute_tool=/usr/lib/realm/bin/wayland-scanner
+unrelated_path=/usr/lib/realmish/bin/tool
 EOF
 cat >"$host_pc" <<'EOF'
 prefix=/usr
@@ -104,10 +106,15 @@ libdir=${prefix}/lib/x86_64-linux-gnu
 EOF
 cp "$host_pc" "$tmpdir/host.pc.before"
 "$pc_relocator" /usr/lib/realm "$pc_stage"
+"$pc_relocator" /usr/lib/realm "$pc_stage"
 grep -Fx "prefix=$pc_stage" "$pc_stage/lib/pkgconfig/libdrm.pc" >/dev/null
 grep -Fx "includedir=\${prefix}/include/libdrm" \
     "$pc_stage/lib/pkgconfig/libdrm.pc" >/dev/null
 grep -Fx "wayland_scanner=\${prefix}/bin/wayland-scanner" \
+    "$pc_stage/share/pkgconfig/wayland-scanner.pc" >/dev/null
+grep -Fx "absolute_tool=$pc_stage/bin/wayland-scanner" \
+    "$pc_stage/share/pkgconfig/wayland-scanner.pc" >/dev/null
+grep -Fx 'unrelated_path=/usr/lib/realmish/bin/tool' \
     "$pc_stage/share/pkgconfig/wayland-scanner.pc" >/dev/null
 if grep -R -Fx 'prefix=/usr/lib/realm' "$pc_stage/lib/pkgconfig" \
     "$pc_stage/share/pkgconfig" >/dev/null; then

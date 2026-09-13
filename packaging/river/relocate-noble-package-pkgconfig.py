@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -15,6 +16,10 @@ def main() -> None:
     if logical_prefix != "/usr/lib/realm":
         raise SystemExit(f"unexpected logical prefix: {logical_prefix}")
     staged_prefix = Path(sys.argv[2]).resolve(strict=True)
+    path_token = re.compile(
+        rf"(?P<lead>^|[=:\s]|-[IL]){re.escape(logical_prefix)}(?=$|[/\s])",
+        re.MULTILINE,
+    )
 
     for relative in ("lib/pkgconfig", "share/pkgconfig"):
         directory = staged_prefix / relative
@@ -22,10 +27,11 @@ def main() -> None:
             continue
         for record in directory.glob("*.pc"):
             text = record.read_text(encoding="utf-8")
-            record.write_text(
-                text.replace(logical_prefix, str(staged_prefix)),
-                encoding="utf-8",
+            relocated = path_token.sub(
+                lambda match: match.group("lead") + str(staged_prefix), text
             )
+            if relocated != text:
+                record.write_text(relocated, encoding="utf-8")
 
 
 if __name__ == "__main__":

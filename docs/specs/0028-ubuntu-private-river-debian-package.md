@@ -102,9 +102,10 @@ remains unproven until the later hardware obligation.
 
 1. C dependencies are configured with logical prefix `/usr/lib/realm` and
    installed beneath Debhelper's `DESTDIR`. After each private install, only
-   that staged private pkg-config metadata has literal `/usr/lib/realm` paths
-   rewritten to the physical staged prefix for subsequent compilation; these
-   build-only records are removed before payload projection. Host pkg-config
+   that staged private pkg-config metadata has literal `/usr/lib/realm` path
+   tokens idempotently rewritten to the physical staged prefix for subsequent
+   compilation; already-staged paths are preserved across later installs and
+   these build-only records are removed before payload projection. Host pkg-config
    metadata (including libevdev, libwacom and udev) remains byte-for-byte
    untouched and no global pkg-config sysroot may rewrite its paths. The staged
    include/library and tool search paths remain in effect. Meson's logical
