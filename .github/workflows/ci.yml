@@ -134,6 +134,7 @@ jobs:
   docs:
     name: docs
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
       # realm-core is the contract every other crate is written against, so an
       # undocumented public item is a broken contract, not a nit.
