@@ -1559,13 +1559,15 @@ mod tests {
             std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
             0o400
         );
-        assert!(
-            std::fs::OpenOptions::new()
-                .write(true)
-                .open(&config)
-                .is_err(),
-            "the selected btop config accepted an ordinary write-open"
-        );
+        if rustix::process::geteuid().as_raw() != 0 {
+            assert!(
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&config)
+                    .is_err(),
+                "the selected btop config accepted an ordinary write-open"
+            );
+        }
 
         let store = GenerationStore::open(&root.path().join("realm/generated")).unwrap();
         let selected = store.select_current().unwrap();
