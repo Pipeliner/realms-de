@@ -504,7 +504,8 @@ that it works.
   trusted from here.*
 - Settings: the installed VM calls `org.freedesktop.portal.Settings.ReadAll`
   and requires its typed result rather than treating interface introspection as
-  a reply.
+  a reply. This is an A13a fixture obligation, not a new `realmctl doctor`
+  check id; SPEC 0006's fixed 32-check surface remains unchanged.
 - ScreenCast: `doctor` still asserts the interface and configured implementation.
   The stronger installed-VM guard completes `CreateSession`, `SelectSources`,
   and `Start`, obtains the restricted remote from `OpenPipeWireRemote`, and
@@ -663,7 +664,6 @@ gate (ADR 0011's guard).
 | `portal/answers` | `org.freedesktop.portal.Desktop` responds without a pause | The 25 s hang | VM |
 | `portal/config` | A `realm-portals.conf` is found and names a backend per interface | Behaviour that changes with what is installed | **CI** (file) / VM (effect) |
 | `portal/filechooser` | `--portal-roundtrip`: a handle within 2 s | "Open File does nothing" | VM |
-| `portal/settings` | `Settings.ReadAll` returns its typed settings map through the running proxy/backend path | Toolkit settings silently fall back | VM |
 | `portal/screencast` | The interface/configured implementation checks pass and the installed VM consumes a nonempty buffer from the restricted PipeWire node returned by a complete ScreenCast request sequence | Screen share silently produces nothing | VM; the browser picker and physical-machine capture remain **HARDWARE** |
 | `session/socket` | `$XDG_RUNTIME_DIR/realm/ctl.sock` answers `Hello` | — | VM |
 | `session/protocol-version` | Matches `realm_core::ipc::PROTOCOL_VERSION` | Bar and session disagree | **CI** |
