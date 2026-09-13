@@ -134,6 +134,15 @@ set +e
 status=$?
 set -e
 printf 'cargo-result|status=%s\n' "$status" >>"$REALM_SENTINEL_LOG"
+if [ "$status" -eq 0 ] && [ "${1:-}" = build ]; then
+    for bin in realmctl realm-wm realm-bar; do
+        if [ -x "${REALM_EXPECTED_TARGET_DIR:?}/release/$bin" ]; then
+            printf 'cargo-output|binary=%s|executable=yes\n' "$bin" >>"$REALM_SENTINEL_LOG"
+        else
+            printf 'cargo-output|binary=%s|executable=no\n' "$bin" >>"$REALM_SENTINEL_LOG"
+        fi
+    done
+fi
 exit "$status"
 EOF
     chmod +x "$directory/cargo"
@@ -352,7 +361,7 @@ accepts_offline_cargo() {
         *) fail "$name did not run the exact package-relevant workspace test selection" ;;
     esac
     for bin in realmctl realm-wm realm-bar; do
-        if [ ! -x "$REALM_EXPECTED_TARGET_DIR/release/$bin" ]; then
+        if ! grep -F -x "cargo-output|binary=$bin|executable=yes" "$log" >/dev/null; then
             fail "$name Cargo build did not produce the staged workspace $bin"
         fi
     done
