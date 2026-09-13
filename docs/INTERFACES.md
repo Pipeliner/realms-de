@@ -510,8 +510,8 @@ pub trait WmBackend: Send {
     /// Human-readable name, shown by `realmctl doctor`.
     fn name(&self) -> &str;
 
-    /// Connect, and report what the backend can actually honour.
-    fn connect(&mut self) -> BackendResult<Capabilities>;
+    /// Connect, and report the capabilities and protocol facts actually bound.
+    fn connect(&mut self) -> BackendResult<BackendConnection>;
 
     /// Bind a compositor-stable window identity to Realm's allocated id.
     ///
@@ -605,6 +605,13 @@ pub struct Capabilities {
     pub explicit_ordering: bool,  // can we set stacking order directly?
     pub fullscreen: bool,
     pub unsupported: Vec<String>, // named realm behaviours this backend cannot honour
+}
+
+/// Immutable facts established by one successful backend connection.
+pub struct BackendConnection {
+    pub capabilities: Capabilities,
+    pub bound_interfaces: Vec<realm_core::ipc::InterfaceVersion>,
+    pub layer_shell_served: bool,
 }
 
 /// Something the compositor did that the ledger needs to know about.

@@ -1,11 +1,14 @@
 # SPEC 0011 — Immutable theme activation generations
 
-- **Status:** Accepted (2026-08-29)
+- **Status:** Accepted (2026-08-29; fixed-consumer bootstrap refinement
+  2026-09-13)
 - **Milestone:** M1
 - **Decision:** [ADR 0017](../adr/0017-immutable-theme-activation-generations.md)
 - **Issue:** [#131](https://github.com/Pipeliner/realms-de/issues/131)
 - **Contract reconciliation:** [#159](https://github.com/Pipeliner/realms-de/issues/159)
 - **Implementation refinement:** publication-order record v1 (2026-08-29)
+- **Fixed-consumer slice:** [#117](https://github.com/Pipeliner/realms-de/issues/117),
+  [#135](https://github.com/Pipeliner/realms-de/issues/135)
 
 ## Purpose
 
@@ -197,7 +200,8 @@ Realm's owned generated subtree. `current` cannot name absent, staging, malforme
 or digest-mismatched content. An apply that cannot finish before pointer commit
 leaves `current` unchanged. A successful pointer commit is the only event that
 may make a generation active for future launches. It must not signal or reload
-an existing process. A direct launch outside a verified Realm profile is not
+an existing process. Outside the two exact fixed consumers specified below, a
+direct launch that did not pass the verified Realm profile facade is not
 generation-selected.
 
 Pointer recovery recognizes only these producer-reachable journal inventories,
@@ -405,7 +409,12 @@ including safe escaping of the diagnostic cause. This result mapping neither
 adds a live-upgrade mechanism nor preserves a control-socket wire contract.
 
 Before publication, the apply boundary holds only safe input locators and opens
-the configuration root.  It creates or opens `realm/generated` only
+the configuration root. Session bootstrap additionally accepts a missing final
+configuration-root component below an existing safely opened parent as fresh
+login absence: it creates exactly that component with `mkdirat` mode 0700,
+reopens it without following links, and fsyncs the parent. Missing earlier
+ancestors and every unsafe or unreadable existing component remain errors. It
+creates or opens `realm/generated` only
 descriptor-relatively: each existing component is opened with `O_NOFOLLOW`,
 the final generated root is current-UID mode 0700, and an absent `realm` or
 `generated` component is created with `mkdirat` mode 0700 then reopened and
@@ -434,6 +443,87 @@ raw bytes are exactly `realm-theme-launch-profile-v1\nnone\n`; any later
 profile selection supplies its own raw bytes instead.  The current renderer
 option map is empty, so its renderer preimage is exactly
 `realm-theme-renderer-v1\n`.  Empty is a value, not an omitted preimage.
+
+### MVP fixed-consumer bootstrap and bindings
+
+The first #117/#135 delivery is deliberately smaller than the general profile
+launcher. It defines two built-in **fixed theme consumers** whose policy is
+compiled into Realm, not supplied as an external launch-profile input. The
+built-in launch-profile bytes therefore remain exactly
+`realm-theme-launch-profile-v1\nnone\n`; an already valid current generation is
+not made obsolete merely by installing this consumer support.
+
+The only fixed consumer identifiers and invocations are:
+
+| Consumer | Exact child argv | Required manifest output |
+|---|---|---|
+| `terminal` | `foot`, `--config=<N>/foot/foot.ini`, `--override=key-bindings.spawn-terminal=none` | `foot/foot.ini` |
+| `launcher` | `fuzzel`, `--config=<N>/fuzzel/fuzzel.ini` | `fuzzel/fuzzel.ini` |
+
+Here `<N>` is the absolute path returned by the one validated
+`GenerationSelection`; each `--config=` or `--override=` option and its value
+are one argument. Realm passes no shell, no mutable ordinary-config path, no
+other option, and no fallback invocation. The executable basenames are resolved
+from the packaged session's inherited `PATH`; packaging must make the declared
+`foot` and `fuzzel` dependencies reachable there. A missing executable or
+rejected generation is a visible launch failure, never permission to omit
+`--config=`.
+The terminal invocation lets foot start the user's ordinary default shell. The
+launcher invocation uses fuzzel's default XDG-application mode. Only the fuzzel
+UI consumes N: an application that fuzzel starts remains ADR 0018's explicitly
+unverified direct launch and must not be reported as a Realm profile or as
+generation-selected.
+
+The terminal's exact command-line override disables foot's default
+`spawn-terminal` action independently of the selected generation's template
+bytes; users open another terminal through Realm's terminal binding. This is
+required so an already-valid generation published before this refinement
+remains usable without republishing and cannot create a later process carrying
+N's config path beyond the leased foot PID. Foot's shell child does not receive
+the config path. Fuzzel reads its config in the directly executed UI process and
+does not pass that config argument or path to the XDG application it starts.
+Consumer fixtures must prove these two boundaries against the packaged
+versions; a package whose `--config=PATH`,
+`--override=[SECTION.]KEY=VALUE`, or `spawn-terminal=none` grammar differs is
+unsupported rather than launched without the exact binding.
+
+Before publishing WM readiness or accepting the first action that could launch
+either consumer, session bootstrap performs one serialized **ensure-current**
+operation against the captured configuration root:
+
+1. If `current` exists and the complete pointer transaction, sealed generation,
+   manifest, receipt, membership, and output digests validate, bootstrap keeps
+   that exact generation. It performs no apply, pointer write, repair, rollback,
+   or palette seed, even when a newer package or different candidate palette
+   would render different bytes.
+2. If `current` is absent and the complete generated-store inventory is the
+   clean absent state accepted by this specification, bootstrap runs the
+   built-in apply exactly once while holding the ordinary exclusive generation
+   lock. That apply may seed the already specified user palette only when the
+   palette itself is absent. `Committed` and `CommittedWithCleanupPending`
+   establish the generation for later launches; bootstrap does not retain a
+   launch lease.
+3. An existing malformed, unsafe, unreadable, missing-target, digest-mismatched,
+   or transactionally inconsistent `current`, or an absent pointer accompanied
+   by any state requiring recovery, is not the clean absent case. Bootstrap
+   reports the exact failure and does not apply, repair, retry, select newest,
+   or launch an unthemed fallback. `OutcomeAmbiguous` likewise fails startup and
+   is not retried.
+
+For this operation, **clean absent** means either that the final configuration
+root is absent below its existing safely opened parent, that no Realm-owned
+`realm/generated` directory exists below a valid captured configuration root,
+or that a valid initialized generated store has no `current`, generation,
+lease, staging entry, or pointer journal. A partially initialized control tree,
+an unpointed final generation, or any other retained transaction/lease evidence
+is not fresh-login absence and is reported without mutation.
+
+The absence test and possible first apply are one atomic store operation. A
+concurrent successful apply observed after bootstrap acquires the exclusive
+lock is retained as existing current; bootstrap must not overwrite it with a
+second candidate. Failure prevents `realm-wm` readiness so the existing
+session-startup supervision path surfaces the error instead of admitting
+bindings that cannot work.
 
 For the catalogue preimage, `reload-kind-bytes` use this canonical UTF-8
 encoding with no trailing newline: `none`; `realm-clients`; or
@@ -490,6 +580,8 @@ candidate with a partially validated or mixed generation.
 | G10 | Given a valid current generation and a candidate whose normalized output set differs, when `theme diff` runs, then it reports only lexicographically sorted `added`, `removed`, and `byte-different` output paths after fully validating current, and performs no control initialization, recovery, lease, GC, publication, output write, pointer switch, or reload. |
 | G11 | Given a successful apply or rollback pointer commit, when existing processes continue running, then Realm sends no signal, command, or notification and only later launches may select the newly current generation. |
 | G12 | Given `Committed`, `CommittedWithCleanupPending`, or `OutcomeAmbiguous`, when `realmctl theme apply` reports the result, then the first two exit 0 and name the selected future-launch generation (with a cleanup warning for the second), while the ambiguous result exits 6, claims no activation, safely reports its candidate/cause, and performs no automatic recovery or retry. |
+| G13 | Given a fresh login whose final configuration root is absent below an existing safely opened parent, a present configuration root with cleanly absent current, a valid current, malformed current, or an absent pointer with recovery evidence, when session bootstrap ensures current, then only clean absence descriptor-relatively creates the final root if needed and performs one serialized built-in apply; valid current is byte-for-byte retained without apply or palette seed, and every malformed/inconsistent case fails readiness without repair, retry, newest-generation selection, or unthemed fallback. A concurrent valid apply that wins the lock is retained rather than overwritten. |
+| G14 | Given either fixed consumer, including terminal launch from an already-valid generation whose foot output predates this refinement, and a later pointer switch from N to N+1, when Realm launches it, then its exact argv contains one `--config=` path below its fully validated selected N, terminal argv also contains the exact `spawn-terminal=none` command-line override, its process lease exists durably before exec and remains live for that unchanged PID until the consumer exits, and it never reads an ordinary mutable foot/fuzzel config as fallback. The fuzzel-started application is explicitly not reported as generation-selected. |
 
 ## Boundaries
 

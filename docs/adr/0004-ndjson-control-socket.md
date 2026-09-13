@@ -16,12 +16,14 @@ properties, in this order of importance:
    matching Hello followed by one request, with an LF after each JSON value:
 
    ```text
-   {"cmd":"hello","arg":{"version":1,"client":"shell"}}
+   {"cmd":"hello","arg":{"version":2,"client":"shell"}}
    {"cmd":"switch-orbit","arg":3}
    ```
 
    Sending those two frames to `$XDG_RUNTIME_DIR/realm/ctl.sock` with `socat`
-   is the bar we are aiming at.
+   is the bar we are aiming at. The example uses the current
+   `realm_core::ipc::PROTOCOL_VERSION`; a different version receives only the
+   server's Hello before the connection closes.
 2. **Unmisreadable framing.** A half-written frame must never parse as a
    complete one. `docs/PITFALLS.md` lists version skew between components as a
    packaging pitfall; a protocol that silently misinterprets a truncated or

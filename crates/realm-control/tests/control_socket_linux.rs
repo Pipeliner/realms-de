@@ -273,6 +273,7 @@ fn respond(server: &mut ControlServer, action: ControlAction) {
                     now,
                     connection,
                     Response::Error {
+                        kind: realm_core::ipc::ErrorKind::BackendRefused,
                         message: "unsupported by integration fixture".into(),
                     },
                 )
@@ -547,6 +548,7 @@ fn a_full_send_buffer_returns_from_one_nonblocking_quantum() {
     assert!(fixture.receive_pipeline(token).is_none());
     let first_connection = expect_request(fixture.drain_writes(token, deadline), Request::GetState);
     let large_response = Response::Error {
+        kind: realm_core::ipc::ErrorKind::Internal,
         message: "x".repeat(60_000),
     };
     assert!(ipc::encode(&large_response).unwrap().len() < ipc::MAX_FRAME_BYTES);
@@ -686,9 +688,7 @@ fn shell_two_frame_interoperability_is_ordered() {
         .stdin
         .take()
         .expect("pipe literal frames to socat")
-        .write_all(
-            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"socat\"}}\n{\"cmd\":\"get-state\"}\n",
-        )
+        .write_all(&shell_interoperability_frames())
         .expect("write the two literal LF-terminated ADR frames");
 
     let (status, stdout, stderr) = child.wait(deadline);
@@ -704,4 +704,29 @@ fn shell_two_frame_interoperability_is_ordered() {
 
     server_thread.finish();
     drop(runtime);
+}
+
+fn shell_interoperability_frames() -> Vec<u8> {
+    // Keep the external client's literal wire shape independent of ipc::encode,
+    // but follow the declared version for this matching-handshake fixture.
+    format!(
+        "{{\"cmd\":\"hello\",\"arg\":{{\"version\":{PROTOCOL_VERSION},\"client\":\"socat\"}}}}\n{{\"cmd\":\"get-state\"}}\n"
+    )
+    .into_bytes()
+}
+
+#[test]
+fn shell_interoperability_frames_match_current_protocol() {
+    let frames = shell_interoperability_frames();
+    assert!(frames.ends_with(b"\n"));
+    let lines: Vec<_> = std::str::from_utf8(&frames).unwrap().lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(
+        ipc::decode::<Request>(lines[0]).unwrap(),
+        Request::Hello {
+            version: PROTOCOL_VERSION,
+            client: "socat".to_owned(),
+        }
+    );
+    assert_eq!(ipc::decode::<Request>(lines[1]).unwrap(), Request::GetState);
 }

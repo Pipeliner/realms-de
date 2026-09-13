@@ -32,6 +32,7 @@ authors = ["realm contributors"]
 [workspace.dependencies]
 realm-core = { path = "crates/realm-core", version = "0.1.0" }
 realm-control = { path = "crates/realm-control", version = "0.1.0" }
+realm-theme = { path = "crates/realm-theme", version = "0.1.0" }
 
 anyhow = "1"
 thiserror = "2"
