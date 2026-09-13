@@ -497,9 +497,9 @@ EOF
           activated_display,
           imported_display,
       )
-      machine.succeed(
-          f"test \"$(readlink /proc/{x11_pid}/exe)\" = ${pkgs.xmessage}/bin/xmessage"
-      )
+      x11_exe = machine.succeed(f"readlink /proc/{x11_pid}/exe").strip()
+      expected_x11_exe = "${pkgs.xmessage}/bin/.xmessage-wrapped"
+      assert x11_exe == expected_x11_exe, (x11_exe, expected_x11_exe)
       wait_for_state(
           lambda response: sum(
               cell["windows"] for cell in response["data"]["orbits"]
