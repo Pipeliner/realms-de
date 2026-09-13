@@ -1,0 +1,61 @@
+name: Rebind Realm workspace source
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/rebind-realm-workspace.yml
+      - docs/specs/0024-m1-private-tool-bundle.md
+      - packaging/tool-sources/README.md
+      - packaging/tool-sources/ci_rebind_realm_workspace.py
+      - packaging/tool-sources/test-ci-rebind.py
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact 40-character source commit to bind
+        required: true
+        type: string
+
+concurrency:
+  group: realm-workspace-rebind-${{ inputs.source_commit || github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  produce-candidate:
+    name: Produce validated source-binding candidate
+    runs-on: ubuntu-24.04
+    env:
+      SOURCE_COMMIT: ${{ inputs.source_commit || github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tooling
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          path: source
+          ref: ${{ inputs.source_commit || github.event.pull_request.head.sha }}
+      - name: Produce candidate in runner-local storage
+        run: |
+          set -euo pipefail
+          python3 tooling/packaging/tool-sources/ci_rebind_realm_workspace.py \
+            --repo "$GITHUB_WORKSPACE/source" \
+            --commit "$SOURCE_COMMIT" \
+            --output "$RUNNER_TEMP/realm-workspace-rebind"
+      - name: Validate complete candidate bundle
+        run: |
+          set -euo pipefail
+          python3 tooling/packaging/tool-sources/check-bundle-linkage.py \
+            "$RUNNER_TEMP/realm-workspace-rebind"
+      - name: Upload exact candidate binding files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: realm-workspace-rebind-${{ env.SOURCE_COMMIT }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/realm-workspace-rebind/source.tar.gz
+            ${{ runner.temp }}/realm-workspace-rebind/bundle.toml
+            ${{ runner.temp }}/realm-workspace-rebind/provenance.md
