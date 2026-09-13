@@ -69,6 +69,14 @@ grep -F -q 'dontUpdateAutotoolsGnuConfigScripts = true;' "$support" || {
     echo "retained Nix Yazi permits automatic vendor mutation" >&2
     exit 1
 }
+if grep -F -q "assert '\${pkgs.yazi}/bin' in daemon_path" "$checks"; then
+    echo "Nix VM expects ambient Yazi instead of Realm's retained selection" >&2
+    exit 1
+fi
+grep -F -q "assert '\${realmYazi}/bin' in daemon_path" "$checks" || {
+    echo "Nix VM does not assert Realm's retained Yazi path" >&2
+    exit 1
+}
 
 # These are literal Nix/Python command fragments, not shell expansions.
 # shellcheck disable=SC2016
