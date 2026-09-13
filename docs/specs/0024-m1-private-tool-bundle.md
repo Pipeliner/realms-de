@@ -1,6 +1,7 @@
 # SPEC 0024 — M1 private Yazi and Starship tool bundle
 
-- **Status:** Accepted (2026-08-31; amended 2026-09-13)
+- **Status:** Accepted (2026-08-31; retained-tool, dual-Foot-config, and
+  terminal GTK/Qt refinements 2026-09-13)
 - **Milestone:** M1
 - **Issue:** [#134](https://github.com/Pipeliner/realms-de/issues/134)
 - **Refines:** [SPEC 0023](0023-m1-tool-source-intake.md)
@@ -31,6 +32,24 @@ versions requires a reviewed SPEC 0023 intake update that adds their complete
 offline closures and provenance records before a package build may consume
 them. This specification neither deletes the current records nor treats a
 top-level archive as an offline build input.
+
+The Realm-scoped Nix package path SHALL also build Yazi `25.4.8` from the
+selected retained source archive, lockfile and vendor archive above. It SHALL
+not substitute nixpkgs' moving Yazi package: `26.8.15` uses a different keymap
+section name and cannot consume the selected `25.4.8` configuration unchanged.
+This pin applies only inside `support.reusedTools`; it is not a global nixpkgs
+overlay. The normal nixpkgs Yazi wrapper may still supply its declared optional
+runtime tools around the retained unwrapped binary. Evaluation and the
+installed-session fixture SHALL assert the exact `25.4.8` version, and its
+build has no fetch path beyond the already retained archives.
+
+The retained Nix build SHALL disable Nix's automatic Autotools GNU-config
+script update phase for this derivation. The vendored `config.sub` and
+`config.guess` files are Cargo directory-source inputs whose checksums are
+bound by the retained vendor closure; rewriting them before Cargo's checksum
+validation is neither an update nor an admissible build adaptation. This does
+not disable Cargo's checksum verification or permit another vendored-file
+mutation.
 
 ## Offline bundle contract
 
@@ -180,6 +199,48 @@ disabled and empty Cargo registry/Git caches, reject a
 closure/configuration/lockfile mismatch, and fail when an adversarial
 injected-fetch attempt is present in either recipe.
 
+The selected Starship 1.23.0 source invokes `shadow-rs` from its build script.
+Before native compilation, the selected-tool stager SHALL apply one
+Starship-specific, record-bound patch which extends `shadow-rs`'s upstream
+default deny set with `CARGO_TREE`. The bundle record SHALL bind the patch
+digest and the exact SHA-256 of `build.rs` before and after application. The
+stager SHALL first validate and unpack the original retained source archive
+unchanged, refuse a missing, symlinked, digest-mismatched, or path-escaping
+patch, refuse a preimage mismatch, apply the patch exactly once, and refuse a
+postimage mismatch. Staging repeatedly into the same destination SHALL replace
+the old stage with a fully materialized copy from the original archive and
+produce the same patched `build.rs`; it SHALL NOT apply the patch cumulatively
+or mutate the retained archive. A failed replacement SHALL restore the prior
+complete stage. Staging happens before compilation and makes no concurrent
+consumer or continuously-present-path guarantee. Native package build metadata
+and every CI lane which invokes the stager SHALL declare the `patch` utility
+rather than inherit it accidentally from the host.
+
+With `CARGO_TREE` denied, the pinned `shadow-rs` build still makes one
+unconditional `cargo -V` metadata query. The native fixture MAY classify only
+that exact invocation from the selected Starship source and Cargo home as
+build-script metadata. It SHALL execute the supplied real Cargo unchanged,
+retain the validated source-replacement configuration in the now populated
+Starship Cargo home, and require the query to succeed. This metadata query is
+not a recipe build/test invocation and does not weaken the requirement that the
+three authoritative builds and one workspace test use
+`--frozen --offline --locked`. `cargo tree`, any other nested Cargo command, a
+fifth authoritative build/test, or Cargo from another source/home remains a
+failure.
+
+Pinned `shadow-rs` also attempts local VCS metadata commands even though the
+retained source archive contains no Git repository. During the selected
+Starship stage, the fixture SHALL put a denying sentinel ahead of Git, require
+the exact read-only metadata attempts made by pinned `shadow-rs`, and prove
+that no real Git executable ran. The allowlisted attempts are limited to
+`status`, `rev-parse`, `log`, `show`, `tag`, `describe`, and `symbolic-ref`
+queries. Any acquisition or mutation command, including `fetch`, `clone`,
+`pull`, `checkout`, `reset`, `clean`, `init`, `add`, `commit`, or `tag` with a
+mutation argument, remains a failure. Network access remains disabled around
+the entire package path. This compositional fixture exception records and
+denies an upstream metadata attempt; it does not permit either native recipe to
+invoke Git or weaken the source archive's deterministic authority.
+
 The fixture's disposable build tree SHALL be on a Linux filesystem that
 supports `O_TMPFILE` with file `fsync`, atomic `renameat2` publication/exchange,
 and directory `fsync`, as required by the retained lifecycle tests. CI SHALL
@@ -219,6 +280,76 @@ SHALL not accept `vergen`'s fallback metadata as release evidence or assume that
 in two different directories/times and either compare the normalized declared
 artifacts or explicitly record and justify every remaining non-identical field.
 
+For the selected `25.4.8` bundle, both native recipes SHALL set
+`SOURCE_DATE_EPOCH=1744112829`,
+`VERGEN_GIT_SHA=99ea3b74c4260a724b43af812df0f68ef59395b7`,
+`VERGEN_GIT_COMMIT_DATE=2025-04-08`, and
+`VERGEN_BUILD_DATE=2025-04-08`. These values are the Unix epoch, commit, and
+UTC date bound by that bundle's intake record. The native Yazi build SHALL
+append `-std=gnu17` to the package builder's inherited `CFLAGS`. The
+retained `onig_sys 69.8.1` source uses pre-C23 empty-parameter callback
+declarations; selecting GNU C17 preserves their intended unspecified-argument
+meaning on GCC 16 and newer without suppressing incompatible-type diagnostics.
+This compatibility selection applies only to the selected Yazi build, not the
+Realm workspace or Starship builds.
+
+The native-package fixture SHALL distinguish build authority from runtime
+validation. All three Cargo builds, the workspace Cargo test, the one exact
+Starship `cargo -V` metadata query, and every package preparation step remain
+under the retained-Cargo and forbidden-network-command instrumentation. Only
+the already-built Yazi/ya/Starship runtime validation MAY replace that
+instrumented `PATH`; each native recipe SHALL select the fixed distro runtime
+search path `/usr/bin:/bin` directly rather than depend on a caller-supplied
+environment variable surviving Debhelper or RPM phase boundaries. Before that
+validation the recipe SHALL remove inherited Cargo/rustc selector and
+build-output variables. The runtime validation remains inside the same
+mandatory network namespace and SHALL NOT compile or fetch. The fixture SHALL
+prove that an injected package build fetch is still refused before Cargo and
+that its build log contains exactly the three selected builds, one selected
+test, and the one classified metadata query.
+
+Starship's stable retained identity is the first line of `starship --version`,
+which SHALL be exactly `starship 1.23.0`. Additional upstream version lines
+report compiler and build metadata; the fixture MAY record them but SHALL NOT
+claim they are deterministic retained identity. The deterministic source/VCS
+metadata requirements above apply to the selected Yazi/ya build. Debian and RPM
+MAY apply different native compile and link flags, so their complete ELF bytes
+are not comparable artifacts. The cross-directory reproducibility assertion
+SHALL instead compare the exact normalized Yazi and ya version/commit/date
+lines emitted by both packages; any mismatch fails.
+
+After retained-bundle verification and unpacking, Fedora preparation SHALL
+remove executable permission bits from staged regular Rust source (`*.rs`)
+files before compilation and debug-source collection. Source bytes and retained
+archives remain unchanged; executable scripts and binaries keep their modes.
+Rust inner attributes are not script shebangs. RPM's normal shebang processing
+and debug-source generation remain enabled. A fixture SHALL verify those mode
+and content boundaries, and the native CI RPM build verifies integration.
+
+The retained Yazi runtime fixture SHALL set both the process working directory
+and `PWD` to its controlled directory. Yazi 25.4.8 prefers absolute `PWD` over
+the operating-system directory; an inherited package-build `PWD` must not make
+the fixture inspect the package source tree instead of its sample file.
+
+The Yazi build command SHALL select the `yazi-fm` and `yazi-cli` packages,
+which produce `yazi` and `ya`;
+the Starship build command SHALL select the `starship` binary. Both use their
+selected bundle's staged source, vendor tree, source-replacement configuration,
+and a bundle-local target directory with `--release --frozen --offline
+--locked`. Default features are retained; a feature-set change requires a
+specification amendment because it changes the supported executables.
+
+The outer native source kits SHALL carry exactly the Realm-workspace,
+`yazi-25.4.8`, and `starship-1.23.0` bundle authorities plus the narrow staging
+helpers needed to validate and materialize those inputs. They SHALL NOT contain
+a recursive copy of any bundle, a second source snapshot, or another hidden
+workspace. Before Cargo runs, the selected-tool stager SHALL validate the
+record-bound source archive, lockfile, vendor archive, source replacement, and
+license report, then materialize only that selected bundle into an empty
+package-local stage. The target mapping SHALL identify `retained:yazi@25.4.8`
+and `retained:starship@1.23.0` for Debian and Fedora; Nix continues to use its
+locked nixpkgs inputs.
+
 ## Executable ownership and session scope
 
 Native packages SHALL install only these Realm-owned executables:
@@ -250,9 +381,10 @@ and PATH isolation for both direct and systemd-user launch paths, including the
 
 ## Yazi v25.4 configuration migration
 
-The current Realm Yazi template targets a different schema and is not valid
-configuration evidence for Yazi `25.4.8`. Its migration is part of selecting
-that version, rather than a later cosmetic change.
+The Realm Yazi template has been migrated to the selected `25.4.8` schema. The
+static `packaging/tool-sources/test-tool-configs.sh` guard already proves the
+required names below and rejects the known legacy names. That source-level
+guard is necessary but does not replace the real retained-runtime fixture.
 
 The rendered template SHALL use Yazi v25.4's names as follows:
 
@@ -279,32 +411,115 @@ is not evidence that an obsolete field had the intended effect. The fixture
 shall assert that the canonical fields are consumed, not merely that the TOML
 parses.
 
-The Starship validation SHALL render `configs/templates/starship.toml` and run
-the selected private `starship prompt` with `STARSHIP_CONFIG`, fixed HOME/cwd,
-terminal settings, shell/keymap, status, and command-duration inputs. It SHALL
-assert no configuration diagnostic on stderr and a known rendered feature from
-the Realm template, rather than only a nonempty default prompt.
+The Starship validation SHALL render `configs/templates/starship.toml`, run the
+selected private `starship prompt` with `STARSHIP_CONFIG`, fixed HOME/cwd,
+terminal settings, shell/keymap, status, and command-duration inputs, and pass
+that zsh prompt program through the selected zsh's real prompt expansion. It
+SHALL assert no configuration diagnostic on stderr and compare normalized
+visible output with the Realm template's complete expected prompt. Stripping
+ANSI directly from Starship's unevaluated `%{...%}` zsh directives is not
+rendered output. For the deterministic successful prompt, the normalized
+content is exactly `alice@machine :: ~ ~% ` with one final space. The
+configured character symbol already owns that separator, so its module format
+is exactly `$symbol`; Starship's default `$symbol ` would duplicate it.
+
+## M1 terminal-profile activation
+
+Realm-launched terminals use complete generation-local configuration; they do
+not merge, replace or repair an ordinary user zsh, Yazi or btop configuration.
+Alongside the palette-rendered theme files, every newly applied generation
+contains these byte-exact UTF-8 files with one final LF.
+
+`zsh/.zshrc`:
+
+```zsh
+eval "$(starship init zsh)"
+btop() {
+  command btop --config="$REALM_GENERATION/btop/btop.conf" \
+    --themes-dir="$REALM_GENERATION/btop/themes" "$@"
+}
+```
+
+`yazi/yazi.toml`:
+
+```toml
+[manager]
+ratio = [1, 4, 3]
+sort_by = "alphabetical"
+sort_sensitive = false
+sort_reverse = false
+sort_dir_first = true
+linemode = "size"
+show_hidden = false
+show_symlink = true
+scrolloff = 5
+```
+
+`yazi/keymap.toml`:
+
+```toml
+[manager]
+prepend_keymap = [
+  { on = "<C-p>", run = "shell 'btop --config=\"$REALM_GENERATION/btop/btop.conf\" --themes-dir=\"$REALM_GENERATION/btop/themes\"' --block", desc = "Open Realm system monitor" },
+]
+```
+
+`btop/btop.conf`:
+
+```text
+color_theme = "realm"
+theme_background = False
+truecolor = True
+force_tty = False
+vim_keys = True
+rounded_corners = True
+graph_symbol = "braille"
+shown_boxes = "cpu mem net proc"
+```
+
+`Ctrl+p` is deliberately scoped inside Yazi and does not consume a compositor
+binding. The invocation and selectors are those in SPEC 0011. Zsh resolves the
+packaged `starship`, `yazi` and `btop` from the already-owned Realm session
+`PATH`; it does not source an ordinary user startup file or add a private path
+to the systemd-user or D-Bus activation environment. The publisher creates
+`btop/btop.conf` at exact mode 0400 as SPEC 0011 defines. Btop consumes those
+bytes but cannot use its ordinary save path to rewrite the selected generation;
+the runtime fixture compares the digest again after btop exits.
+
+These outputs extend the template catalogue and therefore appear only in a
+newly applied generation. An existing valid generation without them remains
+valid and is never silently repaired; terminal launch reports its missing
+required output. Explicit `realmctl theme apply` is the normal supported update
+path and publishes a complete later generation for future terminals. Existing
+terminals keep their original selectors and receive no live reload.
 
 ## Acceptance criteria
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| B1 | Given a selected tool or Realm-workspace source bundle, when its intake linkage is validated, then archive, lockfile, every resolved Cargo source, vendor tree, source-replacement config, digest records, and dependency license report agree exactly. | To be implemented: source-bundle linkage fixture. |
-| B2 | Given retained-only Debian and Fedora source kits and their actual package build paths with networking disabled and empty Cargo caches, when source-kit recursion, emitted package documentation, selected bundles, the complete Realm workspace build, and all package-relevant staged workspace tests run (excluding only non-packaged `realm-agent-sdd`), then no hidden workspace is accepted, the installed guide names only the retained-kit workflow, all Cargo invocations use `--frozen --offline --locked`, deterministic source/VCS metadata where applicable, and no recipe fetch path exists. | `packaging/tool-sources/test-native-source-kits.sh`; `packaging/tool-sources/test-native-builds.sh` (Realm-workspace portion; selected Yazi/Starship bundle integration remains follow-on work) |
-| B3 | Given a native package install and direct or systemd-user Realm session launch, when executable and PATH ownership are inspected, then only `/usr/lib/realm/bin/*` owns the three Realm tools, Realm-launched applications resolve them, and neither user manager nor DBus activation receives the private PATH, including with `REALM_IMPORT_PATH=1`. | To be implemented: package/session ownership fixture. |
-| B4 | Given a rendered Realm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it, then a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Realm feature. | To be implemented: rendered-config runtime fixture. |
-| B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | To be implemented: dependency-license fixture. |
-| B6 | Given an exact committed workspace revision with an unchanged retained lockfile, when its source authority needs rebinding, then read-only repository CI alone creates and validates the candidate archive/records and retains exactly those three files as an artifact without committing or pushing them; a mutable ref, changed lockfile, local packaging command, or unvalidated candidate is rejected. | CI rebind workflow projection and transformation fixtures; bundle-linkage validator in the rebind job. |
+| B1 | Given a selected tool or Realm-workspace source bundle, when its intake linkage is validated, then archive, lockfile, every resolved Cargo source, vendor tree, source-replacement config, digest records, and dependency license report agree exactly. | `packaging/tool-sources/test-bundle-linkage.sh`; `packaging/tool-sources/check-bundle-linkage.py` |
+| B2 | Given retained-only Debian and Fedora source kits and their actual package build paths with networking disabled and empty Cargo caches, when source-kit recursion, emitted package documentation, selected bundles, the complete Realm workspace build, and all package-relevant staged workspace tests run (excluding only non-packaged `realm-agent-sdd`), then no hidden workspace is accepted, the installed guide names only the retained-kit workflow, the three authoritative Cargo builds and one test use `--frozen --offline --locked`, the sole additional Cargo invocation is pinned Starship's successful classified `cargo -V` metadata query, its `cargo tree` query is disabled by the exact record-bound source patch, its exact read-only Git metadata attempts are denied before Git executes, deterministic source/VCS metadata remains authoritative, and no recipe fetch path exists. | `packaging/tool-sources/test-native-source-kits.sh`; `packaging/tool-sources/test-native-builds.sh` |
+| B3 | Given a native package install and direct or systemd-user Realm session launch, when executable and PATH ownership are inspected, then only `/usr/lib/realm/bin/*` owns the three Realm tools, Realm-launched applications resolve them, and neither user manager nor DBus activation receives the private PATH, including with `REALM_IMPORT_PATH=1`. | `packaging/tool-sources/test-native-builds.sh`; `packaging/session/test-private-tool-path.sh` |
+| B4 | Given a rendered Realm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it on native or Nix package paths, then the executable reports exactly `25.4.8`, a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Realm feature. | `packaging/tool-sources/test-tool-configs.sh`; selected-runtime assertions in `packaging/tool-sources/test-native-builds.sh`; installed Nix terminal fixture |
+| B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | `packaging/tool-sources/test-bundle-linkage.sh`; `packaging/tool-sources/check-bundle-linkage.py` |
+| B6 | Given a complete current generation N, when the typed terminal binding launches Foot and zsh, then exact argv/environment select only N; one shared one-second capability deadline selects N's modern Foot config when accepted or its byte-equivalent legacy config otherwise, with no user-config fallback, leaked probe, or suppressed final-launch error. The installed modern-Foot VM names the modern path and retains no legacy-section deprecation notification. The installed Starship's zsh prompt program is expanded by the installed zsh and its ANSI-stripped result under N's exact selectors equals Realm's complete prompt, and a typed marker proves the same real interactive shell is input-ready while its unmodified prompt remains in the retained framebuffer. Yazi loads all three generation-local files; `Ctrl+p` launches pinned btop with the exact five-element argv `btop`, `--config`, `<N>/btop/btop.conf`, `--themes-dir`, `<N>/btop/themes`; btop's selected config is mode 0400 and byte-identical after exit; and both TUI screens visibly use their selected Realm configuration. The exact pinned VM driver runs once into a retained evidence output before the public check gates its status; that evidence producer preserves the pinned test derivation's required system features and execution attributes. A launch failure retains the full bounded driver log, exact nonzero status and any framebuffer captures already emitted by that run rather than only timing out on process count; the evidence output does not make the public check pass, and a missing, malformed or nonzero status fails that check. Given a valid pre-profile generation, terminal refuses without mutation; after explicit apply a complete later generation launches successfully. User configuration remains untouched, prior committed generations remain present, and no mutable/live-reload path is used. | byte-equivalent Foot template and modern/legacy/deadline/failure fixed-consumer tests; rendered zsh/keymap execution with a spaced N and exact argv capture; generation mode/write-open test; installed Nix terminal/Yazi/btop fixture, deterministic status-gate fixtures and failure-evidence guard |
+| B7 | Given a complete N and no explicit user qt6ct override, when packaged GTK 3, GTK 4 and Qt 6 applications start below N's selected terminal, then the actual toolkit/plugin loaders consume N's named GTK CSS and N's qt6ct colour scheme, including actual qt6ct expansion of `$REALM_GENERATION`, and the VM retains nonempty application frames. A pre-existing qt6ct configuration remains byte-identical and is reported as an override rather than Realm-palette success. | fixed-consumer selector tests; packaged parser probes; installed Nix application fixture |
+| B8 | Given an exact committed workspace revision with an unchanged retained lockfile, when its source authority needs rebinding, then read-only repository CI alone creates and validates the candidate archive/records and retains exactly those three files as an artifact without committing or pushing them; a mutable ref, changed lockfile, local packaging command, or unvalidated candidate is rejected. | CI rebind workflow projection and transformation fixtures; bundle-linkage validator in the rebind job. |
 
 ## Boundaries and follow-on work
 
-This specification completes the design required for SPEC 0023 A2 only. It
-does not claim A2 is implemented, does not establish target availability (A3),
-and does not establish immutable generation update or rollback behavior (A4).
-It also does not claim full user configuration integration: the actual generated
-templates are in `configs/templates/`, while the configuration directories
-described by ADR 0007 are not currently present. That integration gap requires
-its own accepted specification before it becomes a supported capability.
+This specification covers the selected tools' retained native package
+availability, the terminal-scoped zsh/Starship/Yazi/btop integration, and the
+terminal-descendant GTK 3/GTK 4/Qt 6 tranche above. Passing the native-build,
+installed-ownership, session-PATH, retained-runtime, and installed Nix fixtures
+establishes those supported paths, but does not by itself close issue #134:
+complete immutable-generation update and rollback behavior from SPEC 0023 A4
+remains follow-on work. Arbitrary desktop/profile launches, Fuzzel/browser
+children, D-Bus-activated services, existing-owner Qt behaviour, Qt 5/Kvantum,
+lifecycle-owned descendants, production generation reclamation, and complete
+update/rollback policy remain #117/#133/#135 follow-on work and are not
+satisfied by this slice. In particular, B7 is not a claim that the whole
+default desktop is coherently themed.
 
 No public package repository, binary distribution, signing service, mirror,
 container registry, backend, or network service is introduced.

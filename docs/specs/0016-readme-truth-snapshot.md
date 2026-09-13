@@ -1,6 +1,7 @@
 # SPEC 0016 — README truthfulness snapshot
 
-- **Status:** Accepted (2026-08-30; live-VM evidence amendment 2026-09-13)
+- **Status:** Accepted (2026-08-30; live-VM, native installroot and functional
+  portal evidence amendments 2026-09-13)
 - **Milestone:** M0
 - **Issue:** [#8](https://github.com/Pipeliner/realms-de/issues/8)
 - **Decisions:** Standing orders S3, S10 and S15
@@ -70,8 +71,15 @@ surfaces render. The captures show foot with the current unthemed/default-font
 presentation, including visible ASCII glyph fallback; the README must not
 present that as the final themed desktop.
 
-That proof does not establish a completed M3 desktop, physical-hardware support,
-native Debian or Fedora installation, or functional portal integration.
+That proof does not establish a completed M3 desktop, physical-hardware
+support, or native Ubuntu or Fedora graphical login. Separately, CI
+clean-installs the exact Realm and private River Debian packages together in an
+empty amd64 Noble root and clean-installs the exact Fedora RPM in an empty
+Fedora root. The installed NixOS VM also verifies an actual FileChooser cancel,
+a Settings read, and a nonempty buffer from the restricted PipeWire node
+returned by ScreenCast. This functional portal evidence remains VM-bounded; it
+does not establish a real browser picker, physical-machine capture, or native
+Ubuntu/Fedora portal behaviour.
 
 For this pre-alpha snapshot, the `crates/realm-session` manifest, library and
 backend contract, runtime owner, production `src/bin/realm-wm.rs` entrypoint,
@@ -125,7 +133,7 @@ to be live.
 | # | Given / When / Then | Test |
 |---|---|---|
 | A1 | Given the README before its first divider, when a visitor reads it, then it contains the five-part identity and both inspected VM captures; their caption identifies NixOS QEMU and River 0.4.8, links the original provenance and explicit review correction, reports the PNG-IHDR-derived 1280x800 dimensions, and makes no hardware or final-theme claim; given the rule section, it contains the three exact headings with ADR 0001/0005/0009 links. | `docs/test-readme-truth-snapshot.sh` — `intro-and-rules`, `capture-evidence` |
-| A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, installed-NixOS-VM-verified `realm-wm` and `realm-bar`, remaining hardware/native-package/portal boundary, present pre-alpha assets, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
+| A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, installed-NixOS-VM-verified `realm-wm`, `realm-bar`, FileChooser, Settings and ScreenCast buffer, Ubuntu Realm/private River and Fedora RPM clean-install evidence, remaining native graphical-login/browser-picker/physical-hardware boundary, present pre-alpha assets, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
 | A3 | Given the `2026-08-30T06:18:36Z` snapshot, when each `Needs a human` table row is checked, then it binds one exact issue number, URL and title to a nonempty factual blocker; exactly the 13 accepted rows exist and #34 does not. | `docs/test-readme-truth-snapshot.sh` — `needs-human-snapshot` |
 | A4 | Given the documentation CI job, when it runs on a pull request or push, then uncommented fixture and production-check commands run in the `docs` job without a network call. | `docs/test-readme-truth-snapshot.sh` — `workflow-invocation` |
 

@@ -72,6 +72,7 @@ jobs:
             libxcb-xfixes0-dev \
             libxcb1-dev \
             ninja-build \
+            patch \
             patchelf \
             pkg-config \
             python3 \
@@ -179,6 +180,7 @@ jobs:
             rustc-1.89 \
             debhelper \
             fonts-dejavu-core \
+            patch \
             pkg-config \
             python3 \
             zstd
@@ -198,7 +200,7 @@ jobs:
     container: registry.fedoraproject.org/fedora:44@sha256:df52038ff64ee61affa188d78beb85cf6eecfe4e9f6042238269ccdc8e944392
     steps:
       - name: Install RPM build prerequisites
-        run: dnf -y install --setopt=install_weak_deps=False git rpm-build rust cargo systemd-rpm-macros make python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts
+        run: dnf -y install --setopt=install_weak_deps=False git rpm-build rust cargo systemd-rpm-macros make patch python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build retained-only RPM Source0
         run: |
@@ -417,14 +419,15 @@ jobs:
           system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
           nix build --print-build-logs ".#checks.$system.portal-helper-imports"
           if [ -e /dev/kvm ]; then
-            echo "KVM present — running the full flake check, VM boot test included."
-            nix flake check --print-build-logs
+            echo "KVM present — retaining the VM result before applying its status gate."
             nix build --print-build-logs \
-              ".#checks.$system.session-boots" \
-              --out-link result-session-boots
+              ".#checks.$system.session-boots-evidence" \
+              --out-link result-session-boots-evidence
             mkdir -p "$RUNNER_TEMP/realm-session-boots"
-            cp -RL result-session-boots/. "$RUNNER_TEMP/realm-session-boots/"
+            cp -RL result-session-boots-evidence/. "$RUNNER_TEMP/realm-session-boots/"
             echo "vm_artifacts=true" >> "$GITHUB_OUTPUT"
+            echo "Running the full flake check; session-boots gates the retained driver status."
+            nix flake check --print-build-logs
           else
             echo "::notice::no /dev/kvm on this runner; the NixOS VM boot test is skipped. Everything else is checked."
             echo "The VM boot test needs a KVM-capable runner." >> "$GITHUB_STEP_SUMMARY"
@@ -433,11 +436,12 @@ jobs:
               ".#checks.$system.shellcheck" \
               ".#checks.$system.package" \
               ".#checks.$system.packaged-binaries" \
-              ".#checks.$system.realm-sdd-git-runtime"
+              ".#checks.$system.realm-sdd-git-runtime" \
+              ".#checks.$system.xwayland-window-observation"
           fi
 
       - name: Upload live Realm VM evidence
-        if: steps.reference-build.outputs.vm_artifacts == 'true'
+        if: always() && steps.reference-build.outputs.vm_artifacts == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: realm-live-vm-${{ github.sha }}
@@ -445,10 +449,32 @@ jobs:
           path: |
             ${{ runner.temp }}/realm-session-boots/realm-tiled-desktop.png
             ${{ runner.temp }}/realm-session-boots/realm-grimoire.png
+            ${{ runner.temp }}/realm-session-boots/realm-gtk3-toolkit.png
+            ${{ runner.temp }}/realm-session-boots/realm-gtk4-toolkit.png
+            ${{ runner.temp }}/realm-session-boots/realm-qt6-toolkit.png
+            ${{ runner.temp }}/realm-session-boots/control-gtk3-toolkit-state.json
+            ${{ runner.temp }}/realm-session-boots/control-gtk4-toolkit-state.json
+            ${{ runner.temp }}/realm-session-boots/control-qt6-toolkit-state.json
+            ${{ runner.temp }}/realm-session-boots/gtk3-toolkit-openat.log
+            ${{ runner.temp }}/realm-session-boots/gtk3-toolkit-stderr.log
+            ${{ runner.temp }}/realm-session-boots/gtk4-toolkit-openat.log
+            ${{ runner.temp }}/realm-session-boots/gtk4-toolkit-stderr.log
+            ${{ runner.temp }}/realm-session-boots/qt6-toolkit-openat.log
+            ${{ runner.temp }}/realm-session-boots/qt6-toolkit-stderr.log
+            ${{ runner.temp }}/realm-session-boots/qt6-user-override-openat.log
+            ${{ runner.temp }}/realm-session-boots/qt6-user-override-stderr.log
+            ${{ runner.temp }}/realm-session-boots/realm-terminal-prompt.png
             ${{ runner.temp }}/realm-session-boots/capture-provenance.json
             ${{ runner.temp }}/realm-session-boots/realmctl-doctor.json
+            ${{ runner.temp }}/realm-session-boots/realmctl-doctor-direct-dbus-control.json
+            ${{ runner.temp }}/realm-session-boots/realmctl-doctor-direct-dbus-omitted.json
+            ${{ runner.temp }}/realm-session-boots/realmctl-doctor-direct-dbus-control.stderr
+            ${{ runner.temp }}/realm-session-boots/realmctl-doctor-direct-dbus-omitted.stderr
+            ${{ runner.temp }}/realm-session-boots/realmctl-doctor-direct-dbus-metadata.json
             ${{ runner.temp }}/realm-session-boots/control-get-state.json
             ${{ runner.temp }}/realm-session-boots/control-tiled-state.json
             ${{ runner.temp }}/realm-session-boots/control-grimoire-state.json
             ${{ runner.temp }}/realm-session-boots/control-quit.json
             ${{ runner.temp }}/realm-session-boots/portal-roundtrip.json
+            ${{ runner.temp }}/realm-session-boots/driver.log
+            ${{ runner.temp }}/realm-session-boots/test-status

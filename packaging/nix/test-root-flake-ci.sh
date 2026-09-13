@@ -69,6 +69,30 @@ expect_fail() {
 fixture_root=$(make_fixture canonical)
 expect_pass canonical-root-flake-contract "$fixture_root"
 
+for artifact in \
+    realm-gtk3-toolkit.png \
+    realm-gtk4-toolkit.png \
+    realm-qt6-toolkit.png \
+    control-gtk3-toolkit-state.json \
+    control-gtk4-toolkit-state.json \
+    control-qt6-toolkit-state.json \
+    gtk3-toolkit-openat.log \
+    gtk3-toolkit-stderr.log \
+    gtk4-toolkit-openat.log \
+    gtk4-toolkit-stderr.log \
+    qt6-toolkit-openat.log \
+    qt6-toolkit-stderr.log \
+    qt6-user-override-openat.log \
+    qt6-user-override-stderr.log
+do
+    fixture_root=$(make_fixture "missing-$artifact")
+    sed "/$artifact/d" "$fixture_root/.github/workflows/distro.yml" \
+        >"$fixture_root/workflow.yml"
+    mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+    expect_fail "missing-$artifact" "$fixture_root" \
+        "live VM evidence must retain $artifact"
+done
+
 fixture_root=$(make_fixture missing-flake)
 rm -f "$fixture_root/flake.nix"
 expect_fail missing-flake "$fixture_root" 'root flake.nix is required'
@@ -76,6 +100,13 @@ expect_fail missing-flake "$fixture_root" 'root flake.nix is required'
 fixture_root=$(make_fixture missing-lock)
 rm -f "$fixture_root/flake.lock"
 expect_fail missing-lock "$fixture_root" 'root flake.lock is required'
+
+fixture_root=$(make_fixture unsupported-qt6ct-attribute)
+sed 's/pkgs\.qt6Packages\.qt6ct/pkgs.qt6ct/g' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail unsupported-qt6ct-attribute "$fixture_root" \
+    'installed VM must use the pinned Qt 6 qt6ct attribute'
 
 fixture_root=$(make_fixture conditional-nix-job)
 printf '%s\n' '        if: steps.flake.outputs.present == '\''true'\''' \
@@ -147,5 +178,83 @@ sed '/realm-session-boots\/realmctl-doctor\.json/d' \
 mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
 expect_fail missing-doctor-evidence "$fixture_root" \
     'live VM artifact must retain realmctl doctor JSON'
+
+fixture_root=$(make_fixture missing-vm-evidence-build)
+sed "/\"\\.#checks\\.\$system\\.session-boots-evidence\"/d" \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-vm-evidence-build "$fixture_root" \
+    'Nix CI must build the VM evidence producer before the public status gate'
+
+fixture_root=$(make_fixture evidence-upload-not-always)
+sed "s/if: always() && steps.reference-build.outputs.vm_artifacts == 'true'/if: steps.reference-build.outputs.vm_artifacts == 'true'/" \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail evidence-upload-not-always "$fixture_root" \
+    'live VM evidence upload must run after a failed public status gate'
+
+fixture_root=$(make_fixture missing-driver-log)
+sed '/realm-session-boots\/driver\.log/d' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-driver-log "$fixture_root" \
+    'live VM evidence upload must retain the driver log and exact status'
+
+fixture_root=$(make_fixture missing-public-status-gate)
+sed '/check-vm-evidence-status\.sh/d' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail missing-public-status-gate "$fixture_root" \
+    'public session-boots must gate the retained evidence driver status'
+
+fixture_root=$(make_fixture fresh-run-command-wrappers)
+sed -e 's/test\.overrideTestDerivation/pkgs.runCommand/' \
+    -e 's/session-boots-evidence\.overrideTestDerivation/pkgs.runCommand/' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail fresh-run-command-wrappers "$fixture_root" \
+    'public session-boots must gate the retained evidence driver status'
+
+fixture_root=$(make_fixture missing-prompt-regex-import)
+sed '/^      import re$/d' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail missing-prompt-regex-import "$fixture_root" \
+    'Nix VM prompt proof must import its regular-expression dependency'
+
+fixture_root=$(make_fixture missing-direct-dbus-control)
+sed '/direct_activation_control = direct_activation_doctor(import_environment=True)/d' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail missing-direct-dbus-control "$fixture_root" \
+    'doctor VM must compare imported and omitted fresh direct D-Bus activation'
+
+fixture_root=$(make_fixture missing-direct-dbus-failure-verdict)
+sed '/assert omitted_dbus\["status"\] == "fail"/d' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail missing-direct-dbus-failure-verdict "$fixture_root" \
+    'doctor VM must compare imported and omitted fresh direct D-Bus activation'
+
+fixture_root=$(make_fixture missing-direct-dbus-deadline)
+sed '/"--property=RuntimeMaxSec=5s",/d' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail missing-direct-dbus-deadline "$fixture_root" \
+    'direct D-Bus doctor probes must retain their bounded control-group cleanup'
+
+fixture_root=$(make_fixture missing-direct-dbus-stop-grace)
+sed '/"--property=TimeoutStopSec=1s",/d' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail missing-direct-dbus-stop-grace "$fixture_root" \
+    'direct D-Bus doctor probes must retain their bounded control-group cleanup'
+
+fixture_root=$(make_fixture missing-direct-dbus-evidence)
+sed '/realm-session-boots\/realmctl-doctor-direct-dbus-omitted\.json/d' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-direct-dbus-evidence "$fixture_root" \
+    'live VM artifact must retain both direct D-Bus doctor reports and diagnostics'
 
 printf 'PASS: %d root-flake CI guard fixtures\n' "$tests_run"

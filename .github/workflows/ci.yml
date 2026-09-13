@@ -151,7 +151,7 @@ jobs:
       - name: Install native package build drivers
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends debhelper rpm zstd fonts-dejavu-core
+          sudo apt-get install -y --no-install-recommends debhelper rpm zstd fonts-dejavu-core patch
       - name: Check README truth snapshot
         run: |
           set -euo pipefail
@@ -169,6 +169,9 @@ jobs:
           ./packaging/tool-sources/test-no-live-fetch.sh
           ./packaging/tool-sources/test-native-source-kits.sh
           ./packaging/tool-sources/test-native-cargo-wrapper.sh
+          ./packaging/tool-sources/test-native-command-sentinel.sh
+          python3 packaging/tool-sources/test-stage-tool-bundle.py
+          python3 packaging/fedora/test-source-modes.py
       - name: Prepare lifecycle-capable native package temporary directory
         id: native-temp
         run: |

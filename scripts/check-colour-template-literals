@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 
@@ -13,11 +14,21 @@ EXPECTED = {
     "gtk3.css",
     "gtk4.css",
     "foot.ini",
+    "foot-modern.ini",
+    "zshrc",
+    "yazi.toml",
+    "yazi-keymap.toml",
     "yazi-theme.toml",
+    "btop.conf",
     "btop.theme",
     "starship.toml",
     "fuzzel.ini",
     "qt6ct-colors.conf",
+    "qt6ct.conf",
+}
+EXPECTED_OPERAND_COUNTS = {
+    f"../../../configs/templates/{name}": 2 if name in {"gtk3.css", "gtk4.css"} else 1
+    for name in EXPECTED
 }
 PLACEHOLDER = r"\{\{[^{}\r\n]*\.bare\s*\}\}"
 PLACEHOLDER_RE = re.compile(PLACEHOLDER)
@@ -61,11 +72,12 @@ class Checker:
         if operands is None:
             self.errors.append("crates/realm-theme/src/template.rs: malformed templates() catalogue")
             return
-        expected_operands = {f"../../../configs/templates/{name}" for name in EXPECTED}
-        if len(operands) != len(EXPECTED) or set(operands) != expected_operands:
+        operand_counts = Counter(operands)
+        if operand_counts != EXPECTED_OPERAND_COUNTS:
             self.errors.append(
                 "crates/realm-theme/src/template.rs: embedded template inventory differs from SPEC 0022: "
-                f"expected {sorted(expected_operands)!r}, got {operands!r}"
+                f"expected {dict(sorted(EXPECTED_OPERAND_COUNTS.items()))!r}, "
+                f"got {dict(sorted(operand_counts.items()))!r}"
             )
 
     @staticmethod
@@ -292,6 +304,7 @@ class Checker:
             self.fail(path, text, match.start(), text[match.start():end])
 
     def foot(self, path: Path, text: str) -> None:
+        section = "[colors-dark]" if path.name == "foot-modern.ini" else "[colors]"
         in_colours = False
         colour_keys = {
             "background", "foreground", "selection-background", "selection-foreground", "urls",
@@ -304,7 +317,7 @@ class Checker:
         for raw in text.splitlines(keepends=True):
             line = raw.rstrip("\r\n")
             if line.startswith("[") and line.endswith("]"):
-                in_colours = line == "[colors]"
+                in_colours = line == section
             elif in_colours and "=" in line:
                 key, value = line.split("=", 1)
                 value = value.strip()
@@ -324,7 +337,7 @@ class Checker:
                         self.fail(path, text, offset, line)
             offset += len(raw)
         if seen != colour_keys:
-            self.errors.append(f"{path.as_posix()}: missing required [colors] key")
+            self.errors.append(f"{path.as_posix()}: missing required {section} key")
 
     def fuzzel(self, path: Path, text: str) -> None:
         self.ini_colour_section(path, text, re.compile(rf"{PLACEHOLDER}ff"), "fuzzel")
@@ -425,8 +438,14 @@ class Checker:
             "gtk3.css": self.css,
             "gtk4.css": self.css,
             "foot.ini": self.foot,
+            "foot-modern.ini": self.foot,
             "fuzzel.ini": self.fuzzel,
             "qt6ct-colors.conf": self.qt,
+            "zshrc": self.raw_hex,
+            "yazi.toml": self.raw_hex,
+            "yazi-keymap.toml": self.raw_hex,
+            "btop.conf": self.raw_hex,
+            "qt6ct.conf": self.raw_hex,
             "btop.theme": self.btop,
             "yazi-theme.toml": self.yazi,
             "starship.toml": self.starship,

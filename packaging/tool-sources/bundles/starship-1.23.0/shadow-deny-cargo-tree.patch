@@ -1,0 +1,10 @@
+--- a/build.rs
++++ b/build.rs
+@@ -7,4 +7,7 @@
+ fn main() -> SdResult<()> {
++    let mut deny_const = shadow_rs::default_deny();
++    deny_const.insert(shadow_rs::CARGO_TREE);
+     shadow_rs::ShadowBuilder::builder()
++        .deny_const(deny_const)
+         .hook(gen_presets_hook)
+         .build()?;
