@@ -93,7 +93,10 @@ has an explicit `repeatable: bool`; repeatability is policy data and is never
 inferred from a backend event. In the MVP default only directional Focus and
 Swap bindings repeat. Every toggle, close, launch, mode, orbit, layout, undo,
 theme, grimoire, and Quit binding is non-repeatable. Wire types are
-adjacently-tagged serde enums framed one-per-line as JSON. `RealmState` is a
+adjacently-tagged serde enums framed one-per-line as JSON. The default Return
+binding is the typed `Action::Terminal`, serialized as
+`{"action":"terminal"}`; it is not the raw `Spawn(["realm-term"])` wire
+shape. `RealmState` is a
 plain snapshot with `renders_same_as`, which is how the bar avoids redrawing
 when a module recomputes to the same string. The snapshot carries both
 `whichkey` and `grimoire` visibility; both fields participate in
@@ -123,6 +126,7 @@ layouts.
 | A12 | The which-key strip matches the reference row exactly | `keys::tests::strip_matches_the_reference_which_key_row` |
 | A12a | The default keymap marks only directional Focus and Swap bindings repeatable; all other actions are non-repeatable | `keys::tests::only_directional_focus_and_swap_bindings_repeat` |
 | A12b | The grimoire visibility bit changes rendered state and survives a state JSON round trip | `state::tests::grimoire_visibility_changes_rendered_state_and_round_trips` |
+| A12c | The default Return binding is the typed non-repeatable Terminal action and its exact `GetKeymap` wire representation is `{"action":"terminal"}`, not a raw Spawn argv | `keys::tests::default_terminal_action_has_the_stable_typed_wire_shape`, `runtime::tests::request_dispatch_uses_live_state_and_exact_session_keymap` |
 | A13 | Every protocol message survives a round trip through a single-line frame | `ipc::tests::requests_round_trip_through_a_frame` |
 | A13a | The bar can request the session-owned keymap and the response survives a protocol frame round trip | `ipc::tests::keymap_response_round_trips_through_a_frame` |
 | A14 | An ASCII-only font degrades to documented substitutes instead of tofu | `glyphs::tests::a_bare_ascii_font_degrades_instead_of_drawing_tofu` |
