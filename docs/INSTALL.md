@@ -176,7 +176,7 @@ against noble's package lists):
 
 | Missing | Effect | What to do |
 |---|---|---|
-| `river` (any version) | No compositor — realm cannot start | Ubuntu only: provide a River `>= 0.4.0` package; its source is unresolved |
+| `river` (any version) | No compositor — realm cannot start | Ubuntu's selected source is SPEC 0026's private River 0.4.8 closure; its CI build proof and Debian integration are still pending |
 | `yazi` | charon (files) is missing | `cargo install --locked yazi-fm yazi-cli`, or a newer Ubuntu |
 | `starship` | thoth's prompt falls back to plain zsh | `cargo install --locked starship` |
 
@@ -479,7 +479,6 @@ None of them block building from source today.
 
 | Decision | Where | Options |
 |---|---|---|
-| How a River 0.4-compatible source is provided for the deb | `packaging/debian/rules` | Build from an upstream tag; package an upstream binary; require a PPA; raise the minimum Ubuntu version |
 | Package hosting | `packaging/debian/control`, spec | PPA / self-hosted apt / GitHub Releases; COPR / dist-git / release tarballs |
 | Maintainer identity | `packaging/debian/control`, `changelog`, spec, `SECURITY.md` | `vadim.evard@gmail.com` is the reachable package and private-security fallback contact |
 | Idle and lock | `packaging/systemd/realm-session.target` | SPEC 0005 OQ-1: river 0.4 speaks `ext-session-lock-v1`, so the locker must too — gtklock (recommended), waylock (Zig), a new-enough swaylock, or `realm-ward` in M6. The idle defaults are a user-visible security decision and are not guessed |
