@@ -33,9 +33,16 @@ the same change whenever a contract changes.
   effect), record it at the appropriate durable authority, and verify the
   resulting state before claiming it was handled.
 
-- Native distro packages are built and verified in CI only. Do not install
-  distro packaging toolchains merely to reproduce package builds locally, and
-  do not treat their local absence as a blocker; inspect the matching CI job.
+- **All packaging is performed in CI only.** This includes native/Nix package
+  builds, source archives, vendor bundles, provenance/source-bundle rebinding,
+  and package installation/verification. Do not run these locally or install
+  packaging toolchains. Local source edits and lightweight tests that produce
+  no packages or bundles are allowed. Inspect CI for packaging evidence; if a
+  packaging step lacks a CI path, add that path rather than executing it locally.
+- Regularly clean stale agent-generated build caches using explicit ownership,
+  active-build exclusion, and bounded retention. Never sweep source worktrees,
+  user files, retained bundles, or verification evidence. Keep local cleanup
+  infrastructure private and record its operation at the local authority.
 - Security checks and security-hardening review are post-MVP work. Do not make
   them MVP gates; track them for the post-MVP queue instead.
 - **Never let process become the product.** Keep specifications, reviews,

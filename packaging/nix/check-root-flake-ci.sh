@@ -37,4 +37,8 @@ if ! grep -F -q -e './packaging/nix/test-root-flake-ci.sh' "$workflow"; then
     fail 'normal Nix CI must invoke the root-flake fixture suite'
 fi
 
+if ! grep -F -q -e 'realm-session-boots/realmctl-doctor.json' "$workflow"; then
+    fail 'live VM artifact must retain realmctl doctor JSON'
+fi
+
 echo 'root-flake CI contract: pass'

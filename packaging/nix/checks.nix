@@ -30,7 +30,8 @@ assert realmYazi.version == "25.4.8";
       ''
         shellcheck --shell=bash \
           ${src + "/packaging/session/realm-session"} \
-          ${src + "/packaging/session/test-runtime-dir-mode.sh"}
+          ${src + "/packaging/session/test-runtime-dir-mode.sh"} \
+          ${src + "/packaging/session/test-portal-warmup.sh"}
         shellcheck --shell=sh \
           ${src + "/packaging/session/realm-browser"} \
           ${src + "/packaging/check-font-policy.sh"} \
@@ -47,6 +48,7 @@ assert realmYazi.version == "25.4.8";
           ${src + "/packaging/debian/toolchain-path.sh"} \
           ${src + "/packaging/debian/test-toolchain-path.sh"}
         bash ${src + "/packaging/session/test-runtime-dir-mode.sh"}
+        bash ${src + "/packaging/session/test-portal-warmup.sh"}
         touch $out
       '';
 
@@ -59,6 +61,47 @@ assert realmYazi.version == "25.4.8";
     test -x ${realm}/bin/realmctl
     test -x ${realm}/bin/realm-browser
     test -x ${realm}/bin/realm-sdd
+    touch $out
+  '';
+
+  # The installed command owns the narrow command path needed by its two
+  # expressly permitted external probes. A systemd transient service supplies
+  # no interactive-shell path, so exercise the same condition directly.
+  realmctl-command-runtime = pkgs.runCommand "realmctl-command-runtime" {
+    nativeBuildInputs = [ pkgs.jq ];
+  } ''
+    mkdir -m 700 "$TMPDIR/runtime" "$TMPDIR/home"
+    set +e
+    env -i \
+      HOME="$TMPDIR/home" \
+      XDG_RUNTIME_DIR="$TMPDIR/runtime" \
+      XDG_DATA_DIRS=${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name} \
+      PATH=/not-an-installed-command-path \
+      ${realm}/bin/realmctl --json --palette ${src + "/palette.toml"} doctor \
+      >"$TMPDIR/report.json"
+    status=$?
+    set -e
+    echo "doctor command-path fixture exit: $status"
+    cat "$TMPDIR/report.json"
+    case "$status" in
+      0|1) ;;
+      *) exit 1 ;;
+    esac
+    ! grep -F 'error:not found' "$TMPDIR/report.json"
+    jq -e '.checks | map(select(.id == "tools/floors")) |
+      length == 1 and .[0].group == "tools" and .[0].status == "skip"' \
+      "$TMPDIR/report.json"
+    touch $out
+  '';
+
+  # Keep the bare-session cursor inputs independently buildable. Pinned
+  # nixpkgs' GLib setup hook moves schemas below share/gsettings-schemas/$name,
+  # and its desktop-manager modules publish that package-named directory in
+  # XDG_DATA_DIRS. Assert both package layouts before the slower VM exercises
+  # the live gsettings/cursor agreement through `realmctl doctor`.
+  desktop-session-data = pkgs.runCommand "realm-desktop-session-data" { } ''
+    test -f ${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}/glib-2.0/schemas/gschemas.compiled
+    test -d ${pkgs.adwaita-icon-theme}/share/icons/Adwaita/cursors
     touch $out
   '';
 
@@ -430,6 +473,14 @@ EOF
           "grep -q '^org.freedesktop.impl.portal.ScreenCast=wlr$' "
           "/etc/xdg/xdg-desktop-portal/realm-portals.conf"
       )
+      machine.succeed(
+          "grep -q '^org.freedesktop.impl.portal.Settings=gtk$' "
+          "/etc/xdg/xdg-desktop-portal/realm-portals.conf"
+      )
+      machine.succeed(
+          "grep -q '^org.freedesktop.impl.portal.Inhibit=none$' "
+          "/etc/xdg/xdg-desktop-portal/realm-portals.conf"
+      )
 
       # The palette every themed surface is generated from.
       machine.succeed("test -f /etc/realm/palette.toml")
@@ -489,6 +540,48 @@ EOF
       ).strip()
       assert imported_wayland == daemon_wayland and imported_wayland
 
+      # Run the installed diagnostic inside the user manager so it receives
+      # the same published graphical-session environment as supervised units.
+      # This is the healthy-session acceptance path for the complete fixed
+      # check set; skips remain explicit data rather than omitted checks.
+      # The session entry enqueues cold portal activation after its environment
+      # imports. Waiting here verifies that production path; the fixture does
+      # not manually start the service before doctor.
+      machine.wait_for_unit(
+          "xdg-desktop-portal.service", user="alice", timeout=STARTUP_TIMEOUT
+      )
+      doctor_raw = machine.succeed(
+          "systemd-run --user --machine=alice@ --wait --pipe --quiet --collect "
+          "${realm}/bin/realmctl --json doctor"
+      )
+      doctor = json.loads(doctor_raw)
+      assert len(doctor["checks"]) == 32, doctor
+      assert [check["id"] for check in doctor["checks"]] == [
+          "session/socket", "session/protocol-version", "session/degraded",
+          "wm/attached", "wm/layer-shell", "wm/capabilities",
+          "wm/protocol-version", "env/identity",
+          "env/wayland-display/process", "env/wayland-display/systemd",
+          "env/wayland-display/dbus", "env/desktop/systemd",
+          "env/desktop/dbus", "env/agree", "env/stale", "env/cursor",
+          "env/xwayland", "env/list-matches-entry", "units/target",
+          "units/wm", "units/bar", "units/restart-policy",
+          "units/idle-lock", "portal/answers", "portal/config",
+          "portal/filechooser", "portal/screencast", "palette/lint",
+          "theme/outputs", "fonts/glyphs", "fonts/attribution",
+          "tools/floors",
+      ]
+      assert all(check["status"] != "fail" for check in doctor["checks"]), doctor
+      doctor_by_id = {check["id"]: check for check in doctor["checks"]}
+      assert {
+          check["id"] for check in doctor["checks"] if check["status"] == "skip"
+      } == {"units/idle-lock", "portal/filechooser", "tools/floors"}, doctor
+      for check_id in [
+          "session/socket", "session/protocol-version", "wm/attached",
+          "wm/layer-shell", "portal/answers", "portal/config",
+          "portal/screencast",
+      ]:
+          assert doctor_by_id[check_id]["status"] == "ok", doctor
+      write_artifact("realmctl-doctor.json", doctor_raw)
       # XWayland is useful only if the wrapper learns its assigned DISPLAY and
       # publishes it before either launcher starts. The purpose-built D-Bus
       # service acquires its configured name before recording its activation
@@ -568,7 +661,7 @@ EOF
       )
 
       # Use the library client itself. The initial state proves Hello and
-      # GetState reached the production server; no realmctl command is added.
+      # GetState reached the production server independently of realmctl.
       initial_raw, initial = control("state")
       assert initial["reply"] == "state", initial
       assert initial["data"]["whichkey"] is True, initial
