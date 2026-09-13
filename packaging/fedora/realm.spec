@@ -202,12 +202,11 @@ CARGO_HOME=%{realm_cargo_home} CARGO_TARGET_DIR=%{realm_target_dir} \
     cargo test --release --frozen --offline --locked --workspace \
         --exclude realm-agent-sdd
 ./packaging/tool-sources/test-tool-configs.sh
-runtime_path="${REALM_RUNTIME_PATH:-$PATH}"
 env -u CARGO_HOME -u CARGO_TARGET_DIR -u CARGO_INCREMENTAL \
     -u CARGO_PROFILE_RELEASE_DEBUG -u RUSTC -u RUSTC_WRAPPER \
     -u RUSTC_WORKSPACE_WRAPPER -u CARGO_BUILD_RUSTC \
     -u CARGO_BUILD_RUSTC_WRAPPER -u CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER \
-    -u REALM_SENTINEL_LOG PATH="$runtime_path" \
+    -u REALM_SENTINEL_LOG PATH="/usr/bin:/bin" \
     python3 %{tool_runtime} \
     %{realm_target_dir}/release/realmctl \
     %{yazi_target_dir}/release/yazi %{yazi_target_dir}/release/ya \

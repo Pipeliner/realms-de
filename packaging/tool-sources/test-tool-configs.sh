@@ -70,8 +70,13 @@ grep -F -q 'dontUpdateAutotoolsGnuConfigScripts = true;' "$support" || {
 }
 
 for recipe in "$debian_rules" "$fedora_spec"; do
-    grep -F -q 'REALM_RUNTIME_PATH' "$recipe" || {
-        echo "native runtime validation inherits build instrumentation: $recipe" >&2
+    if grep -F -q 'REALM_RUNTIME_PATH' "$recipe" \
+        || grep -F -q 'runtime_path=' "$recipe"; then
+        echo "native runtime validation depends on cross-phase environment: $recipe" >&2
+        exit 1
+    fi
+    grep -F -q 'PATH="/usr/bin:/bin"' "$recipe" || {
+        echo "native runtime validation does not select the fixed runtime PATH: $recipe" >&2
         exit 1
     }
     grep -F -q 'env -u CARGO_HOME -u CARGO_TARGET_DIR' "$recipe" || {
@@ -80,11 +85,42 @@ for recipe in "$debian_rules" "$fedora_spec"; do
     }
 done
 
-runtime_path_count=$(grep -F -c 'REALM_RUNTIME_PATH=/usr/bin:/bin' "$native_fixture" || true)
-if [ "$runtime_path_count" -ne 2 ]; then
-    echo "native fixture does not supply an uninstrumented runtime PATH" >&2
+if grep -F -q 'REALM_RUNTIME_PATH=' "$native_fixture"; then
+    echo "native fixture still supplies a cross-phase runtime PATH" >&2
     exit 1
 fi
+
+runtime_fixture=$(mktemp -d "${TMPDIR:-/tmp}/realm-runtime-path.XXXXXX")
+trap 'rm -rf "$runtime_fixture"' EXIT HUP INT TERM
+mkdir -p "$runtime_fixture/sentinels"
+for command in python3 git cargo; do
+    printf '%s\n' '#!/bin/sh' 'exit 97' >"$runtime_fixture/sentinels/$command"
+    chmod +x "$runtime_fixture/sentinels/$command"
+done
+if ! PATH="$runtime_fixture/sentinels:/usr/bin:/bin" \
+    REALM_RUNTIME_PATH="$runtime_fixture/sentinels" \
+    CARGO_HOME="$runtime_fixture/cargo-home" \
+    CARGO_TARGET_DIR="$runtime_fixture/cargo-target" \
+    RUSTC="$runtime_fixture/sentinels/rustc" \
+    REALM_SENTINEL_LOG="$runtime_fixture/sentinel.log" \
+    env -u CARGO_HOME -u CARGO_TARGET_DIR -u RUSTC -u REALM_SENTINEL_LOG \
+        PATH="/usr/bin:/bin" python3 - "$runtime_fixture/sentinels" <<'PY'
+import os
+import shutil
+import sys
+
+sentinels = sys.argv[1]
+assert os.environ["PATH"] == "/usr/bin:/bin"
+assert os.environ["REALM_RUNTIME_PATH"] == sentinels
+assert shutil.which("python3") == "/usr/bin/python3"
+for name in ("CARGO_HOME", "CARGO_TARGET_DIR", "RUSTC", "REALM_SENTINEL_LOG"):
+    assert name not in os.environ
+PY
+then
+    echo "runtime phase did not isolate a dropped selector and poisoned caller PATH" >&2
+    exit 1
+fi
+
 grep -F -q "starship_version_first=\$(printf '%s\\n' \"\$starship_version\" | sed -n '1p')" \
     "$native_fixture" || {
     echo "native fixture does not isolate Starship's stable version line" >&2

@@ -229,9 +229,11 @@ The native-package fixture SHALL distinguish build authority from runtime
 validation. All three Cargo builds, the workspace Cargo test, and every package
 preparation step remain under the retained-Cargo and forbidden-network-command
 instrumentation. Only the already-built Yazi/ya/Starship runtime validation MAY
-replace that instrumented `PATH` with the fixture-supplied
-`REALM_RUNTIME_PATH`; before that validation the recipe SHALL remove inherited
-Cargo/rustc selector and build-output variables. The runtime validation remains
+replace that instrumented `PATH`; each native recipe SHALL select the fixed
+distro runtime search path `/usr/bin:/bin` directly rather than depend on a
+caller-supplied environment variable surviving Debhelper or RPM phase
+boundaries. Before that validation the recipe SHALL remove inherited Cargo/rustc
+selector and build-output variables. The runtime validation remains
 inside the same mandatory network namespace and SHALL NOT compile or fetch.
 The fixture SHALL prove that an injected package build fetch is still refused
 before Cargo and that its build log contains exactly the three selected builds
