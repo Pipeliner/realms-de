@@ -47,7 +47,6 @@ staged_prefix="$staging$prefix"
 
 export PATH="$staged_prefix/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PKG_CONFIG_PATH="$staged_prefix/lib/pkgconfig:$staged_prefix/share/pkgconfig"
-export PKG_CONFIG_SYSROOT_DIR="$staging"
 export C_INCLUDE_PATH="$staged_prefix/include"
 export LIBRARY_PATH="$staged_prefix/lib"
 unset LD_LIBRARY_PATH

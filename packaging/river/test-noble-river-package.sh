@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 checker="$repo_root/packaging/river/check-noble-river-package.py"
+closure_builder="$repo_root/packaging/river/build-noble-package-closure.sh"
 control="$repo_root/packaging/debian-river/control"
 rules="$repo_root/packaging/debian-river/rules"
 realm_control="$repo_root/packaging/debian/control"
@@ -48,6 +49,17 @@ grep -F 'REALM_PARENT_NETNS' "$rules" >/dev/null || {
     echo 'Noble River rules do not require the outer namespace identity' >&2
     exit 1
 }
+if grep -F 'export PKG_CONFIG_SYSROOT_DIR=' "$closure_builder" >/dev/null; then
+    echo 'Noble River closure rewrites host pkg-config paths beneath staging' >&2
+    exit 1
+fi
+for staged_search in "export C_INCLUDE_PATH=\"\$staged_prefix/include\"" \
+    "export LIBRARY_PATH=\"\$staged_prefix/lib\""; do
+    grep -F "$staged_search" "$closure_builder" >/dev/null || {
+        echo "Noble River closure omits staged search path: $staged_search" >&2
+        exit 1
+    }
+done
 if grep -F 'unshare --user --map-root-user --net' "$rules" >/dev/null; then
     echo 'Noble River rules create the user namespace too late under dpkg' >&2
     exit 1
