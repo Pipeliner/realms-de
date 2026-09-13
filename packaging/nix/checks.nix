@@ -383,8 +383,10 @@ EOF
       )
       assert tiled["data"]["whichkey"] is True, tiled
       machine.wait_for_text("Realm VM sample", timeout=OCR_TIMEOUT)
-      # The strip has no "which-key" heading; assert its actual prompt.
-      machine.wait_for_text("grimoire.*full spellbook", timeout=OCR_TIMEOUT)
+      # The strip has no heading. Its distinctive launcher label proves it is
+      # rendered; exact OCR of the small full-spellbook prompt is unreliable.
+      # Neither the sample applications nor the bar title contains this label.
+      machine.wait_for_text("hecate", timeout=OCR_TIMEOUT)
       write_artifact("control-tiled-state.json", tiled_raw)
       machine.screenshot("realm-tiled-desktop")
 
@@ -418,8 +420,17 @@ EOF
           ("realm-grimoire.png", "control-grimoire-state.json"),
       ]:
           payload = (Path(machine.out_dir) / filename).read_bytes()
+          # The requested VM mode need not be the compositor's actual mode.
+          # Read the PNG IHDR rather than claiming the configured resolution.
+          assert payload[:8] == bytes([137, 80, 78, 71, 13, 10, 26, 10])
+          assert payload[12:16] == b"IHDR" and len(payload) >= 24
+          width = int.from_bytes(payload[16:20], "big")
+          height = int.from_bytes(payload[20:24], "big")
+          assert width > 0 and height > 0
           captures.append({
               "file": filename,
+              "width": width,
+              "height": height,
               "sha256": hashlib.sha256(payload).hexdigest(),
               "state_file": state_file,
           })
@@ -427,7 +438,7 @@ EOF
           "schema": "realm-vm-capture-provenance/v1",
           "source_revision": "${sourceRevision}",
           "realm_package": "${realm}",
-          "environment": "NixOS QEMU framebuffer, River 0.4.8, 1920x1080",
+          "environment": "NixOS QEMU framebuffer, River 0.4.8; dimensions recorded per capture",
           "nixos_version": machine.succeed("nixos-version").strip(),
           "kernel": machine.succeed("uname -srmo").strip(),
           "river_version": machine.succeed("river -version").strip(),
