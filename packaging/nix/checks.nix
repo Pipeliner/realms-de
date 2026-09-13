@@ -149,7 +149,8 @@ EOF
                   raise SystemExit("D-Bus probe did not acquire its configured name")
 
               child = await asyncio.create_subprocess_exec(
-                  "${pkgs.xmessage}/bin/xmessage",
+                  "${pkgs.xmessage}"
+                  "/bin/xmessage",
                   "-center",
                   "Realm X11 Probe",
               )
