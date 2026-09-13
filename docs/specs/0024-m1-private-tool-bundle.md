@@ -207,13 +207,17 @@ stager SHALL first validate and unpack the original retained source archive
 unchanged, refuse a missing, symlinked, digest-mismatched, or path-escaping
 patch, refuse a preimage mismatch, apply the patch exactly once, and refuse a
 postimage mismatch. Staging repeatedly into the same destination SHALL replace
-the old stage atomically from the original archive and produce the same patched
-`build.rs`; it SHALL NOT apply the patch cumulatively or mutate the retained
-archive.
+the old stage with a fully materialized copy from the original archive and
+produce the same patched `build.rs`; it SHALL NOT apply the patch cumulatively
+or mutate the retained archive. A failed replacement SHALL restore the prior
+complete stage. Staging happens before compilation and makes no concurrent
+consumer or continuously-present-path guarantee. Native package build metadata
+and every CI lane which invokes the stager SHALL declare the `patch` utility
+rather than inherit it accidentally from the host.
 
 With `CARGO_TREE` denied, the pinned `shadow-rs` build still makes one
 unconditional `cargo -V` metadata query. The native fixture MAY classify only
-that exact two-argument invocation from the selected Starship source and Cargo
+that exact invocation from the selected Starship source and Cargo
 home as build-script metadata. It SHALL execute the supplied real Cargo
 unchanged, retain the validated source-replacement configuration in the now
 populated Starship Cargo home, and require the query to succeed. This metadata

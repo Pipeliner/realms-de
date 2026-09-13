@@ -19,6 +19,10 @@ cp "$tmp/config.toml" "$tmp/cargo-home/config.toml"
 
 cat >"$tmp/fake-cargo" <<'EOF'
 #!/bin/sh
+if [ "$#" -eq 1 ] && [ "$1" = -V ]; then
+    printf 'cargo 1.90.0 (fixture)\n'
+    exit 0
+fi
 mkdir -p "${CARGO_TARGET_DIR:?}/release"
 for bin in ${REALM_FAKE_OUTPUTS:?}; do
     : >"$CARGO_TARGET_DIR/release/$bin"
@@ -78,5 +82,43 @@ for fixture in 'yazi ya|--package yazi-fm --package yazi-cli' \
     done
     rm -rf "$tmp/tool-target"
 done
+
+# Pinned shadow-rs makes this one metadata query after the outer Starship
+# Cargo process has populated its retained home. It is not another build.
+metadata_home=$tmp/starship-metadata-home
+metadata_source=$tmp/starship-source
+mkdir -p "$metadata_home/registry" "$metadata_source"
+cp "$tmp/config.toml" "$metadata_home/config.toml"
+metadata_log=$tmp/starship-metadata.log
+(
+    cd "$metadata_source"
+    REALM_FAKE_OUTPUTS='' \
+        REALM_REAL_CARGO="$tmp/fake-cargo" \
+        REALM_SENTINEL_LOG="$metadata_log" \
+        REALM_EXPECTED_CARGO_CONFIG="$tmp/config.toml" \
+        REALM_EXPECTED_STARSHIP_SOURCE="$metadata_source" \
+        REALM_EXPECTED_STARSHIP_CARGO_HOME="$metadata_home" \
+        CARGO_HOME="$metadata_home" \
+        CARGO_TARGET_DIR="$tmp/metadata-target" \
+        "$wrapper" -V
+)
+grep -F -x 'cargo-metadata|kind=starship-version|status=0' \
+    "$metadata_log" >/dev/null
+
+if (
+    cd "$metadata_source"
+    REALM_FAKE_OUTPUTS='' \
+        REALM_REAL_CARGO="$tmp/fake-cargo" \
+        REALM_SENTINEL_LOG="$tmp/tree.log" \
+        REALM_EXPECTED_CARGO_CONFIG="$tmp/config.toml" \
+        REALM_EXPECTED_STARSHIP_SOURCE="$metadata_source" \
+        REALM_EXPECTED_STARSHIP_CARGO_HOME="$metadata_home" \
+        CARGO_HOME="$metadata_home" \
+        CARGO_TARGET_DIR="$tmp/tree-target" \
+        "$wrapper" tree
+); then
+    echo "native Cargo wrapper accepted Starship cargo tree metadata" >&2
+    exit 1
+fi
 
 echo "PASS: native Cargo output lifetime"

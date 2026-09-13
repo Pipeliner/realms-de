@@ -71,6 +71,7 @@ jobs:
             libxcb-xfixes0-dev \
             libxcb1-dev \
             ninja-build \
+            patch \
             patchelf \
             pkg-config \
             python3 \
@@ -165,6 +166,7 @@ jobs:
             rustc-1.89 \
             debhelper \
             fonts-dejavu-core \
+            patch \
             pkg-config \
             python3 \
             zstd
@@ -184,7 +186,7 @@ jobs:
     container: registry.fedoraproject.org/fedora:44@sha256:df52038ff64ee61affa188d78beb85cf6eecfe4e9f6042238269ccdc8e944392
     steps:
       - name: Install RPM build prerequisites
-        run: dnf -y install --setopt=install_weak_deps=False git rpm-build rust cargo systemd-rpm-macros make python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts
+        run: dnf -y install --setopt=install_weak_deps=False git rpm-build rust cargo systemd-rpm-macros make patch python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build retained-only RPM Source0
         run: |

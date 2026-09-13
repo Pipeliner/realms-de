@@ -5,9 +5,16 @@ set -eu
 printf 'cargo|cwd=%s|home=%s|args=%s|cflags=%s\n' \
     "$PWD" "${CARGO_HOME:-}" "$*" "${CFLAGS:-}" \
     >>"${REALM_SENTINEL_LOG:?}"
+starship_metadata=false
+if [ "$#" -eq 1 ] && [ "$1" = -V ] \
+    && [ "$PWD" = "${REALM_EXPECTED_STARSHIP_SOURCE:-}" ] \
+    && [ "${CARGO_HOME:-}" = "${REALM_EXPECTED_STARSHIP_CARGO_HOME:-}" ]; then
+    starship_metadata=true
+fi
 if ! cmp -s "${CARGO_HOME:?}/config.toml" "${REALM_EXPECTED_CARGO_CONFIG:?}" \
-    || find "$CARGO_HOME" -mindepth 1 ! -path "$CARGO_HOME/config.toml" \
-        -print -quit | grep . >/dev/null; then
+    || { [ "$starship_metadata" = false ] \
+        && find "$CARGO_HOME" -mindepth 1 ! -path "$CARGO_HOME/config.toml" \
+            -print -quit | grep . >/dev/null; }; then
     printf 'cargo-home-not-retained-config|home=%s\n' "$CARGO_HOME" \
         >>"$REALM_SENTINEL_LOG"
     exit 96
@@ -18,6 +25,12 @@ set +e
 status=$?
 set -e
 printf 'cargo-result|status=%s\n' "$status" >>"$REALM_SENTINEL_LOG"
+
+if [ "$starship_metadata" = true ]; then
+    printf 'cargo-metadata|kind=starship-version|status=%s\n' "$status" \
+        >>"$REALM_SENTINEL_LOG"
+    exit "$status"
+fi
 
 if [ "$status" -eq 0 ] && [ "${1:-}" = build ]; then
     case " $* " in
