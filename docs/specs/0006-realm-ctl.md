@@ -140,7 +140,7 @@ Four of these are additions and one is a correction. Each is a revision of
 [SPEC 0001](0001-realm-core-contracts.md) made in the same commit as the change.
 Before the first production `realmctl` control command ships, the typed Error
 kind, complete `OrbitLedger` fields, `GetHealth`/`Health` schema, and a
-corresponding `PROTOCOL_VERSION` bump must land together. The current v1 enum
+corresponding `PROTOCOL_VERSION` bump must land together. The pre-v2 enum
 may support transport tests, but it is not a final production server/client
 contract. Across that bump, the Hello request/response envelope remains
 decodable in both directions so a mismatch can always report both versions.
@@ -395,13 +395,13 @@ things:
 #### Output shape
 
 ```
-realmctl doctor - realmctl 0.1.0, protocol 1
+realmctl doctor - realmctl 0.1.0, protocol 2
 2026-08-26T14:32:11+01:00 | Fedora 44 | kernel 6.12.4
   river backend | realm-wm 0.1.0
 
 session
   ok    socket            /run/user/1000/realm/ctl.sock - realm-wm 0.1.0
-  ok    protocol-version  1 == 1
+  ok    protocol-version  2 == 2
   ok    degraded          no DEGRADED codes in this session
 
 wm
@@ -431,7 +431,7 @@ fonts
         fix      install Symbols Nerd Font Mono, or Symbola
   ok    attribution       runes <- Symbols Nerd Font Mono (chain position 2)
 
-32 checks: 26 ok, 3 warn, 1 failed, 2 skipped
+32 checks: 25 ok, 3 warn, 1 failed, 3 skipped
 ```
 
 (An excerpt: the `units`, `portal`, `palette`, `theme` and `tools` groups are
@@ -451,7 +451,7 @@ redirected, and is therefore pasteable as-is.
 {
   "tool": "realmctl doctor",
   "version": "0.1.0",
-  "protocol": 1,
+  "protocol": 2,
   "checks": [
     {"id": "env/wayland-display/dbus", "group": "environment", "status": "fail",
      "summary": "portal did not answer within 2000 ms",
@@ -461,7 +461,7 @@ redirected, and is therefore pasteable as-is.
      "data": {"deadline_ms": 2000, "elapsed_ms": 2000,
               "activation_environment_values": "unobservable"}}
   ],
-  "summary": {"ok": 28, "warn": 3, "fail": 1, "skip": 0}
+  "summary": {"ok": 25, "warn": 3, "fail": 1, "skip": 3}
 }
 ```
 
@@ -535,7 +535,7 @@ Each row is one happy path and becomes one test.
 | B8a | Given any terminal client path/transport/I/O error other than version mismatch, when a live-session command runs, then it is not retried and exits 6; an application `Response::Error` remains a normal response and maps by its typed kind to exit 5 | `realm_ctl::tests::terminal_transport_errors_exit_six_without_retry` |
 | B9 | Given a session with three windows in orbit 1, when `ledger show 1 --json` runs, then stdout is exactly one object that deserialises as `Response::Ledger` with the windows in ledger order and the focused one marked | |
 | B10 | Given a running session, when `run foot -e yazi` runs, then it sends `Request::Spawn(["foot","-e","yazi"])`, exits 0 without waiting, and reports the argv as accepted rather than launched | |
-| B11 | Given a healthy session, when `doctor` runs, then every resolved check reports `ok` or `warn`, the two explicitly unresolved checks report their accepted `skip`, the header names the tool, protocol, distribution, kernel, backend and negotiated compositor interfaces without inventing a compositor package version, and it exits 0 | |
+| B11 | Given a healthy session, when `doctor` runs, then every resolved check reports `ok` or `warn`, idle lock, the unrequested file-chooser round trip and unresolved tool floors report their accepted explicit `skip`, the header names the tool, protocol, distribution, kernel, backend and negotiated compositor interfaces without inventing a compositor package version, and it exits 0 | |
 | B12 | Given the session entry deliberately suppresses the D-Bus activation-environment import and no earlier activation supplied the graphical-session values, when `doctor` runs and its portal proxy cannot become usable, then `env/wayland-display/dbus` fails within its 2 s deadline, prints the 25-second-hang symptom, reports the observed portal failure without claiming to have read a missing variable, names the activation environment, portal service and selected backend as possible causes, prints the `dbus-update-activation-environment` remedy, and exits 1 | |
 | B13 | Given no session running and a font stack that covers ASCII only, when `doctor` runs, then its optional session probe resolves at most one `RuntimeDir` and reuses one `ClientEndpoint`, the session checks are `skip` with a banner, `fonts/glyphs` warns with `Probe::summary()`'s wording, and it exits 0 rather than 3 | |
 | B14 | Given no session bus and no session running, when `doctor` runs, then the D-Bus and portal checks are `skip` and not `fail`, and it exits 0 | |
