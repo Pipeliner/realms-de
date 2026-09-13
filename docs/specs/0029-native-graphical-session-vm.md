@@ -16,10 +16,12 @@
 
 Prove that the exact native packages already emitted for one commit can be
 installed through normal Ubuntu 24.04 and Fedora 44 package resolution and
-selected by a real display manager to start a usable Realm Wayland session.
-This closes the gap between an installroot command probe and a graphical
-login without rebuilding packages inside the VM or presenting emulated
-devices as hardware evidence.
+selected by a real display manager to start a live Realm Wayland session whose
+owned health checks pass. This closes the gap between an installroot command
+probe and a graphical login without rebuilding packages inside the VM or
+presenting emulated devices as hardware evidence. It does not establish an
+interactive application workflow merely because `GetState` or a framebuffer
+exists.
 
 ## Scope
 
