@@ -1542,6 +1542,38 @@ mod tests {
     }
 
     #[test]
+    fn built_in_apply_publishes_btop_config_read_only() {
+        let root = tempfile::tempdir().unwrap();
+        let outcome = apply(root.path()).unwrap();
+        let GenerationPublicationOutcome::Committed(generation) = outcome else {
+            panic!("built-in apply did not commit cleanly: {outcome:?}");
+        };
+        let config = root
+            .path()
+            .join("realm/generated/generations")
+            .join(generation.as_str())
+            .join("btop/btop.conf");
+        let expected = std::fs::read(&config).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
+            0o400
+        );
+        assert!(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&config)
+                .is_err(),
+            "the selected btop config accepted an ordinary write-open"
+        );
+
+        let store = GenerationStore::open(&root.path().join("realm/generated")).unwrap();
+        let selected = store.select_current().unwrap();
+        assert_eq!(selected.read_output("btop/btop.conf").unwrap(), expected);
+        selected.release().unwrap();
+    }
+
+    #[test]
     fn public_apply_refuses_a_fatal_user_palette_without_replacing_current() {
         let root = tempfile::tempdir().unwrap();
         let first = apply(root.path()).unwrap();
