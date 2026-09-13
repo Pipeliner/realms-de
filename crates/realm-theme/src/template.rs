@@ -102,9 +102,33 @@ pub fn templates() -> Vec<Template> {
             },
         },
         Template {
+            id: "zsh-profile",
+            source: ::core::include_str!("../../../configs/templates/zshrc"),
+            target: PathBuf::from("zsh/.zshrc"),
+            reload: Reload::None,
+        },
+        Template {
+            id: "yazi-config",
+            source: ::core::include_str!("../../../configs/templates/yazi.toml"),
+            target: PathBuf::from("yazi/yazi.toml"),
+            reload: Reload::None,
+        },
+        Template {
+            id: "yazi-keymap",
+            source: ::core::include_str!("../../../configs/templates/yazi-keymap.toml"),
+            target: PathBuf::from("yazi/keymap.toml"),
+            reload: Reload::None,
+        },
+        Template {
             id: "yazi",
             source: ::core::include_str!("../../../configs/templates/yazi-theme.toml"),
             target: PathBuf::from("yazi/theme.toml"),
+            reload: Reload::None,
+        },
+        Template {
+            id: "btop-config",
+            source: ::core::include_str!("../../../configs/templates/btop.conf"),
+            target: PathBuf::from("btop/btop.conf"),
             reload: Reload::None,
         },
         Template {
@@ -139,6 +163,44 @@ mod tests {
     use super::templates;
 
     #[test]
+    fn terminal_tool_profile_is_complete_and_generation_local() {
+        let actual = templates()
+            .into_iter()
+            .filter_map(|template| {
+                ["zsh-profile", "yazi-config", "yazi-keymap", "btop-config"]
+                    .contains(&template.id)
+                    .then(|| (template.id, template.target, template.source.to_owned()))
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    "zsh-profile",
+                    "zsh/.zshrc".into(),
+                    include_str!("../../../configs/templates/zshrc").to_owned(),
+                ),
+                (
+                    "yazi-config",
+                    "yazi/yazi.toml".into(),
+                    "[manager]\nratio = [1, 4, 3]\nsort_by = \"alphabetical\"\nsort_sensitive = false\nsort_reverse = false\nsort_dir_first = true\nlinemode = \"size\"\nshow_hidden = false\nshow_symlink = true\nscrolloff = 5\n".to_owned(),
+                ),
+                (
+                    "yazi-keymap",
+                    "yazi/keymap.toml".into(),
+                    "[manager]\nprepend_keymap = [\n  { on = \"<C-p>\", run = \"shell 'btop --config=\\\"$REALM_GENERATION/btop/btop.conf\\\" --themes-dir=\\\"$REALM_GENERATION/btop/themes\\\"' --block\", desc = \"Open Realm system monitor\" },\n]\n".to_owned(),
+                ),
+                (
+                    "btop-config",
+                    "btop/btop.conf".into(),
+                    "color_theme = \"realm\"\ntheme_background = False\ntruecolor = True\nforce_tty = False\nvim_keys = True\nrounded_corners = True\ngraph_symbol = \"braille\"\nshown_boxes = \"cpu mem net proc\"\n".to_owned(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn compiled_catalogue_embeds_the_declared_template_sources() {
         let actual: Vec<(&str, &str)> = templates()
             .into_iter()
@@ -160,8 +222,24 @@ mod tests {
                     ::core::include_str!("../../../configs/templates/foot.ini")
                 ),
                 (
+                    "zsh-profile",
+                    ::core::include_str!("../../../configs/templates/zshrc")
+                ),
+                (
+                    "yazi-config",
+                    ::core::include_str!("../../../configs/templates/yazi.toml")
+                ),
+                (
+                    "yazi-keymap",
+                    ::core::include_str!("../../../configs/templates/yazi-keymap.toml")
+                ),
+                (
                     "yazi",
                     ::core::include_str!("../../../configs/templates/yazi-theme.toml")
+                ),
+                (
+                    "btop-config",
+                    ::core::include_str!("../../../configs/templates/btop.conf")
                 ),
                 (
                     "btop",

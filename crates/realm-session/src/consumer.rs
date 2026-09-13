@@ -46,10 +46,19 @@ impl FixedConsumer {
         }
     }
 
-    fn output(self) -> &'static str {
+    fn outputs(self) -> &'static [&'static str] {
         match self {
-            Self::Terminal => "foot/foot.ini",
-            Self::Launcher => "fuzzel/fuzzel.ini",
+            Self::Terminal => &[
+                "foot/foot.ini",
+                "zsh/.zshrc",
+                "starship.toml",
+                "yazi/yazi.toml",
+                "yazi/keymap.toml",
+                "yazi/theme.toml",
+                "btop/btop.conf",
+                "btop/themes/realm.theme",
+            ],
+            Self::Launcher => &["fuzzel/fuzzel.ini"],
         }
     }
 }
@@ -78,12 +87,23 @@ pub fn exec_from_env(consumer: FixedConsumer) -> Result<(), String> {
     let root = config_root_from_env()?;
     let store = GenerationStore::open(&root.join("realm/generated"))?;
     let selection = store.select_current()?;
-    selection.read_output(consumer.output())?;
-    let config = config_argument(&selection.path().join(consumer.output()));
+    for output in consumer.outputs() {
+        selection
+            .read_output(output)
+            .map_err(|error| format!("required output {output} is unavailable: {error}"))?;
+    }
+    let generation = selection.path();
+    let config = config_argument(&generation.join(consumer.outputs()[0]));
     let mut command = Command::new(consumer.executable());
     command.arg(config);
     if consumer == FixedConsumer::Terminal {
-        command.arg(OsStr::new("--override=key-bindings.spawn-terminal=none"));
+        command
+            .arg(OsStr::new("--override=key-bindings.spawn-terminal=none"))
+            .arg(OsStr::new("zsh"))
+            .env("REALM_GENERATION", generation)
+            .env("ZDOTDIR", generation.join("zsh"))
+            .env("STARSHIP_CONFIG", generation.join("starship.toml"))
+            .env("YAZI_CONFIG_HOME", generation.join("yazi"));
     }
     let error = command.exec();
     drop(selection);

@@ -1,0 +1,5 @@
+eval "$(starship init zsh)"
+btop() {
+  command btop --config="$REALM_GENERATION/btop/btop.conf" \
+    --themes-dir="$REALM_GENERATION/btop/themes" "$@"
+}

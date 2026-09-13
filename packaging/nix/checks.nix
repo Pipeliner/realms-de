@@ -145,6 +145,10 @@ EOF
         environment.systemPackages = [
           vmControlHelper
           pkgs.foot
+          pkgs.zsh
+          pkgs.starship
+          pkgs.yazi
+          pkgs.btop
         ];
       };
 
@@ -228,6 +232,15 @@ EOF
           lease = machine.succeed(f"cat {shlex.quote(leases[0])}")
           assert f"generation {generation}\n" in lease, lease
           assert f"pid {pid}\n" in lease, lease
+
+      def process_environment(pid):
+          return dict(
+              line.split("=", 1)
+              for line in machine.succeed(
+                  f"tr '\\0' '\\n' < /proc/{pid}/environ"
+              ).splitlines()
+              if "=" in line
+          )
 
       def write_artifact(name, content):
           (Path(machine.out_dir) / name).write_text(content, encoding="utf-8")
@@ -377,6 +390,10 @@ EOF
       assert '${realm}/bin' in daemon_path, daemon_path
       assert '${pkgs.foot}/bin' in daemon_path, daemon_path
       assert '${pkgs.fuzzel}/bin' in daemon_path, daemon_path
+      assert '${pkgs.zsh}/bin' in daemon_path, daemon_path
+      assert '${pkgs.starship}/bin' in daemon_path, daemon_path
+      assert '${pkgs.yazi}/bin' in daemon_path, daemon_path
+      assert '${pkgs.btop}/bin' in daemon_path, daemon_path
 
       # Check the user-manager publication against the installed daemon that
       # inherited it. A client started without this value cannot map a surface.
@@ -429,9 +446,91 @@ EOF
               "foot",
               f"--config={generation_root}/foot/foot.ini",
               "--override=key-bindings.spawn-terminal=none",
+              "zsh",
           ],
           generation,
       )
+      zsh_pid = wait_for_single_user_process("zsh")
+      zsh_environment = process_environment(zsh_pid)
+      assert (
+          zsh_environment["REALM_GENERATION"] == generation_root
+      ), zsh_environment
+      assert (
+          zsh_environment["ZDOTDIR"] == f"{generation_root}/zsh"
+      ), zsh_environment
+      assert (
+          zsh_environment["STARSHIP_CONFIG"]
+          == f"{generation_root}/starship.toml"
+      ), zsh_environment
+      assert (
+          zsh_environment["YAZI_CONFIG_HOME"]
+          == f"{generation_root}/yazi"
+      ), zsh_environment
+      machine.wait_for_text("alice@machine :: ~ ~%", timeout=OCR_TIMEOUT)
+
+      machine.succeed(
+          "install -d -o alice -g users -m 0755 /tmp/realm-yazi-proof && "
+          "install -o alice -g users -m 0644 /dev/null "
+          "/tmp/realm-yazi-proof/realm-yazi-visible"
+      )
+      btop_config = f"{generation_root}/btop/btop.conf"
+      btop_config_digest = machine.succeed(
+          f"sha256sum {shlex.quote(btop_config)}"
+      ).split()[0]
+      machine.succeed(
+          f"sudo -u alice test ! -w {shlex.quote(btop_config)}"
+      )
+      machine.send_chars("cd /tmp/realm-yazi-proof && yazi\n")
+      yazi_pid = wait_for_single_user_process("yazi")
+      yazi_environment = process_environment(yazi_pid)
+      assert (
+          yazi_environment["REALM_GENERATION"] == generation_root
+      ), yazi_environment
+      assert (
+          yazi_environment["YAZI_CONFIG_HOME"]
+          == f"{generation_root}/yazi"
+      ), yazi_environment
+      machine.wait_for_text("realm-yazi-visible", timeout=OCR_TIMEOUT)
+
+      machine.send_key("ctrl-p")
+      btop_pid = wait_for_single_user_process("btop")
+      btop_args = machine.succeed(
+          f"tr '\\0' '\\n' < /proc/{btop_pid}/cmdline"
+      ).splitlines()
+      assert btop_args == [
+          "btop",
+          f"--config={generation_root}/btop/btop.conf",
+          f"--themes-dir={generation_root}/btop/themes",
+      ], btop_args
+      machine.wait_for_text("CPU", timeout=OCR_TIMEOUT)
+      machine.fail(
+          as_alice("sh", "-c", f"printf x >> {shlex.quote(btop_config)}")
+      )
+      assert machine.succeed(
+          f"sha256sum {shlex.quote(btop_config)}"
+      ).split()[0] == btop_config_digest
+      machine.send_key("q")
+      machine.wait_until_succeeds(
+          f"test ! -d /proc/{btop_pid}", timeout=STATE_TIMEOUT
+      )
+      assert machine.succeed(
+          f"sha256sum {shlex.quote(btop_config)}"
+      ).split()[0] == btop_config_digest
+      machine.send_key("q")
+      machine.wait_until_succeeds(
+          f"test ! -d /proc/{yazi_pid}", timeout=STATE_TIMEOUT
+      )
+
+      previous_generation = generation
+      machine.succeed(as_alice("realmctl", "theme", "apply"))
+      generation = machine.succeed(
+          "cat /home/alice/.config/realm/generated/current"
+      ).strip()
+      assert generation != previous_generation, (
+          generation,
+          previous_generation,
+      )
+      machine.succeed(f"test -d {shlex.quote(generation_root)}")
       machine.succeed(f"kill -TERM {terminal_pid}")
       machine.wait_until_succeeds(
           f"test ! -d /proc/{terminal_pid}", timeout=STATE_TIMEOUT
@@ -441,6 +540,10 @@ EOF
               cell["windows"] for cell in response["data"]["orbits"]
           ) == 0,
           "default-binding terminal close",
+      )
+      machine.succeed(f"test -d {shlex.quote(generation_root)}")
+      generation_root = (
+          f"/home/alice/.config/realm/generated/generations/{generation}"
       )
 
       machine.succeed(
