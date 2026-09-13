@@ -6,13 +6,17 @@ root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 builder=$root/packaging/tool-sources/build-native-source-kits.sh
 checker=$root/packaging/tool-sources/check-native-source-kit.py
 bundle=$root/packaging/tool-sources/bundles/realm-workspace
+tool_stager=$root/packaging/tool-sources/stage-tool-bundle.py
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/realm-native-source-kits.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-if [ ! -x "$builder" ] || [ ! -x "$checker" ]; then
+if [ ! -x "$builder" ] || [ ! -x "$checker" ] || [ ! -x "$tool_stager" ]; then
     echo "native source-kit producer or checker is missing" >&2
     exit 1
 fi
+
+python3 "$root/packaging/tool-sources/test-tool-runtime.py" --self-test
+"$root/packaging/session/test-private-tool-path.sh"
 
 # SPEC 0024 requires the retained source authority to move whenever workspace
 # source or Cargo build/test input moves. Keep this guard in the source checkout
@@ -37,6 +41,16 @@ check_realm_workspace_freshness() {
 }
 
 check_realm_workspace_freshness "$root" "$bundle"
+
+if [ "$(grep -c -F 'yazi = "retained:yazi@25.4.8"' \
+    "$root/packaging/tool-sources/targets.toml")" -ne 2 ] \
+    || [ "$(grep -c -F 'starship = "retained:starship@1.23.0"' \
+        "$root/packaging/tool-sources/targets.toml")" -ne 2 ] \
+    || grep -E 'retained:(yazi@26\.8\.15|starship@1\.26\.0)' \
+        "$root/packaging/tool-sources/targets.toml" >/dev/null; then
+    echo "native target map does not select the accepted retained tool versions" >&2
+    exit 1
+fi
 
 freshness_fixture=$tmp/freshness-fixture
 fixture_bundle=$freshness_fixture/packaging/tool-sources/bundles/realm-workspace
@@ -90,6 +104,15 @@ if grep -F "skipping \$\$bin: not built in this revision" \
     exit 1
 fi
 
+if grep -E '^(Suggests:|Recommends: +)(yazi|starship)' \
+    "$root/packaging/debian/control" "$root/packaging/fedora/realm.spec" \
+    >/dev/null \
+    || grep -F 'suggests = "yazi, starship"' \
+        "$root/packaging/debian/cargo-deb.toml.fragment" >/dev/null; then
+    echo "native package metadata delegates Realm-owned tools to distribution packages" >&2
+    exit 1
+fi
+
 mkdir -p "$tmp/sentinels"
 for command in git curl wget ssh scp; do
     sed "s/@COMMAND@/$command/g" >"$tmp/sentinels/$command" <<'EOF'
@@ -123,6 +146,43 @@ mkdir -p "$tmp/rpm"
 tar -C "$tmp/rpm" -xzf "$rpm_archive"
 rpm=$tmp/rpm/realm-0.1.0
 "$checker" rpm "$rpm"
+
+for kit in "$debian" "$rpm"; do
+    for selected in yazi-25.4.8 starship-1.23.0; do
+        selected_bundle=$kit/packaging/tool-sources/bundles/$selected
+        if [ ! -d "$selected_bundle" ]; then
+            echo "native source kit omitted selected bundle: $selected" >&2
+            exit 1
+        fi
+        staged=$tmp/staged-$(basename "$kit")-$selected
+        source=$(python3 "$kit/packaging/tool-sources/stage-tool-bundle.py" \
+            "$selected_bundle" "$staged")
+        if [ "$source" != "$staged/source" ] \
+            || [ ! -f "$source/Cargo.lock" ] \
+            || [ ! -f "$staged/.cargo/config.toml" ] \
+            || [ ! -d "$staged/vendor" ]; then
+            echo "selected bundle did not materialize a complete Cargo stage: $selected" >&2
+            exit 1
+        fi
+        if find "$source" -path '*/packaging/tool-sources/bundles' -print -quit \
+            | grep . >/dev/null; then
+            echo "selected bundle stage contains a recursive retained authority" >&2
+            exit 1
+        fi
+    done
+done
+
+cp -R "$debian" "$tmp/debian-missing-selected"
+rm -rf "$tmp/debian-missing-selected/packaging/tool-sources/bundles/yazi-25.4.8"
+if "$checker" debian "$tmp/debian-missing-selected" >"$tmp/out" 2>"$tmp/err"; then
+    echo "Debian source kit accepted a missing selected tool bundle" >&2
+    exit 1
+elif ! grep -F 'DEBIAN source kit bundle inventory differs from policy' \
+    "$tmp/err" >/dev/null; then
+    echo "missing selected tool bundle rejection had the wrong reason" >&2
+    cat "$tmp/err" >&2
+    exit 1
+fi
 
 guide_failures=0
 for guide in \
@@ -212,13 +272,20 @@ fi
 diff -qr "$root/packaging/debian" "$debian/debian"
 diff -qr "$root/packaging/fedora" "$rpm/packaging/fedora"
 cmp "$root/packaging/fedora/realm.spec" "$rpm_spec"
-for helper in check-bundle-linkage.py check-native-source-kit.py stage-realm-workspace.py; do
+for helper in \
+    check-bundle-linkage.py \
+    check-native-source-kit.py \
+    stage-realm-workspace.py \
+    stage-tool-bundle.py \
+    test-tool-runtime.py; do
     cmp "$root/packaging/tool-sources/$helper" \
         "$debian/packaging/tool-sources/$helper"
     cmp "$root/packaging/tool-sources/$helper" \
         "$rpm/packaging/tool-sources/$helper"
 done
-diff -qr "$root/packaging/tool-sources/bundles/realm-workspace" \
-    "$debian/packaging/tool-sources/bundles/realm-workspace"
-diff -qr "$root/packaging/tool-sources/bundles/realm-workspace" \
-    "$rpm/packaging/tool-sources/bundles/realm-workspace"
+for selected in realm-workspace yazi-25.4.8 starship-1.23.0; do
+    diff -qr "$root/packaging/tool-sources/bundles/$selected" \
+        "$debian/packaging/tool-sources/bundles/$selected"
+    diff -qr "$root/packaging/tool-sources/bundles/$selected" \
+        "$rpm/packaging/tool-sources/bundles/$selected"
+done

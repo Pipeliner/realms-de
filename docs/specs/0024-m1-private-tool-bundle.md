@@ -203,6 +203,51 @@ SHALL not accept `vergen`'s fallback metadata as release evidence or assume that
 in two different directories/times and either compare the normalized declared
 artifacts or explicitly record and justify every remaining non-identical field.
 
+For the selected `25.4.8` bundle, both native recipes SHALL set
+`SOURCE_DATE_EPOCH=1744112829`,
+`VERGEN_GIT_SHA=99ea3b74c4260a724b43af812df0f68ef59395b7`,
+`VERGEN_GIT_COMMIT_DATE=2025-04-08`, and
+`VERGEN_BUILD_DATE=2025-04-08`. These values are the Unix epoch, commit, and
+UTC date bound by that bundle's intake record. The native Yazi build SHALL
+append `-std=gnu17` to the package builder's inherited `CFLAGS`. The
+retained `onig_sys 69.8.1` source uses pre-C23 empty-parameter callback
+declarations; selecting GNU C17 preserves their intended unspecified-argument
+meaning on GCC 16 and newer without suppressing incompatible-type diagnostics.
+This compatibility selection applies only to the selected Yazi build, not the
+Realm workspace or Starship builds.
+
+After retained-bundle verification and unpacking, Fedora preparation SHALL
+remove executable permission bits from staged regular Rust source (`*.rs`)
+files before compilation and debug-source collection. Source bytes and retained
+archives remain unchanged; executable scripts and binaries keep their modes.
+Rust inner attributes are not script shebangs. RPM's normal shebang processing
+and debug-source generation remain enabled. A fixture SHALL verify those mode
+and content boundaries, and the native CI RPM build verifies integration.
+
+The retained Yazi runtime fixture SHALL set both the process working directory
+and `PWD` to its controlled directory. Yazi 25.4.8 prefers absolute `PWD` over
+the operating-system directory; an inherited package-build `PWD` must not make
+the fixture inspect the package source tree instead of its sample file.
+
+The Yazi build command SHALL select the `yazi-fm` and `yazi-cli` packages,
+which produce `yazi` and `ya`;
+the Starship build command SHALL select the `starship` binary. Both use their
+selected bundle's staged source, vendor tree, source-replacement configuration,
+and a bundle-local target directory with `--release --frozen --offline
+--locked`. Default features are retained; a feature-set change requires a
+specification amendment because it changes the supported executables.
+
+The outer native source kits SHALL carry exactly the Realm-workspace,
+`yazi-25.4.8`, and `starship-1.23.0` bundle authorities plus the narrow staging
+helpers needed to validate and materialize those inputs. They SHALL NOT contain
+a recursive copy of any bundle, a second source snapshot, or another hidden
+workspace. Before Cargo runs, the selected-tool stager SHALL validate the
+record-bound source archive, lockfile, vendor archive, source replacement, and
+license report, then materialize only that selected bundle into an empty
+package-local stage. The target mapping SHALL identify `retained:yazi@25.4.8`
+and `retained:starship@1.23.0` for Debian and Fedora; Nix continues to use its
+locked nixpkgs inputs.
+
 ## Executable ownership and session scope
 
 Native packages SHALL install only these Realm-owned executables:
@@ -234,9 +279,10 @@ and PATH isolation for both direct and systemd-user launch paths, including the
 
 ## Yazi v25.4 configuration migration
 
-The current Realm Yazi template targets a different schema and is not valid
-configuration evidence for Yazi `25.4.8`. Its migration is part of selecting
-that version, rather than a later cosmetic change.
+The Realm Yazi template has been migrated to the selected `25.4.8` schema. The
+static `packaging/tool-sources/test-tool-configs.sh` guard already proves the
+required names below and rejects the known legacy names. That source-level
+guard is necessary but does not replace the real retained-runtime fixture.
 
 The rendered template SHALL use Yazi v25.4's names as follows:
 
@@ -340,20 +386,22 @@ terminals keep their original selectors and receive no live reload.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| B1 | Given a selected tool or Realm-workspace source bundle, when its intake linkage is validated, then archive, lockfile, every resolved Cargo source, vendor tree, source-replacement config, digest records, and dependency license report agree exactly. | To be implemented: source-bundle linkage fixture. |
-| B2 | Given retained-only Debian and Fedora source kits and their actual package build paths with networking disabled and empty Cargo caches, when source-kit recursion, emitted package documentation, selected bundles, the complete Realm workspace build, and all package-relevant staged workspace tests run (excluding only non-packaged `realm-agent-sdd`), then no hidden workspace is accepted, the installed guide names only the retained-kit workflow, all Cargo invocations use `--frozen --offline --locked`, deterministic source/VCS metadata where applicable, and no recipe fetch path exists. | `packaging/tool-sources/test-native-source-kits.sh`; `packaging/tool-sources/test-native-builds.sh` (Realm-workspace portion; selected Yazi/Starship bundle integration remains follow-on work) |
-| B3 | Given a native package install and direct or systemd-user Realm session launch, when executable and PATH ownership are inspected, then only `/usr/lib/realm/bin/*` owns the three Realm tools, Realm-launched applications resolve them, and neither user manager nor DBus activation receives the private PATH, including with `REALM_IMPORT_PATH=1`. | To be implemented: package/session ownership fixture. |
-| B4 | Given a rendered Realm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it on native or Nix package paths, then the executable reports exactly `25.4.8`, a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Realm feature. | `packaging/tool-sources/test-tool-configs.sh`; retained native and installed Nix runtime fixtures |
-| B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | To be implemented: dependency-license fixture. |
+| B1 | Given a selected tool or Realm-workspace source bundle, when its intake linkage is validated, then archive, lockfile, every resolved Cargo source, vendor tree, source-replacement config, digest records, and dependency license report agree exactly. | `packaging/tool-sources/test-bundle-linkage.sh`; `packaging/tool-sources/check-bundle-linkage.py` |
+| B2 | Given retained-only Debian and Fedora source kits and their actual package build paths with networking disabled and empty Cargo caches, when source-kit recursion, emitted package documentation, selected bundles, the complete Realm workspace build, and all package-relevant staged workspace tests run (excluding only non-packaged `realm-agent-sdd`), then no hidden workspace is accepted, the installed guide names only the retained-kit workflow, all Cargo invocations use `--frozen --offline --locked`, deterministic source/VCS metadata where applicable, and no recipe fetch path exists. | `packaging/tool-sources/test-native-source-kits.sh`; `packaging/tool-sources/test-native-builds.sh` |
+| B3 | Given a native package install and direct or systemd-user Realm session launch, when executable and PATH ownership are inspected, then only `/usr/lib/realm/bin/*` owns the three Realm tools, Realm-launched applications resolve them, and neither user manager nor DBus activation receives the private PATH, including with `REALM_IMPORT_PATH=1`. | `packaging/tool-sources/test-native-builds.sh`; `packaging/session/test-private-tool-path.sh` |
+| B4 | Given a rendered Realm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it on native or Nix package paths, then the executable reports exactly `25.4.8`, a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Realm feature. | `packaging/tool-sources/test-tool-configs.sh`; selected-runtime assertions in `packaging/tool-sources/test-native-builds.sh`; installed Nix terminal fixture |
+| B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | `packaging/tool-sources/test-bundle-linkage.sh`; `packaging/tool-sources/check-bundle-linkage.py` |
 | B6 | Given a complete current generation N, when the typed terminal binding launches Foot and zsh, then exact argv/environment select only N, Starship renders Realm's prompt, Yazi loads all three generation-local files, `Ctrl+p` launches btop with N's exact config/theme arguments, and both TUI screens visibly use their selected Realm configuration. Given a valid pre-profile generation, terminal refuses without mutation; after explicit apply a complete later generation launches successfully. User configuration remains untouched, prior committed generations remain present, and no mutable/live-reload path is used. | `fixed_consumers` exact profile tests; installed Nix terminal/Yazi/btop fixture |
 
 ## Boundaries and follow-on work
 
-This specification completes the design required for SPEC 0023 A2 only. It
-does not claim A2 is implemented, does not establish target availability (A3),
-and does not establish immutable generation update or rollback behavior (A4).
-It establishes only the terminal-scoped zsh/Starship/Yazi/btop integration
-above. GTK and Qt process activation, arbitrary desktop/profile launches,
+This specification covers the selected tools' retained native package
+availability and the terminal-scoped zsh/Starship/Yazi/btop integration above.
+Passing the native-build, installed-ownership, session-PATH, retained-runtime,
+and installed Nix fixtures establishes those supported paths, but does not by
+itself close issue #134: complete immutable-generation update and rollback
+behavior from SPEC 0023 A4 remains follow-on work. GTK and Qt process
+activation remain the next MVP tranche. Arbitrary desktop/profile launches,
 lifecycle-owned descendants, production generation reclamation, and complete
 update/rollback policy remain #117/#135 follow-on work and are not satisfied by
 this slice.
