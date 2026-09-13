@@ -9,6 +9,9 @@ SELECTED = {("yazi", "25.4.8"), ("starship", "1.23.0")}
 
 
 def linkage_module():
+    # A source kit is a digest-checked input, not a Python cache directory.
+    # Import the copied validator without mutating that strict inventory.
+    sys.dont_write_bytecode = True
     checker = Path(__file__).with_name("check-bundle-linkage.py")
     specification = importlib.util.spec_from_file_location("realm_bundle_linkage", checker)
     if specification is None or specification.loader is None:
