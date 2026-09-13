@@ -4,6 +4,9 @@ set -euo pipefail
 
 target=${2:-}
 package_dir=${3:-}
+probe_input_dir=$(CDPATH='' cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+control_probe="$probe_input_dir/control_get_state.py"
+input_checker="$probe_input_dir/check_inputs.py"
 
 fail() {
     printf 'FAIL: %s\n' "$*" >&2
@@ -149,15 +152,15 @@ probe_guest() {
         river "$river_exe" realm-wm "$wm_exe" realm-bar \
         "$(readlink -f "/proc/$bar_pid/exe")" > "$evidence/processes.txt"
 
-    user_command timeout 10 python3 /tmp/realm-native-vm/control_get_state.py \
+    user_command timeout 10 python3 "$control_probe" \
         "$runtime_dir/realm/ctl.sock" "$evidence/control-get-state.ndjson"
-    python3 /tmp/realm-native-vm/check_inputs.py control \
+    python3 "$input_checker" control \
         "$evidence/control-get-state.ndjson"
 
     user_command timeout 15 systemd-run --user --wait --pipe --quiet --collect \
         --unit=realm-native-doctor /usr/bin/realmctl --json doctor \
         > "$evidence/realmctl-doctor.json"
-    python3 /tmp/realm-native-vm/check_inputs.py doctor \
+    python3 "$input_checker" doctor \
         "$evidence/realmctl-doctor.json"
 
     cp /var/tmp/realm-native-packages.txt "$evidence/packages.txt"
