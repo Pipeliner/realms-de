@@ -372,8 +372,8 @@ Realm installs both `xdg-desktop-portal-gtk` and
 `gtk`, ScreenCast and Screenshot to `wlr`, and Inhibit to `none`. Check that the
 `wlr` backend and the installed `realm-portals.conf` are both present before
 changing that policy. `realmctl doctor` checks the routing and advertised
-interfaces, but an actual captured stream under River remains unverified until
-the hardware acceptance test runs.
+interfaces. This is not proof of browser screen sharing on physical hardware;
+that acceptance remains unverified.
 
 ### Tofu boxes instead of runes, or `𓂃` renders as a rectangle
 
