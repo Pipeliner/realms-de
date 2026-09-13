@@ -1,0 +1,50 @@
+Source: realm-river
+Section: x11
+Priority: optional
+Maintainer: realm contributors <vadim.evard@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               bison,
+               build-essential,
+               hwdata,
+               iproute2,
+               libcap-dev,
+               libegl-dev,
+               libevdev-dev,
+               libexpat1-dev,
+               libffi-dev,
+               libgbm-dev,
+               libgl-dev,
+               libgles-dev,
+               libmtdev-dev,
+               libpciaccess-dev,
+               libpthread-stubs0-dev,
+               libseat-dev,
+               libudev-dev,
+               libwacom-dev,
+               libx11-dev,
+               libxcb-composite0-dev,
+               libxcb-ewmh-dev,
+               libxcb-icccm4-dev,
+               libxcb-render0-dev,
+               libxcb-res0-dev,
+               libxcb-xfixes0-dev,
+               libxcb1-dev,
+               ninja-build,
+               patchelf,
+               pkg-config,
+               python3,
+               xkb-data,
+               xwayland,
+               xz-utils
+Standards-Version: 4.7.0
+Homepage: https://github.com/pipeliner/realms-de
+Rules-Requires-Root: no
+
+Package: realm-river
+Architecture: amd64
+Provides: river (= 0.4.8)
+Depends: ${shlibs:Depends}, ${misc:Depends}, libinput-bin (>= 1.25.0)
+Description: private River 0.4.8 runtime for Realm on Ubuntu Noble
+ Feature-bearing River with Realm's pinned private Wayland, wlroots, DRM,
+ input, rendering and Xwayland library closure. This pre-alpha package is
+ built for Realm's Ubuntu 24.04 session and does not install /usr/bin/river.
