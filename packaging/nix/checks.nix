@@ -366,11 +366,17 @@ EOF
       river_pid = machine.succeed("pgrep -u alice -xo river").strip()
       machine.succeed(f"test \"$(readlink /proc/{wm_pid}/exe)\" = ${realm}/bin/realm-wm")
       machine.succeed(f"test \"$(readlink /proc/{bar_pid}/exe)\" = ${realm}/bin/realm-bar")
-      # The unit supplies its own narrow PATH. Its packaged environment must
-      # therefore carry both fixed consumers rather than relying on the system
-      # profile or an interactive shell.
+      # The package unit and NixOS-generated drop-in jointly determine PATH.
+      # Inspect the running daemon so a later drop-in cannot silently replace
+      # a correct-looking package unit with NixOS's minimal default PATH.
       machine.succeed("grep -F -q '${pkgs.foot}/bin' /etc/systemd/user/realm-wm.service")
       machine.succeed("grep -F -q '${pkgs.fuzzel}/bin' /etc/systemd/user/realm-wm.service")
+      daemon_path = machine.succeed(
+          f"tr '\\0' '\\n' < /proc/{wm_pid}/environ | sed -n 's/^PATH=//p'"
+      ).strip().split(":")
+      assert '${realm}/bin' in daemon_path, daemon_path
+      assert '${pkgs.foot}/bin' in daemon_path, daemon_path
+      assert '${pkgs.fuzzel}/bin' in daemon_path, daemon_path
 
       # Check the user-manager publication against the installed daemon that
       # inherited it. A client started without this value cannot map a surface.
