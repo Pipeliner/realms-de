@@ -273,6 +273,7 @@ fn respond(server: &mut ControlServer, action: ControlAction) {
                     now,
                     connection,
                     Response::Error {
+                        kind: realm_core::ipc::ErrorKind::BackendRefused,
                         message: "unsupported by integration fixture".into(),
                     },
                 )
@@ -547,6 +548,7 @@ fn a_full_send_buffer_returns_from_one_nonblocking_quantum() {
     assert!(fixture.receive_pipeline(token).is_none());
     let first_connection = expect_request(fixture.drain_writes(token, deadline), Request::GetState);
     let large_response = Response::Error {
+        kind: realm_core::ipc::ErrorKind::Internal,
         message: "x".repeat(60_000),
     };
     assert!(ipc::encode(&large_response).unwrap().len() < ipc::MAX_FRAME_BYTES);

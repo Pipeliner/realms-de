@@ -839,6 +839,7 @@ fn client_request_is_local_forbidden_or_one_bounded_exchange() {
         write_test_response(
             &mut stream,
             &Response::Error {
+                kind: realm_core::ipc::ErrorKind::BackendRefused,
                 message: "application refusal".into(),
             },
         );
@@ -860,6 +861,7 @@ fn client_request_is_local_forbidden_or_one_bounded_exchange() {
     assert_eq!(
         client.request(Request::GetState).unwrap(),
         Response::Error {
+            kind: realm_core::ipc::ErrorKind::BackendRefused,
             message: "application refusal".into()
         }
     );
@@ -1514,7 +1516,7 @@ fn terminal_readiness_table_is_closed_for_every_transport_state() {
         base,
     );
     await_server.inject_receive_for_test(TestReceive::Bytes(
-        b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+        b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n".to_vec(),
     ));
     let receives = await_server.receive_calls_for_test();
     await_server
@@ -1708,6 +1710,7 @@ fn oversized_completion_returns_no_receipt_and_proves_closed() {
     finish_test_handshake(&mut server, other, other_token, base);
     request_test_response(&mut server, oversized_peer, oversized_token, base);
     let oversized = Response::Error {
+        kind: realm_core::ipc::ErrorKind::Internal,
         message: "x".repeat(MAX_FRAME_BYTES),
     };
 
@@ -1831,7 +1834,7 @@ fn connected_errno_classification_is_peer_local_and_total() {
             base,
         );
         server.inject_receive_for_test(TestReceive::Bytes(
-            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n".to_vec(),
         ));
         assert_eq!(
             server.service_one(base, ready(token, true, false)).unwrap(),
@@ -1854,7 +1857,7 @@ fn connected_errno_classification_is_peer_local_and_total() {
             base,
         );
         server.inject_receive_for_test(TestReceive::Bytes(
-            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n".to_vec(),
         ));
         server.service_one(base, ready(token, true, false)).unwrap();
         server.inject_send_for_test(TestSend::Error(error));
@@ -1873,7 +1876,7 @@ fn connected_errno_classification_is_peer_local_and_total() {
         base,
     );
     server.inject_receive_for_test(TestReceive::Bytes(
-        b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+        b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n".to_vec(),
     ));
     server.service_one(base, ready(token, true, false)).unwrap();
     server.inject_send_for_test(TestSend::Error(Errno::IO));
@@ -1908,7 +1911,7 @@ fn poll_interest_and_ready_arbitration_is_total() {
     );
 
     server.inject_receive_for_test(TestReceive::Bytes(
-        b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+        b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n".to_vec(),
     ));
     assert_eq!(
         server.service_one(base, ready(token, true, false)).unwrap(),
@@ -2051,7 +2054,7 @@ fn finish_test_handshake(
     now: Instant,
 ) {
     server.inject_receive_for_test(TestReceive::Bytes(
-        b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+        b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n".to_vec(),
     ));
     assert_eq!(
         server.service_one(now, ready(token, true, false)).unwrap(),
@@ -2108,6 +2111,7 @@ fn outbound_frame_bound_is_streaming_peer_local_and_stable() {
         Some(ControlAction::Request { connection: got, request: Request::GetState }) if got == connection
     ));
     let oversized = Response::Error {
+        kind: realm_core::ipc::ErrorKind::Internal,
         message: "x".repeat(MAX_FRAME_BYTES),
     };
     assert!(matches!(
@@ -2146,6 +2150,7 @@ fn completion_encoding_precedes_queue_mutation_and_overflow_is_retriable() {
     let (mut ordinary, action) = pending_protocol_machine(base, b"{\"cmd\":\"get-state\"}\n");
     assert_eq!(action, MachineAction::Request(Request::GetState));
     let oversized_response = Response::Error {
+        kind: realm_core::ipc::ErrorKind::Internal,
         message: "x".repeat(MAX_FRAME_BYTES),
     };
     assert_eq!(
@@ -2419,7 +2424,7 @@ fn one_ready_token_performs_at_most_one_socket_io() {
     let token = peer.token;
 
     server.inject_receive_for_test(TestReceive::Bytes(
-        b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+        b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n".to_vec(),
     ));
     let before = server.socket_calls_for_test();
     server.service_one(base, ready(token, true, true)).unwrap();
@@ -2450,7 +2455,7 @@ fn production_send_path_supplies_msg_nosignal() {
         base,
     );
     server.inject_receive_for_test(TestReceive::Bytes(
-        b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n".to_vec(),
+        b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n".to_vec(),
     ));
     server.service_one(base, ready(token, true, false)).unwrap();
     let output = server.output_len_for_test(connection).unwrap();
@@ -3738,14 +3743,14 @@ fn protocol_state_machine_is_total() {
         expected_input_enabled: bool,
     }
 
-    let hello = b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n";
+    let hello = b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n";
     let hello_reply =
-        b"{\"reply\":\"hello\",\"data\":{\"version\":1,\"session\":\"test-session\"}}\n";
-    let expected_hello_error = b"{\"reply\":\"error\",\"data\":{\"message\":\"expected Hello\"}}\n";
+        b"{\"reply\":\"hello\",\"data\":{\"version\":2,\"session\":\"test-session\"}}\n";
+    let expected_hello_error = b"{\"reply\":\"error\",\"data\":{\"kind\":\"unknown-request\",\"message\":\"expected Hello\"}}\n";
     let invalid_request_error =
-        b"{\"reply\":\"error\",\"data\":{\"message\":\"invalid request\"}}\n";
+        b"{\"reply\":\"error\",\"data\":{\"kind\":\"unknown-request\",\"message\":\"invalid request\"}}\n";
     let duplicate_hello_error =
-        b"{\"reply\":\"error\",\"data\":{\"message\":\"duplicate Hello\"}}\n";
+        b"{\"reply\":\"error\",\"data\":{\"kind\":\"unknown-request\",\"message\":\"duplicate Hello\"}}\n";
 
     let cases = vec![
         Case {
@@ -3760,7 +3765,7 @@ fn protocol_state_machine_is_total() {
         Case {
             name: "mismatched Hello discards its pipeline",
             prepare_ready: false,
-            input: b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n{\"cmd\":\"get-state\"}\n".to_vec(),
+            input: b"{\"cmd\":\"hello\",\"arg\":{\"version\":3,\"client\":\"test\"}}\n{\"cmd\":\"get-state\"}\n".to_vec(),
             expected_action: MachineAction::None,
             expected_output: Some(hello_reply),
             expected_phase: ConnectionPhase::CloseAfterReply,
@@ -3832,7 +3837,7 @@ fn protocol_state_machine_is_total() {
         Case {
             name: "third startup frame closes before retained dispatch",
             prepare_ready: false,
-            input: b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n{\"cmd\":\"get-state\"}\n{\"cmd\":\"quit\"}\n".to_vec(),
+            input: b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n{\"cmd\":\"get-state\"}\n{\"cmd\":\"quit\"}\n".to_vec(),
             expected_action: MachineAction::Close(MachineClose::ExcessPipeline),
             expected_output: None,
             expected_phase: ConnectionPhase::Closing,
@@ -3888,13 +3893,13 @@ fn protocol_state_machine_is_total() {
 fn hello_reply_drains_before_retained_request_dispatch() {
     let now = Instant::now();
     let hello_reply =
-        b"{\"reply\":\"hello\",\"data\":{\"version\":1,\"session\":\"test-session\"}}\n";
+        b"{\"reply\":\"hello\",\"data\":{\"version\":2,\"session\":\"test-session\"}}\n";
     let mut machine = ConnectionMachine::new(now, "test-session");
 
     assert_eq!(
         machine.ingest(
             now,
-            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"shell\"}}\n{\"cmd\":\"get-state\"}\n"
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"shell\"}}\n{\"cmd\":\"get-state\"}\n"
         ),
         MachineAction::None
     );
@@ -3928,7 +3933,7 @@ fn mismatched_hello_reply_drains_then_closes() {
     assert_eq!(
         machine.ingest(
             now,
-            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n{\"cmd\":\"quit\"}\n"
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":3,\"client\":\"test\"}}\n{\"cmd\":\"quit\"}\n"
         ),
         MachineAction::None
     );
@@ -3946,7 +3951,7 @@ fn ready_protocol_machine(now: Instant) -> ConnectionMachine {
     assert_eq!(
         machine.ingest(
             now,
-            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n"
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n"
         ),
         MachineAction::None
     );
@@ -4039,7 +4044,7 @@ fn hard_read_deadlines_and_impossible_full_prefix_close_exactly() {
     assert_eq!(
         retained_partial.ingest(
             first_byte,
-            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n{"
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n{"
         ),
         MachineAction::None
     );
@@ -4063,7 +4068,7 @@ fn all_output_classes_obey_exact_nonblocking_deadlines() {
     assert_eq!(
         no_progress.ingest(
             base,
-            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n"
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n"
         ),
         MachineAction::None
     );
@@ -4080,7 +4085,7 @@ fn all_output_classes_obey_exact_nonblocking_deadlines() {
     assert_eq!(
         progress.ingest(
             base,
-            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n"
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n"
         ),
         MachineAction::None
     );
@@ -4106,7 +4111,7 @@ fn all_output_classes_obey_exact_nonblocking_deadlines() {
     assert_eq!(
         terminal.ingest(
             base,
-            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n"
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":3,\"client\":\"test\"}}\n"
         ),
         MachineAction::None
     );
@@ -4194,7 +4199,7 @@ fn oversized_hello_reply_returns_close_action() {
     assert_eq!(
         machine.ingest(
             now,
-            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"test\"}}\n"
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"test\"}}\n"
         ),
         MachineAction::Close(MachineClose::FrameTooLarge)
     );
@@ -4210,7 +4215,7 @@ fn half_close_preserves_authorized_two_frame_work_and_subscribers() {
     assert_eq!(
         ordinary.ingest(
             base,
-            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"shell\"}}\n{\"cmd\":\"get-state\"}\n"
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"shell\"}}\n{\"cmd\":\"get-state\"}\n"
         ),
         MachineAction::None
     );
@@ -4234,7 +4239,7 @@ fn half_close_preserves_authorized_two_frame_work_and_subscribers() {
     assert_eq!(
         subscriber.ingest(
             base,
-            b"{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"bar\"}}\n{\"cmd\":\"subscribe\"}\n"
+            b"{\"cmd\":\"hello\",\"arg\":{\"version\":2,\"client\":\"bar\"}}\n{\"cmd\":\"subscribe\"}\n"
         ),
         MachineAction::None
     );
@@ -4292,12 +4297,13 @@ fn read_half_closed_application_error_drains_then_closes() {
         machine.complete_request(
             base,
             &Response::Error {
+                kind: realm_core::ipc::ErrorKind::BackendRefused,
                 message: "application refused".to_owned(),
             }
         ),
         MachineAction::None
     );
-    let expected = b"{\"reply\":\"error\",\"data\":{\"message\":\"application refused\"}}\n";
+    let expected = b"{\"reply\":\"error\",\"data\":{\"kind\":\"backend-refused\",\"message\":\"application refused\"}}\n";
     assert_eq!(machine.output(), Some(expected.as_slice()));
     assert_eq!(
         machine.advance_output(base, expected.len()),

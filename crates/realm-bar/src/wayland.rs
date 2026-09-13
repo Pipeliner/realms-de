@@ -289,7 +289,7 @@ fn try_connect_control(
         .map_err(classify_control_error)?
     {
         Response::Keymap(keymap) => *keymap,
-        Response::Error { message } => {
+        Response::Error { message, .. } => {
             return Err(ControlConnectError::Fatal(anyhow::anyhow!(
                 "session refused keymap request: {message}"
             )));

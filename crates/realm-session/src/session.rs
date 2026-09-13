@@ -5,7 +5,7 @@ use std::os::fd::BorrowedFd;
 use std::time::{Duration, Instant};
 
 use realm_core::ipc::PROTOCOL_VERSION;
-use realm_core::ipc::{Capabilities, LedgerEntry, OrbitLedger};
+use realm_core::ipc::{Capabilities, InterfaceVersion, LedgerEntry, OrbitLedger, SessionHealth};
 use realm_core::keys::{Action, Binding, Keymap, Mode};
 use realm_core::layout::{project, Layout, Placement, TriptychParams, Workarea};
 use realm_core::ledger::{Dir, Orbit, ORBIT_COUNT};
@@ -17,12 +17,12 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::backend::{
     BackendBindingId, BackendBindingSpec, BackendBindingState, BackendCapacityResource,
-    BackendContractError, BackendError, BackendEvent, BackendModifier, BackendNextKeyEdge,
-    BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn, BackendPolicyTurnId,
-    BackendResult, BackendSubmission, BackendTicket, BackendWindowId, WmBackend,
-    KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE_HZ, MAX_CONFIGURED_BINDINGS, MAX_MANAGED_WINDOWS,
-    MAX_POLICY_EVENTS, MAX_POLICY_TEXT_BYTES, MAX_REPLAY_POLICY_EVENTS, MAX_STAGED_EFFECTS,
-    MAX_VISIBLE_APP_ID_JSON_BYTES, MAX_VISIBLE_TITLE_JSON_BYTES,
+    BackendConnection, BackendContractError, BackendError, BackendEvent, BackendModifier,
+    BackendNextKeyEdge, BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn,
+    BackendPolicyTurnId, BackendResult, BackendSubmission, BackendTicket, BackendWindowId,
+    WmBackend, KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE_HZ, MAX_CONFIGURED_BINDINGS,
+    MAX_MANAGED_WINDOWS, MAX_POLICY_EVENTS, MAX_POLICY_TEXT_BYTES, MAX_REPLAY_POLICY_EVENTS,
+    MAX_STAGED_EFFECTS, MAX_VISIBLE_APP_ID_JSON_BYTES, MAX_VISIBLE_TITLE_JSON_BYTES,
 };
 
 const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
@@ -738,8 +738,12 @@ enum TransactionSubstate {
 /// The compositor-independent owner of Realm's ledger and visible state.
 pub struct Session<B: WmBackend> {
     backend: B,
+    backend_name: String,
     ledger: Ledger,
     capabilities: Capabilities,
+    bound_interfaces: Vec<InterfaceVersion>,
+    layer_shell_served: bool,
+    degraded_codes: Option<Vec<String>>,
     workarea: Workarea,
     windows: BTreeMap<WinId, WindowMetadata>,
     backend_ids: BTreeMap<BackendWindowId, WinId>,
@@ -776,7 +780,7 @@ pub struct Session<B: WmBackend> {
 impl<B: WmBackend> Session<B> {
     /// Connect a backend and seed an empty six-orbit session.
     pub fn connect(backend: B) -> BackendResult<Self> {
-        Self::connect_with_snapshot_and_keymap(backend, None, Keymap::default())
+        Self::connect_with_snapshot_and_keymap(backend, None, Keymap::default(), None)
     }
 
     /// Connect a backend and enter initial replay using an optional validated snapshot.
@@ -784,18 +788,28 @@ impl<B: WmBackend> Session<B> {
         backend: B,
         snapshot: Option<SessionSnapshotV1>,
     ) -> BackendResult<Self> {
-        Self::connect_with_snapshot_and_keymap(backend, snapshot, Keymap::default())
+        Self::connect_with_snapshot_and_keymap(backend, snapshot, Keymap::default(), None)
+    }
+
+    /// Connect using an optional snapshot and the session-entry degradation handoff.
+    pub fn connect_with_snapshot_and_degraded(
+        backend: B,
+        snapshot: Option<SessionSnapshotV1>,
+        degraded_codes: Option<Vec<String>>,
+    ) -> BackendResult<Self> {
+        Self::connect_with_snapshot_and_keymap(backend, snapshot, Keymap::default(), degraded_codes)
     }
 
     #[cfg(test)]
     fn connect_with_keymap(backend: B, keymap: Keymap) -> BackendResult<Self> {
-        Self::connect_with_snapshot_and_keymap(backend, None, keymap)
+        Self::connect_with_snapshot_and_keymap(backend, None, keymap, None)
     }
 
     fn connect_with_snapshot_and_keymap(
         mut backend: B,
         snapshot: Option<SessionSnapshotV1>,
         keymap: Keymap,
+        degraded_codes: Option<Vec<String>>,
     ) -> BackendResult<Self> {
         if keymap.bindings.len() > MAX_CONFIGURED_BINDINGS {
             return Err(BackendError::Capacity {
@@ -803,7 +817,12 @@ impl<B: WmBackend> Session<B> {
                 limit: MAX_CONFIGURED_BINDINGS as u64,
             });
         }
-        let capabilities = backend.connect()?;
+        let backend_name = backend.name().to_owned();
+        let BackendConnection {
+            capabilities,
+            bound_interfaces,
+            layer_shell_served,
+        } = backend.connect()?;
         let workarea = Workarea::new(0, 0, 0, 0);
         let (ledger, backend_ids, next_win_id) = snapshot.map_or_else(
             || (Ledger::new(), BTreeMap::new(), 0),
@@ -846,8 +865,12 @@ impl<B: WmBackend> Session<B> {
         let published_ledger = Ledger::new();
         Ok(Self {
             backend,
+            backend_name,
             ledger,
             capabilities,
+            bound_interfaces,
+            layer_shell_served,
+            degraded_codes,
             workarea,
             windows: BTreeMap::new(),
             backend_ids,
@@ -958,6 +981,20 @@ impl<B: WmBackend> Session<B> {
     /// Capabilities returned by the backend during connection.
     pub fn capabilities(&self) -> &Capabilities {
         &self.capabilities
+    }
+
+    /// Build the immutable session health response at a supplied monotonic uptime.
+    pub fn health(&self, uptime_ms: u64) -> SessionHealth {
+        SessionHealth {
+            session_version: env!("CARGO_PKG_VERSION").to_owned(),
+            protocol_version: PROTOCOL_VERSION,
+            backend_name: self.backend_name.clone(),
+            capabilities: self.capabilities.clone(),
+            bound_interfaces: self.bound_interfaces.clone(),
+            layer_shell_served: self.layer_shell_served,
+            degraded_codes: self.degraded_codes.clone(),
+            uptime_ms,
+        }
     }
 
     /// The last visible state accepted for publication.
@@ -2325,6 +2362,8 @@ impl<B: WmBackend> Session<B> {
                 orbit: orbit.id.human(),
                 rune: orbit.id.rune().to_string(),
                 name: orbit.name.clone(),
+                active: orbit.id == self.published_ledger.active(),
+                layout: orbit.layout,
                 windows: orbit
                     .windows
                     .iter()
@@ -2418,11 +2457,11 @@ mod tests {
     use realm_core::{Ledger, OrbitId, WinId};
 
     use crate::backend::{
-        BackendBindingId, BackendBindingSpec, BackendCapacityResource, BackendContractError,
-        BackendError, BackendEvent, BackendExitPolicy, BackendModifier, BackendNextKeyEdge,
-        BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn, BackendPolicyTurnId,
-        BackendPollInterest, BackendReady, BackendResult, BackendSubmission, BackendTicket,
-        BackendWindowId, WmBackend, KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE_HZ,
+        BackendBindingId, BackendBindingSpec, BackendCapacityResource, BackendConnection,
+        BackendContractError, BackendError, BackendEvent, BackendExitPolicy, BackendModifier,
+        BackendNextKeyEdge, BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn,
+        BackendPolicyTurnId, BackendPollInterest, BackendReady, BackendResult, BackendSubmission,
+        BackendTicket, BackendWindowId, WmBackend, KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE_HZ,
         MAX_CONFIGURED_BINDINGS, MAX_MANAGED_WINDOWS, MAX_POLICY_EVENTS, MAX_POLICY_TEXT_BYTES,
         MAX_REPLAY_POLICY_EVENTS, MAX_STAGED_EFFECTS, MAX_VISIBLE_APP_ID_JSON_BYTES,
         MAX_VISIBLE_TITLE_JSON_BYTES,
@@ -2489,9 +2528,13 @@ mod tests {
             "fake"
         }
 
-        fn connect(&mut self) -> BackendResult<Capabilities> {
+        fn connect(&mut self) -> BackendResult<BackendConnection> {
             self.connect_calls += 1;
-            Ok(self.capabilities.clone())
+            Ok(BackendConnection {
+                capabilities: self.capabilities.clone(),
+                bound_interfaces: Vec::new(),
+                layer_shell_served: false,
+            })
         }
 
         fn assign_window(

@@ -224,10 +224,10 @@ mod tests {
 
     use super::{PersistCompletion, PersistenceCoordinator, SNAPSHOT_DELAY};
     use crate::backend::{
-        BackendBindingSpec, BackendContractError, BackendEvent, BackendExitPolicy,
-        BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn, BackendPolicyTurnId,
-        BackendPollInterest, BackendReady, BackendResult, BackendSubmission, BackendTicket,
-        BackendWindowId, WmBackend,
+        BackendBindingSpec, BackendConnection, BackendContractError, BackendEvent,
+        BackendExitPolicy, BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn,
+        BackendPolicyTurnId, BackendPollInterest, BackendReady, BackendResult, BackendSubmission,
+        BackendTicket, BackendWindowId, WmBackend,
     };
     use crate::session::{Session, SessionSnapshotV1};
 
@@ -503,14 +503,18 @@ mod tests {
             "fake"
         }
 
-        fn connect(&mut self) -> BackendResult<Capabilities> {
-            Ok(Capabilities {
-                exact_geometry: true,
-                server_side_borders: true,
-                hide_show: true,
-                explicit_ordering: true,
-                fullscreen: true,
-                unsupported: Vec::new(),
+        fn connect(&mut self) -> BackendResult<BackendConnection> {
+            Ok(BackendConnection {
+                capabilities: Capabilities {
+                    exact_geometry: true,
+                    server_side_borders: true,
+                    hide_show: true,
+                    explicit_ordering: true,
+                    fullscreen: true,
+                    unsupported: Vec::new(),
+                },
+                bound_interfaces: Vec::new(),
+                layer_shell_served: false,
             })
         }
 
