@@ -1,7 +1,7 @@
 # SPEC 0011 — Immutable theme activation generations
 
-- **Status:** Accepted (2026-08-29; fixed-consumer bootstrap refinement
-  2026-09-13)
+- **Status:** Accepted (2026-08-29; fixed-consumer bootstrap and retained
+  terminal-profile refinements 2026-09-13)
 - **Milestone:** M1
 - **Decision:** [ADR 0017](../adr/0017-immutable-theme-activation-generations.md)
 - **Issue:** [#131](https://github.com/Pipeliner/realms-de/issues/131)
@@ -268,6 +268,18 @@ provable stale leases, then treats any such entry, missing `publication-order`,
 lingering staging file or malformed record as uncertain and deletes zero
 generations.
 
+For the M1 terminal-profile activation below, production generation
+reclamation is deliberately disabled until SPEC 0012 lifecycle ownership is
+wired to that path. Apply, rollback, startup recovery, selection cleanup and
+pointer-journal cleanup never remove a valid committed generation. The generic
+GC algorithm remains test-only model evidence: no production library surface,
+CLI, daemon path or recovery path can invoke it. Thus every committed N remains
+available to a terminal descendant which inherited N even after its directly
+leased Foot process exits. This trades automatic reclamation for truthful MVP
+lifetime safety; re-enabling reclamation requires the terminal profile to
+carry SPEC 0012 scope/process-group ownership and its lifecycle lease through
+verified emptiness.
+
 When `publication-order` is absent, the first opener serializes control creation
 with the exclusive persistent lock, creates it once with
 `O_CREAT|O_EXCL|O_NOFOLLOW` at mode 0600, writes and fsyncs the canonical empty
@@ -457,18 +469,36 @@ The only fixed consumer identifiers and invocations are:
 
 | Consumer | Exact child argv | Required manifest output |
 |---|---|---|
-| `terminal` | `foot`, `--config=<N>/foot/foot.ini`, `--override=key-bindings.spawn-terminal=none` | `foot/foot.ini` |
+| `terminal` | `foot`, `--config=<N>/foot/foot.ini`, `--override=key-bindings.spawn-terminal=none`, `zsh` | the terminal-profile output set below |
 | `launcher` | `fuzzel`, `--config=<N>/fuzzel/fuzzel.ini` | `fuzzel/fuzzel.ini` |
 
 Here `<N>` is the absolute path returned by the one validated
 `GenerationSelection`; each `--config=` or `--override=` option and its value
-are one argument. Realm passes no shell, no mutable ordinary-config path, no
-other option, and no fallback invocation. The executable basenames are resolved
+is one argument, and `zsh` is the final command argument. Realm passes no
+mutable ordinary-config path, no other option, and no fallback invocation. The
+executable basenames are resolved
 from the packaged session's inherited `PATH`; packaging must make the declared
 `foot` and `fuzzel` dependencies reachable there. A missing executable or
 rejected generation is a visible launch failure, never permission to omit
 `--config=`.
-The terminal invocation lets foot start the user's ordinary default shell. The
+The terminal executor validates this complete manifest-listed set before exec:
+`foot/foot.ini`, `zsh/.zshrc`, `starship.toml`, `yazi/yazi.toml`,
+`yazi/keymap.toml`, `yazi/theme.toml`, `btop/btop.conf`, and
+`btop/themes/realm.theme`. It exports exactly these generation selectors in
+addition to its inherited environment:
+
+```text
+REALM_GENERATION=<N>
+ZDOTDIR=<N>/zsh
+STARSHIP_CONFIG=<N>/starship.toml
+YAZI_CONFIG_HOME=<N>/yazi
+```
+
+The generation-local `.zshrc` initializes the inherited `starship` executable
+and defines `btop` to invoke the inherited executable with exactly
+`--config=<N>/btop/btop.conf` and `--themes-dir=<N>/btop/themes`, followed by
+the caller's arguments. The Yazi keymap's `Ctrl+p` invokes the same exact btop
+configuration and theme-directory arguments as a blocking command. The
 launcher invocation uses fuzzel's default XDG-application mode. Only the fuzzel
 UI consumes N: an application that fuzzel starts remains ADR 0018's explicitly
 unverified direct launch and must not be reported as a Realm profile or as
@@ -477,15 +507,24 @@ generation-selected.
 The terminal's exact command-line override disables foot's default
 `spawn-terminal` action independently of the selected generation's template
 bytes; users open another terminal through Realm's terminal binding. This is
-required so an already-valid generation published before this refinement
-remains usable without republishing and cannot create a later process carrying
-N's config path beyond the leased foot PID. Foot's shell child does not receive
-the config path. Fuzzel reads its config in the directly executed UI process and
-does not pass that config argument or path to the XDG application it starts.
-Consumer fixtures must prove these two boundaries against the packaged
+required so Foot itself cannot create an unselected terminal. The zsh child and
+its Yazi, btop and Starship descendants intentionally receive N's selectors.
+They are not lifecycle-owned profile launches, and no survival or status
+promise is made for them; their files remain safe because production
+reclamation is disabled as specified above. Fuzzel reads its config in the
+directly executed UI process and does not pass that config argument or path to
+the XDG application it starts.
+Consumer fixtures must prove these boundaries against the packaged
 versions; a package whose `--config=PATH`,
 `--override=[SECTION.]KEY=VALUE`, or `spawn-terminal=none` grammar differs is
 unsupported rather than launched without the exact binding.
+
+A current generation published before the terminal-profile output set existed
+remains a valid selectable generation. Bootstrap neither repairs nor replaces
+it. Terminal launch against that N fails visibly before exec because required
+outputs are absent. The supported update is an explicit ordinary
+`realmctl theme apply`, which publishes a complete N+1 for later launches;
+there is no in-place repair, boot-time upgrade or live reload.
 
 Before publishing WM readiness or accepting the first action that could launch
 either consumer, session bootstrap performs one serialized **ensure-current**
@@ -581,7 +620,8 @@ candidate with a partially validated or mixed generation.
 | G11 | Given a successful apply or rollback pointer commit, when existing processes continue running, then Realm sends no signal, command, or notification and only later launches may select the newly current generation. |
 | G12 | Given `Committed`, `CommittedWithCleanupPending`, or `OutcomeAmbiguous`, when `realmctl theme apply` reports the result, then the first two exit 0 and name the selected future-launch generation (with a cleanup warning for the second), while the ambiguous result exits 6, claims no activation, safely reports its candidate/cause, and performs no automatic recovery or retry. |
 | G13 | Given a fresh login whose final configuration root is absent below an existing safely opened parent, a present configuration root with cleanly absent current, a valid current, malformed current, or an absent pointer with recovery evidence, when session bootstrap ensures current, then only clean absence descriptor-relatively creates the final root if needed and performs one serialized built-in apply; valid current is byte-for-byte retained without apply or palette seed, and every malformed/inconsistent case fails readiness without repair, retry, newest-generation selection, or unthemed fallback. A concurrent valid apply that wins the lock is retained rather than overwritten. |
-| G14 | Given either fixed consumer, including terminal launch from an already-valid generation whose foot output predates this refinement, and a later pointer switch from N to N+1, when Realm launches it, then its exact argv contains one `--config=` path below its fully validated selected N, terminal argv also contains the exact `spawn-terminal=none` command-line override, its process lease exists durably before exec and remains live for that unchanged PID until the consumer exits, and it never reads an ordinary mutable foot/fuzzel config as fallback. The fuzzel-started application is explicitly not reported as generation-selected. |
+| G14 | Given either fixed consumer and a later pointer switch from N to N+1, when Realm launches it, then its exact argv contains one `--config=` path below its fully validated selected N, terminal argv also contains the exact `spawn-terminal=none` override and final `zsh`, its process lease exists durably before exec and remains live for that unchanged PID until the consumer exits, and it never reads an ordinary mutable foot/fuzzel config as fallback. Terminal validates the complete output set and exports only N-derived selectors before exec; zsh/Starship/Yazi/btop visibly consume N, while the fuzzel-started application is explicitly not reported as generation-selected. |
+| G15 | Given an old complete N or a pre-profile valid N, when apply publishes N+1, Foot exits and more generations are published, then production apply/recovery/startup exposes no generation-reclamation operation and every valid committed tree remains byte-for-byte present. Terminal against the old complete N continues to consume N; terminal against the pre-profile N refuses the missing exact output before exec and the explicit apply path makes a later complete generation launchable. The test-only GC model is not linked as a production API. |
 
 ## Boundaries
 

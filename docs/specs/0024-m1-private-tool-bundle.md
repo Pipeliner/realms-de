@@ -259,6 +259,73 @@ terminal settings, shell/keymap, status, and command-duration inputs. It SHALL
 assert no configuration diagnostic on stderr and a known rendered feature from
 the Realm template, rather than only a nonempty default prompt.
 
+## M1 terminal-profile activation
+
+Realm-launched terminals use complete generation-local configuration; they do
+not merge, replace or repair an ordinary user zsh, Yazi or btop configuration.
+Alongside the palette-rendered theme files, every newly applied generation
+contains these byte-exact UTF-8 files with one final LF.
+
+`zsh/.zshrc`:
+
+```zsh
+eval "$(starship init zsh)"
+btop() {
+  command btop --config="$REALM_GENERATION/btop/btop.conf" \
+    --themes-dir="$REALM_GENERATION/btop/themes" "$@"
+}
+```
+
+`yazi/yazi.toml`:
+
+```toml
+[manager]
+ratio = [1, 4, 3]
+sort_by = "alphabetical"
+sort_sensitive = false
+sort_reverse = false
+sort_dir_first = true
+linemode = "size"
+show_hidden = false
+show_symlink = true
+scrolloff = 5
+```
+
+`yazi/keymap.toml`:
+
+```toml
+[manager]
+prepend_keymap = [
+  { on = "<C-p>", run = "shell 'btop --config=\"$REALM_GENERATION/btop/btop.conf\" --themes-dir=\"$REALM_GENERATION/btop/themes\"' --block", desc = "Open Realm system monitor" },
+]
+```
+
+`btop/btop.conf`:
+
+```text
+color_theme = "realm"
+theme_background = False
+truecolor = True
+force_tty = False
+vim_keys = True
+rounded_corners = True
+graph_symbol = "braille"
+shown_boxes = "cpu mem net proc"
+```
+
+`Ctrl+p` is deliberately scoped inside Yazi and does not consume a compositor
+binding. The invocation and selectors are those in SPEC 0011. Zsh resolves the
+packaged `starship`, `yazi` and `btop` from the already-owned Realm session
+`PATH`; it does not source an ordinary user startup file or add a private path
+to the systemd-user or D-Bus activation environment.
+
+These outputs extend the template catalogue and therefore appear only in a
+newly applied generation. An existing valid generation without them remains
+valid and is never silently repaired; terminal launch reports its missing
+required output. Explicit `realmctl theme apply` is the normal supported update
+path and publishes a complete later generation for future terminals. Existing
+terminals keep their original selectors and receive no live reload.
+
 ## Acceptance criteria
 
 | # | Given / When / Then | Test |
@@ -268,16 +335,18 @@ the Realm template, rather than only a nonempty default prompt.
 | B3 | Given a native package install and direct or systemd-user Realm session launch, when executable and PATH ownership are inspected, then only `/usr/lib/realm/bin/*` owns the three Realm tools, Realm-launched applications resolve them, and neither user manager nor DBus activation receives the private PATH, including with `REALM_IMPORT_PATH=1`. | To be implemented: package/session ownership fixture. |
 | B4 | Given a rendered Realm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it, then a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Realm feature. | To be implemented: rendered-config runtime fixture. |
 | B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | To be implemented: dependency-license fixture. |
+| B6 | Given a complete current generation N, when the typed terminal binding launches Foot and zsh, then exact argv/environment select only N, Starship renders Realm's prompt, Yazi loads all three generation-local files, `Ctrl+p` launches btop with N's exact config/theme arguments, and both TUI screens visibly use their selected Realm configuration. Given a valid pre-profile generation, terminal refuses without mutation; after explicit apply a complete later generation launches successfully. User configuration remains untouched, prior committed generations remain present, and no mutable/live-reload path is used. | `fixed_consumers` exact profile tests; installed Nix terminal/Yazi/btop fixture |
 
 ## Boundaries and follow-on work
 
 This specification completes the design required for SPEC 0023 A2 only. It
 does not claim A2 is implemented, does not establish target availability (A3),
 and does not establish immutable generation update or rollback behavior (A4).
-It also does not claim full user configuration integration: the actual generated
-templates are in `configs/templates/`, while the configuration directories
-described by ADR 0007 are not currently present. That integration gap requires
-its own accepted specification before it becomes a supported capability.
+It establishes only the terminal-scoped zsh/Starship/Yazi/btop integration
+above. GTK and Qt process activation, arbitrary desktop/profile launches,
+lifecycle-owned descendants, production generation reclamation, and complete
+update/rollback policy remain #117/#135 follow-on work and are not satisfied by
+this slice.
 
 No public package repository, binary distribution, signing service, mirror,
 container registry, backend, or network service is introduced.
