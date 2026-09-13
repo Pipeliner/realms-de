@@ -13,7 +13,6 @@ river="$prefix/bin/river"
 origin="\$ORIGIN"
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:$prefix/share/pkgconfig"
-export PKG_CONFIG_SYSROOT_DIR="$staging"
 
 if [[ -n ${LD_LIBRARY_PATH:-} ]]; then
     echo "closure probe: LD_LIBRARY_PATH must be unset" >&2

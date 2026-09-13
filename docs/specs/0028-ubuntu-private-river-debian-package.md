@@ -101,11 +101,14 @@ remains unproven until the later hardware obligation.
 ## Staged build and runtime projection (L4)
 
 1. C dependencies are configured with logical prefix `/usr/lib/realm` and
-   installed beneath Debhelper's `DESTDIR`. The staged pkg-config inventory,
-   include/library search paths and tool path feed later builds without
-   changing the logical prefix. A global pkg-config sysroot must not rewrite
-   host dependency paths (including libevdev, libwacom and udev) beneath the
-   staging root. This preserves libinput's compiled quirks path rather than
+   installed beneath Debhelper's `DESTDIR`. After each private install, only
+   that staged private pkg-config metadata has literal `/usr/lib/realm` paths
+   rewritten to the physical staged prefix for subsequent compilation; these
+   build-only records are removed before payload projection. Host pkg-config
+   metadata (including libevdev, libwacom and udev) remains byte-for-byte
+   untouched and no global pkg-config sysroot may rewrite its paths. The staged
+   include/library and tool search paths remain in effect. Meson's logical
+   prefix is unchanged, preserving libinput's compiled quirks path rather than
    embedding a CI temporary directory.
 2. River is installed into the same staged logical tree. Before packaging, the
    staged ELF objects must pass SPEC 0026's feature, relative-runpath, complete

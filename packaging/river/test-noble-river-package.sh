@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 checker="$repo_root/packaging/river/check-noble-river-package.py"
 closure_builder="$repo_root/packaging/river/build-noble-package-closure.sh"
+pc_relocator="$repo_root/packaging/river/relocate-noble-package-pkgconfig.py"
 control="$repo_root/packaging/debian-river/control"
 rules="$repo_root/packaging/debian-river/rules"
 realm_control="$repo_root/packaging/debian/control"
@@ -13,6 +14,10 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 [[ -x "$checker" ]] || {
     echo "Noble River package checker is missing" >&2
+    exit 1
+}
+[[ -x "$pc_relocator" ]] || {
+    echo "Noble River staged pkg-config relocator is missing" >&2
     exit 1
 }
 debian_dollar='$'
@@ -53,6 +58,11 @@ if grep -F 'export PKG_CONFIG_SYSROOT_DIR=' "$closure_builder" >/dev/null; then
     echo 'Noble River closure rewrites host pkg-config paths beneath staging' >&2
     exit 1
 fi
+grep -F "\"\$pc_relocator\" \"\$prefix\" \"\$staged_prefix\"" \
+    "$closure_builder" >/dev/null || {
+    echo 'Noble River closure omits staged private pkg-config relocation' >&2
+    exit 1
+}
 for staged_search in "export C_INCLUDE_PATH=\"\$staged_prefix/include\"" \
     "export LIBRARY_PATH=\"\$staged_prefix/lib\""; do
     grep -F "$staged_search" "$closure_builder" >/dev/null || {
@@ -72,6 +82,39 @@ if ! printf '%s\n' "$river_job" | grep -F \
     echo 'Noble River job bypasses the retained package-build entrypoint' >&2
     exit 1
 fi
+
+pc_stage="$tmpdir/pkgconfig-stage/usr/lib/realm"
+host_pc="$tmpdir/host/lib/x86_64-linux-gnu/pkgconfig/libevdev.pc"
+mkdir -p "$pc_stage/lib/pkgconfig" "$pc_stage/share/pkgconfig" \
+    "$(dirname "$host_pc")"
+cat >"$pc_stage/lib/pkgconfig/libdrm.pc" <<'EOF'
+prefix=/usr/lib/realm
+includedir=${prefix}/include/libdrm
+libdir=${prefix}/lib
+EOF
+cat >"$pc_stage/share/pkgconfig/wayland-scanner.pc" <<'EOF'
+prefix=/usr/lib/realm
+wayland_scanner=${prefix}/bin/wayland-scanner
+pkgdatadir=${prefix}/share/wayland
+EOF
+cat >"$host_pc" <<'EOF'
+prefix=/usr
+includedir=${prefix}/include/libevdev-1.0
+libdir=${prefix}/lib/x86_64-linux-gnu
+EOF
+cp "$host_pc" "$tmpdir/host.pc.before"
+"$pc_relocator" /usr/lib/realm "$pc_stage"
+grep -Fx "prefix=$pc_stage" "$pc_stage/lib/pkgconfig/libdrm.pc" >/dev/null
+grep -Fx "includedir=\${prefix}/include/libdrm" \
+    "$pc_stage/lib/pkgconfig/libdrm.pc" >/dev/null
+grep -Fx "wayland_scanner=\${prefix}/bin/wayland-scanner" \
+    "$pc_stage/share/pkgconfig/wayland-scanner.pc" >/dev/null
+if grep -R -Fx 'prefix=/usr/lib/realm' "$pc_stage/lib/pkgconfig" \
+    "$pc_stage/share/pkgconfig" >/dev/null; then
+    echo 'private staged pkg-config metadata retained its logical path' >&2
+    exit 1
+fi
+cmp "$tmpdir/host.pc.before" "$host_pc"
 
 make_package() {
     local root=$1 package=$2

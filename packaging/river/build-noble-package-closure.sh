@@ -12,6 +12,7 @@ staging=$3
 parent_netns=$4
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 checker="$repo_root/packaging/river/check-closure-manifest.py"
+pc_relocator="$repo_root/packaging/river/relocate-noble-package-pkgconfig.py"
 
 current_netns=$(readlink /proc/self/ns/net)
 if [[ "$current_netns" == "$parent_netns" ]]; then
@@ -81,6 +82,7 @@ meson_install() {
         --wrap-mode=nofallback --prefix "$prefix" --libdir lib "$@"
     "${meson_cmd[@]}" compile -C "$build_root/objects/$selected_name"
     DESTDIR="$staging" "${meson_cmd[@]}" install -C "$build_root/objects/$selected_name"
+    "$pc_relocator" "$prefix" "$staged_prefix"
 }
 
 meson_source=$(extract_source meson)

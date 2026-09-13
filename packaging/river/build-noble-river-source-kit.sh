@@ -71,6 +71,7 @@ for helper in \
     check-closure-manifest.py \
     check-private-resolutions.py \
     probe-noble-package-closure.sh \
+    relocate-noble-package-pkgconfig.py \
     run-noble-river-package-build.sh; do
     cp "$repo_root/packaging/river/$helper" "$kit/packaging/river/$helper"
 done
