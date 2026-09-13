@@ -115,8 +115,9 @@ require_zig_record() {
     printf 'ok %s - canonical %s Zig pin\n' "$pass_count" "$name"
 }
 
+aro_commit=5f5a050569a95ecc40a426f0c3666ae7ef987ede
 require_zig_record aro \
-    $'aro\tgit+https://github.com/Vexu/arocc#5f5a050569a95ecc40a426f0c3666ae7ef987ede\taro-0.0.0-JSD1Qi7QNgDnfcrdEJf82v3o6MhZySjYVrtdfEf3E4Se'
+    $'aro\tgit+https://github.com/Vexu/arocc#'"$aro_commit"$'\taro-0.0.0-JSD1Qi7QNgDnfcrdEJf82v3o6MhZySjYVrtdfEf3E4Se'
 require_zig_record xkbcommon-wlroots \
     $'xkbcommon-wlroots\thttps://codeberg.org/ifreund/zig-xkbcommon/archive/v0.3.0.tar.gz\txkbcommon-0.3.0-VDqIe3K9AQB2fG5ZeRcMC9i7kfrp5m2rWgLrmdNn9azr'
 
