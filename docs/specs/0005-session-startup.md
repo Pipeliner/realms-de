@@ -617,18 +617,18 @@ gate (ADR 0011's guard).
 | `env/identity` | `XDG_CURRENT_DESKTOP=realm`, `XDG_SESSION_TYPE=wayland`, `XDG_SESSION_DESKTOP=realm` in the process | Portal picks the wrong backend | VM |
 | `env/wayland-display/process` | Present in `doctor`'s own environment | — | VM |
 | `env/wayland-display/systemd` | Present in `systemctl --user show-environment` | Nothing themed after login; units come up displayless | VM |
-| `env/wayland-display/dbus` | Present in the bus activation environment | File dialogs hang ~25 s | VM |
-| `env/desktop/systemd`, `env/desktop/dbus` | `XDG_CURRENT_DESKTOP=realm` in both | Screen share offers no sources | VM |
-| `env/agree` | All three views hold the *same* values | The import ran too early or was skipped | VM |
+| `env/wayland-display/dbus` | The bounded functional portal-proxy outcome used in place of an unreadable D-Bus activation value; it does not prove any exact value | File dialogs hang ~25 s | VM |
+| `env/desktop/systemd`, `env/desktop/dbus` | `XDG_CURRENT_DESKTOP=realm` is exact in systemd; the D-Bus check reports only the functional portal-proxy outcome and never claims which value or policy the proxy inherited | Screen share offers no sources | VM |
+| `env/agree` | Process and systemd hold the same exact values; the D-Bus activation channel is reported separately as an explicitly unobservable functional proxy | The import ran too early or was skipped | VM |
 | `env/list-matches-entry` | `doctor`'s variable list equals the session entry's | A variable added in one place and forgotten in the other | **CI** |
-| `env/cursor` | `XCURSOR_THEME`/`SIZE` in all three, theme resolves on disk, gsettings agrees | Black X11 arrow; cursor resizes across windows | VM |
-| `env/xwayland` | `DISPLAY` in all three when XWayland is up; integer-scale policy in force | X11 apps absent or blurred | VM |
+| `env/cursor` | `XCURSOR_THEME`/`SIZE` agree in the process and systemd views, the theme resolves on disk, and GSettings agrees; no exact D-Bus value is claimed | Black X11 arrow; cursor resizes across windows | VM |
+| `env/xwayland` | `DISPLAY` agrees in the process and systemd views when XWayland is up, its socket answers, and integer-scale policy is in force; the D-Bus value is reported as unobservable | X11 apps absent or blurred | VM |
 | `units/target` | `realm-session.target` active, and its `.wants` symlinks exist | A target that starts nothing and reports success | VM |
 | `units/wm` | `realm-wm.service` `ActiveState=active`; `ConditionResult` reported separately | **N1** — a condition-skipped unit read as success | VM |
 | `units/bar` | `realm-bar.service` active or cleanly restarting | Bar gone unnoticed | VM |
 | `units/restart-policy` | The shipped units carry the policy in §4 | A crashed bar taking the session down | **CI** |
 | `units/idle-lock` | An idle and a lock unit are part of `graphical-session.target` | Lid closes, session stays unlocked | VM *(blocked on OQ-1)* |
-| `wm/attached` | realm holds river's window-management global; reports the holder if not | **N2** — inert compositor, or a restart loop against a stale holder | VM |
+| `wm/attached` | realm holds river's window-management global; on refusal reports a possible foreign holder, and names it only when independent evidence identifies it | **N2** — inert compositor, or a restart loop against a stale holder | VM |
 | `wm/layer-shell` | realm is serving `river-layer-shell-v1` | The bar never appears, and it looks like the bar's fault | VM |
 | `wm/capabilities` | `Capabilities`, including `unsupported` ([INTERFACES.md §1](../INTERFACES.md)) | A backend gap that looks like a bug | VM |
 | `wm/protocol-version` | Bound interface versions match the pinned river | Session fails after a routine upgrade | VM |
@@ -664,13 +664,13 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A2 | Given the session entry source, when the ordering test runs, then the identity exports precede the compositor start, and the two imports precede every client start, every `gsettings` call and every other D-Bus touch | CI | |
 | A3 | Given the entry's variable list, the units' `ConditionEnvironment=` set and `doctor`'s list, when the consistency test runs, then all three name the same variables | CI | |
 | A4 | Given a container with no reachable `systemd --user` and no `dbus-update-activation-environment`, when the entry runs against a stub compositor, then it logs exactly one `DEGRADED NO-SYSTEMD-USER` line and one `DEGRADED NO-DBUS-ACTIVATION` line, starts the clients directly under the bounded respawn loop, and does not hang | CI | |
-| A5 | Given a booted session, when `systemctl --user show-environment` and the bus activation environment are read, then every imported variable is present in both with values equal to the compositor's `/proc/<pid>/environ` | VM | |
-| A6 | Given a session started with the D-Bus import deliberately suppressed, when `doctor` runs, then `env/wayland-display/dbus` fails, names the twenty-five second hang, and `doctor` exits non-zero | VM | |
-| A7 | Given a booted session, when the cursor is checked, then the environment, the imported environment and `gsettings` all name the same theme and size, and the theme resolves to a directory on disk | VM | |
+| A5 | Given a booted session, when `systemctl --user show-environment` is read and a VM-only D-Bus-activated probe reports its own inherited environment, then every imported variable is present in both with values equal to the compositor's `/proc/<pid>/environ`; `doctor` itself continues to label D-Bus activation values unobservable and uses the portal proxy | VM | |
+| A6 | Given a session started with the D-Bus import deliberately suppressed and no earlier activation supplied the graphical-session values, when `doctor` runs and its portal proxy cannot become usable, then `env/wayland-display/dbus` fails, names the twenty-five second hang, reports only the observed proxy failure plus possible causes and the import remedy, and exits non-zero | VM | |
+| A7 | Given a booted session, when the cursor is checked, then the process and systemd environments and GSettings name the same theme and size, the theme resolves to a directory on disk, and `doctor` makes no claim to have read the D-Bus activation value | VM | |
 | A8 | Given river started, when `realm-wm` attaches, then `doctor` reports `wm/attached` and `wm/layer-shell` served, and the measured unmanaged interval is inside the cold-start budget | VM | |
 | A9 | Given `realm-wm` removed from the image, when the session starts, then the entry logs `FATAL WM-ABORT` with the "no window can be placed" message, tears river down, and exits non-zero — and the same happens when the unit is condition-skipped rather than failed | VM | |
 | A10 | Given a running session with three windows, when `realm-wm` is killed, then it is restarted within `RestartSec`, the ledger is recovered from the snapshot, the three windows return to their projected rectangles, and `realm-bar.service` never leaves `active` | VM | |
-| A11 | Given a stale window manager already holding river's window-management global, when `realm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed naming the holding process | VM | |
+| A11 | Given a stale window manager already holding river's window-management global, when `realm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed; it names the holding process only if an independent observation identifies it, otherwise it states that the holder identity is unavailable | VM | |
 | A12 | Given a running session, when `realm-bar` is killed, then it is restarted, and `realm-session.target` and `realm-wm.service` both stay `active` throughout | VM | |
 | A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the running portal chose the backends named in `realm-portals.conf` | VM | |
 | A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
@@ -733,7 +733,10 @@ register yet. They are recorded here as findings for a human to add.
   supervised one permanently unstartable, and a naive restart policy turns that
   into an endless loop that buries the one message explaining it. *realm's
   answer:* a distinct exit code (69) plus `RestartPreventExitStatus=`, and
-  `doctor` names the holding process. *Guard:* A11.
+  `doctor` reports a possible foreign holder. River's refusal does not identify
+  that holder, so `doctor` names a process only when a separate observation
+  proves the identity; otherwise it says the identity is unavailable. *Guard:*
+  A11.
 - **N3 — The user manager outlives the session.** *(Session integration.)* With
   lingering enabled, or on a quick relogin, `systemd --user` and the session bus
   persist across logout, so the next login inherits the previous session's
