@@ -6,7 +6,8 @@
   containers use the admitted image.
 - **Amendment:** Accepted (2026-09-13): the existing RPM lane clean-installs
   its exact output into an empty Fedora 44 installroot with normal DNF
-  dependency resolution, then executes the installed Realm CLI and River.
+  dependency resolution, then executes the installed Realm CLI and River; this
+  remains distinct from graphical-session evidence.
 - **Milestone:** M0 support-claim correction; M3 Fedora runtime acceptance is separate
 - **Decision:** [ADR 0015](../adr/0015-fedora-44-pre-alpha-baseline.md)
 - **Issue:** [#138](https://github.com/Pipeliner/realms-de/issues/138)
