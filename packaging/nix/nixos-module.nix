@@ -164,6 +164,8 @@ in
       ];
       config.realm = {
         default = [ "gtk" ];
+        "org.freedesktop.impl.portal.Settings" = [ "gtk" ];
+        "org.freedesktop.impl.portal.Inhibit" = [ "none" ];
         "org.freedesktop.impl.portal.ScreenCast" = [ "wlr" ];
         "org.freedesktop.impl.portal.Screenshot" = [ "wlr" ];
       };

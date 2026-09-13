@@ -52,6 +52,27 @@
     touch $out
   '';
 
+  # The installed command owns the narrow command path needed by its two
+  # expressly permitted external probes. A systemd transient service supplies
+  # no interactive-shell path, so exercise the same condition directly.
+  realmctl-command-runtime = pkgs.runCommand "realmctl-command-runtime" { } ''
+    mkdir -m 700 "$TMPDIR/runtime" "$TMPDIR/home"
+    set +e
+    env -i \
+      HOME="$TMPDIR/home" \
+      XDG_RUNTIME_DIR="$TMPDIR/runtime" \
+      XDG_DATA_DIRS=${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name} \
+      PATH=/not-an-installed-command-path \
+      ${realm}/bin/realmctl --json --palette ${src + "/palette.toml"} doctor \
+      >"$TMPDIR/report.json"
+    status=$?
+    set -e
+    test "$status" -eq 0
+    ! grep -F 'error:not found' "$TMPDIR/report.json"
+    grep -F '"id":"tools/floors","group":"tools","status":"skip"' "$TMPDIR/report.json"
+    touch $out
+  '';
+
   # Keep the bare-session cursor inputs independently buildable. Pinned
   # nixpkgs' GLib setup hook moves schemas below share/gsettings-schemas/$name,
   # and its desktop-manager modules publish that package-named directory in
@@ -344,6 +365,14 @@ EOF
           "grep -q '^org.freedesktop.impl.portal.ScreenCast=wlr$' "
           "/etc/xdg/xdg-desktop-portal/realm-portals.conf"
       )
+      machine.succeed(
+          "grep -q '^org.freedesktop.impl.portal.Settings=gtk$' "
+          "/etc/xdg/xdg-desktop-portal/realm-portals.conf"
+      )
+      machine.succeed(
+          "grep -q '^org.freedesktop.impl.portal.Inhibit=none$' "
+          "/etc/xdg/xdg-desktop-portal/realm-portals.conf"
+      )
 
       # The palette every themed surface is generated from.
       machine.succeed("test -f /etc/realm/palette.toml")
@@ -403,6 +432,14 @@ EOF
       # the same published graphical-session environment as supervised units.
       # This is the healthy-session acceptance path for the complete fixed
       # check set; skips remain explicit data rather than omitted checks.
+      # Cold portal activation is itself bounded here before the healthy-state
+      # assertion; doctor still performs and times its own live property read.
+      machine.succeed(
+          "systemctl --user --machine=alice@ start xdg-desktop-portal.service"
+      )
+      machine.wait_for_unit(
+          "xdg-desktop-portal.service", user="alice", timeout=STARTUP_TIMEOUT
+      )
       doctor_raw = machine.succeed(
           "systemd-run --user --machine=alice@ --wait --pipe --quiet --collect "
           "${realm}/bin/realmctl --json doctor"

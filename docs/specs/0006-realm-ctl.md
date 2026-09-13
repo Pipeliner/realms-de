@@ -322,6 +322,15 @@ values. Each command has a deadline inside `doctor`'s one overall deadline.
 missing schema, or malformed output is reported rather than treated as a
 passing cursor check.
 
+The installed command must make those deliberately permitted command probes
+reachable without inheriting an interactive shell's `PATH`. Native packages
+use their normal system paths. The Nix package wraps `realmctl` with only
+`gsettings` and the reused tools it probes; it does not import or publish that
+private path through the session environment. Likewise, when packaging wraps
+the session entry with an executable launcher shim, `env/list-matches-entry`
+must inspect the installed entry payload rather than treating the readable
+shim as a malformed copy of the source.
+
 | id | What it checks | Probe | Fail, and what it prints |
 |---|---|---|---|
 | `env/identity` | `XDG_CURRENT_DESKTOP=realm`, `XDG_SESSION_TYPE=wayland`, `XDG_SESSION_DESKTOP=realm` in this process | `std::env` | *"Portals will pick the wrong backend and screen share will silently fail."* |
@@ -536,7 +545,7 @@ Each row is one happy path and becomes one test.
 | B8a | Given any terminal client path/transport/I/O error other than version mismatch, when a live-session command runs, then it is not retried and exits 6; an application `Response::Error` remains a normal response and maps by its typed kind to exit 5 | `realm_ctl::tests::terminal_transport_errors_exit_six_without_retry` |
 | B9 | Given a session with three windows in orbit 1, when `ledger show 1 --json` runs, then stdout is exactly one object that deserialises as `Response::Ledger` with the windows in ledger order and the focused one marked | |
 | B10 | Given a running session, when `run foot -e yazi` runs, then it sends `Request::Spawn(["foot","-e","yazi"])`, exits 0 without waiting, and reports the argv as accepted rather than launched | |
-| B11 | Given a healthy session, when `doctor` runs, then every resolved check reports `ok` or `warn`, idle lock, the unrequested file-chooser round trip and unresolved tool floors report their accepted explicit `skip`, the header names the tool, protocol, distribution, kernel, backend and negotiated compositor interfaces without inventing a compositor package version, and it exits 0 | `session-boots` NixOS VM (pending first run) |
+| B11 | Given a healthy session whose portal frontend has completed one bounded activation after the session environment import, when `doctor` runs, then every resolved check reports `ok` or `warn`, idle lock, the unrequested file-chooser round trip and unresolved tool floors report their accepted explicit `skip`, the header names the tool, protocol, distribution, kernel, backend and negotiated compositor interfaces without inventing a compositor package version, and it exits 0. The installed-package fixture invokes `realmctl` without an interactive-shell path and proves its permitted `gsettings` and reused-tool probes remain reachable | `session-boots` NixOS VM (pending first passing run); `realmctl-command-runtime` Nix package check |
 | B12 | Given the session entry deliberately suppresses the D-Bus activation-environment import and no earlier activation supplied the graphical-session values, when `doctor` runs and its portal proxy cannot become usable, then `env/wayland-display/dbus` fails within its 2 s deadline, prints the 25-second-hang symptom, reports the observed portal failure without claiming to have read a missing variable, names the activation environment, portal service and selected backend as possible causes, prints the `dbus-update-activation-environment` remedy, and exits 1 | `realmctl::doctor::tests::portal_failure_reports_an_observation_and_only_possible_causes` (diagnostic mapping only; missing-activation VM case pending) |
 | B13 | Given no session running and a font stack that covers ASCII only, when `doctor` runs, then its optional session probe resolves at most one `RuntimeDir` and reuses one `ClientEndpoint`, the session checks are `skip` with a banner, `fonts/glyphs` warns with `Probe::summary()`'s wording, and it exits 0 rather than 3 | `doctor_cli::no_session_report_is_ordered_bounded_and_keeps_independent_warnings` |
 | B14 | Given no session bus and no session running, when `doctor` runs, then the D-Bus and portal checks are `skip` and not `fail`, and it exits 0 | `doctor_cli::no_session_report_is_ordered_bounded_and_keeps_independent_warnings` |
