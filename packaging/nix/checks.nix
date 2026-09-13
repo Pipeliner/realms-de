@@ -2,8 +2,8 @@
 #
 # `shellcheck` and `package` build on any Linux builder; `session-boots` is a
 # NixOS VM test and needs /dev/kvm. CI (.github/workflows/distro.yml) falls back
-# to `nix flake check --no-build` plus the two buildable checks when KVM is
-# absent, so those two must stay independently buildable.
+# to `nix flake check --no-build` plus selected buildable checks when KVM is
+# absent, so those checks must stay independently buildable.
 {
   pkgs,
   lib,
@@ -20,6 +20,10 @@ let
   realmYazi = lib.findFirst (
     package: lib.getName package == "yazi"
   ) null (support.reusedTools pkgs);
+  xwaylandWindowObservation = pkgs.writers.writePython3Bin
+    "realm-xwayland-window-observation"
+    { }
+    (builtins.readFile ./xwayland_window_observation.py);
 in
 assert realmYazi != null;
 assert realmYazi.version == "25.4.8";
@@ -114,6 +118,20 @@ assert realmYazi.version == "25.4.8";
     test -d ${pkgs.adwaita-icon-theme}/share/icons/Adwaita/cursors
     touch $out
   '';
+
+  xwayland-window-observation = pkgs.runCommand
+    "realm-xwayland-window-observation-tests"
+    {
+      nativeBuildInputs = [
+        pkgs.coreutils
+        pkgs.python3
+      ];
+    }
+    ''
+      PYTHONDONTWRITEBYTECODE=1 ${pkgs.python3}/bin/python3 \
+        ${src + "/packaging/nix/test_xwayland_window_observation.py"}
+      touch $out
+    '';
 
   # The local agent-SDD validator reads Git objects at runtime.  Its package
   # wrapper must supply Git without adding it to the desktop session wrapper.
@@ -211,9 +229,12 @@ EOF
               if reply is not RequestNameReply.PRIMARY_OWNER:
                   raise SystemExit("D-Bus probe did not acquire its configured name")
 
+              title = "Realm X11 Probe A17-" + str(os.getpid())
               child = await asyncio.create_subprocess_exec(
                   "${pkgs.xmessage}"
                   "/bin/xmessage",
+                  "-title",
+                  title,
                   "-center",
                   "Realm X11 Probe",
               )
@@ -221,7 +242,8 @@ EOF
               marker.write_text(
                   "display=" + display + "\n"
                   "service_pid=" + str(os.getpid()) + "\n"
-                  "child_pid=" + str(child.pid) + "\n",
+                  "child_pid=" + str(child.pid) + "\n"
+                  "title=" + title + "\n",
                   encoding="utf-8",
               )
               await child.wait()
@@ -300,6 +322,7 @@ EOF
       import hashlib
       import json
       import shlex
+      import time
       from pathlib import Path
       from test_driver.errors import RequestedAssertionFailed
 
@@ -323,7 +346,7 @@ EOF
           output = machine.succeed(as_alice("realm-vm-control", *argv))
           return output, json.loads(output)
 
-      def wait_for_state(predicate, description):
+      def wait_for_state(predicate, description, timeout=STATE_TIMEOUT):
           observed_raw = None
           observed = None
 
@@ -344,8 +367,88 @@ EOF
                   machine.log(f"last state while waiting for {description}: {observed!r}")
               return False
 
-          retry(matches, timeout=STATE_TIMEOUT)
+          retry(matches, timeout=timeout)
           return observed_raw, observed
+
+      def remaining_timeout(deadline, description):
+          remaining = deadline - time.monotonic()
+          assert remaining > 0, f"{description} exhausted the shared X11 deadline"
+          return dt.timedelta(seconds=remaining)
+
+      def x11_observation(display, title, timeout=DIAGNOSTIC_TIMEOUT):
+          status, output = machine.execute(
+              as_alice(
+                  "${xwaylandWindowObservation}"
+                  "/bin/realm-xwayland-window-observation",
+                  "--timeout-bin",
+                  "${pkgs.coreutils}/bin/timeout",
+                  "--xwininfo-bin",
+                  "${pkgs.xwininfo}/bin/xwininfo",
+                  "--display",
+                  display,
+                  "--title",
+                  title,
+                  "--command-timeout",
+                  "2s",
+              ),
+              timeout=timeout,
+          )
+          if status != 0:
+              return {
+                  "observer_status": status,
+                  "observer_output": output,
+                  "tree": {"status": None, "output": ""},
+                  "window_ids": [],
+                  "stats": [],
+                  "viewable": False,
+              }
+          return json.loads(output)
+
+      def log_x11_diagnostics(observation, child_pid):
+          tree = observation["tree"]
+          machine.log(f"X11 root tree (exit {tree['status']}):\n{tree['output']}")
+          for stats in observation["stats"]:
+              machine.log(
+                  f"X11 window {stats['window_id']} stats "
+                  f"(exit {stats['status']}):\n{stats['output']}"
+              )
+          if "observer_status" in observation:
+              machine.log(
+                  f"X11 observer (exit {observation['observer_status']}):\n"
+                  f"{observation['observer_output']}"
+              )
+          stderr_status, stderr = machine.execute(
+              "journalctl -b --no-pager -o cat "
+              f"_PID={shlex.quote(child_pid)}",
+              timeout=DIAGNOSTIC_TIMEOUT,
+          )
+          machine.log(
+              f"X11 child journal/stderr (exit {stderr_status}):\n{stderr}"
+          )
+
+      def wait_for_x11_mapping(display, title, child_pid, deadline):
+          last_observation = None
+
+          def mapped(_last_try):
+              nonlocal last_observation
+              last_observation = x11_observation(
+                  display,
+                  title,
+                  timeout=remaining_timeout(deadline, "X11 window mapping"),
+              )
+              return last_observation["viewable"]
+
+          try:
+              retry(
+                  mapped,
+                  timeout=remaining_timeout(deadline, "X11 window mapping"),
+              )
+          except Exception:
+              if last_observation is None:
+                  last_observation = x11_observation(display, title)
+              log_x11_diagnostics(last_observation, child_pid)
+              raise
+          return last_observation
 
       def wait_for_single_user_process(name):
           quoted = shlex.quote(name)
@@ -728,6 +831,7 @@ EOF
       baseline_windows = sum(
           cell["windows"] for cell in baseline["data"]["orbits"]
       )
+      x11_deadline = time.monotonic() + STATE_TIMEOUT.total_seconds()
       machine.succeed(
           as_alice(
               "env",
@@ -741,7 +845,10 @@ EOF
           )
       )
       marker = "/run/user/1000/realm-xwayland-probe"
-      machine.wait_until_succeeds(f"test -s {marker}", timeout=STATE_TIMEOUT)
+      machine.wait_until_succeeds(
+          f"test -s {marker}",
+          timeout=remaining_timeout(x11_deadline, "D-Bus activation marker"),
+      )
       activated_display = machine.succeed(
           f"sed -n 's/^display=//p' {marker}"
       ).strip()
@@ -751,6 +858,9 @@ EOF
       x11_pid = machine.succeed(
           f"sed -n 's/^child_pid=//p' {marker}"
       ).strip()
+      x11_title = machine.succeed(
+          f"sed -n 's/^title=//p' {marker}"
+      ).strip()
       assert activated_display == imported_display, (
           activated_display,
           imported_display,
@@ -758,12 +868,29 @@ EOF
       x11_exe = machine.succeed(f"readlink /proc/{x11_pid}/exe").strip()
       expected_x11_exe = "${pkgs.xmessage}/bin/.xmessage-wrapped"
       assert x11_exe == expected_x11_exe, (x11_exe, expected_x11_exe)
-      wait_for_state(
-          lambda response: sum(
-              cell["windows"] for cell in response["data"]["orbits"]
-          ) == baseline_windows + 1,
-          "D-Bus-activated X11 window",
+      assert x11_title == f"Realm X11 Probe A17-{service_pid}", x11_title
+      x11_mapping = wait_for_x11_mapping(
+          activated_display,
+          x11_title,
+          x11_pid,
+          x11_deadline,
       )
+      try:
+          wait_for_state(
+              lambda response: sum(
+                  cell["windows"] for cell in response["data"]["orbits"]
+              ) == baseline_windows + 1,
+              "D-Bus-activated X11 window",
+              timeout=remaining_timeout(x11_deadline, "Realm X11 observation"),
+          )
+      except Exception:
+          x11_observation_after_projection = x11_observation(
+              activated_display,
+              x11_title,
+          )
+          log_x11_diagnostics(x11_observation_after_projection, x11_pid)
+          machine.log(f"X11 mapping-boundary observation:\n{x11_mapping!r}")
+          raise
       machine.wait_for_text("Realm X11 Probe", timeout=OCR_TIMEOUT)
       machine.succeed(f"kill -TERM {x11_pid}")
       machine.wait_until_succeeds(
@@ -909,6 +1036,7 @@ EOF
           [
               "foot",
               f"--config={generation_root}/foot/foot.ini",
+              "--log-level=error",
               "--override=key-bindings.spawn-terminal=none",
               "zsh",
           ],
@@ -942,7 +1070,36 @@ EOF
           zsh_environment["XDG_CONFIG_DIRS"].split(":", 1)[0]
           == generation_root
       ), zsh_environment
-      machine.wait_for_text("alice@machine :: ~ ~%", timeout=OCR_TIMEOUT)
+
+      prompt = machine.succeed(
+          "cd /home/alice && "
+          + shlex.join([
+              "sudo",
+              "-u",
+              "alice",
+              "env",
+              "HOME=/home/alice",
+              "TERM=foot",
+              f"STARSHIP_CONFIG={generation_root}/starship.toml",
+              "STARSHIP_SHELL=zsh",
+              "${pkgs.zsh}/bin/zsh",
+              "-dfc",
+              "prompt=\"$(${pkgs.starship}/bin/starship prompt "
+              + "--status 0 --cmd-duration 0 --keymap viins)\"; "
+              + "print -Pnr -- \"$prompt\"",
+          ])
+      )
+      plain_prompt = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", prompt)
+      assert plain_prompt == "alice@machine :: ~ ~% ", repr(plain_prompt)
+
+      # OCR is useful for user-visible proof but cannot reliably join adjacent
+      # differently coloured prompt spans. Keep the unmodified prompt in the
+      # framebuffer, then prove the real shell is accepting and executing input
+      # with a marker that does not occur contiguously in the command itself.
+      machine.wait_for_text("alice@machine", timeout=OCR_TIMEOUT)
+      machine.screenshot("realm-terminal-prompt")
+      machine.send_chars("printf 'REALM-%s-READY\\n' SHELL\n")
+      machine.wait_for_text("REALM-SHELL-READY", timeout=OCR_TIMEOUT)
 
       gtk3_css = f"{generation_root}/share/themes/realm/gtk-3.0/gtk.css"
       gtk4_css = f"{generation_root}/share/themes/realm/gtk-4.0/gtk.css"

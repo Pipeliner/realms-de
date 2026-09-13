@@ -139,6 +139,7 @@ pub fn exec_from_env(consumer: FixedConsumer) -> Result<(), String> {
     command.arg(config);
     if consumer == FixedConsumer::Terminal {
         command
+            .arg(OsStr::new("--log-level=error"))
             .arg(OsStr::new("--override=key-bindings.spawn-terminal=none"))
             .arg(OsStr::new("zsh"))
             .env("REALM_GENERATION", generation)

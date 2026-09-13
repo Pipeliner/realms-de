@@ -366,11 +366,17 @@ is not evidence that an obsolete field had the intended effect. The fixture
 shall assert that the canonical fields are consumed, not merely that the TOML
 parses.
 
-The Starship validation SHALL render `configs/templates/starship.toml` and run
-the selected private `starship prompt` with `STARSHIP_CONFIG`, fixed HOME/cwd,
-terminal settings, shell/keymap, status, and command-duration inputs. It SHALL
-assert no configuration diagnostic on stderr and a known rendered feature from
-the Realm template, rather than only a nonempty default prompt.
+The Starship validation SHALL render `configs/templates/starship.toml`, run the
+selected private `starship prompt` with `STARSHIP_CONFIG`, fixed HOME/cwd,
+terminal settings, shell/keymap, status, and command-duration inputs, and pass
+that zsh prompt program through the selected zsh's real prompt expansion. It
+SHALL assert no configuration diagnostic on stderr and compare normalized
+visible output with the Realm template's complete expected prompt. Stripping
+ANSI directly from Starship's unevaluated `%{...%}` zsh directives is not
+rendered output. For the deterministic successful prompt, the normalized
+content is exactly `alice@machine :: ~ ~% ` with one final space. The
+configured character symbol already owns that separator, so its module format
+is exactly `$symbol`; Starship's default `$symbol ` would duplicate it.
 
 ## M1 terminal-profile activation
 
@@ -448,7 +454,7 @@ terminals keep their original selectors and receive no live reload.
 | B3 | Given a native package install and direct or systemd-user Realm session launch, when executable and PATH ownership are inspected, then only `/usr/lib/realm/bin/*` owns the three Realm tools, Realm-launched applications resolve them, and neither user manager nor DBus activation receives the private PATH, including with `REALM_IMPORT_PATH=1`. | `packaging/tool-sources/test-native-builds.sh`; `packaging/session/test-private-tool-path.sh` |
 | B4 | Given a rendered Realm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it on native or Nix package paths, then the executable reports exactly `25.4.8`, a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Realm feature. | `packaging/tool-sources/test-tool-configs.sh`; selected-runtime assertions in `packaging/tool-sources/test-native-builds.sh`; installed Nix terminal fixture |
 | B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | `packaging/tool-sources/test-bundle-linkage.sh`; `packaging/tool-sources/check-bundle-linkage.py` |
-| B6 | Given a complete current generation N, when the typed terminal binding launches Foot and zsh, then exact argv/environment select only N, Starship renders Realm's prompt, Yazi loads all three generation-local files, `Ctrl+p` launches btop with N's exact config/theme arguments, and both TUI screens visibly use their selected Realm configuration. Given a valid pre-profile generation, terminal refuses without mutation; after explicit apply a complete later generation launches successfully. User configuration remains untouched, prior committed generations remain present, and no mutable/live-reload path is used. | `fixed_consumers` exact profile tests; installed Nix terminal/Yazi/btop fixture |
+| B6 | Given a complete current generation N, when the typed terminal binding launches Foot and zsh, then exact argv/environment select only N, Foot reports only error-level diagnostics, the installed Starship's zsh prompt program is expanded by the installed zsh and its ANSI-stripped result under N's exact selectors equals Realm's complete prompt, and a typed marker proves the same real interactive shell is input-ready while its unmodified prompt remains in the retained framebuffer. Yazi loads all three generation-local files, `Ctrl+p` launches btop with N's exact config/theme arguments, and both TUI screens visibly use their selected Realm configuration. Given a valid pre-profile generation, terminal refuses without mutation; after explicit apply a complete later generation launches successfully. User configuration remains untouched, prior committed generations remain present, and no mutable/live-reload path is used. | `fixed_consumers` exact profile tests; installed Nix terminal/Yazi/btop fixture |
 | B7 | Given a complete N and no explicit user qt6ct override, when packaged GTK 3, GTK 4 and Qt 6 applications start below N's selected terminal, then the actual toolkit/plugin loaders consume N's named GTK CSS and N's qt6ct colour scheme, including actual qt6ct expansion of `$REALM_GENERATION`, and the VM retains nonempty application frames. A pre-existing qt6ct configuration remains byte-identical and is reported as an override rather than Realm-palette success. | fixed-consumer selector tests; packaged parser probes; installed Nix application fixture |
 | B8 | Given an exact committed workspace revision with an unchanged retained lockfile, when its source authority needs rebinding, then read-only repository CI alone creates and validates the candidate archive/records and retains exactly those three files as an artifact without committing or pushing them; a mutable ref, changed lockfile, local packaging command, or unvalidated candidate is rejected. | CI rebind workflow projection and transformation fixtures; bundle-linkage validator in the rebind job. |
 

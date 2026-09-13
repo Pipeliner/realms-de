@@ -337,7 +337,8 @@ jobs:
               ".#checks.$system.shellcheck" \
               ".#checks.$system.package" \
               ".#checks.$system.packaged-binaries" \
-              ".#checks.$system.realm-sdd-git-runtime"
+              ".#checks.$system.realm-sdd-git-runtime" \
+              ".#checks.$system.xwayland-window-observation"
           fi
 
       - name: Upload live Realm VM evidence
@@ -363,6 +364,7 @@ jobs:
             ${{ runner.temp }}/realm-session-boots/qt6-toolkit-stderr.log
             ${{ runner.temp }}/realm-session-boots/qt6-user-override-openat.log
             ${{ runner.temp }}/realm-session-boots/qt6-user-override-stderr.log
+            ${{ runner.temp }}/realm-session-boots/realm-terminal-prompt.png
             ${{ runner.temp }}/realm-session-boots/capture-provenance.json
             ${{ runner.temp }}/realm-session-boots/realmctl-doctor.json
             ${{ runner.temp }}/realm-session-boots/control-get-state.json
