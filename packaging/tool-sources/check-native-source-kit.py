@@ -9,6 +9,8 @@ TOOL_SOURCE_ENTRIES = {
     "check-bundle-linkage.py",
     "check-native-source-kit.py",
     "stage-realm-workspace.py",
+    "stage-tool-bundle.py",
+    "test-tool-runtime.py",
 }
 FORBIDDEN_WORKSPACE_FILES = {"Cargo.toml"}
 FORBIDDEN_WORKSPACE_DIRECTORIES = {".cargo", "crates", "vendor"}
@@ -61,15 +63,14 @@ def main() -> None:
     )
     require_inventory(
         root / "packaging" / "tool-sources" / "bundles",
-        {"realm-workspace"},
+        {"realm-workspace", "yazi-25.4.8", "starship-1.23.0"},
         f"{kind.upper()} source kit bundle inventory differs from policy",
     )
-    canonical_bundle = (
-        root / "packaging" / "tool-sources" / "bundles" / "realm-workspace"
-    )
+    bundle_root = root / "packaging" / "tool-sources" / "bundles"
     allowed_named_files = {
-        canonical_bundle / "Cargo.lock",
-        canonical_bundle / "source.tar.gz",
+        bundle_root / selected / name
+        for selected in ("realm-workspace", "yazi-25.4.8", "starship-1.23.0")
+        for name in ("Cargo.lock", "source.tar.gz")
     }
     for entry in root.rglob("*"):
         if entry.is_symlink() or not (entry.is_file() or entry.is_dir()):
