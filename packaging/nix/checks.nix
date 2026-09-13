@@ -360,6 +360,14 @@ EOF
       assert initial["data"]["whichkey"] is True, initial
       write_artifact("control-get-state.json", initial_raw)
 
+      modules_raw, modules = wait_for_state(
+          lambda response: [
+              module["id"] for module in response["data"]["modules"]
+          ] == ["net", "cpu", "mem", "clock"],
+          "ordered batteryless MVP system modules",
+      )
+      write_artifact("control-modules-state.json", modules_raw)
+
       # Three ordinary Wayland application windows must enter compositor-backed
       # state before the tiled-desktop framebuffer capture is accepted.
       for number in range(1, 4):
