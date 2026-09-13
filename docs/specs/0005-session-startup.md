@@ -2,7 +2,9 @@
 
 - **Status:** Draft — the NixOS session-discovery contract, startup step 3,
   XWayland display discovery and publication, and current-incarnation
-  doctor-health handoff are accepted; open questions below remain unresolved
+  doctor-health handoff are accepted; §4's systemd startup ordering and dual
+  teardown anchors are accepted; SPEC 0029 separately accepts the bounded native
+  x86_64 graphical-login proof. Open questions below remain unresolved
   (`needs-human`)
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
@@ -413,24 +415,34 @@ is guaranteed installed on any of the three targets. It connects to
 
 ### 4. systemd user units
 
+**Accepted slice (2026-09-13):** the acyclic startup order, shipped `.wants`
+edges, and dual Realm/graphical teardown anchors in this section are Accepted
+independently of the remaining M3 draft. This slice requires the package units
+and Home Manager copies to represent the same graph.
+
 ```
                 graphical-session-pre.target
-                            │
-   realm-session.target ─────┤  BindsTo= + Before= graphical-session.target
-                            ▼
-                  graphical-session.target
-                     │            │            │
-        realm-wm.service   realm-bar.service   xdg-desktop-portal.service
-        (the window manager)   (Wants=daemon)    (upstream; PartOf= the target)
-                     │
-             realm-idle.service  ← blocked on OQ-1
+                            │                  realm-wm.service
+                            │                         │
+                            │                         ▼
+                            │                  realm-bar.service
+                            │                         │
+                            └────────────┬────────────┘
+                                         ▼
+                              realm-session.target
+                                         │  BindsTo= + Before=
+                                         ▼
+                             graphical-session.target
+                                │                  │
+                     xdg-desktop-portal     realm-idle.service
+                       (upstream)           (blocked on OQ-1)
 ```
 
 | Unit | `[Unit]` | `[Service]` | `[Install]` |
 |---|---|---|---|
 | `realm-session.target` | `BindsTo=graphical-session.target`, `Before=graphical-session.target`, `Wants=graphical-session-pre.target`, `After=graphical-session-pre.target` | — | **none** |
-| `realm-wm.service` | `PartOf=realm-session.target graphical-session.target`, `After=graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=realm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=realm-session.target` |
-| `realm-bar.service` | `PartOf=realm-session.target graphical-session.target`, `After=graphical-session.target realm-wm.service`, `Wants=realm-wm.service`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5` | `Type=exec`, `Restart=on-failure`, `RestartSec=1`, `TimeoutStopSec=5`, `Slice=app.slice` | `WantedBy=realm-session.target` |
+| `realm-wm.service` | `PartOf=realm-session.target graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=realm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=realm-session.target` |
+| `realm-bar.service` | `PartOf=realm-session.target graphical-session.target`, `After=realm-wm.service`, `Wants=realm-wm.service`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5` | `Type=exec`, `Restart=on-failure`, `RestartSec=1`, `TimeoutStopSec=5`, `Slice=app.slice` | `WantedBy=realm-session.target` |
 
 The reasoning behind each relationship, because these are easy to copy wrongly:
 
@@ -439,10 +451,15 @@ The reasoning behind each relationship, because these are easy to copy wrongly:
   `graphical-session.target` up, and anything else on the system that keys off
   `graphical-session.target` — a notification daemon, an idle daemon, the
   upstream portal unit — works under realm without knowing what realm is. The
-  `Before=` is what makes `After=graphical-session.target` on the client units a
-  real ordering barrier rather than a coincidence of an empty target activating
-  quickly. This is systemd's documented shape for a session unit
-  (`systemd.special(7)`).
+  target's default dependencies order every unit in its shipped `.wants`
+  directory before `realm-session.target`; `Before=graphical-session.target`
+  therefore gives the acyclic startup order `realm-wm.service` →
+  `realm-bar.service` → `realm-session.target` →
+  `graphical-session.target`. The client units must not declare
+  `After=graphical-session.target`: that reverse edge creates an ordering cycle,
+  causes systemd to delete their start jobs, and leaves the display-manager
+  session without a compositor or bar. This is systemd's documented target-unit
+  default-dependency shape (`systemd.special(7)`).
 - **`PartOf=`, never `BindsTo=`, on session helpers.** Helpers name both
   `realm-session.target` and `graphical-session.target`: the first makes an
   explicit Realm-target stop propagate, while the second retains graphical
@@ -771,6 +788,11 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A17 | Given an installed NixOS VM session running the pinned XWayland-enabled River, when a purpose-built session-bus service is activated and acquires its configured bus name, then the non-empty `DISPLAY` inherited by `realm-wm`, the systemd user manager and that D-Bus-activated service is identical; the service invokes the pinned xmessage package's public `bin/xmessage` wrapper and the child executable resolves to that same package's exact `bin/.xmessage-wrapped` payload selected by locked nixpkgs' X file-search wrapper hook; the X server's root tree identifies exactly one window with that child's unique test title and its X attributes report `Map State: IsViewable` before Realm reports one additional managed X11 window; and the test reaps the client. This proves discovery, both publication paths and XWayland window management, attributes a pre-map failure separately from a River/Realm observation failure, but does not claim Xresources or scaling behaviour. | VM | |
 
 **Split: 17 criteria — 4 CI, 11 VM, 2 HARDWARE.**
+
+SPEC 0029 adds native-package Ubuntu 24.04 and Fedora 44 graphical-login VM
+evidence without changing these criteria or treating virtio devices as the
+hardware rows. Its doctor subset reuses this specification's required checks;
+its test-only SDDM choice does not select a Realm display-manager dependency.
 
 ## Budgets
 

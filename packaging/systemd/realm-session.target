@@ -25,10 +25,11 @@ Documentation=man:systemd.special(7)
 Documentation=https://github.com/pipeliner/realms-de/blob/main/docs/INSTALL.md
 BindsTo=graphical-session.target
 # Before=, not just BindsTo=. BindsTo implies Requires, which pulls
-# graphical-session.target up but is NOT an ordering barrier: without Before=,
-# `After=graphical-session.target` on the client units only works by the
-# accident of an empty target activating quickly. This pair is systemd's
-# documented shape for a session unit (systemd.special(7)).
+# graphical-session.target up but is NOT an ordering barrier. Target default
+# dependencies already order the units in realm-session.target.wants before
+# this target; Before= extends that acyclic order through
+# graphical-session.target (systemd.special(7)). Client units must not reverse
+# it with After=graphical-session.target.
 Before=graphical-session.target
 Wants=graphical-session-pre.target
 After=graphical-session-pre.target
@@ -44,4 +45,5 @@ After=graphical-session-pre.target
 # speak ext-session-lock-v1; (d) realm-ward, ours, not before M6. The idle
 # defaults are a separate, user-visible security decision and must not be
 # guessed. Once chosen, ship realm-idle.service with
-# PartOf=graphical-session.target and WantedBy=realm-session.target.
+# PartOf=realm-session.target graphical-session.target and
+# WantedBy=realm-session.target.
