@@ -180,7 +180,9 @@ require_section "$status_section" 'Daemon and real River adapter verified in the
 
 require_section "$status_section" 'Implemented and verified in the installed NixOS QEMU VM' \
     'README must name installed NixOS VM verification for realm-bar'
-require_section "$status_section" 'Physical-hardware, native-package installation, and functional portal verification remain pending' \
+require_section "$status_section" 'the exact Fedora RPM verified in an empty installroot' \
+    'README status must name the Fedora RPM installroot evidence'
+require_section "$status_section" 'Debian installation, Fedora graphical login, physical hardware, and functional portal verification remain pending' \
     'README status must retain the unverified delivery boundary'
 for stale_claim in \
     'There is no desktop environment here yet' \
