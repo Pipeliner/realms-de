@@ -146,7 +146,7 @@ There is no apt repository yet (`NEEDS-HUMAN` in `packaging/debian/control`:
 PPA, self-hosted apt, or GitHub Releases). Build it yourself:
 
 ```sh
-sudo apt install devscripts debhelper rustc-1.89 cargo-1.89 pkg-config python3 zstd
+sudo apt install devscripts debhelper rustc-1.89 cargo-1.89 pkg-config python3 zstd fonts-dejavu-core
 git clone https://github.com/pipeliner/realms-de && cd realms-de
 
 packaging/tool-sources/build-native-source-kits.sh "$PWD/native-kits"
@@ -207,7 +207,7 @@ retained-only source kit without clean-installing it. Package installation and
 a graphical session remain unverified. To investigate the package locally:
 
 ```sh
-sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd
+sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts
 git clone https://github.com/pipeliner/realms-de && cd realms-de
 
 packaging/tool-sources/build-native-source-kits.sh "$PWD/native-kits"

@@ -230,10 +230,10 @@ assert_current_package_guide() {
     fi
     case $guide_name in
         Debian)
-            required_install='sudo apt install devscripts debhelper rustc-1.89 cargo-1.89 pkg-config python3 zstd'
+            required_install='sudo apt install devscripts debhelper rustc-1.89 cargo-1.89 pkg-config python3 zstd fonts-dejavu-core'
             ;;
         RPM)
-            required_install='sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd'
+            required_install='sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts'
             ;;
     esac
     if ! grep -F -x "$required_install" "$guide_output" >/dev/null; then

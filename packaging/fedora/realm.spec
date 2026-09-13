@@ -46,6 +46,8 @@ Source0:        %{name}-%{version}.tar.gz
 # shipped Rust compiler is older.
 BuildRequires:  rust >= 1.89
 BuildRequires:  cargo
+BuildRequires:  dejavu-sans-fonts
+BuildRequires:  dejavu-sans-mono-fonts
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  make
 BuildRequires:  python3
