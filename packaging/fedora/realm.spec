@@ -61,6 +61,8 @@ Requires:       river >= 0.4.0
 # units never start.
 Requires:       dbus-common
 Requires:       systemd
+Requires:       /usr/bin/xdg-settings
+Requires:       /usr/bin/gtk-launch
 # A portal backend, or "Open File" silently does nothing in Firefox
 # (docs/PITFALLS.md, "No portal backend installed").
 # Named backends, not a disjunction: a solver may satisfy `gtk or wlr or gnome`
@@ -127,6 +129,7 @@ CARGO_HOME=%{realm_cargo_home} CARGO_TARGET_DIR=%{realm_target_dir} \
 %install
 cd %{realm_source}
 install -Dpm0755 packaging/session/realm-session %{buildroot}%{_bindir}/realm-session
+install -Dpm0755 packaging/session/realm-browser %{buildroot}%{_bindir}/realm-browser
 install -Dpm0644 packaging/session/realm.desktop %{buildroot}%{_datadir}/wayland-sessions/realm.desktop
 install -Dpm0644 packaging/systemd/realm-session.target %{buildroot}%{_userunitdir}/realm-session.target
 install -Dpm0644 packaging/systemd/realm-wm.service %{buildroot}%{_userunitdir}/realm-wm.service
@@ -177,6 +180,7 @@ CARGO_HOME=%{realm_cargo_home} CARGO_TARGET_DIR=%{realm_target_dir} \
 # -f: the session entry and mandatory three-binary runtime payload recorded
 # during %%install.
 %files -f %{_builddir}/realm-binaries.list
+%{_bindir}/realm-browser
 %license .realm-workspace/source/LICENSE-MIT .realm-workspace/source/LICENSE-APACHE
 %doc packaging/package-docs/INSTALL.md .realm-workspace/source/docs/PITFALLS.md
 %{_datadir}/wayland-sessions/realm.desktop
