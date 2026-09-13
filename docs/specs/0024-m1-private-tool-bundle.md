@@ -198,8 +198,16 @@ For the selected `25.4.8` bundle, both native recipes SHALL set
 `VERGEN_GIT_SHA=99ea3b74c4260a724b43af812df0f68ef59395b7`,
 `VERGEN_GIT_COMMIT_DATE=2025-04-08`, and
 `VERGEN_BUILD_DATE=2025-04-08`. These values are the Unix epoch, commit, and
-UTC date bound by that bundle's intake record. The Yazi build command SHALL
-select the `yazi-fm` and `yazi-cli` packages, which produce `yazi` and `ya`;
+UTC date bound by that bundle's intake record. The native Yazi build SHALL
+append `-std=gnu17` to the package builder's inherited `CFLAGS`. The
+retained `onig_sys 69.8.1` source uses pre-C23 empty-parameter callback
+declarations; selecting GNU C17 preserves their intended unspecified-argument
+meaning on GCC 16 and newer without suppressing incompatible-type diagnostics.
+This compatibility selection applies only to the selected Yazi build, not the
+Realm workspace or Starship builds.
+
+The Yazi build command SHALL select the `yazi-fm` and `yazi-cli` packages,
+which produce `yazi` and `ya`;
 the Starship build command SHALL select the `starship` binary. Both use their
 selected bundle's staged source, vendor tree, source-replacement configuration,
 and a bundle-local target directory with `--release --frozen --offline

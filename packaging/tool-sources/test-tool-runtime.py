@@ -55,7 +55,13 @@ def run_yazi(
         if status is None:
             os.kill(pid, 9)
             _, status = os.waitpid(pid, 0)
-            raise SystemExit("selected Yazi did not terminate after its quit input")
+            escaped_tail = repr(bytes(output[-4096:]))
+            raise SystemExit(
+                "selected Yazi did not terminate within its runtime bound: "
+                f"visible_entry={visible_entry in output} "
+                f"visible_border={visible_border in output} "
+                f"sent_quit={sent_quit} output_tail={escaped_tail}"
+            )
     finally:
         os.close(descriptor)
     if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
@@ -111,8 +117,11 @@ def self_test_timeout_reaps_child() -> None:
         except ChildProcessError:
             pass
 
-        expected = "selected Yazi did not terminate after its quit input"
-        if failure != expected or leaked:
+        expected = (
+            "selected Yazi did not terminate within its runtime bound: "
+            "visible_entry=True visible_border=True sent_quit=True "
+        )
+        if failure is None or not failure.startswith(expected) or leaked:
             raise SystemExit(
                 "Yazi timeout regression did not fail within its bound and reap its child"
             )

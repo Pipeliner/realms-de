@@ -102,6 +102,7 @@ override_dh_auto_build:
 	cargo build --release --frozen --offline --locked --workspace; \
 	cd "$$yazi_source"; \
 	CARGO_HOME="$(YAZI_STAGE)/.cargo" CARGO_TARGET_DIR="$(YAZI_TARGET)" \
+	CFLAGS="$(CFLAGS) -std=gnu17" \
 	SOURCE_DATE_EPOCH=1744112829 \
 	VERGEN_GIT_SHA=99ea3b74c4260a724b43af812df0f68ef59395b7 \
 	VERGEN_GIT_COMMIT_DATE=2025-04-08 VERGEN_BUILD_DATE=2025-04-08 \

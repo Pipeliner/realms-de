@@ -2,7 +2,8 @@
 # Transparent Cargo recorder for the native package-path fixture.
 set -eu
 
-printf 'cargo|cwd=%s|home=%s|args=%s\n' "$PWD" "${CARGO_HOME:-}" "$*" \
+printf 'cargo|cwd=%s|home=%s|args=%s|cflags=%s\n' \
+    "$PWD" "${CARGO_HOME:-}" "$*" "${CFLAGS:-}" \
     >>"${REALM_SENTINEL_LOG:?}"
 if ! cmp -s "${CARGO_HOME:?}/config.toml" "${REALM_EXPECTED_CARGO_CONFIG:?}" \
     || find "$CARGO_HOME" -mindepth 1 ! -path "$CARGO_HOME/config.toml" \

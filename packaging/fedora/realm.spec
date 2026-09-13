@@ -135,6 +135,7 @@ CARGO_HOME=%{realm_cargo_home} CARGO_TARGET_DIR=%{realm_target_dir} \
     cargo build --release --frozen --offline --locked --workspace
 cd %{yazi_source}
 CARGO_HOME=%{yazi_cargo_home} CARGO_TARGET_DIR=%{yazi_target_dir} \
+CFLAGS="$CFLAGS -std=gnu17" \
 SOURCE_DATE_EPOCH=1744112829 \
 VERGEN_GIT_SHA=99ea3b74c4260a724b43af812df0f68ef59395b7 \
 VERGEN_GIT_COMMIT_DATE=2025-04-08 VERGEN_BUILD_DATE=2025-04-08 \

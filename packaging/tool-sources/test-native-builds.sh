@@ -330,22 +330,30 @@ accepts_offline_cargo() {
     fi
     build_invocation=$(grep '|args=build .*--workspace' "$log" | head -n 1 || true)
     case $build_invocation in
-        *"|args=build --release --frozen --offline --locked --workspace") ;;
+        *"|args=build --release --frozen --offline --locked --workspace|cflags="*) ;;
         *) fail "$name did not run the exact complete staged workspace build" ;;
     esac
     yazi_invocation=$(grep '|args=build .*--package yazi-fm' "$log" | head -n 1 || true)
     case $yazi_invocation in
-        *"|args=build --release --frozen --offline --locked --package yazi-fm --package yazi-cli") ;;
+        *"|args=build --release --frozen --offline --locked --package yazi-fm --package yazi-cli|cflags="*) ;;
         *) fail "$name did not run the exact selected Yazi build" ;;
+    esac
+    case $yazi_invocation in
+        *"|cflags="*" -std=gnu17"*) ;;
+        *) fail "$name did not select GNU C17 for the retained Yazi C dependency" ;;
     esac
     starship_invocation=$(grep '|args=build .*--bin starship' "$log" | head -n 1 || true)
     case $starship_invocation in
-        *"|args=build --release --frozen --offline --locked --bin starship") ;;
+        *"|args=build --release --frozen --offline --locked --bin starship|cflags="*) ;;
         *) fail "$name did not run the exact selected Starship build" ;;
+    esac
+    case "$build_invocation $starship_invocation" in
+        *" -std=gnu17"*) fail "$name leaked the Yazi C standard selection into another build" ;;
+        *) ;;
     esac
     test_invocation=$(grep '|args=test ' "$log" | head -n 1 || true)
     case $test_invocation in
-        *"|args=test --release --frozen --offline --locked --workspace --exclude realm-agent-sdd") ;;
+        *"|args=test --release --frozen --offline --locked --workspace --exclude realm-agent-sdd|cflags="*) ;;
         *) fail "$name did not run the exact package-relevant workspace test selection" ;;
     esac
     for bin in realmctl realm-wm realm-bar yazi ya starship; do
