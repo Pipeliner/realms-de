@@ -131,6 +131,10 @@ in
     programs.dconf.enable = true;
     security.polkit.enable = true;
     hardware.graphics.enable = lib.mkDefault true;
+    # xdg-desktop-portal-wlr hands ScreenCast clients a restricted PipeWire
+    # remote. Installing its client library is insufficient: the per-user
+    # service/socket must exist. An explicit host choice still wins.
+    services.pipewire.enable = lib.mkDefault true;
 
     # Portals: a browser with no portal backend has a silently broken "Open
     # File" (docs/PITFALLS.md). A backend is named per interface rather than
@@ -141,17 +145,14 @@ in
     # wlroots-based compositors, so screen sharing is routed to wlr explicitly;
     # left to the default it offers no sources and reports no error.
     #
-    # UNVERIFIED (SPEC 0005 OQ-2): whether river 0.4.8 still exports
-    # wlr-screencopy-unstable-v1, and whether xdg-desktop-portal-wlr works when
-    # window management lives outside the compositor. Screen sharing under realm
-    # stays marked unverified in docs/INSTALL.md until that is tested on
-    # hardware. slurp is xdpw's default output chooser.
+    # The installed-desktop VM exercises xdpw through a real restricted
+    # PipeWire frame. Browser picker behaviour and physical-machine capture
+    # remain hardware acceptance (SPEC 0005 A15), so docs/INSTALL.md keeps that
+    # boundary explicit. slurp is xdpw's default interactive output chooser.
     xdg.portal = {
       enable = true;
-      extraPortals = [
-        pkgs.xdg-desktop-portal-gtk
-        pkgs.xdg-desktop-portal-wlr
-      ];
+      extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
+      wlr.enable = true;
       config.realm = {
         default = [ "gtk" ];
         "org.freedesktop.impl.portal.ScreenCast" = [ "wlr" ];

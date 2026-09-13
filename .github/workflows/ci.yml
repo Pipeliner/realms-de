@@ -154,6 +154,7 @@ jobs:
           ./docs/test-github-body-safety.sh
           ./docs/check-github-body-safety.sh
           ./docs/test-colour-template-literals.sh
+          python3 packaging/tool-sources/test-ci-rebind.py
           ./packaging/tool-sources/test-intake.sh
           ./packaging/tool-sources/test-bundle-linkage.sh
           ./packaging/tool-sources/test-no-live-fetch.sh
