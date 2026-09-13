@@ -90,6 +90,8 @@ They are tracked as post-MVP work and do not gate the M0–M3 critical path.
    distro gets a CI job on that distro.
 4. **The budget is a gate, not a goal.** A change that misses a frame budget in
    [ARCHITECTURE.md §4](ARCHITECTURE.md) is a regression, not a trade-off.
-5. **Native package builds run in CI only.** Local development does not install
-   distro packaging toolchains or treat their absence as a blocker; the
-   matching distro CI job supplies authoritative package-build evidence.
+5. **All packaging builds and verification run in CI only.** This includes Nix
+   and native packages, archive/vendor/provenance generation or rebinding, and
+   install verification. Local development does not install packaging
+   toolchains or treat their absence as a blocker; the matching CI job supplies
+   authoritative evidence.

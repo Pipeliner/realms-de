@@ -8,6 +8,8 @@ rules="$repo_root/packaging/debian/rules"
 control="$repo_root/packaging/debian/control"
 workflow="$repo_root/.github/workflows/distro.yml"
 install_guide="$repo_root/docs/INSTALL.md"
+mvp_contract="$repo_root/docs/MVP.md"
+markdown_tick='`'
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
@@ -88,7 +90,27 @@ grep -F 'v[2] < 89' "$rules" >/dev/null \
   || fail "Debian rules do not enforce the workspace Rust 1.89 floor"
 grep -F 'rustc-1.89/cargo-1.89' "$rules" >/dev/null \
   || fail "Debian rules do not diagnose the required 1.89 packages"
-grep -F 'sudo apt install devscripts debhelper rustc-1.89 cargo-1.89 pkg-config python3 zstd' \
+grep -F 'All package builds and verification run in CI only.' \
   "$install_guide" >/dev/null \
-  || fail "install guide does not name the accepted Ubuntu 1.89 packages"
+  || fail "install guide does not state the CI-only packaging boundary"
+grep -F 'All packaging builds and verification run in CI only.' \
+  "$mvp_contract" >/dev/null \
+  || fail "MVP sequencing does not state the complete CI-only packaging boundary"
+for forbidden in \
+  'packaging/tool-sources/build-native-source-kits.sh' \
+  'dpkg-buildpackage' \
+  'rpmbuild -bb' \
+  'nix build' \
+  'nix flake check'; do
+  if grep -F "$forbidden" "$install_guide" >/dev/null; then
+    fail "install guide prescribes forbidden local packaging command: $forbidden"
+  fi
+done
+grep -F 'realmctl doctor' "$install_guide" >/dev/null \
+  || fail "install guide does not name the shipped doctor command"
+if grep -F 'PENDING M2' "$install_guide" >/dev/null \
+  || grep -F "stand-in for ${markdown_tick}realmctl doctor${markdown_tick}" \
+    "$install_guide" >/dev/null; then
+  fail "install guide retains a stale pending bar or future-doctor claim"
+fi
 pass accepted-rust-floor-projections
