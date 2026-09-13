@@ -69,6 +69,10 @@ PATH="$sentinels:/usr/bin:/bin" \
     exit 1
 }
 "$checker" "$tmpdir/kit"
+[[ -x "$tmpdir/kit/packaging/river/run-noble-river-package-build.sh" ]] || {
+    echo 'source kit omits its package-build namespace entrypoint' >&2
+    exit 1
+}
 
 cp -R "$cache" "$tmpdir/extra-cache"
 : >"$tmpdir/extra-cache/unexpected"

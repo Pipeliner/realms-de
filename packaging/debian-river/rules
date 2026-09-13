@@ -10,11 +10,9 @@ REALM_INPUT := $(CURDIR)/closure-input
 	dh $@
 
 override_dh_auto_configure:
-	@set -e; \
-	parent_netns="$$(readlink /proc/self/ns/net)"; \
-	unshare --user --map-root-user --net -- \
-		"$(CURDIR)/packaging/river/build-noble-package-closure.sh" \
-		"$(REALM_MANIFEST)" "$(REALM_INPUT)" "$(REALM_STAGE)" "$$parent_netns"
+	@"$(CURDIR)/packaging/river/build-noble-package-closure.sh" \
+		"$(REALM_MANIFEST)" "$(REALM_INPUT)" "$(REALM_STAGE)" \
+		"$${REALM_PARENT_NETNS:?package build did not enter its outer namespace}"
 
 override_dh_auto_build:
 	:

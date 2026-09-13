@@ -44,6 +44,22 @@ if printf '%s\n' "$river_job" | \
     echo 'Noble River package job bypasses declared build dependency validation' >&2
     exit 1
 fi
+grep -F 'REALM_PARENT_NETNS' "$rules" >/dev/null || {
+    echo 'Noble River rules do not require the outer namespace identity' >&2
+    exit 1
+}
+if grep -F 'unshare --user --map-root-user --net' "$rules" >/dev/null; then
+    echo 'Noble River rules create the user namespace too late under dpkg' >&2
+    exit 1
+fi
+if ! printf '%s\n' "$river_job" | grep -F \
+    '/packaging/river/run-noble-river-package-build.sh"' >/dev/null \
+    || ! printf '%s\n' "$river_job" | \
+        grep -Fx "            \"${debian_dollar}RUNNER_TEMP/realm-river-0.4.8\"" \
+        >/dev/null; then
+    echo 'Noble River job bypasses the retained package-build entrypoint' >&2
+    exit 1
+fi
 
 make_package() {
     local root=$1 package=$2

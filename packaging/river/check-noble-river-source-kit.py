@@ -18,6 +18,7 @@ RIVER_FILES = {
     "check-closure-manifest.py",
     "check-private-resolutions.py",
     "probe-noble-package-closure.sh",
+    "run-noble-river-package-build.sh",
     "sources.toml",
 }
 DEBIAN_FILES = {"changelog", "control", "copyright", "rules", "source"}
