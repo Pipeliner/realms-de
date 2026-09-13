@@ -87,13 +87,16 @@ remains unproven until the later hardware obligation.
    no-replace rename after complete validation; a partial destination is never
    accepted as a kit.
 4. The retained source kit's package-build entrypoint captures the parent
-   network namespace and enters a fresh user and network namespace before it
-   invokes `dpkg-buildpackage`. The package rules require that captured parent
-   identity and the closure builder verifies that its current namespace
-   differs and has no usable interface before compilation. Invoking the rules
-   without the entrypoint or failing namespace creation/verification is fatal,
-   with no connected retry. Every Meson setup keeps `--wrap-mode=nofallback`;
-   River keeps Zig `--system`.
+   network namespace, requires non-interactive `sudo`, and uses it only to
+   invoke `unshare --net` before `dpkg-buildpackage`. This is the same
+   privileged network-namespace boundary proven by SPEC 0026 on the Noble CI
+   runner; it does not depend on an unprivileged user namespace. The package
+   rules require the captured parent identity and the closure builder verifies
+   that its current namespace differs and has no usable interface before
+   compilation. Invoking the rules without the entrypoint, unavailable
+   non-interactive privilege, or failed namespace creation/verification is
+   fatal, with no connected retry. Every Meson setup keeps
+   `--wrap-mode=nofallback`; River keeps Zig `--system`.
 
 ## Staged build and runtime projection (L4)
 

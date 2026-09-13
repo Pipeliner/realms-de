@@ -12,6 +12,12 @@ if [[ ! -f "$source_kit/debian/control" ]]; then
     exit 1
 fi
 parent_netns=$(readlink /proc/self/ns/net)
+
+if ! sudo --non-interactive true; then
+    echo "package build: non-interactive sudo is required for a fresh network namespace" >&2
+    exit 1
+fi
+
 cd "$source_kit"
-exec unshare --user --map-root-user --net -- \
+exec sudo --non-interactive unshare --net -- \
     env REALM_PARENT_NETNS="$parent_netns" dpkg-buildpackage -us -uc -b
