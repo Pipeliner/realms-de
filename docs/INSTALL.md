@@ -6,13 +6,15 @@ browser's own default-browser setting). Realm does not choose a browser brand.
 The packaged `realm-browser` helper reports an absent default or a failed
 launch instead of silently choosing another application.
 
-> **realm 0.1.0 is pre-alpha.** The native recipes now require the complete
-> Realm runtime payload — `realmctl`, `realm-wm`, and `realm-bar` — plus the
-> session contract. Fedora CI clean-installs the exact built RPM into an empty
-> Fedora 44 root with normal DNF dependency resolution, then runs the installed
-> Realm CLI against the installed palette and probes installed River. Debian
-> installation and Fedora graphical login remain unverified; a package build
-> alone is not that evidence.
+> **realm 0.1.0 is pre-alpha.** The native recipes require the complete Realm
+> runtime payload — `realmctl`, `realm-wm`, and `realm-bar` — plus the session
+> contract. Fedora CI clean-installs the exact built RPM into an empty Fedora
+> 44 root with normal DNF dependency resolution, then runs the installed Realm
+> CLI against the installed palette and probes installed River. The installed
+> NixOS package has also completed a display-manager login into a graphical
+> Realm session in QEMU, including managed windows, the bar, key discovery and
+> `realmctl doctor`. Ubuntu installation, Fedora graphical login and physical
+> hardware remain unverified.
 >
 > A failed `realm-wm` unit returns the user to the display manager rather than
 > leaving bare river. That failure policy remains required while live native
@@ -22,12 +24,12 @@ launch instead of silently choosing another application.
 > Every section below has a **What this actually installs today** block that says
 > exactly what you get and what you do not.
 >
-> **Candidate SPEC 0012 is not implemented by today's package.** The current
-> entry starts river without a persistent activation claim, the WM/bar units
-> are only `PartOf=graphical-session.target`, and current exit has no durable
-> admission-freeze or launch-record/lease reconciliation. Those differences are
-> expected red implementation evidence while SPEC 0012 remains Draft; current
-> packages must not be described as satisfying its restart/logout contract.
+> [SPEC 0012](specs/0012-activation-launch-lifecycle.md) is Accepted, and the
+> shipped fixed terminal and launcher select one sealed generation and hold its
+> process lease until the owned child exits. The broader durable profile-launch
+> admission, record reconciliation and restart/logout ownership path is not yet
+> wired into every launcher. Do not read the fixed-consumer proof as complete
+> profile-lifecycle or daily-driver evidence.
 
 realm intends to support three M3 platforms, but today's evidence differs by
 target ([ARCHITECTURE.md §5](ARCHITECTURE.md)):
@@ -35,7 +37,7 @@ target ([ARCHITECTURE.md §5](ARCHITECTURE.md)):
 | Platform | Delivery | State today |
 |---|---|---|
 | NixOS / Nix | flake: `packages.default`, `nixosModules.realm`, `homeManagerModules.realm` | Reference build; its installed display-manager session boots River and the Realm desktop in the QEMU VM. This is not physical-hardware evidence |
-| Ubuntu 24.04 LTS + | `.deb` from `packaging/debian/` | Builds; three runtime dependencies are not in the Ubuntu archive (below) |
+| Ubuntu 24.04 LTS + | `.deb` from `packaging/debian/` | Realm package builds in CI; the complete River-bearing clean-install path is not yet delivered on `main` |
 | Fedora 44 (pre-alpha) | RPM from the retained-only source kit | Builds in a pinned Fedora 44 image; its exact output clean-installs into an empty Fedora 44 root and its installed CLI/palette and River probes pass. Graphical login, portals and SELinux remain unverified |
 
 Anything else is best-effort. The flake is the definition; the deb and the rpm
@@ -51,9 +53,10 @@ Two consequences you will meet immediately:
 
 - **river 0.4 does no window management on its own.** Until `realm-wm` attaches,
   river places nothing — and serves no layer shell, so the bar maps nothing.
-  The daemon now exists, but its installed headless-River verification remains
-  pending; a failed unit must still return the login rather than leave an inert
-  compositor.
+  The installed NixOS VM verifies that the daemon attaches, places ordinary
+  Wayland windows and serves the bar. Native Ubuntu and Fedora graphical-login
+  verification remains pending; a failed unit must still return the login
+  rather than leave an inert compositor.
 - **`river-window-management-v1` is declared *stable* as of river 0.4.0**, with
   a forward-compatibility pledge to 1.0.0. The residual risk is not a protocol
   classification but trust in a single maintainer of a pre-1.0 project. realm
@@ -66,20 +69,14 @@ Two consequences you will meet immediately:
 ## NixOS and Nix
 
 The flake lives at the repository root; the parts it imports live in
-`packaging/nix/`.
-
-```sh
-git clone https://github.com/pipeliner/realms-de && cd realms-de
-
-nix develop          # rust toolchain, river, yazi, btop, starship, fuzzel, foot
-nix build            # the realm package
-nix flake check      # shellcheck + package; the VM test needs /dev/kvm
-```
+`packaging/nix/`. All package builds and verification run in CI only. The
+reference Nix checks include an installed display-manager login in a KVM-backed
+NixOS VM; they are not instructions to rebuild release evidence locally.
 
 > **`flake.lock` is committed.** It pins the Nix inputs used by this reference
 > build. Refresh it only deliberately with `nix flake update` or `nix flake
-> lock`, review the revision/hash diff, and run `nix flake check` before
-> committing the update.
+> lock`, review the revision/hash diff, and let the matching CI workflow build
+> and verify the result before merging the update.
 
 ### As a NixOS module
 
@@ -142,27 +139,22 @@ For the user half — palette, generated configs, user units — add
 The generated theme is not installed as a static package artifact; `realmctl`
 applies it into the user's configuration.
 
-`checks.session-boots` boots a NixOS VM and asserts the login entry, the
-wrapper, the units, the palette and river's presence. The assertion it exists
-for — the bar appears — is written but gated off, marked `PENDING M2` in
-`packaging/nix/checks.nix`.
+`checks.session-boots` boots the installed NixOS display-manager session and
+asserts the wrapper, units, palette and River connection. It also drives real
+keybindings, observes managed windows, the bar, which-key and grimoire, and
+runs the installed `realmctl doctor`. This is QEMU/KVM evidence, not a claim
+about physical hardware or every M3 target.
 
 ---
 
 ## Ubuntu 24.04 LTS and newer
 
-There is no apt repository yet (`NEEDS-HUMAN` in `packaging/debian/control`:
-PPA, self-hosted apt, or GitHub Releases). Build it yourself:
-
-```sh
-sudo apt install devscripts debhelper rustc-1.89 cargo-1.89 pkg-config python3 zstd fonts-dejavu-core
-git clone https://github.com/pipeliner/realms-de && cd realms-de
-
-packaging/tool-sources/build-native-source-kits.sh "$PWD/native-kits"
-cd native-kits/realm-debian-0.1.0
-dpkg-buildpackage -us -uc -b
-sudo apt install ../realm_0.1.0_*.deb
-```
+There is no apt repository or published native artifact yet (`NEEDS-HUMAN` in
+`packaging/debian/control`: PPA, self-hosted apt, or GitHub Releases). All
+package builds and verification run in CI only; this guide does not ask users
+or contributors to reproduce the package toolchain locally. Until CI publishes
+and clean-installs a complete Realm-plus-River artifact set, Ubuntu is an
+intended target rather than a supported installation path.
 
 The producer copies only Debian metadata, the staging/linkage helpers, and the
 retained Realm workspace bundle into the package source directory. The checkout
@@ -173,21 +165,19 @@ a second workspace authority.
 The retained native kit and source workspace require **Rust 1.89 or newer**.
 Ubuntu 24.04's default rustc is 1.75, below that floor. Noble Updates carries
 versioned `rustc-1.89`/`cargo-1.89` packages
-(`1.89.0+dfsg~24.04-0ubuntu0.24.04.2`, checked 2026-09-13), and
-`debian/rules` puts the newest complete versioned pair it finds on PATH,
-failing with a clear message rather than building with the wrong compiler.
-For a source-workspace build where those versioned packages are unavailable,
-install the declared floor or newer with `rustup` instead; the MSRV comes from
-the locked dependency graph, not Ubuntu's glibc.
+(`1.89.0+dfsg~24.04-0ubuntu0.24.04.2`, checked 2026-09-13), and the CI recipe
+selects the newest complete versioned pair it finds, failing rather than
+building with the wrong compiler. This records the package-build contract; it
+is not a local build instruction.
 
 **Three runtime dependencies are not in the Ubuntu 24.04 archive** (checked
 against noble's package lists):
 
-| Missing | Effect | What to do |
+| Missing | Effect | Current status |
 |---|---|---|
-| `river` (any version) | No compositor — realm cannot start | Ubuntu only: provide a River `>= 0.4.0` package; its source is unresolved |
-| `yazi` | charon (files) is missing | `cargo install --locked yazi-fm yazi-cli`, or a newer Ubuntu |
-| `starship` | thoth's prompt falls back to plain zsh | `cargo install --locked starship` |
+| `river` (any version) | No compositor — realm cannot start | A private River 0.4.8 closure and native package are being verified in CI; they are not delivered on `main` yet |
+| `yazi` | charon (files) is missing | Packaging remains unresolved |
+| `starship` | thoth's prompt falls back to plain zsh | Packaging remains unresolved |
 
 `fonts-ibm-plex` is in *multiverse*, so it is a Recommends rather than a
 Depends: a hard dependency would make realm uninstallable on a box with only
@@ -209,25 +199,15 @@ fails the package build.
 
 ## Fedora 44 (pre-alpha)
 
-There is no Realm Fedora repository. The tracked RPM is pre-alpha and does not
-yet have a verified graphical login. Fedora 44 has one pinned Cargo-smoke lane
-and one pinned retained-source RPM lane; the latter builds the RPM from the
-retained-only source kit, installs that exact output into an empty Fedora 44
-root with normal DNF dependency resolution, verifies its NEVRA, and runs the
-installed Realm CLI/palette and River version probes. This does not exercise a
-graphical session, portals, SELinux, or physical hardware. To investigate the
-package locally:
-
-```sh
-sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts
-git clone https://github.com/pipeliner/realms-de && cd realms-de
-
-packaging/tool-sources/build-native-source-kits.sh "$PWD/native-kits"
-rpmbuild -bb \
-  --define "_sourcedir $PWD/native-kits" \
-  "$PWD/native-kits/realm.spec"
-sudo dnf install ~/rpmbuild/RPMS/*/realm-0.1.0-*.rpm
-```
+There is no Realm Fedora repository or published RPM artifact. The tracked RPM
+is pre-alpha and does not yet have a verified graphical login. Fedora 44 has
+one pinned Cargo-smoke lane and one pinned retained-source RPM lane; the latter
+builds the RPM from the retained-only source kit, installs that exact output
+into an empty Fedora 44 root with normal DNF dependency resolution, verifies
+its NEVRA, and runs the installed Realm CLI/palette and River version probes.
+All package builds and verification run in CI only. This does not exercise a
+graphical session, portals, SELinux, or physical hardware, and the successful
+output is not currently published for download.
 
 The resulting RPM `Source0` contains only Fedora metadata, the shared helpers,
 and the same retained Realm bundle. `%prep` rejects a checkout-shaped Source0
@@ -235,11 +215,10 @@ and stages Cargo exclusively from the canonical inner `source.tar.gz`.
 
 Fedora 44's official package listing reported `rust` and `cargo` 1.97.1 on
 2026-08-29, above the current Rust 1.89 MSRV. Fedora repositories float, so
-check `rustc --version` when building from source. On an older Fedora release,
-use `rustup` to install Rust 1.89 or newer for a source-workspace build; do not
-lower `rust-version` to match a distro toolchain, because the locked dependency
-graph would still fail to parse. RPM builds remain governed by the toolchain
-requirement in `packaging/fedora/realm.spec`.
+the CI lane records the selected compiler version and refuses anything below
+the floor. Do not lower `rust-version` to match a distro toolchain, because the
+locked dependency graph would still fail to parse. RPM builds remain governed
+by the toolchain requirement in `packaging/fedora/realm.spec`.
 
 **Command names are settled:** the CLI installs as `realmctl`, the session entry
 as `realm-session`, and the window manager as `realm-wm`. These names are the
@@ -256,10 +235,10 @@ session domain; realm's control socket lives in `$XDG_RUNTIME_DIR/realm/ctl.sock
 inside `/run/user/$UID`; and nothing is setuid, has file capabilities, listens on
 a port or runs as a system service.
 
-**This has not been verified on a Fedora box in enforcing mode** — there is none
-in the container this packaging was written in. The M3 Fedora CI job should run
-`ausearch -m AVC -ts recent` after a session start and assert it comes back
-empty. That is the guard that would fail if the claim ever stopped being true.
+**This has not been verified on a Fedora box in enforcing mode.** SELinux
+verification is tracked as post-MVP work and is not a launch gate; current
+Fedora evidence is limited to the clean installroot and installed probes stated
+above.
 
 ### What this actually installs today
 
@@ -274,10 +253,10 @@ symlinks, portal policy, and palette. A missing runtime binary fails `%install`.
 `realm-session` is not boilerplate. It implements the ordering contract in
 ADR 0011, and the order is the entire point:
 
-The numbered list below describes the currently shipped SPEC 0005 path. Draft
-SPEC 0012 requires a crash-safe persistent session claim before step 2 and
-mode-specific systemd/direct lifecycle teardown, but neither is shipped or
-implementation authority yet.
+The numbered list below describes the currently shipped SPEC 0005 path.
+Accepted SPEC 0012 defines the broader crash-safe activation lifecycle. Its
+sealed-generation fixed terminal/launcher slice is shipped; complete durable
+profile-launch admission and reconciliation is still pending.
 
 1. Export `XDG_CURRENT_DESKTOP=realm`, `XDG_SESSION_TYPE=wayland`,
    `XDG_SESSION_DESKTOP=realm`, `XCURSOR_THEME`, `XCURSOR_SIZE` — **before** the
@@ -285,10 +264,12 @@ implementation authority yet.
    read them at client start-up.
 2. Start river — in the background, never `exec`: the entry outlives the
    compositor because it owns teardown.
-3. **Wait** for the Wayland socket to actually appear, then for it to answer a
-   round trip (`realmctl wait-display`, once that exists; until then the entry
-   logs `DEGRADED NO-DISPLAY-PROBE` and settles for file existence). Importing
-   early imports nothing, silently, and everything downstream inherits the hole.
+3. **Wait** for the Wayland socket to actually appear, then require
+   `realmctl wait-display` to complete a real registry round trip within the
+   same startup deadline. The file-existence-only `DEGRADED NO-DISPLAY-PROBE`
+   path remains solely for an incomplete or manually assembled installation.
+   Importing early imports nothing, silently, and everything downstream
+   inherits the hole.
    XWayland's `DISPLAY` is discovered the same way, by diffing
    `/tmp/.X11-unix/X*` across the compositor start.
 4. Publish the environment to **both** `systemctl --user import-environment`
@@ -304,12 +285,12 @@ implementation authority yet.
    is empty, and the desktop is inert. If the window manager is not `active`,
    the entry logs `FATAL WM-ABORT` and returns you to the display manager.
 
-On exit the current pre-alpha script attempts to stop the target and clear both
+On exit the current pre-alpha script stops the Realm target and clears both
 environments so the next session does not inherit a `WAYLAND_DISPLAY` pointing
-at a dead socket. This is not proof of candidate SPEC 0012 conformance: the
-shipped units do not yet propagate Realm-target stop and the script does not yet
-freeze launch admission or preserve/reconcile durable launch records and
-leases.
+at a dead socket. The target is bound to `graphical-session.target`, and the
+fixed terminal/launcher children hold generation process leases. This is not
+proof that every SPEC 0012 profile-launch path is complete: durable admission
+freeze and record reconciliation are not yet wired into every launcher.
 
 Every degradation emits exactly one line with a stable code, so it can be
 grepped, quoted in a bug report and looked up here:
@@ -344,15 +325,20 @@ Preflight, without logging in:
 realm-session --check
 ```
 
-That is the stand-in for `realmctl doctor` until the CLI exists.
+That checks wrapper prerequisites without starting a session. From a terminal
+inside a running Realm session, use the shipped health command:
+
+```sh
+realmctl doctor
+```
 
 ---
 
 ## Troubleshooting
 
 Each entry names the symptom, what is actually happening, how to check it by
-hand today, and the `doctor` check that will diagnose it once `realm-ctl` lands
-(M1–M2). The full failure register is [docs/PITFALLS.md](PITFALLS.md).
+hand, and what the shipped `realmctl doctor` reports. The full failure register
+is [docs/PITFALLS.md](PITFALLS.md).
 
 ### A file dialog hangs for ~25 seconds, then falls back to the toolkit's own
 
@@ -367,25 +353,27 @@ busctl --user get-property org.freedesktop.portal.Desktop \
 ```
 
 The first must list both variables; the second must answer immediately. If the
-compositor's own environment has `WAYLAND_DISPLAY` and systemd or D-Bus does
-not, the import ran too early or was skipped — that is the whole diagnosis,
-every time.
+compositor's own environment has `WAYLAND_DISPLAY` and systemd does not, the
+import ran too early or was skipped. If the portal probe fails, a missing or
+stale D-Bus activation import is one possible cause alongside a broken portal
+service or selected backend; D-Bus does not expose the stored value directly.
 
-*`realmctl doctor` will check this in three separate places — the process,
-systemd, and D-Bus — because they fail separately.*
+*`realmctl doctor` compares the exact process and systemd values, then reports
+the D-Bus path separately through a bounded functional portal probe. D-Bus does
+not expose its stored activation-environment value, so doctor does not invent
+one.*
 
 ### Screen sharing offers no sources, or produces nothing
 
 Either `XDG_CURRENT_DESKTOP` was not `realm` when the portal started, so
 `portals.conf` matching failed, or the chosen backend implements no ScreenCast.
-`xdg-desktop-portal-gtk` — the default this packaging installs — does not
-implement ScreenCast for wlroots-based compositors, and river 0.4 is
-wlroots-based.
-
-Installing `xdg-desktop-portal-wlr` alongside it is the likely fix and is
-**unverified under river 0.4**; it is a `NEEDS-HUMAN` marked in
-`packaging/nix/nixos-module.nix`. Screen sharing under realm should be treated as
-untested until someone runs it on hardware.
+Realm installs both `xdg-desktop-portal-gtk` and
+`xdg-desktop-portal-wlr`. Its named policy routes FileChooser and Settings to
+`gtk`, ScreenCast and Screenshot to `wlr`, and Inhibit to `none`. Check that the
+`wlr` backend and the installed `realm-portals.conf` are both present before
+changing that policy. `realmctl doctor` checks the routing and advertised
+interfaces, but an actual captured stream under River remains unverified until
+the hardware acceptance test runs.
 
 ### Tofu boxes instead of runes, or `𓂃` renders as a rectangle
 
@@ -405,7 +393,7 @@ module installs IBM Plex, but does not install a Symbola or Nerd Font
 automatically. These symbol-font packages are optional recommendations: the
 glyph probe and ASCII fallbacks keep Realm legible when they are absent.
 
-*`realmctl doctor` will print the glyph coverage summary —
+*`realmctl doctor` prints the glyph coverage summary —
 `realm-core::glyphs::Probe::summary()` already produces exactly that line.*
 
 ### The cursor is a black X11 arrow, or disappears over some windows
@@ -423,7 +411,7 @@ gsettings get org.gnome.desktop.interface cursor-theme
 The wrapper sets all three. If the theme name is set but the cursor is still
 wrong, the theme itself is not installed: `ls /usr/share/icons/*/cursors`.
 
-*`realmctl doctor` will check the theme resolves *and* that gsettings agrees.*
+*`realmctl doctor` checks that the theme resolves *and* that gsettings agrees.*
 
 ### I select realm and land straight back at the login screen
 
@@ -440,17 +428,17 @@ an explanation onto it. Check `systemctl --user status realm-wm.service` for the
 daemon's concrete startup error.
 
 `REALM_ALLOW_NO_WM=1` keeps river running without a window manager — useful for
-poking at the compositor, not a desktop. Once M2 lands, the same abort means the
-window manager really failed, and `systemctl --user status realm-wm.service`
-is the next stop; `realm-session-abort.service` is what turned its failure into a
-returned login.
+poking at the compositor, not a desktop. Without that diagnostic override, the
+abort means the window manager failed, and `systemctl --user status
+realm-wm.service` is the next stop; `realm-session-abort.service` is what turns
+its failure into a returned login.
 
 If the window manager exits **69**, another window-management client already
 holds river's global — a leftover `realm-wm`, or one started by hand. river
 answers `unavailable` to the second, so the unit deliberately does not restart:
 `pgrep -a realm-wm` finds the holder.
 
-### The bar never appears (M2 onwards)
+### The bar never appears
 
 Under river the bar is a layer-shell client served by *realm's own window
 manager*, so a missing bar usually means the window manager is not serving
