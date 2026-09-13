@@ -179,7 +179,7 @@ projection_paths() {
 }
 
 assert_discovered_claims_are_reviewed() {
-    pattern='(Fedora 41|F41|fedora-41|fedora:41|Fedora 43|F43|fedora-43|fedora:43|Fedora[[:space:]]*44\+|Fedora[[:space:]]*44[[:space:]]+(and[[:space:]]+)?(later|newer)|Fedora[^[:alnum:]]*(latest|Rawhide)|fedora:(latest|rawhide))'
+    pattern='(Fedora 41|(^|[^[:alnum:]_])F41([^[:alnum:]_]|$)|fedora-41|fedora:41|Fedora 43|(^|[^[:alnum:]_])F43([^[:alnum:]_]|$)|fedora-43|fedora:43|Fedora[[:space:]]*44\+|Fedora[[:space:]]*44[[:space:]]+(and[[:space:]]+)?(later|newer)|Fedora[^[:alnum:]]*(latest|Rawhide)|fedora:(latest|rawhide))'
 
     while IFS= read -r path || [ -n "$path" ]; do
         matches=$(grep -E -i -e "$pattern" "$root/$path" || true)
@@ -201,7 +201,7 @@ EOF
 }
 
 assert_no_live_fedora_support_claims() {
-    pattern='Fedora[[:space:]]*44|F44|fedora[-:]44'
+    pattern='Fedora[[:space:]]*44|(^|[^[:alnum:]_])F44([^[:alnum:]_]|$)|fedora[-:]44'
 
     while IFS= read -r path || [ -n "$path" ]; do
         is_historical_path "$path" && continue
@@ -470,11 +470,11 @@ for invocation in \
     assert_ci_invocation "$invocation"
 done
 
-if current_matches '(Fedora 41|F41|fedora-41|fedora:41)'; then
+if current_matches '(Fedora 41|(^|[^[:alnum:]_])F41([^[:alnum:]_]|$)|fedora-41|fedora:41)'; then
     fail 'forbidden Fedora 41 current claim'
 fi
 
-if current_matches '(Fedora 43|F43|fedora-43|fedora:43)'; then
+if current_matches '(Fedora 43|(^|[^[:alnum:]_])F43([^[:alnum:]_]|$)|fedora-43|fedora:43)'; then
     fail 'exactly one Fedora 44 Cargo-smoke lane and one retained-source RPM build lane are required'
 fi
 
@@ -626,7 +626,7 @@ assert_discovered_claims_are_reviewed
 
 for path in $historical_inputs; do
     matches=$(grep -E -i \
-        -e '(Fedora 41|F41|fedora-41|fedora:41|44\+|Rawhide|Fedora[^[:alnum:]]+latest|track = "latest"|realm-river|vendored[^.]*river|vendors[^.]*river)' \
+        -e '(Fedora 41|(^|[^[:alnum:]_])F41([^[:alnum:]_]|$)|fedora-41|fedora:41|44\+|Rawhide|Fedora[^[:alnum:]]+latest|track = "latest"|realm-river|vendored[^.]*river|vendors[^.]*river)' \
         "$root/$path" || true)
     while IFS= read -r line || [ -n "$line" ]; do
         [ -n "$line" ] || continue

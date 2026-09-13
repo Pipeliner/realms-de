@@ -1,7 +1,7 @@
 # SPEC 0005 — Session startup and desktop integration
 
-- **Status:** Draft — NixOS session-discovery contract accepted; open questions
-  below remain unresolved (`needs-human`)
+- **Status:** Draft — the NixOS session-discovery contract and startup step 3
+  are accepted; open questions below remain unresolved (`needs-human`)
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
   [ADR 0013](../adr/0013-river-window-management-backend.md),
@@ -145,6 +145,10 @@ client it spawns inherits the hole.
 
 #### Step 3 — Wait for `WAYLAND_DISPLAY` to actually exist
 
+**Accepted slice (2026-09-13):** this step's discovery, liveness, deadline and
+early-compositor-death requirements are Accepted independently of the remaining
+M3 draft and its open questions.
+
 Not a sleep. Never a sleep. The socket name is assigned by the compositor and
 must be discovered, in two phases:
 
@@ -158,14 +162,20 @@ must be discovered, in two phases:
    compositor is dispatching. Confirm with a connect-and-roundtrip probe —
    connect, bind `wl_registry`, `wl_display_roundtrip` — and proceed only when
    it returns. `realmctl wait-display --timeout <s>` is the required
-   implementation of this probe and is a hard requirement on `realm-ctl`. Until
-   it exists, the entry falls back to file existence alone and logs
-   `DEGRADED NO-DISPLAY-PROBE`, because file existence is a weaker claim than
-   the one the next step relies on.
+   implementation of this probe and is a hard requirement on `realm-ctl`.
+   `<s>` accepts a finite positive decimal number of seconds. The command starts
+   one monotonic deadline before connecting; the connect, registry bind and
+   round trip all share its remaining time. Success is exit 0 only after the
+   round trip completes; invalid input or any connection, protocol or deadline
+   failure is non-zero. Until the command exists, the entry falls back to file
+   existence alone and logs `DEGRADED NO-DISPLAY-PROBE`, because file existence
+   is a weaker claim than the one the next step relies on.
 
-Both phases run under one deadline (`REALM_WAIT_SECONDS`, default 10) and abort
-early if the compositor pid dies. On expiry: `FATAL NO-SOCKET`, naming the
-runtime directory that was watched.
+Both phases run under one monotonic deadline (`REALM_WAIT_SECONDS`, default 10)
+and abort early if the compositor pid dies. The entry passes only the fractional
+time remaining after discovery to `wait-display`; it observes the compositor
+while the probe runs and terminates the probe if the compositor exits. On
+expiry: `FATAL NO-SOCKET`, naming the runtime directory that was watched.
 
 **If this moves, or is replaced by a fixed delay:** everything downstream
 inherits an empty `WAYLAND_DISPLAY`. `systemctl --user import-environment

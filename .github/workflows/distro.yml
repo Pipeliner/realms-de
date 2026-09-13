@@ -162,15 +162,22 @@ jobs:
       # the NixOS VM; a runner without KVM still evaluates the flake and builds the
       # independent ShellCheck, package, and runtime-validator checks.
       - name: Run the reference build
+        id: reference-build
         run: |
           set -euo pipefail
+          system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
           if [ -e /dev/kvm ]; then
             echo "KVM present — running the full flake check, VM boot test included."
             nix flake check --print-build-logs
+            nix build --print-build-logs \
+              ".#checks.$system.session-boots" \
+              --out-link result-session-boots
+            mkdir -p "$RUNNER_TEMP/realm-session-boots"
+            cp -RL result-session-boots/. "$RUNNER_TEMP/realm-session-boots/"
+            echo "vm_artifacts=true" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::no /dev/kvm on this runner; the NixOS VM boot test is skipped. Everything else is checked."
             echo "The VM boot test needs a KVM-capable runner." >> "$GITHUB_STEP_SUMMARY"
-            system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
             nix flake check --print-build-logs --no-build
             nix build --print-build-logs \
               ".#checks.$system.shellcheck" \
@@ -178,3 +185,18 @@ jobs:
               ".#checks.$system.packaged-binaries" \
               ".#checks.$system.realm-sdd-git-runtime"
           fi
+
+      - name: Upload live Realm VM evidence
+        if: steps.reference-build.outputs.vm_artifacts == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: realm-live-vm-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/realm-session-boots/realm-tiled-desktop.png
+            ${{ runner.temp }}/realm-session-boots/realm-grimoire.png
+            ${{ runner.temp }}/realm-session-boots/capture-provenance.json
+            ${{ runner.temp }}/realm-session-boots/control-get-state.json
+            ${{ runner.temp }}/realm-session-boots/control-tiled-state.json
+            ${{ runner.temp }}/realm-session-boots/control-grimoire-state.json
+            ${{ runner.temp }}/realm-session-boots/control-quit.json

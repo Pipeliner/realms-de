@@ -12,6 +12,11 @@ members = [
     "crates/realm-control",
     "crates/realm-bar",
 ]
+exclude = ["crates/realm-session/src/backend/vendor/wayland-backend"]
+
+[patch.crates-io]
+# Realm-private bounded transport adaptation of exact wayland-backend 0.3.17.
+wayland-backend = { path = "crates/realm-session/src/backend/vendor/wayland-backend" }
 
 [workspace.package]
 version = "0.1.0"

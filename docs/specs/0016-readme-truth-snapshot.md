@@ -1,6 +1,6 @@
 # SPEC 0016 — README truthfulness snapshot
 
-- **Status:** Accepted (2026-08-30)
+- **Status:** Accepted (2026-08-30; live-VM evidence amendment 2026-09-13)
 - **Milestone:** M0
 - **Issue:** [#8](https://github.com/Pipeliner/realms-de/issues/8)
 - **Decisions:** Standing orders S3, S10 and S15
@@ -30,8 +30,21 @@ scripts is defense in depth, not a second documentation gate.
 
 Before the first README divider, realm is identified as a keyboard-first,
 gapless-tiling, Rust-first Wayland desktop environment with zero animations and
-one palette file. The `What makes it different` section uses these exact rule
-headings and links their governing ADRs:
+one palette file. Its hero is a visually inspected compositor framebuffer from
+the installed Realm package running under River 0.4.8 in the NixOS QEMU
+reference VM, and the README also shows the paired grimoire capture. The caption
+identifies that environment as a VM and does not imply physical-hardware,
+native-package-installation or full-MVP verification. It links both the original
+capture provenance and the review correction kept beside the images.
+
+Reported capture dimensions come from each PNG's IHDR, not the resolution
+requested from the VM configuration. The original provenance remains preserved
+verbatim even when it contains incorrect requested-resolution metadata; a
+linked correction records the observed dimensions and explains the discrepancy
+without rewriting the original evidence.
+
+The `What makes it different` section uses these exact rule headings and links
+their governing ADRs:
 
 1. `The ledger is the truth.` — ADR 0001.
 2. `No colour outside palette.toml.` — ADR 0005.
@@ -43,23 +56,31 @@ a client of a compositor.
 ### 2. Status, delivery and map truth
 
 The README states that the roadmap marks M0 **in progress** and that M3 is the
-MVP. It distinguishes present pre-alpha artifacts from a usable desktop:
+MVP. It distinguishes the installed NixOS reference-VM proof from a completed
+or generally usable desktop:
 `realm-core` and `realm-theme` have source and tests; tracked session entry,
 wrapper, systemd-unit, portal-configuration, Nix-module and native-package
 assets exist; `realmctl theme apply`, `theme lint`, and `theme diff` are
 implemented; the `realm-session` crate contains the accepted `WmBackend`
-contract and wire capability type, but none provides a working log-in session
-because the `realm-wm` daemon binary and dispatch loop are not implemented. The
-bar implementation now exists, but live compositor verification is pending.
-Its presence alone does not establish a usable desktop.
+contract, real River adapter, daemon binary, and dispatch loop. The NixOS QEMU
+reference VM verifies the installed session entry reaches a live River
+compositor, the daemon and bar run from the installed package, three ordinary
+Wayland application windows are managed, and the which-key and grimoire
+surfaces render. The captures show foot with the current unthemed/default-font
+presentation, including visible ASCII glyph fallback; the README must not
+present that as the final themed desktop.
+
+That proof does not establish a completed M3 desktop, physical-hardware support,
+native Debian or Fedora installation, or functional portal integration.
 
 For this pre-alpha snapshot, the `crates/realm-session` manifest, library and
-backend contract are checked evidence for the implemented seam. Absence of a
-`realm-wm` binary target, including the conventional `src/bin/realm-wm.rs`, is
-the checked repository evidence for the missing daemon. For `realm-bar`,
-its manifest, binary entrypoint, and render
-contract tests are required artifacts. README status must call it implemented
-while explicitly retaining the pending live compositor verification boundary.
+backend contract, runtime owner, production `src/bin/realm-wm.rs` entrypoint,
+real-socket runtime fixture, and installed NixOS QEMU capture are checked
+evidence for the implemented daemon. README status must name the verified VM
+boundary without broadening it to physical hardware or native packages. For
+`realm-bar`, its manifest, binary entrypoint, render contract tests, and paired
+which-key/grimoire captures are required artifacts. README status must call it
+implemented and verified in that same bounded VM environment.
 The `crates/realm-ctl` manifest and binary source are checked evidence for the
 implemented theme commands; the README must not imply that the full M3 control
 surface or `doctor` exists.
@@ -103,8 +124,8 @@ to be live.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| A1 | Given the README before its first divider, when a visitor reads it, then it contains the five-part identity; given the rule section, it contains the three exact headings with ADR 0001/0005/0009 links. | `docs/test-readme-truth-snapshot.sh` — `intro-and-rules` |
-| A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, present backend seam and pre-alpha assets, absent `realm-wm` daemon binary, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
+| A1 | Given the README before its first divider, when a visitor reads it, then it contains the five-part identity and both inspected VM captures; their caption identifies NixOS QEMU and River 0.4.8, links the original provenance and explicit review correction, reports the PNG-IHDR-derived 1280x800 dimensions, and makes no hardware or final-theme claim; given the rule section, it contains the three exact headings with ADR 0001/0005/0009 links. | `docs/test-readme-truth-snapshot.sh` — `intro-and-rules`, `capture-evidence` |
+| A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, installed-NixOS-VM-verified `realm-wm` and `realm-bar`, remaining hardware/native-package/portal boundary, present pre-alpha assets, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
 | A3 | Given the `2026-08-30T06:18:36Z` snapshot, when each `Needs a human` table row is checked, then it binds one exact issue number, URL and title to a nonempty factual blocker; exactly the 13 accepted rows exist and #34 does not. | `docs/test-readme-truth-snapshot.sh` — `needs-human-snapshot` |
 | A4 | Given the documentation CI job, when it runs on a pull request or push, then uncommented fixture and production-check commands run in the `docs` job without a network call. | `docs/test-readme-truth-snapshot.sh` — `workflow-invocation` |
 

@@ -9,9 +9,8 @@
 #     cd /tmp/realm-kits/realm-debian-0.1.0
 #     dpkg-buildpackage -us -uc -b
 #
-# PRE-ALPHA (0.1.0): this workspace builds `realmctl` for the implemented theme
-# commands. override_dh_auto_install installs every built Realm binary, so
-# realm-wm and realm-bar can land without another packaging change.
+# PRE-ALPHA (0.1.0): this workspace builds `realmctl`, `realm-wm`, and
+# `realm-bar`. override_dh_auto_install installs every built Realm binary.
 #
 # NEEDS-HUMAN — the vendored river (realm-river) this package depends on is NOT
 # built by these rules, and building it is not a trivial recipe:

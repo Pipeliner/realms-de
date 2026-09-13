@@ -44,6 +44,22 @@ require_section "$intro_section" 'keyboard-first, gapless-tiling, Rust-first Way
     'README first screen must state the full project identity'
 require_section "$intro_section" 'zero animations, one palette file' \
     'README first screen must state the motion and palette constraints'
+require_section "$intro_section" 'docs/assets/realm-tiled-desktop.png' \
+    'README first screen must show the tiled live-VM capture'
+require_section "$intro_section" 'docs/assets/realm-grimoire.png' \
+    'README first screen must show the grimoire live-VM capture'
+require_section "$intro_section" 'NixOS QEMU VM' \
+    'README capture caption must identify the NixOS QEMU VM'
+require_section "$intro_section" 'River 0.4.8' \
+    'README capture caption must identify River 0.4.8'
+require_section "$intro_section" '1280×800' \
+    'README capture caption must report PNG-IHDR-derived 1280x800 dimensions'
+require_section "$intro_section" 'docs/assets/capture-provenance.json' \
+    'README capture caption must link the original provenance'
+require_section "$intro_section" 'docs/assets/capture-review.md' \
+    'README capture caption must link the visual review correction'
+require_section "$intro_section" 'not physical-hardware or final-theme evidence' \
+    'README capture caption must retain the hardware and final-theme boundary'
 require_section "$rules_section" '**The ledger is the truth.**' \
     'README must use the exact ledger rule'
 require_section "$rules_section" "**No colour outside \`palette.toml\`.**" \
@@ -84,6 +100,8 @@ for path in \
     crates/realm-session/Cargo.toml \
     crates/realm-session/src/lib.rs \
     crates/realm-session/src/backend.rs \
+    crates/realm-session/src/runtime.rs \
+    crates/realm-session/src/bin/realm-wm.rs \
     crates/realm-bar/Cargo.toml \
     crates/realm-bar/src/main.rs \
     crates/realm-bar/tests/render_contract.rs \
@@ -93,9 +111,58 @@ for path in \
     configs/portal/realm-portals.conf \
     packaging/nix/nixos-module.nix \
     packaging/debian/control \
-    packaging/fedora/realm.spec; do
+    packaging/fedora/realm.spec \
+    docs/assets/realm-tiled-desktop.png \
+    docs/assets/realm-grimoire.png \
+    docs/assets/capture-provenance.json \
+    docs/assets/capture-review.md \
+    docs/assets/control-tiled-state.json \
+    docs/assets/control-grimoire-state.json; do
     [ -e "$root/$path" ] || fail "README truth snapshot artifact is missing: $path"
 done
+
+sha256_of() {
+    sha256sum "$1" | awk '{ print $1 }'
+}
+
+tiled_sha=7a538588a797829871e7e55d8e397eabf7232b979928cadf0a047d30085de695
+grimoire_sha=60777f7287f64063805a70ddd4d82d251f86021075c374deb3115808705132b0
+provenance_sha=0bba679bed1eb33c3e64e1fb805f51afef002ca69f0bca6111e7dd0bed62fa30
+
+[ "$(sha256_of "$root/docs/assets/realm-tiled-desktop.png")" = "$tiled_sha" ] \
+    || fail 'README tiled capture SHA-256 differs from preserved provenance'
+[ "$(sha256_of "$root/docs/assets/realm-grimoire.png")" = "$grimoire_sha" ] \
+    || fail 'README grimoire capture SHA-256 differs from preserved provenance'
+[ "$(sha256_of "$root/docs/assets/capture-provenance.json")" = "$provenance_sha" ] \
+    || fail 'README original capture provenance must remain byte-for-byte preserved'
+
+capture_provenance=$(cat "$root/docs/assets/capture-provenance.json")
+capture_review=$(cat "$root/docs/assets/capture-review.md")
+tiled_state=$(cat "$root/docs/assets/control-tiled-state.json")
+grimoire_state=$(cat "$root/docs/assets/control-grimoire-state.json")
+
+require_section "$capture_provenance" "$tiled_sha" \
+    'README original provenance must bind the tiled capture hash'
+require_section "$capture_provenance" "$grimoire_sha" \
+    'README original provenance must bind the grimoire capture hash'
+require_section "$capture_provenance" '20ef533c6989a5712598b245b937d5d87fa607ec' \
+    'README original provenance must identify the tested merge revision'
+require_section "$capture_review" 'Both actual PNGs are 1280×800' \
+    'README capture review must record PNG-IHDR-derived dimensions'
+require_section "$capture_review" "incorrect ${markdown_tick}1920x1080${markdown_tick} environment suffix" \
+    'README capture review must correct the preserved requested-resolution metadata'
+require_section "$tiled_state" '"windows":3' \
+    'README tiled capture state must retain three managed windows'
+require_section "$tiled_state" '"whichkey":true' \
+    'README tiled capture state must retain visible which-key'
+require_section "$tiled_state" '"grimoire":false' \
+    'README tiled capture state must precede grimoire'
+require_section "$grimoire_state" '"windows":3' \
+    'README grimoire capture state must retain three managed windows'
+require_section "$grimoire_state" '"whichkey":true' \
+    'README grimoire capture state must retain visible which-key'
+require_section "$grimoire_state" '"grimoire":true' \
+    'README grimoire capture state must retain visible grimoire'
 
 grep -F -q -e '#[test]' "$root/crates/realm-theme/src/theme.rs" \
     || fail 'README truth snapshot realm-theme must retain test evidence'
@@ -108,18 +175,22 @@ grep -F -q -e 'pub trait WmBackend' "$root/crates/realm-session/src/backend.rs" 
 
 require_section "$status_section" "${markdown_tick}realmctl theme${markdown_tick}" \
     'README status must name the implemented realmctl theme surface'
-require_section "$status_section" "${markdown_tick}WmBackend${markdown_tick} contract" \
-    'README status must distinguish the implemented backend seam from the missing daemon'
+require_section "$status_section" 'Daemon and real River adapter verified in the installed NixOS QEMU VM' \
+    'README must name installed NixOS VM verification for realm-wm'
 
-require_section "$status_section" 'Live compositor verification pending' \
-    'README must distinguish implemented bar from pending live verification'
-if find "$root/crates" -type f -path '*/src/bin/realm-wm.rs' -print -quit | grep -q .; then
-    fail 'README must not say realm-wm is absent after its binary lands'
-fi
-if grep -F -q -e 'name = "realm-wm"' "$root/crates/realm-session/Cargo.toml"; then
-    fail 'README must not say realm-wm is absent after its binary target lands'
-fi
-
+require_section "$status_section" 'Implemented and verified in the installed NixOS QEMU VM' \
+    'README must name installed NixOS VM verification for realm-bar'
+require_section "$status_section" 'Physical-hardware, native-package installation, and functional portal verification remain pending' \
+    'README status must retain the unverified delivery boundary'
+for stale_claim in \
+    'There is no desktop environment here yet' \
+    'live compositor verification pending' \
+    'There are no screenshots of realm' \
+    'realm does not run yet'; do
+    if printf '%s\n' "$status_section" | grep -F -q -e "$stale_claim"; then
+        fail "README status retains stale pre-live claim: $stale_claim"
+    fi
+done
 while IFS='|' read -r path map_name; do
     [ -n "$path" ] || continue
     [ -e "$root/$path" ] || fail "README repository-map path is missing: $path"

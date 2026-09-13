@@ -8,6 +8,18 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# Built only by packaging/nix/checks.nix. This is deliberately not installed
+# by the Realm package and is not a user-facing control command.
+vm-test-helper = []
+
+[[bin]]
+name = "realm-vm-control"
+path = "tests/support/realm_vm_control.rs"
+required-features = ["vm-test-helper"]
+test = false
+bench = false
+
 [dependencies]
 realm-core = { workspace = true }
 rustix = { workspace = true }

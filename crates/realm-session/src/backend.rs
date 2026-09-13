@@ -1,6 +1,9 @@
 //! Compositor-independent window-management contract.
 
+mod river;
 mod river_protocols;
+
+pub use river::RiverBackend;
 
 use std::num::{NonZeroU32, NonZeroU64, TryFromIntError};
 use std::os::fd::BorrowedFd;

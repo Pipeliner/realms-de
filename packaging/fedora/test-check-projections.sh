@@ -290,6 +290,14 @@ expect_fail_message misnamed-retained-source-rpm-lane "$case_root" \
 
 expect_pass canonical-projections "$tmp_dir/canonical"
 
+case_root=$(clone_case unrelated-action-hash)
+append_line "$case_root/.github/workflows/distro.yml" '      # actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
+expect_pass unrelated-action-hash "$case_root"
+
+case_root=$(clone_case short-release-token)
+append_line "$case_root/README.md" 'F43 is supported.'
+expect_fail_message short-release-token "$case_root" 'exactly one Fedora 44 Cargo-smoke lane'
+
 case_root=$(clone_case current-f41-claim)
 append_line "$case_root/README.md" 'Fedora 41 is a current Realm target.'
 expect_fail_message current-f41-claim "$case_root" 'forbidden Fedora 41 current claim'

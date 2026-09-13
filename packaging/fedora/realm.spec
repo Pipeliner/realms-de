@@ -145,7 +145,7 @@ ln -sf ../realm-wm.service %{buildroot}%{_userunitdir}/realm-session.target.want
 ln -sf ../realm-bar.service %{buildroot}%{_userunitdir}/realm-session.target.wants/realm-bar.service
 
 # Install whichever realm binaries this revision actually built, and record them
-# in a generated file list. This revision builds realmctl.
+# in a generated file list. This revision builds realmctl, realm-wm and realm-bar.
 #
 # A generated list, rather than globs in %%files: rpmbuild treats a %%files glob
 # that matches nothing as a hard error ("File not found: .../realm-wm*"), so
