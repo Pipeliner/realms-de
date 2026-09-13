@@ -214,6 +214,11 @@ Rust inner attributes are not script shebangs. RPM's normal shebang processing
 and debug-source generation remain enabled. A fixture SHALL verify those mode
 and content boundaries, and the native CI RPM build verifies integration.
 
+The retained Yazi runtime fixture SHALL set both the process working directory
+and `PWD` to its controlled directory. Yazi 25.4.8 prefers absolute `PWD` over
+the operating-system directory; an inherited package-build `PWD` must not make
+the fixture inspect the package source tree instead of its sample file.
+
 The Yazi build command SHALL select the `yazi-fm` and `yazi-cli` packages,
 which produce `yazi` and `ya`;
 the Starship build command SHALL select the `starship` binary. Both use their

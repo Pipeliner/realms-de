@@ -30,7 +30,7 @@ def run_yazi(
     pid, descriptor = pty.fork()
     if pid == 0:
         os.chdir(cwd)
-        os.execve(binary, [str(binary)], environment)
+        os.execve(binary, [str(binary)], dict(environment, PWD=os.getcwd()))
 
     fcntl.ioctl(descriptor, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
     output = bytearray()
@@ -127,9 +127,31 @@ def self_test_timeout_reaps_child() -> None:
             )
 
 
+def self_test_working_directory() -> None:
+    with tempfile.TemporaryDirectory(prefix="realm-yazi-cwd-") as temporary:
+        root = Path(temporary)
+        child = root / "checks-cwd"
+        child.write_text(
+            f"#!{sys.executable}\n"
+            "import os, sys, tty\n"
+            "assert os.environ['PWD'] == os.getcwd(), 'stale PWD'\n"
+            "tty.setraw(sys.stdin.fileno())\n"
+            "print('realm-yazi-runtime-visible R', flush=True)\n"
+            "assert sys.stdin.read(1) == 'q'\n",
+            encoding="utf-8",
+        )
+        child.chmod(0o755)
+        config = root / "theme.toml"
+        config.write_text('border_symbol = "R"\n', encoding="utf-8")
+        environment = dict(os.environ, PWD="/")
+        run_yazi(child, config, root, environment, timeout_seconds=1)
+        assert environment["PWD"] == "/", "caller environment was mutated"
+
+
 def main() -> None:
     if sys.argv[1:] == ["--self-test"]:
         self_test_timeout_reaps_child()
+        self_test_working_directory()
         return
     if len(sys.argv) != 6:
         raise SystemExit(
