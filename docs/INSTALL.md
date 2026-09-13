@@ -13,8 +13,9 @@ launch instead of silently choosing another application.
 > CLI against the installed palette and probes installed River. The installed
 > NixOS package has also completed a display-manager login into a graphical
 > Realm session in QEMU, including managed windows, the bar, key discovery and
-> `realmctl doctor`. Ubuntu installation, Fedora graphical login and physical
-> hardware remain unverified.
+> `realmctl doctor`. Ubuntu's exact Realm and private River packages also
+> clean-install together in an empty amd64 Noble root. Native Ubuntu and Fedora
+> graphical login and physical hardware remain unverified.
 >
 > A failed `realm-wm` unit returns the user to the display manager rather than
 > leaving bare river. That failure policy remains required while live native
@@ -37,8 +38,8 @@ target ([ARCHITECTURE.md §5](ARCHITECTURE.md)):
 | Platform | Delivery | State today |
 |---|---|---|
 | NixOS / Nix | flake: `packages.default`, `nixosModules.realm`, `homeManagerModules.realm` | Reference build; its installed display-manager session boots River and the Realm desktop in the QEMU VM. This is not physical-hardware evidence |
-| Ubuntu 24.04 LTS + | `.deb` from `packaging/debian/` | Realm package builds in CI; the complete River-bearing clean-install path is not yet delivered on `main` |
-| Fedora 44 (pre-alpha) | RPM from the retained-only source kit | Builds in a pinned Fedora 44 image; its exact output clean-installs into an empty Fedora 44 root and its installed CLI/palette and River probes pass. Graphical login, portals and SELinux remain unverified |
+| Ubuntu 24.04 LTS + | `.deb` from `packaging/debian/` and `packaging/debian-river/` | CI builds the exact Realm and private River packages and clean-installs them together in an empty amd64 Noble root. Graphical login and package publication remain unverified |
+| Fedora 44 (pre-alpha) | RPM from the retained-only source kit | Builds in a pinned Fedora 44 image; its exact output clean-installs into an empty Fedora 44 root and its installed CLI/palette and River probes pass. Graphical login and SELinux remain unverified; portal effects are verified only in the NixOS reference VM |
 
 Anything else is best-effort. The flake is the definition; the deb and the rpm
 follow from the same tree.
@@ -152,9 +153,12 @@ about physical hardware or every M3 target.
 There is no apt repository or published native artifact yet (`NEEDS-HUMAN` in
 `packaging/debian/control`: PPA, self-hosted apt, or GitHub Releases). All
 package builds and verification run in CI only; this guide does not ask users
-or contributors to reproduce the package toolchain locally. Until CI publishes
-and clean-installs a complete Realm-plus-River artifact set, Ubuntu is an
-intended target rather than a supported installation path.
+or contributors to reproduce the package toolchain locally. CI now builds the
+exact `realm_0.1.0_amd64.deb` and `realm-river_0.4.8-1_amd64.deb`, then
+clean-installs both into an empty amd64 Noble root with normal dependency
+resolution and verifies the installed River version, private ELF resolution,
+palette and session preflight. That is native package-integration evidence,
+not a published installation path or a graphical-login result.
 
 The producer copies only Debian metadata, the staging/linkage helpers, and the
 retained Realm workspace bundle into the package source directory. The checkout
@@ -175,7 +179,7 @@ against noble's package lists):
 
 | Missing | Effect | Current status |
 |---|---|---|
-| `river` (any version) | No compositor — realm cannot start | A private River 0.4.8 closure and native package are being verified in CI; they are not delivered on `main` yet |
+| `river` (any version) | No compositor — realm cannot start | The separate `realm-river` 0.4.8-1 package supplies Realm's private River closure on amd64 Noble; its exact pair with `realm` clean-installs in CI |
 | `yazi` | charon (files) is missing | Packaging remains unresolved |
 | `starship` | thoth's prompt falls back to plain zsh | Packaging remains unresolved |
 
@@ -193,7 +197,10 @@ user units under `/usr/lib/systemd/user/` **plus the
 `realm-session.target.wants/` symlinks**, `/usr/share/xdg-desktop-portal/realm-portals.conf`
 and `/usr/share/realm/palette.toml`, plus the mandatory `/usr/bin/realmctl`,
 `/usr/bin/realm-wm`, and `/usr/bin/realm-bar` runtime payload. A missing binary
-fails the package build.
+fails the package build. The companion `realm-river` package installs River at
+`/usr/lib/realm/bin/river`, its private shared-library closure under
+`/usr/lib/realm/lib`, and its selected libinput quirks under
+`/usr/lib/realm/share/libinput`; it does not replace `/usr/bin/river`.
 
 ---
 
@@ -372,8 +379,11 @@ Realm installs both `xdg-desktop-portal-gtk` and
 `gtk`, ScreenCast and Screenshot to `wlr`, and Inhibit to `none`. Check that the
 `wlr` backend and the installed `realm-portals.conf` are both present before
 changing that policy. `realmctl doctor` checks the routing and advertised
-interfaces. This is not proof of browser screen sharing on physical hardware;
-that acceptance remains unverified.
+interfaces. The installed NixOS reference VM has completed the real
+CreateSession/SelectSources/Start sequence and consumed a nonempty frame from
+the restricted PipeWire node returned by xdpw. That proves one emulated River
+output reaches one portal client; browser picker behavior and useful capture on
+physical hardware remain unverified under SPEC 0005 A15.
 
 ### Tofu boxes instead of runes, or `𓂃` renders as a rectangle
 
@@ -472,16 +482,14 @@ is a separate session-startup bug; theme apply does not repair it.
 
 ---
 
-## Open decisions (`NEEDS-HUMAN`)
+## Open decisions and acceptance (`NEEDS-HUMAN`)
 
-These are recorded in the packaging files themselves, each with its options.
-None of them block building from source today.
+These remaining choices and physical acceptance checks do not invalidate the
+bounded CI evidence above.
 
-| Decision | Where | Options |
+| Decision or acceptance | Where | Status / options |
 |---|---|---|
-| How a River 0.4-compatible source is provided for the deb | `packaging/debian/rules` | Build from an upstream tag; package an upstream binary; require a PPA; raise the minimum Ubuntu version |
 | Package hosting | `packaging/debian/control`, spec | PPA / self-hosted apt / GitHub Releases; COPR / dist-git / release tarballs |
-| Maintainer identity | `packaging/debian/control`, `changelog`, spec, `SECURITY.md` | `vadim.evard@gmail.com` is the reachable package and private-security fallback contact |
 | Idle and lock | `packaging/systemd/realm-session.target` | SPEC 0005 OQ-1: river 0.4 speaks `ext-session-lock-v1`, so the locker must too — gtklock (recommended), waylock (Zig), a new-enough swaylock, or `realm-ward` in M6. The idle defaults are a user-visible security decision and are not guessed |
-| ScreenCast actually working under river | `configs/portal/realm-portals.conf` | SPEC 0005 OQ-2: whether river 0.4.8 exports `wlr-screencopy-unstable-v1` and whether xdpw works with external window management. Routed to `wlr`; **unverified**, and screen sharing stays unproven until someone tests it on hardware |
+| Physical browser ScreenCast acceptance | SPEC 0005 A15 | The NixOS reference VM has consumed a real xdpw/PipeWire frame from an emulated River output. A real browser picker and useful stream on physical hardware remain unverified |
 | How river is pinned in Nix | `packaging/nix/support.nix` | Pin via the nixpkgs input (current); or a tag-pinned input needing a second, human-produced `zigDeps` hash |
