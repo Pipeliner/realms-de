@@ -49,8 +49,28 @@ def validate(path: Path) -> None:
     )
     if forbidden.search(native):
         fail("native VM job contains a forbidden package build command")
-    if "packaging/native-vm/run-native-session-vm.sh" not in native:
+    harness = "          packaging/native-vm/run-native-session-vm.sh"
+    privileged_harness = re.compile(
+        r"(?m)^\s*sudo\s+(?:--\S+\s+)*"
+        r"(?:packaging/native-vm/run-native-session-vm\.sh|qemu-system)"
+    )
+    if privileged_harness.search(native):
+        fail("native VM harness and QEMU must remain unprivileged")
+    if harness not in native:
         fail("native VM job does not run the admitted KVM harness")
+    if "            acl \\\n" not in native:
+        fail("native VM job does not install its explicit ACL prerequisite")
+    kvm_admission = """\
+          if [[ -c /dev/kvm && (! -r /dev/kvm || ! -w /dev/kvm) ]]; then
+            sudo setfacl -m "u:$(id -u):rw" /dev/kvm
+          fi
+"""
+    if native.count("setfacl") != 1 or kvm_admission not in native:
+        fail("native VM job does not use the scoped runner-UID KVM ACL")
+    if native.index(kvm_admission) > native.index(harness):
+        fail("runner-UID KVM ACL must precede the KVM harness")
+    if re.search(r"(?m)^\s*(?:sudo\s+)?(?:chmod|chown)\s+.*?/dev/kvm", native):
+        fail("native VM job must not change /dev/kvm ownership or mode")
     if "if: always()" not in native or "realm-native-session-${{ matrix.target }}-${{ github.sha }}" not in native:
         fail("native VM failure evidence is not retained")
     if "python3 packaging/native-vm/check_workflow.py .github/workflows/distro.yml" not in fast_contract:

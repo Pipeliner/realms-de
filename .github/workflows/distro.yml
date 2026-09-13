@@ -271,6 +271,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes \
+            acl \
             cloud-image-utils \
             qemu-system-x86 \
             qemu-utils \
@@ -299,6 +300,9 @@ jobs:
           set -euo pipefail
           id
           ls -l /dev/kvm || true
+          if [[ -c /dev/kvm && (! -r /dev/kvm || ! -w /dev/kvm) ]]; then
+            sudo setfacl -m "u:$(id -u):rw" /dev/kvm
+          fi
           packaging/native-vm/run-native-session-vm.sh \
             '${{ matrix.target }}' \
             "$RUNNER_TEMP/realm-native-packages" \

@@ -63,6 +63,18 @@ package. Ubuntu receives exactly one `realm` deb and one `realm-river` deb;
 Fedora receives exactly one RPM whose queried name is `realm`. The VM job never
 runs Cargo, `dpkg-buildpackage`, `rpmbuild`, or a Realm source-kit producer.
 
+## Host KVM admission
+
+The VM harness and QEMU run as the unprivileged GitHub Actions runner. On an
+ephemeral runner where `/dev/kvm` is a character device but that runner lacks
+read/write access, the workflow may grant `rw` only to the invoking runner UID
+with a POSIX ACL on that exact device before invoking the harness. The workflow
+must install the ACL tool explicitly. It must not use `chmod` or `chown`,
+broaden access beyond the runner ACL, invoke the harness or QEMU as root, fall
+back to TCG, or skip the matrix entry. A missing device, an ACL failure, or
+read/write access that remains unavailable is a hard failure under the same
+bounded harness contract.
+
 ## Guest contract
 
 1. Cloud-init creates unprivileged user `alice` with an ephemeral CI SSH key.
@@ -103,7 +115,7 @@ runs Cargo, `dpkg-buildpackage`, `rpmbuild`, or a Realm source-kit producer.
 | N2 | Given same-run producer artifacts, when an artifact is absent, duplicated, renamed, from another commit, or has the wrong package identity, then the VM fails before guest installation; the VM workflow contains no build command | pure artifact-inventory fixture plus workflow review |
 | N3 | Given the Ubuntu artifact pair and pinned Ubuntu image, when SDDM autologins `alice`, then logind reports a non-remote Wayland session from the installed Realm entry, `/proc` identifies the private River and installed Realm WM, all three Realm user units are active, `GetState` succeeds, doctor meets §Guest contract 6, and evidence is retained | `native-session-vm (ubuntu-24.04-x86_64)` |
 | N4 | Given the Fedora RPM and pinned Fedora image, when SDDM autologins `alice`, then the same session/control/doctor assertions pass with Fedora's `/usr/bin/river`; the evidence records the unchanged SELinux mode without inspecting AVCs or claiming policy compatibility | `native-session-vm (fedora-44-x86_64)` |
-| N5 | Given a runner without `/dev/kvm`, a dead QEMU process, unreachable SSH, failed login, or incomplete probe, then the matrix entry fails rather than skipping or reporting reduced evidence; cleanup remains bounded and uploads diagnostics on failure | VM harness timeout/failure fixtures and workflow artifact step with `if: always()` |
+| N5 | Given a runner without `/dev/kvm`, with `/dev/kvm` still inaccessible after the narrowly scoped runner-UID ACL, a dead QEMU process, unreachable SSH, failed login, or incomplete probe, then the matrix entry fails rather than elevating QEMU, falling back to TCG, skipping, or reporting reduced evidence; cleanup remains bounded and uploads diagnostics on failure | VM harness timeout/failure fixtures, workflow KVM-admission fixture, and artifact step with `if: always()` |
 
 ## Evidence boundary
 
