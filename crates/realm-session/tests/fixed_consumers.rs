@@ -18,8 +18,14 @@ impl RunningStub {
     fn wait_until_stopped(&mut self) -> u32 {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Ok(raw) = fs::read_to_string(&self.pid_path) {
-                return raw.trim().parse().unwrap();
+            if let (Ok(raw_pid), Ok(raw_args), Ok(raw_selectors)) = (
+                fs::read_to_string(&self.pid_path),
+                fs::read_to_string(&self.args_path),
+                fs::read_to_string(&self.selectors_path),
+            ) {
+                if !raw_args.is_empty() && !raw_selectors.is_empty() {
+                    return raw_pid.trim().parse().unwrap();
+                }
             }
             if let Some(status) = self.child.try_wait().unwrap() {
                 panic!("fixed consumer exited before exec fixture stopped: {status}");
