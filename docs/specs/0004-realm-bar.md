@@ -286,7 +286,8 @@ specified here from the vocabulary the rest of the design already uses.
   `u undo`, `w which-key`, `? grimoire`, `p theme` and `esc nav`.
 - Each row: `⊞ mod` + `hint_key` in `text.bright`, `label` in `text.mid`, and
   the action spelled out in `text.dim` at `typography.size_micro`
-  (`spawn realm-term`, `orbit 1-6`, `set-layout mono`). Two columns at 720 px.
+  (`terminal`, `orbit 1-6`, `set-layout mono`). The typed terminal action is
+  labeled directly rather than rendered as a raw Spawn argv. Two columns at 720 px.
 - Footer in `text.faint` at `typography.size_micro`: the binding count and
   `? or esc dismiss`.
 

@@ -342,6 +342,11 @@ EOF
       river_pid = machine.succeed("pgrep -u alice -xo river").strip()
       machine.succeed(f"test \"$(readlink /proc/{wm_pid}/exe)\" = ${realm}/bin/realm-wm")
       machine.succeed(f"test \"$(readlink /proc/{bar_pid}/exe)\" = ${realm}/bin/realm-bar")
+      # The unit supplies its own narrow PATH. Its packaged environment must
+      # therefore carry both fixed consumers rather than relying on the system
+      # profile or an interactive shell.
+      machine.succeed("grep -F -q '${pkgs.foot}/bin' /etc/systemd/user/realm-wm.service")
+      machine.succeed("grep -F -q '${pkgs.fuzzel}/bin' /etc/systemd/user/realm-wm.service")
 
       # Check the user-manager publication against the installed daemon that
       # inherited it. A client started without this value cannot map a surface.

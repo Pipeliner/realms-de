@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 realm-core = { workspace = true }
 realm-control = { workspace = true }
+realm-theme = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -22,5 +23,6 @@ wayland-backend = "=0.3.17"
 wayland-scanner = "=0.31.11"
 
 [dev-dependencies]
+tempfile = "3"
 trybuild = "=1.0.119"
 wayland-backend = { version = "=0.3.17", features = ["realm_test"] }

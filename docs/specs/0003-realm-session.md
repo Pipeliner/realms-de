@@ -855,8 +855,8 @@ session, and the frame budgets in
 - `RealmState` derivation, JSON encoding and fan-out, which are cheap but are
   not needed before `manage_finish` and therefore must not precede it.
 
-**The specified architecture: one event-loop thread, one worker thread, no
-shared mutable state.**
+**The specified architecture: one event-loop thread, one worker thread and one
+bounded child reaper.**
 
 - The **event loop** thread owns the river connection, the `Ledger`, the
   `Keymap`, the mode machine, the last-applied backend state, the control-socket
@@ -864,7 +864,7 @@ shared mutable state.**
   a single `poll(2)` over: river's Wayland fd, the listener, each client fd, a
   `timerfd` for the clock, an armed-only-when-held `timerfd` for key repeat, and
   an `eventfd` the worker signals.
-- The **worker** thread owns nothing and receives process jobs over a bounded
+- The **worker** thread owns process creation and receives process jobs over a bounded
   `MAX_WORKER_JOBS = 256` FIFO plus one separate replaceable snapshot slot.
   The snapshot slot does not consume process-job capacity, so a due snapshot is
   accepted even when all 256 process slots are reserved or committed; total
@@ -887,6 +887,20 @@ shared mutable state.**
   immediate interest while more remain. Maximum and maximum-plus-one behavior
   for both queues is tested. Future D-Bus work must choose an explicit
   coalescing/admission rule before entering this mailbox.
+- The **child reaper** receives each successful worker-owned `Child` through a
+  bounded 256-slot channel, owns only those exact PIDs, and calls nonblocking
+  `try_wait` across the bounded live set off both the event loop and worker.
+  While the set is nonempty, a bounded receive timeout supplies a cleanup
+  cadence rather than synchronizing launch success; a new child wakes it
+  immediately. One long-lived terminal therefore never serializes reclamation
+  of a later short child, and it cannot steal a child awaited by another owner.
+  One atomic counter is the sole shared state: commit acquires capacity and
+  spawn failure or successful reap releases it. The existing 256 process slots
+  consequently bound queued, running and unreaped children together, as well as
+  the channel and reaper set. The worker reports the existing spawn boundary
+  immediately and its fence does not wait for application exit. An impossible
+  ownership-channel overflow or unexpected `try_wait` failure terminates the
+  daemon rather than silently retaining zombies.
 
   At the adapter's first observation of the terminal `QuitPending` boundary,
   after all pre-Quit effect reservations have committed, explicit logout calls
@@ -1790,7 +1804,7 @@ Each row is one happy path and becomes one test.
 | A11a | Given empty, release-only, stop-repeat, or modifier-only policy turns, when Session reduces them, then each receives exactly one bounded response; release and `BindingRepeatStopped` disarm repeat irreversibly, modifier state follows report order, and a semantic no-op still answers without publication. Any input event naming an unconfigured binding id fails fatally before partial reduction or response | `session::tests::non_action_policy_turns_are_answered_exactly_once`, `session::tests::unknown_binding_id_is_fatal_before_partial_reduction` |
 | A11b | Given the exact successful held binding is still the sole armed target, configured, repeatable, and enabled by committed binding policy, when its timer fires while Session is Idle, then `fire_key_repeat()` rechecks those facts and either finalizes a local result or requests one internal-origin turn with a fresh response ticket but no pending action or ActionCompletion. A later successfully finalized repeatable press replaces/restarts the target; a noncurrent release cannot disarm it, and releasing the replacement never resumes an older held binding. Release, repeat-stop, or finalized mode disable of the current target makes firing an unchanged no-op. A tick during any active backend transaction is consumed unchanged without a ticket/request while leaving the target armed for a later scheduled tick. Every successful update emits one immediate Preserve/Arm/Disarm directive: a finalized same/new press restarts at the Accepted 600 ms delay and 40 ms interval; current release/stop, disabling mode, and Quit disarm before delayed effects. Any backend failure is fatal without an ordinary update. The MVP default marks only Focus and Swap bindings repeatable | `session::tests::armed_repeat_requests_internal_turn_without_action_completion`, `session::tests::released_repeat_is_noop_before_request`, `session::tests::new_repeatable_press_replaces_without_resuming_older_target`, `session::tests::mode_change_disables_armed_repeat_target`, `session::tests::repeat_tick_during_internal_in_flight_is_consumed_without_second_request`, `session::tests::repeat_timer_directives_cover_final_press_pending_release_mode_and_quit`, `keys::tests::only_directional_focus_and_swap_bindings_repeat`; #38 `realm_session::tests::repeat_timer_directives_program_single_timerfd_exactly`, `realm_session::tests::clock_and_repeat_overruns_coalesce_without_catchup` |
 | A12 | Given simultaneous backend, repeat timer, clock timer, worker, and control readiness including a subscriber whose socket buffer is full, when the real #38 combined loop runs with #40's River backend, then one bounded ingress epoch plus all already-admitted immediate dispatch/dequeue work and the complete policy response preempt every other source. The loop does not chase merely fresh level-readable bytes, so continuous new ingress cannot starve one timer/worker/control quantum. An already admitted current-target release/stop crosses ingress, dispatch, and dequeue before repeat; repeat and clock overruns coalesce without catch-up; worker results remain bounded; at most one control quantum follows; backend readiness is zero-polled between control operations; and `manage_finish` is flushed within the key-press budget before any subscriber write | #38 `realm_session::tests::combined_loop_orders_all_ready_sources_once`, `realm_session::tests::received_release_crosses_ingress_dispatch_dequeue_before_repeat`, `realm_session::tests::continuous_backend_readability_yields_after_one_admitted_epoch`, `realm_session::tests::repeat_overrun_during_pending_work_is_dropped_without_catchup`; #40 `backend::tests::policy_response_orders_manage_then_render_and_finishes_once`; #65 `realm_session::tests::key_to_manage_finish_meets_four_millisecond_budget_on_reference_linux` |
-| A12a | Given 256 admitted process jobs, a due snapshot, a full 256-result queue, or a sealed worker, when #38 performs nonblocking admission/service, then the 256 process slots and one replaceable snapshot slot remain distinct, process job 257 fails atomically, the due snapshot remains accepted/coalesced, a full result queue blocks only the worker while the event loop drains, the capacity-free fence can still seal, and all post-seal jobs are rejected | #38 `realm_session::tests::worker_process_queue_accepts_256_and_rejects_257_atomically`, `realm_session::tests::worker_result_queue_blocks_worker_not_event_loop`, `realm_session::tests::snapshot_slot_is_separate_replaceable_and_accepted_beside_256_process_jobs`, `realm_session::tests::worker_seal_rejects_new_jobs_without_consuming_queue_capacity` |
+| A12a | Given 256 admitted process jobs, a due snapshot, a full 256-result queue, a sealed worker, or a long-lived child followed by a short-lived child, when #38 performs nonblocking admission/service, then the 256 process slots and one replaceable snapshot slot remain distinct, process job 257 fails atomically, the due snapshot remains accepted/coalesced, a full result queue blocks only the worker while the event loop drains, the capacity-free fence can still seal, and all post-seal jobs are rejected. The sole off-loop reaper reaps whichever owned child exits without waiting for the older child, and no exited worker child remains a zombie. Spawn failure and successful reap each release the owned-child slot; a running or unreaped child retains it | #38 `realm_session::tests::worker_process_queue_accepts_256_and_rejects_257_atomically`, `realm_session::tests::worker_result_queue_blocks_worker_not_event_loop`, `realm_session::tests::snapshot_slot_is_separate_replaceable_and_accepted_beside_256_process_jobs`, `realm_session::tests::worker_seal_rejects_new_jobs_without_consuming_queue_capacity`, `worker::tests::worker_reaps_a_later_short_child_while_an_older_child_is_alive`, `worker::tests::failed_spawn_releases_its_owned_child_capacity` |
 | A13 | Given subscriber output whose last positive send was two seconds ago, when the #38 loop supplies the exact deadline to SPEC 0007, then that subscriber is closed without waiting for another state change and remaining subscribers continue | Transport deadline evidence belongs to SPEC 0007 A16; #38 `realm_session::tests::subscriber_deadline_expires_without_new_state` |
 | A14 | Given a client that sends `Request::Hello` with a version other than `PROTOCOL_VERSION`, when the session receives it, then it answers `Response::Hello` carrying its own version and then closes the connection | Delegated to SPEC 0007 A14: `realm_control::tests::protocol_state_machine_is_total`, `realm_control::control_socket_linux::mismatched_hello_discards_a_pipelined_request_and_sends_only_hello` |
 | A14a | Given `XDG_RUNTIME_DIR` is absent, relative, or not a directory, when `realm-session` starts or a production client resolves the control socket, then it fails with `IpcPathError::MissingRuntimeDir`, never probes `/tmp`, and ignores `REALM_SOCKET` | Delegated to SPEC 0007 A1/A2: `realm_control::tests::runtime_capability_rejects_every_unsafe_input_and_openat2_failure`, `realm_control::tests::server_creates_realm_exactly_once_under_scoped_umask`, and `realm_control::tests::client_endpoint_missing_realm_is_retryable_and_creates_nothing` |

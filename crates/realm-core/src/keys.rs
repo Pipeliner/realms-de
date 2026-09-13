@@ -39,6 +39,8 @@ impl Mode {
 pub enum Action {
     /// Launch a program by argv.
     Spawn(Vec<String>),
+    /// Open Realm's fixed themed terminal consumer.
+    Terminal,
     /// Open the hecate launcher.
     Launcher,
     /// Move focus along the ledger.
@@ -118,13 +120,7 @@ impl Default for Keymap {
     /// The keymap the reference which-key strip advertises, in strip order.
     fn default() -> Self {
         let mut bindings = vec![
-            b(
-                "Return",
-                "↵",
-                "thoth",
-                Action::Spawn(vec!["realm-term".into()]),
-                true,
-            ),
+            b("Return", "↵", "thoth", Action::Terminal, true),
             b("d", "d", "hecate", Action::Launcher, true),
             b(
                 "b",
@@ -217,6 +213,19 @@ mod tests {
     #[test]
     fn default_keymap_has_no_conflicts() {
         assert!(Keymap::default().conflicts().is_empty());
+    }
+
+    #[test]
+    fn default_terminal_action_has_the_stable_typed_wire_shape() {
+        let keymap = Keymap::default();
+        let terminal = keymap.resolve("Return", Mode::Nav).unwrap();
+
+        assert_eq!(terminal.action, Action::Terminal);
+        assert!(!terminal.repeatable);
+        assert_eq!(
+            serde_json::to_string(&terminal.action).unwrap(),
+            r#"{"action":"terminal"}"#
+        );
     }
 
     #[test]
