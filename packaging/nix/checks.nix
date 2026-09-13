@@ -280,6 +280,7 @@ EOF
       import datetime as dt
       import hashlib
       import json
+      import re
       import shlex
       from pathlib import Path
       from test_driver.errors import RequestedAssertionFailed
@@ -704,6 +705,7 @@ EOF
           [
               "foot",
               f"--config={generation_root}/foot/foot.ini",
+              "--log-level=error",
               "--override=key-bindings.spawn-terminal=none",
               "zsh",
           ],
@@ -725,7 +727,38 @@ EOF
           zsh_environment["YAZI_CONFIG_HOME"]
           == f"{generation_root}/yazi"
       ), zsh_environment
-      machine.wait_for_text("alice@machine :: ~ ~%", timeout=OCR_TIMEOUT)
+      prompt = machine.succeed(
+          "cd /home/alice && "
+          + shlex.join([
+              "sudo",
+              "-u",
+              "alice",
+              "env",
+              "HOME=/home/alice",
+              "TERM=foot",
+              f"STARSHIP_CONFIG={generation_root}/starship.toml",
+              "STARSHIP_SHELL=zsh",
+              "${pkgs.starship}/bin/starship",
+              "prompt",
+              "--status",
+              "0",
+              "--cmd-duration",
+              "0",
+              "--keymap",
+              "viins",
+          ])
+      )
+      plain_prompt = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", prompt)
+      assert plain_prompt == "alice@machine :: ~ ~% ", repr(plain_prompt)
+
+      # OCR is useful for user-visible proof but cannot reliably join adjacent
+      # differently coloured prompt spans. Keep the unmodified prompt in the
+      # framebuffer, then prove the real shell is accepting and executing input
+      # with a marker that does not occur contiguously in the command itself.
+      machine.wait_for_text("alice@machine", timeout=OCR_TIMEOUT)
+      machine.screenshot("realm-terminal-prompt")
+      machine.send_chars("printf 'REALM-%s-READY\\n' SHELL\n")
+      machine.wait_for_text("REALM-SHELL-READY", timeout=OCR_TIMEOUT)
 
       machine.succeed(
           "install -d -o alice -g users -m 0755 /tmp/realm-yazi-proof && "

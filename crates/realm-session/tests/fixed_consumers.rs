@@ -153,6 +153,7 @@ fn fixed_consumers_exec_exact_generation_argv_environment_and_hold_the_ordinary_
                     "--config={}",
                     generation_path.join("foot/foot.ini").display()
                 ),
+                "--log-level=error".to_owned(),
                 "--override=key-bindings.spawn-terminal=none".to_owned(),
                 "zsh".to_owned(),
             ]

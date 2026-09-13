@@ -78,6 +78,10 @@ allowlists.
    `.bare`, or it fails. A raw contiguous six- or eight-ASCII-hex-digit
    candidate, a placeholder without `.bare`, and extra non-whitespace bytes
    fail. Other Foot sections and numeric settings are not colour positions.
+   The shipped section remains `[colors]`: it is the common accepted grammar
+   of Ubuntu 24.04's Foot 1.16 and newer Foot releases. Foot 1.26 introduced
+   `[colors-dark]`, so using that newer spelling in the one shared generated
+   file would make the supported Ubuntu parser reject the configuration.
 5. In `fuzzel.ini`, every value in `[colors]` is exactly one complete Realm
    placeholder expression ending in `.bare`, immediately followed by lowercase
    ASCII `ff`, with optional surrounding whitespace only. A raw `RRGGBBAA`, a

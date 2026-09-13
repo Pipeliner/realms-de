@@ -223,6 +223,7 @@ jobs:
           path: |
             ${{ runner.temp }}/realm-session-boots/realm-tiled-desktop.png
             ${{ runner.temp }}/realm-session-boots/realm-grimoire.png
+            ${{ runner.temp }}/realm-session-boots/realm-terminal-prompt.png
             ${{ runner.temp }}/realm-session-boots/capture-provenance.json
             ${{ runner.temp }}/realm-session-boots/realmctl-doctor.json
             ${{ runner.temp }}/realm-session-boots/control-get-state.json
