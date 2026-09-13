@@ -1,7 +1,7 @@
 # SPEC 0011 — Immutable theme activation generations
 
-- **Status:** Accepted (2026-08-29; fixed-consumer bootstrap and retained
-  terminal-profile refinements 2026-09-13)
+- **Status:** Accepted (2026-08-29; fixed-consumer bootstrap, packaged-Foot
+  parser and retained terminal-profile refinements 2026-09-13)
 - **Milestone:** M1
 - **Decision:** [ADR 0017](../adr/0017-immutable-theme-activation-generations.md)
 - **Issue:** [#131](https://github.com/Pipeliner/realms-de/issues/131)
@@ -518,6 +518,15 @@ Consumer fixtures must prove these boundaries against the packaged
 versions; a package whose `--config=PATH`,
 `--override=[SECTION.]KEY=VALUE`, or `spawn-terminal=none` grammar differs is
 unsupported rather than launched without the exact binding.
+The `foot/foot.ini` published from the current built-in catalogue must also
+pass the packaged Foot version's non-graphical
+`--check-config --config=<N>/foot/foot.ini` parser before the VM accepts the
+terminal launch path. A Foot process that maps a window while reporting a
+rejected configuration key is not evidence of a coherent newly generated
+themed terminal. This parser check does not reinterpret or repair an existing
+valid sealed generation: bootstrap retains its historical bytes under the
+rules below, and explicit catalogue update or migration selection remains
+issue #134's responsibility.
 
 A current generation published before the terminal-profile output set existed
 remains a valid selectable generation. Bootstrap neither repairs nor replaces
@@ -622,6 +631,7 @@ candidate with a partially validated or mixed generation.
 | G13 | Given a fresh login whose final configuration root is absent below an existing safely opened parent, a present configuration root with cleanly absent current, a valid current, malformed current, or an absent pointer with recovery evidence, when session bootstrap ensures current, then only clean absence descriptor-relatively creates the final root if needed and performs one serialized built-in apply; valid current is byte-for-byte retained without apply or palette seed, and every malformed/inconsistent case fails readiness without repair, retry, newest-generation selection, or unthemed fallback. A concurrent valid apply that wins the lock is retained rather than overwritten. |
 | G14 | Given either fixed consumer and a later pointer switch from N to N+1, when Realm launches it, then its exact argv contains one `--config=` path below its fully validated selected N, terminal argv also contains the exact `spawn-terminal=none` override and final `zsh`, its process lease exists durably before exec and remains live for that unchanged PID until the consumer exits, and it never reads an ordinary mutable foot/fuzzel config as fallback. Terminal validates the complete output set and exports only N-derived selectors before exec; zsh/Starship/Yazi/btop visibly consume N, while the fuzzel-started application is explicitly not reported as generation-selected. |
 | G15 | Given an old complete N or a pre-profile valid N, when apply publishes N+1, Foot exits and more generations are published, then production apply/recovery/startup exposes no generation-reclamation operation and every valid committed tree remains byte-for-byte present. Terminal against the old complete N continues to consume N; terminal against the pre-profile N refuses the missing exact output before exec and the explicit apply path makes a later complete generation launchable. The test-only GC model is not linked as a production API. |
+| G16 | Given a clean first login that publishes a generation from the current built-in catalogue, when the installed Foot parser checks that generation's `foot/foot.ini`, then it accepts the complete file without a rejected configuration key. The check neither repairs nor replaces an existing valid historical generation. |
 
 ## Boundaries
 
