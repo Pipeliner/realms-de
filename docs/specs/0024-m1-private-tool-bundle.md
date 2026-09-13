@@ -1,6 +1,7 @@
 # SPEC 0024 — M1 private Yazi and Starship tool bundle
 
-- **Status:** Accepted (2026-08-31; amended 2026-09-13)
+- **Status:** Accepted (2026-08-31; retained-tool and terminal GTK/Qt
+  refinements 2026-09-13)
 - **Milestone:** M1
 - **Issue:** [#134](https://github.com/Pipeliner/realms-de/issues/134)
 - **Refines:** [SPEC 0023](0023-m1-tool-source-intake.md)
@@ -336,17 +337,20 @@ terminals keep their original selectors and receive no live reload.
 | B4 | Given a rendered Realm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it, then a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Realm feature. | To be implemented: rendered-config runtime fixture. |
 | B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | To be implemented: dependency-license fixture. |
 | B6 | Given a complete current generation N, when the typed terminal binding launches Foot and zsh, then exact argv/environment select only N, Starship renders Realm's prompt, Yazi loads all three generation-local files, `Ctrl+p` launches btop with N's exact config/theme arguments, and both TUI screens visibly use their selected Realm configuration. Given a valid pre-profile generation, terminal refuses without mutation; after explicit apply a complete later generation launches successfully. User configuration remains untouched, prior committed generations remain present, and no mutable/live-reload path is used. | `fixed_consumers` exact profile tests; installed Nix terminal/Yazi/btop fixture |
+| B7 | Given a complete N and no explicit user qt6ct override, when packaged GTK 3, GTK 4 and Qt 6 applications start below N's selected terminal, then the actual toolkit/plugin loaders consume N's named GTK CSS and N's qt6ct colour scheme, including actual qt6ct expansion of `$REALM_GENERATION`, and the VM retains nonempty application frames. A pre-existing qt6ct configuration remains byte-identical and is reported as an override rather than Realm-palette success. | fixed-consumer selector tests; packaged parser probes; installed Nix application fixture |
 
 ## Boundaries and follow-on work
 
 This specification completes the design required for SPEC 0023 A2 only. It
 does not claim A2 is implemented, does not establish target availability (A3),
 and does not establish immutable generation update or rollback behavior (A4).
-It establishes only the terminal-scoped zsh/Starship/Yazi/btop integration
-above. GTK and Qt process activation, arbitrary desktop/profile launches,
-lifecycle-owned descendants, production generation reclamation, and complete
-update/rollback policy remain #117/#135 follow-on work and are not satisfied by
-this slice.
+It establishes the terminal-scoped zsh/Starship/Yazi/btop integration and the
+terminal-descendant GTK 3/GTK 4/Qt 6 tranche above. Arbitrary desktop/profile
+launches, Fuzzel/browser children, D-Bus-activated services, existing-owner Qt
+behaviour, Qt 5/Kvantum, lifecycle-owned descendants, production generation
+reclamation, and complete update/rollback policy remain #117/#133/#135
+follow-on work and are not satisfied by this slice. In particular, B7 is not a
+claim that the whole default desktop is coherently themed.
 
 No public package repository, binary distribution, signing service, mirror,
 container registry, backend, or network service is introduced.

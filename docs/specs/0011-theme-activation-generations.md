@@ -1,7 +1,7 @@
 # SPEC 0011 — Immutable theme activation generations
 
-- **Status:** Accepted (2026-08-29; fixed-consumer bootstrap and retained
-  terminal-profile refinements 2026-09-13)
+- **Status:** Accepted (2026-08-29; fixed-consumer bootstrap, retained
+  terminal-profile, and terminal-descendant GTK/Qt refinements 2026-09-13)
 - **Milestone:** M1
 - **Decision:** [ADR 0017](../adr/0017-immutable-theme-activation-generations.md)
 - **Issue:** [#131](https://github.com/Pipeliner/realms-de/issues/131)
@@ -484,15 +484,51 @@ rejected generation is a visible launch failure, never permission to omit
 The terminal executor validates this complete manifest-listed set before exec:
 `foot/foot.ini`, `zsh/.zshrc`, `starship.toml`, `yazi/yazi.toml`,
 `yazi/keymap.toml`, `yazi/theme.toml`, `btop/btop.conf`, and
-`btop/themes/realm.theme`. It exports exactly these generation selectors in
-addition to its inherited environment:
+`btop/themes/realm.theme`. The terminal-descendant GTK/Qt tranche additionally
+requires `share/themes/realm/gtk-3.0/gtk.css`,
+`share/themes/realm/gtk-4.0/gtk.css`, `qt6ct/qt6ct.conf`, and
+`qt6ct/colors/realm.conf`. It exports exactly these generation selectors and
+toolkit selectors in addition to its inherited environment:
 
 ```text
 REALM_GENERATION=<N>
 ZDOTDIR=<N>/zsh
 STARSHIP_CONFIG=<N>/starship.toml
 YAZI_CONFIG_HOME=<N>/yazi
+GTK_THEME=realm
+XDG_DATA_DIRS=<N>/share:<inherited XDG_DATA_DIRS, or /usr/local/share:/usr/share when unset or empty>
+QT_QPA_PLATFORMTHEME=qt6ct
+XDG_CONFIG_DIRS=<N>:<inherited XDG_CONFIG_DIRS, or /etc/xdg when unset or empty>
 ```
+
+The executor refuses before target exec when N is not valid UTF-8 or contains
+the colon separator used by the XDG search lists. It prepends exactly one N
+entry and otherwise preserves a non-empty inherited search list byte-for-byte;
+it does not replace `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `HOME`, or any ordinary
+application configuration path.
+
+`GTK_THEME=realm` selects the generation-local named theme through the
+prepended data root. The GTK 3 and GTK 4 `gtk.css` files are byte-identical to
+the corresponding palette-rendered Realm CSS outputs; they are regular sealed
+outputs, not links or mutable imports.
+
+The generation-local `qt6ct/qt6ct.conf` is byte-exact UTF-8 with one final LF:
+
+```ini
+[Appearance]
+custom_palette=true
+color_scheme_path=$REALM_GENERATION/qt6ct/colors/realm.conf
+```
+
+This is the qt6ct global-default mechanism, not a Realm write to the user's
+ordinary configuration. On a fresh configuration qt6ct may perform its own
+documented first-use copy into `XDG_CONFIG_HOME/qt6ct/qt6ct.conf`; the stable
+`$REALM_GENERATION` selector in those copied bytes resolves separately in each
+selected process. An already present user qt6ct configuration wins and is
+never replaced, merged, or repaired. In that explicit-override case Realm may
+claim only that the qt6ct platform plugin was selected, not that the process
+consumed Realm's palette. Qt 5, Kvantum geometry, and a general Qt configuration
+facade remain outside this tranche.
 
 The generation-local `.zshrc` initializes the inherited `starship` executable
 and defines `btop` to invoke the inherited executable with exactly
@@ -514,6 +550,11 @@ promise is made for them; their files remain safe because production
 reclamation is disabled as specified above. Fuzzel reads its config in the
 directly executed UI process and does not pass that config argument or path to
 the XDG application it starts.
+GTK/Qt selectors likewise reach only processes descended from this selected
+terminal. A Fuzzel application, the default-browser binding, an already-owned
+application, and a D-Bus-activated portal do not acquire N or these selectors
+from this tranche. Full default-launch coherence remains #117/#133/#135 work;
+the terminal proof must not be reported as a completely themed desktop.
 Consumer fixtures must prove these boundaries against the packaged
 versions; a package whose `--config=PATH`,
 `--override=[SECTION.]KEY=VALUE`, or `spawn-terminal=none` grammar differs is
@@ -622,6 +663,7 @@ candidate with a partially validated or mixed generation.
 | G13 | Given a fresh login whose final configuration root is absent below an existing safely opened parent, a present configuration root with cleanly absent current, a valid current, malformed current, or an absent pointer with recovery evidence, when session bootstrap ensures current, then only clean absence descriptor-relatively creates the final root if needed and performs one serialized built-in apply; valid current is byte-for-byte retained without apply or palette seed, and every malformed/inconsistent case fails readiness without repair, retry, newest-generation selection, or unthemed fallback. A concurrent valid apply that wins the lock is retained rather than overwritten. |
 | G14 | Given either fixed consumer and a later pointer switch from N to N+1, when Realm launches it, then its exact argv contains one `--config=` path below its fully validated selected N, terminal argv also contains the exact `spawn-terminal=none` override and final `zsh`, its process lease exists durably before exec and remains live for that unchanged PID until the consumer exits, and it never reads an ordinary mutable foot/fuzzel config as fallback. Terminal validates the complete output set and exports only N-derived selectors before exec; zsh/Starship/Yazi/btop visibly consume N, while the fuzzel-started application is explicitly not reported as generation-selected. |
 | G15 | Given an old complete N or a pre-profile valid N, when apply publishes N+1, Foot exits and more generations are published, then production apply/recovery/startup exposes no generation-reclamation operation and every valid committed tree remains byte-for-byte present. Terminal against the old complete N continues to consume N; terminal against the pre-profile N refuses the missing exact output before exec and the explicit apply path makes a later complete generation launchable. The test-only GC model is not linked as a production API. |
+| G16 | Given a newly applied complete N and a terminal selected on N, when real packaged GTK 3, GTK 4 and Qt 6 applications start as its descendants, then GTK opens N's named-theme CSS and qt6ct resolves the literal `$REALM_GENERATION` value in its configuration to N's manifest-listed colour scheme; the observed windows render with N-derived palette values. The fixture proves exact file consumption and a nonempty real application frame, not environment presence alone. Given an existing user qt6ct configuration, Realm leaves it byte-for-byte unchanged and reports no Realm-palette claim for that Qt process. After current switches to N+1 and Foot exits, a surviving descendant can still consume N because production generation reclamation is unavailable. This criterion makes no claim for Fuzzel/browser/portal/D-Bus launches or Qt 5/Kvantum. |
 
 ## Boundaries
 
