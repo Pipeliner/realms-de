@@ -36,11 +36,18 @@ Nix already obtains the tested closure from the locked nixpkgs input.
    by ELF resolution before River's version command is executed. They do not
    replace Noble's system libraries.
 5. The first increment is a CI-only source-build probe. It proves the complete
-   feature-bearing closure builds and executes its version path on Noble. It
-   does not publish packages, integrate the closure into the `.deb`, claim a
-   graphical login, or claim a DRM device was exercised.
+   feature-bearing closure builds and executes its version path on Noble.
+   SPEC 0028's next increment packages that same closure as a separate amd64
+   `realm-river` Debian package below `/usr/lib/realm`; it does not turn the
+   Realm Rust source kit into a graphics source package.
 6. No PPA, COPR, public repository, mirror, binary hosting service or raised
    Ubuntu minimum is introduced. Native build proof remains CI-only.
+7. The selected libinput quirks remain private to `/usr/lib/realm`. Noble's
+   observed byte-identical libinput 1.25/1.31 rule templates retain the same
+   property names and callout references, but do not prove the two callout
+   implementations behaviorally equivalent. Noble's global rules and callouts
+   remain distro-owned; Realm neither replaces global host input data nor
+   drops mtdev or libwacom device support to avoid that ownership boundary.
 
 ## Alternatives considered
 
@@ -68,8 +75,8 @@ Nix already obtains the tested closure from the locked nixpkgs input.
 
 - Realm owns rebuilds for River and eight private library sources on Ubuntu.
 - The probe adds a Zig toolchain and a non-trivial native graphics build to CI.
-- A successful container build still leaves Debian integration and graphical
-  login unproven.
+- Even after SPEC 0028 proves Debian build and clean installation, graphical
+  login and DRM/input hardware remain unproven.
 
 ### Neutral
 

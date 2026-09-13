@@ -19,13 +19,15 @@ question before the closure is integrated into the Debian package.
 
 **In:** exact source identities, a manifest validator, explicit networked
 acquisition, network-disabled native compilation on Ubuntu 24.04, a private
-relocatable runtime tree, wlroots feature assertions, ELF resolution and the
-River version probe.
+ELF-relocatable runtime tree, wlroots feature assertions, ELF resolution and
+the River version probe. Runtime data paths are fixed only by SPEC 0028's final
+logical installation prefix.
 
 **Out:** local native builds or toolchain installation; Debian package
-integration; clean installation; a display-manager or graphical login; a real
-DRM-device launch; Fedora and Nix changes; public repositories, mirrors,
-signing, uploaded binary artifacts or automatic dependency updates.
+integration (specified separately by SPEC 0028); clean installation; a
+display-manager or graphical login; a real DRM-device launch; Fedora and Nix
+changes; public repositories, mirrors, signing, uploaded binary artifacts or
+automatic dependency updates.
 
 ## Selected source authority
 
