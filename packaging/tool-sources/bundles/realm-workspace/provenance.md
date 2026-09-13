@@ -7,15 +7,16 @@ package recipe.
 ## Bound source
 
 - Repository: `https://github.com/pipeliner/realms-de`
-- Commit: `7bccdc31babc60ab7f3e273ac97857538a50704b`
-- Commit timestamp: `2026-09-10T16:32:34Z` (`1789057954`)
+- Commit: `f48ebb92157ebe9641c3d07544b9e4e1f0190a6b`
+- Commit timestamp: `2026-09-13T00:34:54Z` (`1789259694`)
 - Workspace version: `0.1.0`
 - Canonical archive: `source.tar.gz`
 - Canonical archive SHA-256:
-  `a94bde00d56bc127a833cc385f0e70428100eb23af211fddd67a26e6c9e224de`
+  `2b4129d8f5233ce7cd1339385ac97591537d602e89153b6cbeff69ff05dfc053`
 
 The archive was generated directly from the exact bound Git commit with
-`git archive --format=tar.gz --prefix=realm-workspace/`, excluding
+`git archive --format=tar.gz --prefix=realm-workspace/ <commit> .
+':(exclude)packaging/tool-sources/bundles'`, excluding
 `packaging/tool-sources/bundles/` so the authority cannot recursively contain
 an independent retained source or dependency closure. Git supplied every
 archived byte from that immutable commit object; working-tree bytes were not an
@@ -23,14 +24,14 @@ input. The resulting archive is retained as the canonical source input.
 
 ## Dependency closure
 
-Cargo vendoring used an otherwise empty, intake-local `CARGO_HOME` and the
-archive root's retained `Cargo.lock`:
+Cargo 1.97.1 vendoring used an otherwise empty, intake-local `CARGO_HOME` and
+the archive root's retained `Cargo.lock`:
 
 ```sh
 CARGO_HOME=<intake>/cargo-home cargo vendor --locked --versioned-dirs <intake>/vendor
 ```
 
-The resulting 59 registry crates were archived as `vendor.tar.zst` by one
+The resulting 172 registry crates were archived as `vendor.tar.zst` by one
 sorted tar stream with epoch mtime, numeric uid/gid zero, and Zstandard level
 3 compression:
 
