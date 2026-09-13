@@ -127,4 +127,11 @@ mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
 expect_fail missing-fixture-suite "$fixture_root" \
     'normal Nix CI must invoke the root-flake fixture suite'
 
+fixture_root=$(make_fixture missing-doctor-evidence)
+sed '/realm-session-boots\/realmctl-doctor\.json/d' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-doctor-evidence "$fixture_root" \
+    'live VM artifact must retain realmctl doctor JSON'
+
 printf 'PASS: %d root-flake CI guard fixtures\n' "$tests_run"
