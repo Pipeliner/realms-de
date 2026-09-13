@@ -22,6 +22,14 @@ fail() {
 [ -f "$root/flake.nix" ] || fail 'root flake.nix is required'
 [ -f "$root/flake.lock" ] || fail 'root flake.lock is required'
 
+checks="$root/packaging/nix/checks.nix"
+[ -f "$checks" ] || fail 'installed Nix VM check is required'
+
+qt6ct_references=$(grep -F -c -e 'pkgs.qt6Packages.qt6ct' "$checks" || true)
+if [ "$qt6ct_references" -ne 3 ] || grep -F -q -e 'pkgs.qt6ct' "$checks"; then
+    fail 'installed VM must use the pinned Qt 6 qt6ct attribute'
+fi
+
 workflow="$root/.github/workflows/distro.yml"
 [ -f "$workflow" ] || fail 'distro workflow is required'
 

@@ -215,7 +215,7 @@ EOF
           pkgs.firefox
           pkgs.gtk3.dev
           pkgs.gtk4.dev
-          pkgs.qt6ct
+          pkgs.qt6Packages.qt6ct
           pkgs.strace
           (pkgs.makeDesktopItem {
             name = "realm-browser-test";
@@ -749,7 +749,7 @@ EOF
           screenshot="realm-gtk4-toolkit",
       )
       exercise_toolkit(
-          "${pkgs.qt6ct}/bin/qt6ct",
+          "${pkgs.qt6Packages.qt6ct}/bin/qt6ct",
           "qt6-toolkit",
           [qt6ct_config, qt6ct_colours],
           "Qt6 Configuration Tool",
@@ -768,7 +768,7 @@ EOF
           "sha256sum /home/alice/.config/qt6ct/qt6ct.conf"
       ).split()[0]
       exercise_toolkit(
-          "${pkgs.qt6ct}/bin/qt6ct",
+          "${pkgs.qt6Packages.qt6ct}/bin/qt6ct",
           "qt6-user-override",
           ["/home/alice/.config/qt6ct/qt6ct.conf"],
           "Qt6 Configuration Tool",

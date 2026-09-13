@@ -21,9 +21,11 @@ make_fixture() {
     name=$1
     fixture_root="$tmp_dir/$name"
     mkdir -p "$fixture_root/.github/workflows"
+    mkdir -p "$fixture_root/packaging/nix"
     cp "$repo_root/flake.nix" "$fixture_root/flake.nix"
     cp "$repo_root/flake.lock" "$fixture_root/flake.lock"
     cp "$repo_root/.github/workflows/distro.yml" "$fixture_root/.github/workflows/distro.yml"
+    cp "$repo_root/packaging/nix/checks.nix" "$fixture_root/packaging/nix/checks.nix"
     printf '%s\n' "$fixture_root"
 }
 
@@ -98,6 +100,13 @@ expect_fail missing-flake "$fixture_root" 'root flake.nix is required'
 fixture_root=$(make_fixture missing-lock)
 rm -f "$fixture_root/flake.lock"
 expect_fail missing-lock "$fixture_root" 'root flake.lock is required'
+
+fixture_root=$(make_fixture unsupported-qt6ct-attribute)
+sed 's/pkgs\.qt6Packages\.qt6ct/pkgs.qt6ct/g' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail unsupported-qt6ct-attribute "$fixture_root" \
+    'installed VM must use the pinned Qt 6 qt6ct attribute'
 
 fixture_root=$(make_fixture conditional-nix-job)
 printf '%s\n' '        if: steps.flake.outputs.present == '\''true'\''' \
