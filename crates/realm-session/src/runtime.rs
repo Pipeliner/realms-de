@@ -1360,6 +1360,18 @@ mod tests {
         path
     }
 
+    fn endpoint_fixture_dir(name: &str) -> std::path::PathBuf {
+        let path = fixture_dir(name);
+        let realm = path.join("realm");
+        fs::create_dir(&realm).unwrap();
+        // Runtime integration tests share this process with scoped-umask tests.
+        // Precreate the fixture-owned directory at its admitted mode so the
+        // server exercise does not violate its single-threaded preparation
+        // precondition when the wider suite runs in parallel.
+        fs::set_permissions(&realm, fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+
     #[test]
     fn request_dispatch_uses_live_state_and_exact_session_keymap() {
         let mut session = live_session();
@@ -1436,7 +1448,7 @@ mod tests {
 
     #[test]
     fn real_socket_get_state_and_exact_quit_receipt_drive_clean_exit() {
-        let root = fixture_dir("get-state-quit");
+        let root = endpoint_fixture_dir("get-state-quit");
         let server_runtime = test_runtime_dir(&root).unwrap();
         let client_endpoint = test_runtime_dir(&root).unwrap().client_endpoint();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
@@ -1488,7 +1500,7 @@ mod tests {
 
     #[test]
     fn retained_immediate_quit_and_due_dirty_snapshot_reach_exit() {
-        let root = fixture_dir("retained-immediate-quit");
+        let root = endpoint_fixture_dir("retained-immediate-quit");
         let runtime = test_runtime_dir(&root).unwrap();
         let snapshot_path = runtime.path().join("realm/ledger.json");
         let bound = runtime.prepare_server_endpoint().unwrap().bind().unwrap();
@@ -1629,7 +1641,7 @@ mod tests {
 
     #[test]
     fn quit_pending_stops_sampler_without_join_or_further_service() {
-        let root = fixture_dir("quit-stops-sampler");
+        let root = endpoint_fixture_dir("quit-stops-sampler");
         let runtime = test_runtime_dir(&root).unwrap();
         let snapshot_path = runtime.path().join("realm/ledger.json");
         let bound = runtime.prepare_server_endpoint().unwrap().bind().unwrap();
