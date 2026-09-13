@@ -95,6 +95,23 @@ fi
 pass_count=$((pass_count + 1))
 printf 'ok %s - canonical Meson build-tool pin\n' "$pass_count"
 
+require_zig_record() {
+    local name=$1
+    local expected=$2
+    if ! "$checker" --repo-root "$repo_root" --emit zig-dependencies "$manifest" \
+        | grep -Fx -- "$expected" >/dev/null; then
+        echo "not ok $((pass_count + 1)) - canonical $name Zig pin is absent" >&2
+        exit 1
+    fi
+    pass_count=$((pass_count + 1))
+    printf 'ok %s - canonical %s Zig pin\n' "$pass_count" "$name"
+}
+
+require_zig_record aro \
+    $'aro\tgit+https://github.com/Vexu/arocc#5f5a050569a95ecc40a426f0c3666ae7ef987ede\taro-0.0.0-JSD1Qi7QNgDnfcrdEJf82v3o6MhZySjYVrtdfEf3E4Se'
+require_zig_record xkbcommon-wlroots \
+    $'xkbcommon-wlroots\thttps://codeberg.org/ifreund/zig-xkbcommon/archive/v0.3.0.tar.gz\txkbcommon-0.3.0-VDqIe3K9AQB2fG5ZeRcMC9i7kfrp5m2rWgLrmdNn9azr'
+
 for case in missing extra duplicate digest lock zig-hash; do
     mutated="$tmpdir/$case.toml"
     mutate "$case" "$mutated"

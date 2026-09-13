@@ -105,3 +105,13 @@ content_hash = "xkbcommon-0.4.0-VDqIe0i2AgDRsok2GpMFYJ8SVhQS10_PI2M_CnHXsJJZ"
 name = "translate-c"
 url = "git+https://codeberg.org/ziglang/translate-c/#57c559cf581b1fcad90494eda219f98abeb155ce"
 content_hash = "translate_c-0.0.0-Q_BUWlX1BgCD1wo6uo97prlp9VJ4gxAjwN_vZ7nsSjGN"
+
+[[zig_dependency]]
+name = "aro"
+url = "git+https://github.com/Vexu/arocc#5f5a050569a95ecc40a426f0c3666ae7ef987ede"
+content_hash = "aro-0.0.0-JSD1Qi7QNgDnfcrdEJf82v3o6MhZySjYVrtdfEf3E4Se"
+
+[[zig_dependency]]
+name = "xkbcommon-wlroots"
+url = "https://codeberg.org/ifreund/zig-xkbcommon/archive/v0.3.0.tar.gz"
+content_hash = "xkbcommon-0.3.0-VDqIe3K9AQB2fG5ZeRcMC9i7kfrp5m2rWgLrmdNn9azr"

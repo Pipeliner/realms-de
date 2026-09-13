@@ -28,7 +28,15 @@ ARCHIVE_NAMES = {
     "wlroots",
     "river",
 }
-ZIG_NAMES = {"pixman", "wayland", "wlroots", "xkbcommon", "translate-c"}
+ZIG_NAMES = {
+    "pixman",
+    "wayland",
+    "wlroots",
+    "xkbcommon",
+    "translate-c",
+    "aro",
+    "xkbcommon-wlroots",
+}
 HEX_40 = re.compile(r"[0-9a-f]{40}\Z")
 HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
 ZIG_HASH = re.compile(r"[A-Za-z0-9_-]+-[0-9][A-Za-z0-9._-]*-[A-Za-z0-9_-]{30,}\Z")
