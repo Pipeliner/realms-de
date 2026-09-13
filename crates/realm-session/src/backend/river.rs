@@ -594,6 +594,8 @@ pub struct RiverBackend {
     binding_objects: BTreeMap<BackendBindingId, Binding>,
     watched_modifiers: Vec<BackendModifier>,
     session_locked: bool,
+    binding_input_suspended: bool,
+    unlock_gate_turn: Option<BackendPolicyTurnId>,
     held_bindings: BTreeSet<BackendBindingId>,
     default_output: Option<ObjectId>,
     focused_window: Option<WinId>,
@@ -677,6 +679,8 @@ impl RiverBackend {
             binding_objects: BTreeMap::new(),
             watched_modifiers: Vec::new(),
             session_locked: false,
+            binding_input_suspended: false,
+            unlock_gate_turn: None,
             held_bindings: BTreeSet::new(),
             default_output: None,
             focused_window: None,
@@ -1210,6 +1214,13 @@ impl RiverBackend {
             return Ok(None);
         }
         if let Some(event) = self.public_events.pop_front() {
+            if matches!(
+                &event,
+                BackendEvent::PolicyTurn(turn) if self.unlock_gate_turn == Some(turn.id)
+            ) {
+                self.unlock_gate_turn = None;
+                self.binding_input_suspended = false;
+            }
             return Ok(Some(event));
         }
         if self.open_turn.is_some() {
@@ -1792,6 +1803,8 @@ impl RiverBackend {
             }
             Incoming::SessionLocked => {
                 self.session_locked = true;
+                self.binding_input_suspended = true;
+                self.unlock_gate_turn = None;
                 let mut repeat_stops = std::mem::take(&mut self.held_bindings);
                 self.policy_events.retain(|event| match event {
                     BackendPolicyEvent::BindingPressed(id)
@@ -2074,6 +2087,9 @@ impl RiverBackend {
             .ok_or_else(|| capacity(BackendCapacityResource::PolicyTurnIds, u64::MAX))?;
         let id = BackendPolicyTurnId::new(self.next_turn).ok_or_else(protocol_error)?;
         let events = std::mem::take(&mut self.policy_events);
+        if self.binding_input_suspended && !self.session_locked {
+            self.unlock_gate_turn = Some(id);
+        }
         self.open_turn = Some(id);
         self.public_events
             .push_back(BackendEvent::PolicyTurn(BackendPolicyTurn {
@@ -2266,6 +2282,10 @@ impl WmBackend for RiverBackend {
 
     fn poll_interest(&self) -> BackendPollInterest {
         RiverBackend::poll_interest(self)
+    }
+
+    fn binding_input_suspended(&self) -> bool {
+        self.binding_input_suspended
     }
 
     fn service(
