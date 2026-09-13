@@ -10,6 +10,7 @@ keymap=$root/configs/templates/yazi-keymap.toml
 profile=$root/configs/templates/zshrc
 btop=$root/configs/templates/btop.conf
 support=$root/packaging/nix/support.nix
+checks=$root/packaging/nix/checks.nix
 debian_rules=$root/packaging/debian/rules
 fedora_spec=$root/packaging/fedora/realm.spec
 native_fixture=$root/packaging/tool-sources/test-native-builds.sh
@@ -66,6 +67,22 @@ grep -F -q 'color_theme = "realm"' "$btop"
 grep -F -q 'shown_boxes = "cpu mem net proc"' "$btop"
 grep -F -q 'dontUpdateAutotoolsGnuConfigScripts = true;' "$support" || {
     echo "retained Nix Yazi permits automatic vendor mutation" >&2
+    exit 1
+}
+
+# These are literal Nix/Python command fragments, not shell expansions.
+# shellcheck disable=SC2016
+if grep -F -q 'test \"$(yazi --version)\"' "$checks"; then
+    echo "Nix VM runs Yazi's terminal discovery on the driver control terminal" >&2
+    exit 1
+fi
+# shellcheck disable=SC2016
+grep -F -q '${pkgs.util-linux}/bin/setsid --wait yazi --version' "$checks" || {
+    echo "Nix VM Yazi identity probe is not detached from the driver terminal" >&2
+    exit 1
+}
+grep -F -q '</dev/null >/tmp/realm-yazi-version 2>&1' "$checks" || {
+    echo "Nix VM Yazi identity probe does not isolate all standard streams" >&2
     exit 1
 }
 

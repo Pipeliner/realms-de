@@ -386,8 +386,12 @@ EOF
       machine.succeed("realm-session --version")
       machine.succeed("realm-session --check")
       machine.succeed(
-          "test \"$(yazi --version)\" = "
-          "'Yazi 25.4.8 (99ea3b74c4260a724b43af812df0f68ef59395b7 2025-04-08)'"
+          "rm -f /tmp/realm-yazi-version; "
+          + "${pkgs.util-linux}/bin/setsid --wait yazi --version "
+          + "</dev/null >/tmp/realm-yazi-version 2>&1; "
+          + "grep -aFxq "
+          + "'Yazi 25.4.8 (99ea3b74c4260a724b43af812df0f68ef59395b7 2025-04-08)' "
+          + "/tmp/realm-yazi-version"
       )
 
       # river 0.4.x, the compositor realm drives. `-version` (one dash) is
