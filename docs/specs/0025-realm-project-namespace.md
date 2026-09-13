@@ -25,6 +25,11 @@ All tracked first-party paths and file bytes SHALL be free of the retired
 four-byte ASCII namespace token, case-insensitively. The repository guard SHALL
 construct that token from numeric byte values `(104, 101, 108, 109)` so its own
 source does not preserve the spelling. The check includes binary tracked files.
+The recognized retained workspace `source.tar.gz` is the sole
+representation-opaque exception: arbitrary compressed envelope bytes are not a
+project-name mention, so the guard SHALL instead scan its tracked path, decoded
+member paths, regular-file bytes, and symlink or hardlink targets. This does not
+exempt another binary or any decoded archive content.
 
 The cutover SHALL cover Cargo packages/imports/binaries, commands and
 diagnostics, project-defined environment variables, config/state/runtime paths,
@@ -41,7 +46,7 @@ are outside this working-tree identity contract.
 
 | ID | Criterion | Evidence |
 |---|---|---|
-| A1 | Every tracked path and tracked file, including binary files, passes the case-insensitive retired-token guard. | `scripts/check-project-namespace` |
+| A1 | Every tracked path and tracked file, including binary files, passes the case-insensitive retired-token guard; the recognized workspace archive passes the decoded-member rule above rather than a raw compressed-byte scan. | `scripts/check-project-namespace` and its compressed-envelope fixtures |
 | A2 | The complete Rust workspace builds and tests using only Realm package, crate, binary, and environment-variable names. | `cargo test --workspace --all-targets` |
 | A3 | Packaging and session contract tests refer only to Realm paths, units, commands, and payloads. | repository shell tests and remote native-package CI |
 | A4 | The retained first-party workspace source archive expands under a Realm root and itself passes A1. | `packaging/tool-sources/test-bundle-linkage.sh` plus archive inspection |
