@@ -9,6 +9,7 @@ fi
 prefix=$(realpath "$1")
 river="$prefix/bin/river"
 origin="\$ORIGIN"
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:$prefix/share/pkgconfig"
 
 if [[ -n ${LD_LIBRARY_PATH:-} ]]; then
@@ -75,21 +76,13 @@ if grep -F 'not found' "$resolution_log"; then
     echo "closure probe: unresolved transitive ELF dependency" >&2
     exit 1
 fi
-
-for family in \
-    'libwlroots-0.20.so' \
-    'libwayland-server.so' \
-    'libdrm.so' \
-    'libpixman-1.so' \
-    'libxkbcommon.so' \
-    'libdisplay-info.so'
-do
-    line=$(grep -F -m1 "$family" "$resolution_log" || true)
-    if [[ -z "$line" || "$line" != *"$prefix/lib/"* ]]; then
-        echo "closure probe: private dependency did not resolve inside prefix: $family" >&2
-        exit 1
-    fi
-done
+"$repo_root/packaging/river/check-private-resolutions.py" \
+    "$prefix" "$resolution_log"
+if ! find "$prefix/lib" -type f -name 'libwayland-client.so.*' -print -quit \
+    | grep -q .; then
+    echo "closure probe: private libwayland-client shared object is absent" >&2
+    exit 1
+fi
 
 version=$(env -u LD_LIBRARY_PATH "$river" -version)
 if [[ "$version" != '0.4.8 +xwayland' ]]; then

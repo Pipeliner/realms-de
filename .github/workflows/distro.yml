@@ -76,6 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           packaging/river/test-closure-manifest.sh
+          packaging/river/test-private-resolutions.sh
           packaging/river/acquire-noble-closure.sh \
             packaging/river/sources.toml \
             "$RUNNER_TEMP/realm-river-cache"
