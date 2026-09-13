@@ -69,6 +69,22 @@ grep -F -q 'dontUpdateAutotoolsGnuConfigScripts = true;' "$support" || {
     exit 1
 }
 
+# These are literal Nix/Python command fragments, not shell expansions.
+# shellcheck disable=SC2016
+if grep -F -q 'test \"$(yazi --version)\"' "$checks"; then
+    echo "Nix VM runs Yazi's terminal discovery on the driver control terminal" >&2
+    exit 1
+fi
+# shellcheck disable=SC2016
+grep -F -q '${pkgs.util-linux}/bin/setsid --wait yazi --version' "$checks" || {
+    echo "Nix VM Yazi identity probe is not detached from the driver terminal" >&2
+    exit 1
+}
+grep -F -q '</dev/null >/tmp/realm-yazi-version 2>&1 &&' "$checks" || {
+    echo "Nix VM Yazi identity probe does not preserve producer failure" >&2
+    exit 1
+}
+
 for recipe in "$debian_rules" "$fedora_spec"; do
     if grep -F -q 'REALM_RUNTIME_PATH' "$recipe" \
         || grep -F -q 'runtime_path=' "$recipe"; then
