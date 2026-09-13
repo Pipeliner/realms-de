@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-08-26; generation contract reconciled by #159;
   endpoint capability correction 2026-09-10; control-transport correction
-  2026-09-11; doctor observability correction 2026-09-13) —
+  2026-09-11; doctor observability and owned-health corrections 2026-09-13) —
   `theme apply`, `theme lint`, and `theme diff` implemented; remaining command
   surface not yet implemented
 - **Milestone:** M3, with `theme` and the argument surface in M1 and
@@ -117,10 +117,16 @@ immediately.
 `theme apply`, `theme lint`, and `theme diff` remain session-independent: they
 do not call a runtime resolver, derive a `ClientEndpoint`, or open the control
 socket. `doctor` does not require a successful socket connection. Its optional
-session-health connection uses the same single resolver/capability rule, but an
-unresolvable, absent, or still-refused endpoint becomes the existing no-session
-diagnostic path in §4; `doctor` continues the checks that can run and never
-turns that outcome into exit 3.
+session-health connection uses the same single resolver/capability rule.
+Missing `XDG_RUNTIME_DIR` or `realm`, including an absent socket, is the
+existing no-session diagnostic path in §4. A retained endpoint that remains
+refused after the retry schedule, an unsafe path capability, timeout, EOF,
+malformed response, or other terminal transport failure makes
+`session/socket` fail: an existing but unusable daemon endpoint is not the same
+as no session. A version mismatch makes `session/socket` pass,
+`session/protocol-version` fail with both versions, and health-only checks skip
+because `GetHealth` was correctly not sent. `doctor` continues every other
+check that can run and never maps any of these outcomes to exit 3.
 
 `run` is fire-and-forget by construction. `Response::Ok` means the session
 accepted the argv, not that the program started — `execve` fails after the fork
@@ -148,10 +154,38 @@ meaning is retired and it is not sent by the supported theme path.
 | # | Gap | Addition |
 |---|---|---|
 | 1 | `Request::ReloadTheme` is documented as "re-read `palette.toml`, re-render templates, hot-reload clients", which conflicts with generation-only future-launch activation | Retire that meaning. The supported `theme apply` neither sends this request nor preserves a notify-only replacement. Any later wire compatibility or live upgrade is a separate #22 design and must be generation-aware; it cannot reload on pointer switch. A key action may spawn `realmctl theme apply`, whose effect is still future-launch-only |
-| 2 | No request reports the session's health. `WmBackend::name()` is documented "shown by `realmctl doctor`" and `Capabilities` "`realmctl doctor` prints this" ([INTERFACES.md §1](../INTERFACES.md)) — and neither is reachable over the wire | `Request::GetHealth` → `Response::Health(Box<SessionHealth>)` carrying: session build version, `PROTOCOL_VERSION`, backend `name()`, `Capabilities`, the bound compositor interface names and versions, whether `river-layer-shell-v1` is being served, the palette path in use, the session's own `glyphs::Probe`, and uptime |
+| 2 | No request reports the session's health. `WmBackend::name()` is documented "shown by `realmctl doctor`" and `Capabilities` "`realmctl doctor` prints this" ([INTERFACES.md §1](../INTERFACES.md)) — and neither is reachable over the wire | `Request::GetHealth` → `Response::Health(Box<SessionHealth>)` carrying only facts the live daemon owns: session build version, `PROTOCOL_VERSION`, backend `name()`, `Capabilities`, the actual bound compositor interface names and negotiated versions, whether `river-layer-shell-v1` is being served, the current session-entry `DEGRADED` codes, and monotonic uptime in integer milliseconds. The daemon does not select a palette or render glyphs; `doctor` resolves its own `--palette` and runs its own font probe |
 | 3 | `Capabilities` lives in `docs/INTERFACES.md` as a sketch, not in `realm-core`, and its `unsupported: Vec<&'static str>` cannot be deserialised into an owned value — yet it is exactly what `doctor` must print, entries like `"unclipped-dimension-quantisation"` included | Move it into `realm_core::ipc` with `Serialize`/`Deserialize`, and make `unsupported` a `Vec<String>`. It is a wire type now, not just a trait's return |
 | 4 | `Response::Error { message }` carries prose only, so a caller can map a refusal to an exit code only by matching on English | Add `kind`, a kebab-case enum: `unknown-request`, `bad-argument`, `no-such-orbit`, `no-focused-window`, `backend-refused`, `internal`. Exit codes come from data, not from a string |
 | 5 | `OrbitLedger` has `orbit`, `rune`, `name` and `windows`, but nothing says which orbit is active or what layout it holds, so `orbit list` cannot print what the bar shows without a second round trip | Add `active: bool` and `layout: Layout` |
+
+The closed v2 health shape is:
+
+```rust
+pub struct InterfaceVersion {
+    pub name: String,
+    pub version: u32,
+}
+
+pub struct SessionHealth {
+    pub session_version: String,
+    pub protocol_version: u32,
+    pub backend_name: String,
+    pub capabilities: Capabilities,
+    pub bound_interfaces: Vec<InterfaceVersion>,
+    pub layer_shell_served: bool,
+    pub degraded_codes: Option<Vec<String>>,
+    pub uptime_ms: u64,
+}
+```
+
+`Some(empty)` is the positive statement that the current entry finalized no
+degradation; `None` means its bounded handoff was absent or rejected and makes
+`session/degraded` warn rather than lie. Codes are the known SPEC 0005 spellings
+in entry observation order without duplicates. River's interface vector is the
+five SPEC 0003 rows in that table's order and records the versions actually
+bound, not every advertised global. All strings and vectors are owned and
+bounded by the existing control-frame and backend limits.
 
 [SPEC 0004](0004-realm-bar.md) lists a further three additions the bar needs
 (`RealmState::grimoire`, an elision glyph, `GetKeymap`). They are disjoint from
@@ -281,7 +315,11 @@ calls itself — the systemd user manager's environment and each unit's
 `ActiveState` are read as D-Bus properties on `org.freedesktop.systemd1`, not
 by parsing `systemctl` output, and XWayland is checked by connecting to its
 socket. The only commands it runs are the reused tools' own `--version`, where
-the tool's absence *is* the finding.
+the tool's absence *is* the finding, and `gsettings get` for the two cursor
+values. Each command has a deadline inside `doctor`'s one overall deadline.
+`gsettings` is already a declared session dependency; absence, timeout, a
+missing schema, or malformed output is reported rather than treated as a
+passing cursor check.
 
 | id | What it checks | Probe | Fail, and what it prints |
 |---|---|---|---|
@@ -293,7 +331,7 @@ the tool's absence *is* the finding.
 | `env/agree` | the process and systemd views hold the same exact values; the D-Bus activation channel is reported separately as a functional proxy | process and systemd compared; D-Bus value shown as `unobservable` beside the proxy result | *"The import ran too early, or ran twice with different values."* Prints the two observable views side by side and fails on their disagreement; it never claims that three exact values agreed |
 | `env/stale` | systemd's `WAYLAND_DISPLAY` names a socket that exists | the property, then `stat` under `$XDG_RUNTIME_DIR` | `systemd --user` and the session bus outlive a logout, always when lingering, so a login can inherit a display name pointing at a dead socket. *"Symptoms identical to never importing it at all."* Remedy: `systemctl --user unset-environment WAYLAND_DISPLAY`, then log in again |
 | `env/cursor` | `XCURSOR_THEME`/`XCURSOR_SIZE` agree in the process and systemd views, the theme resolves to a directory containing `cursors/` under the icon search path, and GSettings agrees | process env, the systemd property, the icon search path, the GSettings value; the D-Bus activation values remain unobservable and are not claimed | *"The cursor will be the default black X11 arrow, or invisible over some surfaces, or will change size as it crosses a window."* Names the observable places, because setting one leaves it wrong in the other |
-| `env/xwayland` | `DISPLAY` agrees in the process and systemd views when XWayland is up, its socket answers, and the integer-scale policy is in force | compare the observable values and connect to the X11 socket directly; report the D-Bus activation value as unobservable rather than inventing it | `warn`. Reports honestly that the session entry's `DISPLAY` import is a known gap where the compositor does not hand its `:N` back. *"X11 apps absent, or blurred on a scaled output."* |
+| `env/xwayland` | `DISPLAY` agrees in the process and systemd views when XWayland is up and its socket answers | compare the observable values and connect to the X11 socket directly; report the D-Bus activation value as unobservable rather than inventing it. Realm's integer-only XWayland policy has no separately published runtime value, so this check does not claim to have probed one | `warn`. Reports honestly that the session entry's `DISPLAY` import is a known gap where the compositor does not hand its `:N` back. *"X11 apps absent, or blurred on a scaled output."* |
 | `env/list-matches-entry` | `doctor`'s variable list is identical to the session entry's | both lists, compared; a **CI** check with no session needed | *"A variable was added in one place and forgotten in the other."* SPEC 0005 A3 |
 | `units/target` | `realm-session.target` is active and its `.wants` symlinks exist | `ActiveState` over D-Bus | *"A target that starts nothing and reports success."* |
 | `units/wm` | the window manager's unit is `ActiveState=active`, with `ConditionResult` reported **separately** | both properties | an unmet `ConditionEnvironment=` leaves a unit `inactive (dead)` with `ConditionResult=no`, and `systemctl start` still exits 0 with nothing in `--failed`. *"Nothing started and nothing complained."* Prints the condition that was not met |
@@ -303,30 +341,39 @@ the tool's absence *is* the finding.
 | `wm/attached` | a live health response proves realm holds river's window-management global; a refusal reports a possible foreign holder without inventing its identity | `GetHealth`; outside a live session, exit 69 and independently available process evidence. River's `unavailable` response does not identify the holder, so a pid or command line is printed only when a separate observation proves it | river answers `unavailable` to a second window-management client, so the supervised window manager never starts and a naive restart policy loops forever, burying the message. Without independent holder evidence, prints *"another window manager may hold river's global; holder identity unavailable"*. *"An inert compositor: windows are never placed."* |
 | `wm/layer-shell` | realm is serving `river-layer-shell-v1` | `GetHealth`'s flag, plus `units/bar` | *"The bar never appears, and it looks like the bar's fault rather than the window manager's."* Points at ADR 0013 |
 | `wm/capabilities` | the backend's name and the `Capabilities` it reports, `unsupported` included | `GetHealth` | any `unsupported` entry — `"unclipped-dimension-quantisation"` is the one river can produce — is a `warn` naming the realm behaviour that will not work. *"A backend gap that looks like a bug."* |
-| `wm/protocol-version` | the bound interface versions match the pinned river | `GetHealth`'s interface list | *"A routine river upgrade breaks the session."* Remedy: install the pinned river 0.4.x realm ships |
+| `wm/protocol-version` | the actual negotiated interface versions satisfy SPEC 0003 §1's accepted bind/refusal ranges | `GetHealth`'s interface list | *"A routine river upgrade breaks the session."* Remedy: install the supported river 0.4.x realm ships. Neither this check nor the header claims an unobservable compositor package version |
 | `portal/answers` | a backend answers on `org.freedesktop.portal.Desktop` without a pause | a cheap property read, 2 s deadline | *"'Open File' does nothing in Firefox."* Remedy names the packages: `xdg-desktop-portal` plus `xdg-desktop-portal-gtk` and `xdg-desktop-portal-wlr` |
-| `portal/config` | a `realm-portals.conf` is found and names a backend per interface | the config search path and the `.portal` files' `DesktopNames`; a **CI** check on the file, a VM check on the effect | *"Behaviour that changes with whatever happens to be installed."* |
+| `portal/config` | the effective `realm-portals.conf` is found, names a backend per interface, and the named installed `.portal` metadata advertises those interfaces | the config search path and the `.portal` metadata; a **CI** check on the shipped file and a VM check on the installed effective files. The portal exposes no API for the selected backend identity, so this check never claims which backend the running frontend chose | *"Behaviour that changes with whatever happens to be installed."* |
 | `portal/filechooser` | `--portal-roundtrip` only: a real `FileChooser.OpenFile` returns a request handle within 2 s | the D-Bus call, then cancel the request | `skip` unless `--portal-roundtrip` is given, because it opens a dialog. *"The 25-second hang, reproduced deliberately and bounded"* |
 | `portal/screencast` | the `ScreenCast` interface exists and the configured backend implements it | introspection | *"Screen sharing silently produces nothing."* The real capture is hardware-only and is not attempted |
 | `session/socket` | SPEC 0007's fixed endpoint exists and answers `Hello` | one frame | `skip` with no session (§4). `FAIL` when the path exists but nothing answers: *"The session daemon has died; windows are unplaced and keys are dead."* |
 | `session/protocol-version` | the session's version equals `ipc::PROTOCOL_VERSION` | `Response::Hello` | *"The CLI and the session are from different builds and would misread each other's frames."* Both versions printed |
-| `session/degraded` | every `DEGRADED <CODE>` in force for this session | the session log's stable codes (SPEC 0005 §6) | any code present is a `warn` reprinting the entry's own sentence. *"A degraded session pretending to be healthy."* This is the check that stops a session that started with no cursor theme from reading as clean |
+| `session/degraded` | every `DEGRADED <CODE>` in force for this session | `GetHealth`'s startup-code list, sampled from SPEC 0005's bounded per-incarnation handoff rather than inferred from the append-only historical log | any code present is a `warn` reprinting the entry's own sentence. *"A degraded session pretending to be healthy."* This is the check that stops a session that started with no cursor theme from reading as clean |
 | `palette/lint` | the palette parses and passes `Palette::lint` | `Palette::load` on the resolved path, then `lint()`; names the file used, user or shipped, and prints the accent hue separations | `FAIL` on any fatal `Finding`, `warn` otherwise. Prints every finding through its `Display` impl — `error text.normal: contrast 1.02:1 on background.pane is below 4.5:1` — not the first |
 | `theme/outputs` | the fully validated current generation matches the candidate rendered from the palette | the generation-aware comparison `theme diff` makes | `warn`: *"Future launches still select the previous generated theme."* Remedy: `realmctl theme apply` |
 | `fonts/glyphs` | the glyph inventory against the chain in `palette.toml` | build the database from `typography.family` + `typography.fallback`, then `glyphs::Probe::run`; print `Probe::summary()` verbatim | **`warn`**, never `FAIL`: the runes are non-essential by ADR 0012 and realm degrades to digits rather than tofu. *"Orbit runes draw as the digits 1–6 and the bar looks plain."* Prints `substituting for ᚠᚢᚦ…` and the package to install |
 | `fonts/attribution` | **which** family supplied each at-risk glyph — the six runes and `𓂃` | the resolved chain, per codepoint | `warn` when a family outside `typography.fallback` supplied one. *"Runes render in colour at the wrong size."* This is how an emoji font hijacking the symbol range becomes visible instead of merely puzzling |
-| `tools/floors` | the reused tools are installed and at their version floors | each tool's own `--version` | `warn` naming the tool and the package. *"charon, horus or thoth will be missing or unthemed"* (ADR 0007) |
+| `tools/floors` | the reused tools are installed and their parsed versions are reported; numeric floor comparison remains unresolved below | each tool's own `--version` | `warn` naming any absent or unparseable tool and its package. With all versions observed, `skip` explicitly says that cross-target numeric floors are not yet accepted; it must not report `ok` merely because a version string exists. *"charon, horus or thoth will be missing or unthemed"* (ADR 0007) |
 
-The report order is fixed independently of the explanatory table above:
-`session`, `wm`, `environment`, `units`, `portal`, `palette`, `theme`, `fonts`,
-then `tools`. Within each group, checks retain their relative order from the
-table. Human and JSON output contain the same 32 ids in that order, including
-every `skip`; neither sorting nor probe completion order may change it.
+The report order is the following exact 32-id sequence, independently of probe
+completion order:
 
-**One name is unsettled.** SPEC 0005 §8 gives `units/wm` the unit
-`realm-wm.service`; the session entry names it `realm-wm.service`. The
-two must be reconciled in whichever spec is wrong, and `doctor` reads the name
-from one place rather than hardcoding either.
+1. `session/socket`, `session/protocol-version`, `session/degraded`;
+2. `wm/attached`, `wm/layer-shell`, `wm/capabilities`, `wm/protocol-version`;
+3. `env/identity`, `env/wayland-display/process`,
+   `env/wayland-display/systemd`, `env/wayland-display/dbus`,
+   `env/desktop/systemd`, `env/desktop/dbus`, `env/agree`, `env/stale`,
+   `env/cursor`, `env/xwayland`, `env/list-matches-entry`;
+4. `units/target`, `units/wm`, `units/bar`, `units/restart-policy`,
+   `units/idle-lock`;
+5. `portal/answers`, `portal/config`, `portal/filechooser`,
+   `portal/screencast`;
+6. `palette/lint`; `theme/outputs`; `fonts/glyphs`, `fonts/attribution`;
+   and `tools/floors`.
+
+Human and JSON output contain all 32 ids in that order, including every
+`skip`; neither sorting nor probe completion order may change it. The unit name
+is the settled `realm-wm.service` from SPEC 0005 and its shipped unit.
 
 **When D-Bus is absent entirely.** The design says nothing about this and it is
 a real case: a container, a `su -` shell, a distribution without
@@ -350,7 +397,7 @@ things:
 ```
 realmctl doctor - realmctl 0.1.0, protocol 1
 2026-08-26T14:32:11+01:00 | Fedora 44 | kernel 6.12.4
-  river 0.4.1 | realm-wm 0.1.0
+  river backend | realm-wm 0.1.0
 
 session
   ok    socket            /run/user/1000/realm/ctl.sock - realm-wm 0.1.0
@@ -359,7 +406,6 @@ session
 
 wm
   ok    attached          realm-wm holds river's window-management global
-                          (pid 914)
   ok    layer-shell       river-layer-shell-v1 served; realm-bar.service active
   warn  capabilities      river - unsupported: unclipped-dimension-quantisation
   ok    protocol-version  river_window_manager_v1 v5, river_xkb_bindings_v1 v3
@@ -385,17 +431,19 @@ fonts
         fix      install Symbols Nerd Font Mono, or Symbola
   ok    attribution       runes <- Symbols Nerd Font Mono (chain position 2)
 
-32 checks: 28 ok, 3 warn, 1 failed, 0 skipped
+32 checks: 26 ok, 3 warn, 1 failed, 2 skipped
 ```
 
 (An excerpt: the `units`, `portal`, `palette`, `theme` and `tools` groups are
 omitted above, which is why fewer lines are shown than the tally counts.)
 
-The header line carries everything a bug report needs and the user does not
-have to be asked for: tool version, protocol version, distribution, kernel,
-compositor version, session version. The whole output is plain ASCII apart from
-glyph names, wraps at 80 columns, contains no ANSI when redirected, and is
-therefore pasteable as-is.
+The header line carries the facts a bug report needs and the user does not have
+to be asked for: tool version, protocol version, distribution, kernel, backend
+name, negotiated compositor interface versions, and session version. Wayland
+does not expose River's package version, so the report does not relabel the
+backend's tested target as an observed compositor release. The whole output is
+plain ASCII apart from glyph names, wraps at 80 columns, contains no ANSI when
+redirected, and is therefore pasteable as-is.
 
 `--json`:
 
@@ -487,10 +535,13 @@ Each row is one happy path and becomes one test.
 | B8a | Given any terminal client path/transport/I/O error other than version mismatch, when a live-session command runs, then it is not retried and exits 6; an application `Response::Error` remains a normal response and maps by its typed kind to exit 5 | `realm_ctl::tests::terminal_transport_errors_exit_six_without_retry` |
 | B9 | Given a session with three windows in orbit 1, when `ledger show 1 --json` runs, then stdout is exactly one object that deserialises as `Response::Ledger` with the windows in ledger order and the focused one marked | |
 | B10 | Given a running session, when `run foot -e yazi` runs, then it sends `Request::Spawn(["foot","-e","yazi"])`, exits 0 without waiting, and reports the argv as accepted rather than launched | |
-| B11 | Given a healthy session, when `doctor` runs, then every check reports `ok` or `warn`, the header names the tool, protocol, distribution, kernel and compositor versions, and it exits 0 | |
+| B11 | Given a healthy session, when `doctor` runs, then every resolved check reports `ok` or `warn`, the two explicitly unresolved checks report their accepted `skip`, the header names the tool, protocol, distribution, kernel, backend and negotiated compositor interfaces without inventing a compositor package version, and it exits 0 | |
 | B12 | Given the session entry deliberately suppresses the D-Bus activation-environment import and no earlier activation supplied the graphical-session values, when `doctor` runs and its portal proxy cannot become usable, then `env/wayland-display/dbus` fails within its 2 s deadline, prints the 25-second-hang symptom, reports the observed portal failure without claiming to have read a missing variable, names the activation environment, portal service and selected backend as possible causes, prints the `dbus-update-activation-environment` remedy, and exits 1 | |
 | B13 | Given no session running and a font stack that covers ASCII only, when `doctor` runs, then its optional session probe resolves at most one `RuntimeDir` and reuses one `ClientEndpoint`, the session checks are `skip` with a banner, `fonts/glyphs` warns with `Probe::summary()`'s wording, and it exits 0 rather than 3 | |
 | B14 | Given no session bus and no session running, when `doctor` runs, then the D-Bus and portal checks are `skip` and not `fail`, and it exits 0 | |
+| B14a | Given no runtime directory or no `realm` entry, a retained endpoint that remains refused, an unsafe endpoint, and a version-mismatched live endpoint, when `doctor` runs each case, then only the first case is the no-session `skip`; refused and unsafe endpoints fail `session/socket`; and the mismatched endpoint passes `session/socket`, fails `session/protocol-version` with both versions, sends no `GetHealth`, and never exits 3 | |
+| B14b | Given the fixed result set completes in a different order and the portal proxy reaches its 2 s deadline, when human and JSON reports are emitted, then both contain the exact same 32 ids in the specified order, every shared portal-derived check uses that one bounded observation, and the command completes in under 3 s | |
+| B14c | Given all three reused tools answer with parseable versions but no cross-target floors have been accepted, when `doctor` runs, then `tools/floors` reports the observed versions and an explicit unresolved-floor `skip`, never `ok`; absence or malformed version remains `warn`, and the acceptance row stays open until package/template compatibility establishes real minima | |
 | B15 | Given `theme apply` returns `Committed(generation)`, when the CLI reports it, then it exits 0 and reports exactly that generation as selected for future launches | `theme_cli::apply_reports_selected_future_generation_without_reload_or_session` |
 | B16 | Given `theme apply` returns `CommittedWithCleanupPending { generation, cause }`, when the CLI reports it, then it exits 0, reports exactly that generation as selected for future launches, and emits the safely escaped committed-cleanup warning | `realmctl::tests::cleanup_pending_reports_selected_generation_with_escaped_warning` |
 | B17 | Given `theme apply` returns `OutcomeAmbiguous { candidate, cause }`, when the CLI reports it, then it exits 6, emits no human stdout, safely reports the candidate and unconfirmed activation, claims no success, and performs no recovery or retry | `realmctl::tests::ambiguous_reports_no_success_stdout_and_escaped_cause` |
@@ -565,8 +616,11 @@ check.
   btop minimum is recorded. Those concrete package selections are evidence to
   test, not floors to copy. Before implementing `tools/floors`, verify the
   shipped theme keys against the supported package versions on all three
-  targets and accept the resulting minima. Until then the numeric comparison
-  remains explicitly unresolved rather than guessed.
+  targets and accept the resulting minima. Until then `doctor` implements the
+  fixed id by reporting each observed version and the explicit
+  unresolved-floor `skip`; it never guesses a comparison or reports `ok`.
+  Settling the floors and closing B14c remains a follow-up acceptance
+  obligation before #72 or the full M3 gate can be called complete.
 - **Resolved by SPEC 0003:** `Capabilities` lives in `realm_core::ipc` beside
   the other wire types, with owned unsupported-capability names. The backend,
   health response, and `doctor` share that one type.

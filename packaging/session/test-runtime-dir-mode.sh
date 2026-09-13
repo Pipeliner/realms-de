@@ -51,3 +51,46 @@ preserved_mode=$(stat -c '%a' "$existing_runtime/realm")
 	printf 'session entry changed existing realm mode from 755 to %s\n' "$preserved_mode" >&2
 	exit 1
 }
+
+handoff_runtime=$tmp/handoff-runtime
+mkdir -m 700 "$handoff_runtime"
+mkdir -m 700 "$handoff_runtime/realm"
+XDG_RUNTIME_DIR=$handoff_runtime bash -c '
+	. "$1"
+	have_systemd_user=0
+	degraded_codes=(NO-XWAYLAND NO-GSETTINGS)
+	publish_degraded_handoff
+	expected="$XDG_RUNTIME_DIR/realm/degraded.$MAIN_PID"
+	[[ $REALM_DEGRADED_FILE == "$expected" ]]
+	[[ $(stat -c "%a" "$expected") == 600 ]]
+	printf "%s\n" "$REALM_DEGRADED_FILE"
+' bash "$tmp/session-functions.sh" >"$tmp/handoff-path"
+handoff_path=$(<"$tmp/handoff-path")
+[[ $(<"$handoff_path") == $'version=1\npid='* ]] || {
+	printf 'degraded handoff lacks its versioned incarnation header\n' >&2
+	exit 1
+}
+[[ $(grep -c '^code=' "$handoff_path") == 2 ]] || {
+	printf 'degraded handoff did not preserve the finalized code set\n' >&2
+	exit 1
+}
+
+stale_runtime=$tmp/stale-runtime
+mkdir -m 700 "$stale_runtime"
+mkdir -m 700 "$stale_runtime/realm"
+XDG_RUNTIME_DIR=$stale_runtime CAPTURE=$tmp/manager-env bash -c '
+	. "$1"
+	have_systemd_user=1
+	systemctl() { printf "%s\n" "$*" >"$CAPTURE"; }
+	# Force record creation to fail while an older readable manager value could
+	# otherwise survive: the incarnation path is occupied by a directory.
+	mkdir "$XDG_RUNTIME_DIR/realm/degraded.$MAIN_PID"
+	publish_degraded_handoff
+	expected="$XDG_RUNTIME_DIR/realm/degraded.$MAIN_PID"
+	[[ $REALM_DEGRADED_FILE == "$expected" ]]
+	printf "%s\n" "--user set-environment REALM_DEGRADED_FILE=$expected" >"$CAPTURE.expected"
+' bash "$tmp/session-functions.sh"
+cmp -s "$tmp/manager-env.expected" "$tmp/manager-env" || {
+	printf 'failed handoff publication retained a previous manager path\n' >&2
+	exit 1
+}

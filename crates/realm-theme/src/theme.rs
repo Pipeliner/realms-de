@@ -294,6 +294,47 @@ pub fn apply(root: &Path) -> Result<GenerationPublicationOutcome> {
     })
 }
 
+/// Retain a valid current generation, or seed and publish one from clean absence.
+///
+/// Existing valid state is read-only. Recovery evidence, malformed state, and
+/// ambiguous first publication are errors; this operation does not repair or
+/// choose a fallback generation.
+pub fn ensure_current(root: &Path) -> Result<crate::generation::GenerationId> {
+    let config = ConfigRoot::open_or_create_final(root)?;
+    let input_root = config
+        .fd
+        .try_clone()
+        .map_err(|error| Error::Generation(error.to_string()))?;
+    let (generated, created) = config.open_generated_root_with_status()?;
+    let store = if created {
+        GenerationStore::open_from_fd(generated)
+    } else {
+        GenerationStore::open_initialized_from_fd(generated)
+    }
+    .map_err(Error::Generation)?;
+    let outcome = store
+        .ensure_current(|| {
+            ThemeSnapshot::new(
+                read_or_seed_raw_palette(&input_root).map_err(|error| error.to_string())?,
+                built_in_launch_profile().to_vec(),
+                BTreeMap::new(),
+                templates(),
+            )
+            .map_err(|error| error.to_string())
+            .and_then(|snapshot| snapshot.publication().map_err(|error| error.to_string()))
+        })
+        .map_err(|error| Error::Generation(error.to_string()))?;
+    match outcome {
+        GenerationPublicationOutcome::Committed(generation)
+        | GenerationPublicationOutcome::CommittedWithCleanupPending { generation, .. } => {
+            Ok(generation)
+        }
+        GenerationPublicationOutcome::OutcomeAmbiguous { cause, .. } => Err(Error::Generation(
+            format!("initial publication outcome is ambiguous: {cause}"),
+        )),
+    }
+}
+
 /// Activate a generation from a snapshot builder.
 ///
 /// The builder runs only after the generation store has acquired its exclusive
@@ -550,6 +591,51 @@ impl ConfigRoot {
         }
     }
 
+    /// Open the captured configuration root, creating only its final component
+    /// for a first login whose safe parent already exists.
+    fn open_or_create_final(root: &Path) -> Result<Self> {
+        let root = normalized_root_spelling(root);
+        match crate::generation::open_directory_chain_no_follow(&root) {
+            Ok(fd) => return Ok(Self { fd }),
+            Err(Errno::NOENT) => {}
+            Err(error) => return Err(Error::Generation(format!("configuration root: {error}"))),
+        }
+
+        let parent_path = root
+            .parent()
+            .ok_or_else(|| Error::Generation("configuration root has no existing parent".into()))?;
+        let name = root
+            .file_name()
+            .ok_or_else(|| Error::Generation("configuration root has no final component".into()))?;
+        let parent = crate::generation::open_directory_chain(parent_path)
+            .map_err(|error| Error::Generation(format!("configuration root parent: {error}")))?;
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let mut created = false;
+        match mkdirat(&parent, name, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+            Ok(()) => created = true,
+            Err(Errno::EXIST) => {}
+            Err(error) => return Err(Error::Generation(format!("configuration root: {error}"))),
+        }
+        let fd = openat(&parent, name, flags, Mode::empty())
+            .map_err(|error| Error::Generation(format!("configuration root: {error}")))?;
+        if created {
+            fchmod(&fd, Mode::RUSR | Mode::WUSR | Mode::XUSR)
+                .map_err(|error| Error::Generation(format!("configuration root: {error}")))?;
+            let stat = fstat(&fd).map_err(|error| Error::Generation(error.to_string()))?;
+            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+                || stat.st_uid != rustix::process::getuid().as_raw()
+                || Mode::from_raw_mode(stat.st_mode).bits() != 0o700
+            {
+                return Err(Error::Generation(
+                    "created configuration root must be a current-UID mode-0700 directory".into(),
+                ));
+            }
+        }
+        fsync(&parent)
+            .map_err(|error| Error::Generation(format!("configuration root parent: {error}")))?;
+        Ok(Self { fd })
+    }
+
     fn load_lint_palette(&self) -> Result<Palette> {
         let directory_flags =
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
@@ -579,10 +665,12 @@ impl ConfigRoot {
     }
 
     fn open_generated_root(&self) -> Result<OwnedFd> {
+        self.open_generated_root_with_status().map(|(fd, _)| fd)
+    }
+
+    fn open_generated_root_with_status(&self) -> Result<(OwnedFd, bool)> {
         let realm = self.open_or_create_directory(&self.fd, "realm", "realm", false)?;
-        let generated =
-            self.open_or_create_directory(&realm, "generated", "realm/generated", true)?;
-        Ok(generated)
+        self.open_or_create_directory_with_status(&realm, "generated", "realm/generated", true)
     }
 
     fn open_existing_generated_root(&self) -> Result<OwnedFd> {
@@ -611,6 +699,17 @@ impl ConfigRoot {
         display: &str,
         owned_mode_0700: bool,
     ) -> Result<OwnedFd> {
+        self.open_or_create_directory_with_status(parent, name, display, owned_mode_0700)
+            .map(|(fd, _)| fd)
+    }
+
+    fn open_or_create_directory_with_status(
+        &self,
+        parent: &OwnedFd,
+        name: &str,
+        display: &str,
+        owned_mode_0700: bool,
+    ) -> Result<(OwnedFd, bool)> {
         let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         let mut created = false;
         let fd = match openat(parent, name, flags, Mode::empty()) {
@@ -643,7 +742,7 @@ impl ConfigRoot {
             }
         }
         fsync(parent).map_err(|error| Error::Generation(format!("{display}: {error}")))?;
-        Ok(fd)
+        Ok((fd, created))
     }
 }
 
@@ -1329,6 +1428,66 @@ mod tests {
             );
         }
         selected.release().unwrap();
+    }
+
+    #[test]
+    fn ensure_current_seeds_clean_absence_once_and_retains_the_valid_winner() {
+        let root = tempfile::tempdir().unwrap();
+
+        let first = ensure_current(root.path()).unwrap();
+        let first_inventory = inventory(root.path());
+        let first_palette = std::fs::read(root.path().join(USER_PALETTE)).unwrap();
+
+        std::fs::write(root.path().join(USER_PALETTE), b"not valid palette bytes\n").unwrap();
+        let generated_before_second = inventory(&root.path().join("realm/generated"));
+        let second = ensure_current(root.path()).unwrap();
+
+        assert_eq!(second, first, "a valid current generation was republished");
+        assert_eq!(
+            inventory(&root.path().join("realm/generated")),
+            generated_before_second,
+            "ensure-current changed generation state"
+        );
+        assert_ne!(
+            std::fs::read(root.path().join(USER_PALETTE)).unwrap(),
+            first_palette,
+            "the existing-current path rewrote the palette"
+        );
+        assert!(first_inventory.contains_key(Path::new("realm/generated/current")));
+    }
+
+    #[test]
+    fn ensure_current_refuses_malformed_or_partial_state_without_writing() {
+        let malformed = tempfile::tempdir().unwrap();
+        let first = ensure_current(malformed.path()).unwrap();
+        assert!(!first.as_str().is_empty());
+        std::fs::write(
+            malformed.path().join("realm/generated/current"),
+            b"not-a-generation\n",
+        )
+        .unwrap();
+        let before = inventory(malformed.path());
+
+        assert!(ensure_current(malformed.path()).is_err());
+        assert_eq!(inventory(malformed.path()), before);
+
+        let partial = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(partial.path().join("realm/generated")).unwrap();
+        std::fs::set_permissions(
+            partial.path().join("realm/generated"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .unwrap();
+        std::fs::write(partial.path().join("realm/generated/activation.lock"), b"").unwrap();
+        std::fs::set_permissions(
+            partial.path().join("realm/generated/activation.lock"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        )
+        .unwrap();
+        let before = inventory(partial.path());
+
+        assert!(ensure_current(partial.path()).is_err());
+        assert_eq!(inventory(partial.path()), before);
     }
 
     #[test]

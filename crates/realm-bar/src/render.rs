@@ -1180,6 +1180,7 @@ fn middle_elide(text: &str, floor: usize, probe: &Probe) -> String {
 fn action_label(action: &Action) -> String {
     match action {
         Action::Spawn(argv) => format!("spawn {}", argv.join(" ")),
+        Action::Terminal => "terminal".into(),
         Action::Launcher => "launcher".into(),
         Action::Focus(direction) => format!("focus {direction:?}").to_lowercase(),
         Action::Swap(direction) => format!("swap {direction:?}").to_lowercase(),

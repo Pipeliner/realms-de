@@ -93,13 +93,24 @@ has an explicit `repeatable: bool`; repeatability is policy data and is never
 inferred from a backend event. In the MVP default only directional Focus and
 Swap bindings repeat. Every toggle, close, launch, mode, orbit, layout, undo,
 theme, grimoire, and Quit binding is non-repeatable. Wire types are
-adjacently-tagged serde enums framed one-per-line as JSON. `RealmState` is a
+adjacently-tagged serde enums framed one-per-line as JSON. The default Return
+binding is the typed `Action::Terminal`, serialized as
+`{"action":"terminal"}`; it is not the raw `Spawn(["realm-term"])` wire
+shape. `RealmState` is a
 plain snapshot with `renders_same_as`, which is how the bar avoids redrawing
 when a module recomputes to the same string. The snapshot carries both
 `whichkey` and `grimoire` visibility; both fields participate in
 `renders_same_as`. The bar obtains the session-owned `Keymap` once with
 `Request::GetKeymap` and `Response::Keymap(Box<Keymap>)` rather than copying it
-into every state broadcast. Every glyph realm draws is in an inventory with a
+into every state broadcast. The production v2 wire bundle adds the typed
+`Response::Error` kind, complete active/layout `OrbitLedger`, and
+`Request::GetHealth` / `Response::Health(Box<SessionHealth>)` together under one
+`PROTOCOL_VERSION` bump. `SessionHealth` is a portable owned value containing
+only daemon-owned build/protocol/backend/negotiated-interface/layer-shell,
+current-incarnation degradation, and monotonic-uptime facts; palette and font
+probes belong to the CLI and are not wire fields. Existing serde variant names
+and the decodable two-version `Hello` envelope remain unchanged across the
+bump. Every glyph realm draws is in an inventory with a
 documented ASCII fallback, including the bar's `elision` glyph used by narrow
 layouts.
 
@@ -123,8 +134,10 @@ layouts.
 | A12 | The which-key strip matches the reference row exactly | `keys::tests::strip_matches_the_reference_which_key_row` |
 | A12a | The default keymap marks only directional Focus and Swap bindings repeatable; all other actions are non-repeatable | `keys::tests::only_directional_focus_and_swap_bindings_repeat` |
 | A12b | The grimoire visibility bit changes rendered state and survives a state JSON round trip | `state::tests::grimoire_visibility_changes_rendered_state_and_round_trips` |
+| A12c | The default Return binding is the typed non-repeatable Terminal action and its exact `GetKeymap` wire representation is `{"action":"terminal"}`, not a raw Spawn argv | `keys::tests::default_terminal_action_has_the_stable_typed_wire_shape`, `runtime::tests::request_dispatch_uses_live_state_and_exact_session_keymap` |
 | A13 | Every protocol message survives a round trip through a single-line frame | `ipc::tests::requests_round_trip_through_a_frame` |
 | A13a | The bar can request the session-owned keymap and the response survives a protocol frame round trip | `ipc::tests::keymap_response_round_trips_through_a_frame` |
+| A13b | The complete v2 Error, ledger and health bundle round-trips with owned values under one protocol bump while the Hello envelope remains decodable on mismatch | `ipc::tests::protocol_v2_bundle_round_trips_and_preserves_hello_envelope` |
 | A14 | An ASCII-only font degrades to documented substitutes instead of tofu | `glyphs::tests::a_bare_ascii_font_degrades_instead_of_drawing_tofu` |
 | A14a | The elision glyph is inventory-backed and degrades to one ASCII character | `glyphs::tests::elision_is_inventory_backed_and_has_a_fixed_width_ascii_fallback` |
 | A15 | A revision bump alone does not force a bar redraw | `state::tests::revision_alone_does_not_force_a_redraw` |

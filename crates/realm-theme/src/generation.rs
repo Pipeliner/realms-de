@@ -710,13 +710,18 @@ impl GenerationReader {
 impl GenerationStore {
     /// Open an existing generated root and create its one persistent lock inode.
     pub fn open(path: &Path) -> std::result::Result<Self, String> {
-        Self::open_with_root_and_preflight(GenerationRoot::open(path)?, || {})
+        Self::open_with_root_and_preflight(GenerationRoot::open(path)?, true, || {})
     }
 
     /// Open a generated root already reached through a descriptor-safe parent
     /// chain. The descriptor must name the generated root itself.
     pub fn open_from_fd(fd: OwnedFd) -> std::result::Result<Self, String> {
-        Self::open_with_root_and_preflight(GenerationRoot { fd }, || {})
+        Self::open_with_root_and_preflight(GenerationRoot { fd }, true, || {})
+    }
+
+    /// Open an already-initialized generated root without creating missing controls.
+    pub(crate) fn open_initialized_from_fd(fd: OwnedFd) -> std::result::Result<Self, String> {
+        Self::open_with_root_and_preflight(GenerationRoot { fd }, false, || {})
     }
 
     #[cfg(test)]
@@ -728,11 +733,12 @@ impl GenerationStore {
         H: FnOnce(),
     {
         let root = GenerationRoot::open(path)?;
-        Self::open_with_root_and_preflight(root, preflight_checkpoint)
+        Self::open_with_root_and_preflight(root, true, preflight_checkpoint)
     }
 
     fn open_with_root_and_preflight<H>(
         root: GenerationRoot,
+        initialize: bool,
         preflight_checkpoint: H,
     ) -> std::result::Result<Self, String>
     where
@@ -790,7 +796,28 @@ impl GenerationStore {
             Err(Errno::NOENT) => false,
             Err(error) => return Err(error.to_string()),
         };
+        let publication_order_exists = if initialize {
+            match statat(&root.fd, "publication-order", AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(_) => true,
+                Err(Errno::NOENT) => false,
+                Err(error) => return Err(error.to_string()),
+            }
+        } else {
+            validate_optional_control(
+                &root,
+                "publication-order",
+                FileType::RegularFile,
+                0o600,
+                current_uid,
+            )?
+        };
         preflight_checkpoint();
+
+        if !initialize
+            && (!lock_exists || !generations_exists || !leases_exists || !publication_order_exists)
+        {
+            return Err("existing generated store is partially initialized".into());
+        }
 
         let lock_flags = OFlags::RDWR
             | OFlags::NOFOLLOW
@@ -877,10 +904,8 @@ impl GenerationStore {
         )?;
         flock(&lock, FlockOperation::LockExclusive).map_err(|error| error.to_string())?;
         let initialize_order = (|| -> std::result::Result<(), String> {
-            match statat(&root.fd, "publication-order", AtFlags::SYMLINK_NOFOLLOW) {
-                Ok(_) => return Ok(()),
-                Err(Errno::NOENT) => {}
-                Err(error) => return Err(error.to_string()),
+            if publication_order_exists {
+                return Ok(());
             }
             let fd = match openat(
                 &root.fd,
@@ -1009,6 +1034,75 @@ impl GenerationStore {
         C: FnOnce() -> std::result::Result<GenerationPublication, String>,
     {
         self.publish_with_checkpoint_and_ids(capture, |_| Ok(()), random_generation_id)
+    }
+
+    /// Retain a valid current generation or publish exactly once from pristine state.
+    pub(crate) fn ensure_current<C>(
+        &self,
+        capture: C,
+    ) -> std::result::Result<GenerationPublicationOutcome, GenerationPublicationError>
+    where
+        C: FnOnce() -> std::result::Result<GenerationPublication, String>,
+    {
+        let _lock = self.lock_exclusive()?;
+        let inventory = self.inspect_pointer_journals()?;
+        match &inventory.state {
+            PointerJournalState::Clean | PointerJournalState::CleanupCommitted { .. } => {}
+            _ => return Err("pointer transaction requires exclusive recovery".into()),
+        }
+        if let Some(current) = inventory.current {
+            self.validate_generation(&current)?;
+            return Ok(GenerationPublicationOutcome::Committed(current));
+        }
+        if !matches!(&inventory.state, PointerJournalState::Clean) {
+            return Err("absent current has pending recovery evidence".into());
+        }
+        self.validate_pristine_bootstrap_state()?;
+        let publication_order = self.load_publication_order()?;
+        let publication = capture()?;
+        let mut filesystem = RealPublicationFilesystem;
+        let mut next_id = random_generation_id;
+        self.publish_allocated_locked(
+            publication,
+            false,
+            publication_order,
+            |_| Ok(()),
+            &mut next_id,
+            &mut filesystem,
+        )
+    }
+
+    fn validate_pristine_bootstrap_state(&self) -> std::result::Result<(), String> {
+        let mut root = Dir::read_from(&self.root.fd).map_err(|error| error.to_string())?;
+        while let Some(entry) = root.read() {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let name = entry.file_name().to_bytes();
+            if matches!(
+                name,
+                b"." | b".."
+                    | b"activation.lock"
+                    | b"generations"
+                    | b"leases"
+                    | b"publication-order"
+            ) {
+                continue;
+            }
+            return Err("absent current has retained generation evidence".into());
+        }
+        for directory in [&self.generations.fd, &self.leases.fd] {
+            let mut entries = Dir::read_from(directory).map_err(|error| error.to_string())?;
+            while let Some(entry) = entries.read() {
+                let entry = entry.map_err(|error| error.to_string())?;
+                if !matches!(entry.file_name().to_bytes(), b"." | b"..") {
+                    return Err("absent current has retained generation evidence".into());
+                }
+            }
+        }
+        let publication_order = self.load_publication_order()?;
+        if publication_order != PublicationOrder::empty() {
+            return Err("absent current has retained publication evidence".into());
+        }
+        Ok(())
     }
 
     fn publish_with_checkpoint_and_ids<C, H, I>(

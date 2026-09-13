@@ -1,7 +1,10 @@
 //! Concrete request and poll-loop adapter for the Realm session daemon.
 
+use std::fs::File;
+use std::io::Read;
 use std::os::fd::AsFd;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
@@ -9,10 +12,11 @@ use realm_control::{
     production_runtime_dir, ConnectionId, ControlAction, ControlError, ControlServer, ControlToken,
     IpcPathError, ReadyEvent, ResponseReceipt, ResponseSettlement, RuntimeDir,
 };
-use realm_core::ipc::{Request, Response};
+use realm_core::ipc::{ErrorKind, Request, Response};
 use realm_core::ledger::OrbitId;
 
 use crate::backend::{BackendError, BackendReady, BackendTicket, WmBackend, WorkerCapacityError};
+use crate::consumer::FixedConsumer;
 use crate::modules::{ClockModule, ModuleSampler, ModuleSnapshot};
 use crate::persistence::{PersistCompletion, PersistCompletionError, PersistenceCoordinator};
 use crate::session::{
@@ -72,6 +76,12 @@ pub enum RuntimeError {
     /// The control transport failed outside a peer-local close boundary.
     #[error(transparent)]
     Control(#[from] ControlError),
+    /// The fixed-consumer configuration root could not be resolved.
+    #[error("theme configuration: {0}")]
+    Configuration(String),
+    /// The fresh-login generation could not be retained or published safely.
+    #[error(transparent)]
+    Theme(#[from] realm_theme::Error),
     /// A worker reported a persistence sequence the owner did not issue.
     #[error(transparent)]
     Persistence(#[from] PersistCompletionError),
@@ -80,9 +90,10 @@ pub enum RuntimeError {
     Invariant(&'static str),
 }
 
-fn application_error(message: impl Into<String>) -> RequestDispatch {
+fn application_error(kind: ErrorKind, message: impl Into<String>) -> RequestDispatch {
     RequestDispatch::Immediate {
         response: Response::Error {
+            kind,
             message: message.into(),
         },
         update: SessionUpdate::unchanged(),
@@ -100,13 +111,17 @@ fn action_result(
                 update,
             }),
         },
-        Err(error @ (SessionActionError::NotReady | SessionActionError::InvalidSpawnCommand)) => {
-            Ok(application_error(error.to_string()))
+        Err(error @ SessionActionError::InvalidSpawnCommand) => {
+            Ok(application_error(ErrorKind::BadArgument, error.to_string()))
         }
+        Err(error @ SessionActionError::NotReady) => Ok(application_error(
+            ErrorKind::BackendRefused,
+            error.to_string(),
+        )),
         Err(error @ SessionActionError::Backend(BackendError::Io { .. }))
-        | Err(error @ SessionActionError::Backend(BackendError::Unsupported { .. })) => {
-            Ok(application_error(error.to_string()))
-        }
+        | Err(error @ SessionActionError::Backend(BackendError::Unsupported { .. })) => Ok(
+            application_error(ErrorKind::BackendRefused, error.to_string()),
+        ),
         Err(error) => Err(RuntimeError::FatalAction(error)),
     }
 }
@@ -115,9 +130,13 @@ fn action_result(
 pub fn dispatch_request<B: WmBackend>(
     session: &mut Session<B>,
     request: Request,
+    uptime_ms: u64,
 ) -> Result<RequestDispatch, RuntimeError> {
     match request {
-        Request::Hello { .. } => Ok(application_error("Hello is only valid during handshake")),
+        Request::Hello { .. } => Ok(application_error(
+            ErrorKind::UnknownRequest,
+            "Hello is only valid during handshake",
+        )),
         Request::GetState => Ok(RequestDispatch::Immediate {
             response: Response::State(Box::new(session.state().clone())),
             update: SessionUpdate::unchanged(),
@@ -126,14 +145,19 @@ pub fn dispatch_request<B: WmBackend>(
             response: Response::Keymap(Box::new(session.keymap().clone())),
             update: SessionUpdate::unchanged(),
         }),
+        Request::GetHealth => Ok(RequestDispatch::Immediate {
+            response: Response::Health(Box::new(session.health(uptime_ms))),
+            update: SessionUpdate::unchanged(),
+        }),
         Request::Subscribe => Ok(RequestDispatch::Subscribe(session.state().clone())),
         Request::SwitchOrbit(number) => {
             let orbit = match OrbitId::from_human(number) {
                 Some(orbit) => orbit,
                 None => {
-                    return Ok(application_error(format!(
-                        "invalid one-based orbit {number}"
-                    )))
+                    return Ok(application_error(
+                        ErrorKind::NoSuchOrbit,
+                        format!("invalid one-based orbit {number}"),
+                    ))
                 }
             };
             action_result(session.switch_orbit(orbit))
@@ -142,9 +166,10 @@ pub fn dispatch_request<B: WmBackend>(
             let orbit = match OrbitId::from_human(number) {
                 Some(orbit) => orbit,
                 None => {
-                    return Ok(application_error(format!(
-                        "invalid one-based orbit {number}"
-                    )))
+                    return Ok(application_error(
+                        ErrorKind::NoSuchOrbit,
+                        format!("invalid one-based orbit {number}"),
+                    ))
                 }
             };
             action_result(session.move_focused_to_orbit(orbit))
@@ -157,6 +182,7 @@ pub fn dispatch_request<B: WmBackend>(
         Request::SetLayout(layout) => action_result(session.set_layout(layout)),
         Request::Undo => action_result(session.undo()),
         Request::ReloadTheme => Ok(application_error(
+            ErrorKind::UnknownRequest,
             "theme reload is retired; apply themes through realmctl",
         )),
         Request::Spawn(argv) => action_result(session.request_spawn(argv)),
@@ -166,9 +192,10 @@ pub fn dispatch_request<B: WmBackend>(
                 Some(number) => match OrbitId::from_human(number) {
                     Some(orbit) => Some(orbit),
                     None => {
-                        return Ok(application_error(format!(
-                            "invalid one-based orbit {number}"
-                        )));
+                        return Ok(application_error(
+                            ErrorKind::NoSuchOrbit,
+                            format!("invalid one-based orbit {number}"),
+                        ));
                     }
                 },
             };
@@ -195,10 +222,16 @@ pub struct RuntimeOwners<B: WmBackend> {
     worker_sealed: bool,
     shutdown_started: bool,
     exit_started: bool,
+    started_at: Instant,
 }
 
 impl<B: WmBackend> RuntimeOwners<B> {
     /// Assemble the owners after recovery reached Live and listener activation succeeded.
+    // Keep each event-loop owner and the pre-startup monotonic origin explicit.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "explicit runtime ownership assembly"
+    )]
     fn new(
         session: Session<B>,
         control: ControlServer,
@@ -207,6 +240,7 @@ impl<B: WmBackend> RuntimeOwners<B> {
         clock: ClockRuntime,
         sampler: ModuleSampler,
         persistence: PersistenceCoordinator,
+        started_at: Instant,
     ) -> Self {
         Self {
             session,
@@ -221,6 +255,7 @@ impl<B: WmBackend> RuntimeOwners<B> {
             worker_sealed: false,
             shutdown_started: false,
             exit_started: false,
+            started_at,
         }
     }
 
@@ -312,7 +347,12 @@ impl<B: WmBackend> RuntimeOwners<B> {
             connection,
             request,
         } = action;
-        match dispatch_request(&mut self.session, request)? {
+        let uptime_ms = now
+            .saturating_duration_since(self.started_at)
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        match dispatch_request(&mut self.session, request, uptime_ms)? {
             RequestDispatch::Immediate { response, update } => {
                 self.apply_update(now, update, Some((connection, response)))?;
             }
@@ -362,6 +402,7 @@ impl<B: WmBackend> RuntimeOwners<B> {
                 let response = match &completion.result {
                     Ok(()) => Response::Ok,
                     Err(error) => Response::Error {
+                        kind: ErrorKind::BackendRefused,
                         message: error.to_string(),
                     },
                 };
@@ -384,8 +425,11 @@ impl<B: WmBackend> RuntimeOwners<B> {
         for effect in update.effects.drain(..) {
             match effect {
                 SessionEffect::Spawn(argv) => jobs.push(ProcessJob::Spawn(argv)),
+                SessionEffect::Terminal => {
+                    jobs.push(ProcessJob::FixedConsumer(FixedConsumer::Terminal));
+                }
                 SessionEffect::Launcher => {
-                    jobs.push(ProcessJob::Spawn(vec!["fuzzel".to_owned()]));
+                    jobs.push(ProcessJob::FixedConsumer(FixedConsumer::Launcher));
                 }
                 SessionEffect::ReloadTheme => {
                     eprintln!("realm-wm: ignored retired key-derived theme reload");
@@ -601,17 +645,117 @@ const NOT_READY: BackendReady = BackendReady {
     writable: false,
 };
 
+const MAX_DEGRADED_HANDOFF_BYTES: u64 = 4_096;
+const KNOWN_DEGRADED_CODES: [&str; 7] = [
+    "NO-SESSION-BUS",
+    "NO-DBUS-ACTIVATION",
+    "NO-SYSTEMD-USER",
+    "NO-DISPLAY-PROBE",
+    "NO-XWAYLAND",
+    "NO-GSETTINGS",
+    "NO-CURSOR-THEME",
+];
+
+fn read_degraded_handoff(
+    runtime_root: &std::path::Path,
+    path: &std::path::Path,
+) -> Result<Vec<String>, String> {
+    if !path.is_absolute() || path.parent() != Some(&runtime_root.join("realm")) {
+        return Err("path is not the exact absolute Realm runtime handoff path".to_owned());
+    }
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Err("handoff file name is not UTF-8".to_owned());
+    };
+    let Some(path_pid) = file_name.strip_prefix("degraded.") else {
+        return Err("handoff file name lacks its incarnation pid".to_owned());
+    };
+    let path_pid: u32 = path_pid
+        .parse()
+        .map_err(|_| "handoff file name has an invalid incarnation pid".to_owned())?;
+
+    let metadata = path
+        .symlink_metadata()
+        .map_err(|error| format!("cannot inspect handoff: {error}"))?;
+    if !metadata.file_type().is_file() {
+        return Err("handoff is not a regular file".to_owned());
+    }
+    if metadata.mode() & 0o777 != 0o600 {
+        return Err("handoff mode is not 0600".to_owned());
+    }
+    if metadata.uid() != rustix::process::geteuid().as_raw() {
+        return Err("handoff is not owned by the session user".to_owned());
+    }
+    if metadata.len() > MAX_DEGRADED_HANDOFF_BYTES {
+        return Err("handoff exceeds 4096 bytes".to_owned());
+    }
+
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(|error| format!("cannot open handoff: {error}"))?
+        .take(MAX_DEGRADED_HANDOFF_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read handoff: {error}"))?;
+    if bytes.len() as u64 > MAX_DEGRADED_HANDOFF_BYTES {
+        return Err("handoff grew beyond 4096 bytes".to_owned());
+    }
+    if !bytes.is_ascii() {
+        return Err("handoff is not ASCII".to_owned());
+    }
+    let record = std::str::from_utf8(&bytes).map_err(|_| "handoff is not UTF-8".to_owned())?;
+    let mut lines = record.lines();
+    if lines.next() != Some("version=1") {
+        return Err("handoff version is not 1".to_owned());
+    }
+    let Some(record_pid) = lines.next().and_then(|line| line.strip_prefix("pid=")) else {
+        return Err("handoff lacks its incarnation pid".to_owned());
+    };
+    let record_pid: u32 = record_pid
+        .parse()
+        .map_err(|_| "handoff has an invalid incarnation pid".to_owned())?;
+    if record_pid != path_pid {
+        return Err("handoff pid does not match its file name".to_owned());
+    }
+
+    let mut codes = Vec::new();
+    for line in lines {
+        let Some(code) = line.strip_prefix("code=") else {
+            return Err("handoff contains an unknown record field".to_owned());
+        };
+        if !KNOWN_DEGRADED_CODES.contains(&code) {
+            return Err(format!("handoff contains unknown code {code}"));
+        }
+        if codes.iter().any(|existing| existing == code) {
+            return Err(format!("handoff repeats code {code}"));
+        }
+        codes.push(code.to_owned());
+    }
+    Ok(codes)
+}
+
+fn load_degraded_handoff(runtime: &RuntimeDir) -> Option<Vec<String>> {
+    let path = std::env::var_os("REALM_DEGRADED_FILE")?;
+    match read_degraded_handoff(runtime.path(), std::path::Path::new(&path)) {
+        Ok(codes) => Some(codes),
+        Err(error) => {
+            eprintln!("realm-wm: rejected current-session degradation handoff: {error}");
+            None
+        }
+    }
+}
+
 /// Run the concrete daemon lifecycle with one supported backend constructor.
 pub fn run_daemon_with<B, F, R>(
     runtime: RuntimeDir,
     make_backend: F,
     ready: R,
+    degraded_codes: Option<Vec<String>>,
 ) -> Result<(), RuntimeError>
 where
     B: WmBackend,
     F: FnOnce() -> Result<B, BackendError>,
     R: FnOnce() -> std::io::Result<()>,
 {
+    let started_at = Instant::now();
     let mut clock = ClockRuntime::system();
     let snapshot_path = runtime.path().join("realm/ledger.json");
     let bound = runtime.prepare_server_endpoint()?.bind()?;
@@ -621,7 +765,8 @@ where
     let mut persistence = PersistenceCoordinator::new(recovered.clone());
 
     let backend = make_backend()?;
-    let mut session = Session::connect_with_snapshot(backend, recovered)?;
+    let mut session =
+        Session::connect_with_snapshot_and_degraded(backend, recovered, degraded_codes)?;
     recover_until_live(&mut session, &mut persistence)?;
     let update = clock.tick(&mut session, SystemTime::now())?;
     persistence.observe(update.persistence, Instant::now());
@@ -637,6 +782,7 @@ where
         clock,
         sampler,
         persistence,
+        started_at,
     );
     ready()?;
     run_combined_loop(&mut owners)
@@ -741,7 +887,18 @@ where
     B: WmBackend,
     F: FnOnce() -> Result<B, BackendError>,
 {
-    run_daemon_with(production_runtime_dir()?, make_backend, notify_ready)
+    let runtime = production_runtime_dir()?;
+    let config_root =
+        crate::consumer::config_root_from_env().map_err(RuntimeError::Configuration)?;
+    prepare_startup_theme(&config_root)?;
+    let degraded_codes = load_degraded_handoff(&runtime);
+    run_daemon_with(runtime, make_backend, notify_ready, degraded_codes)
+}
+
+fn prepare_startup_theme(
+    config_root: &std::path::Path,
+) -> Result<realm_theme::generation::GenerationId, RuntimeError> {
+    realm_theme::ensure_current(config_root).map_err(RuntimeError::from)
 }
 
 fn load_startup_snapshot(
@@ -1118,21 +1275,22 @@ mod tests {
     use std::os::fd::{AsFd, BorrowedFd};
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixStream;
+    use std::process::Command;
     use std::sync::mpsc;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use realm_control::test_runtime_dir;
-    use realm_core::ipc::{Capabilities, Request, Response};
+    use realm_core::ipc::{Capabilities, InterfaceVersion, Request, Response, PROTOCOL_VERSION};
     use realm_core::layout::Workarea;
     use realm_core::ledger::Dir;
     use realm_core::WinId;
 
     use super::{dispatch_request, run_daemon_with, ClockRuntime, RequestDispatch};
     use crate::backend::{
-        BackendBindingSpec, BackendContractError, BackendEvent, BackendExitPolicy,
-        BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn, BackendPolicyTurnId,
-        BackendPollInterest, BackendReady, BackendResult, BackendSubmission, BackendTicket,
-        BackendWindowId, WmBackend,
+        BackendBindingSpec, BackendConnection, BackendContractError, BackendEvent,
+        BackendExitPolicy, BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn,
+        BackendPolicyTurnId, BackendPollInterest, BackendReady, BackendResult, BackendSubmission,
+        BackendTicket, BackendWindowId, WmBackend,
     };
     use crate::modules::{ModuleSampler, ModuleSnapshot, NetworkRate};
     use crate::persistence::PersistenceCoordinator;
@@ -1153,14 +1311,21 @@ mod tests {
             "fake"
         }
 
-        fn connect(&mut self) -> BackendResult<Capabilities> {
-            Ok(Capabilities {
-                exact_geometry: true,
-                server_side_borders: true,
-                hide_show: true,
-                explicit_ordering: true,
-                fullscreen: true,
-                unsupported: Vec::new(),
+        fn connect(&mut self) -> BackendResult<BackendConnection> {
+            Ok(BackendConnection {
+                capabilities: Capabilities {
+                    exact_geometry: true,
+                    server_side_borders: true,
+                    hide_show: true,
+                    explicit_ordering: true,
+                    fullscreen: true,
+                    unsupported: Vec::new(),
+                },
+                bound_interfaces: vec![InterfaceVersion {
+                    name: "fixture_window_manager_v1".to_owned(),
+                    version: 7,
+                }],
+                layer_shell_served: true,
             })
         }
 
@@ -1284,14 +1449,18 @@ mod tests {
             "daemon-fake"
         }
 
-        fn connect(&mut self) -> BackendResult<Capabilities> {
-            Ok(Capabilities {
-                exact_geometry: true,
-                server_side_borders: true,
-                hide_show: true,
-                explicit_ordering: true,
-                fullscreen: true,
-                unsupported: Vec::new(),
+        fn connect(&mut self) -> BackendResult<BackendConnection> {
+            Ok(BackendConnection {
+                capabilities: Capabilities {
+                    exact_geometry: true,
+                    server_side_borders: true,
+                    hide_show: true,
+                    explicit_ordering: true,
+                    fullscreen: true,
+                    unsupported: Vec::new(),
+                },
+                bound_interfaces: Vec::new(),
+                layer_shell_served: false,
             })
         }
 
@@ -1377,7 +1546,7 @@ mod tests {
         let mut session = live_session();
 
         assert!(matches!(
-            dispatch_request(&mut session, Request::GetState).unwrap(),
+            dispatch_request(&mut session, Request::GetState, 0).unwrap(),
             RequestDispatch::Immediate {
                 response: Response::State(_),
                 ..
@@ -1386,11 +1555,71 @@ mod tests {
         let RequestDispatch::Immediate {
             response: Response::Keymap(keymap),
             ..
-        } = dispatch_request(&mut session, Request::GetKeymap).unwrap()
+        } = dispatch_request(&mut session, Request::GetKeymap, 0).unwrap()
         else {
             panic!("GetKeymap must return the Session-owned keymap");
         };
         assert_eq!(&*keymap, session.keymap());
+    }
+
+    #[test]
+    fn get_health_reports_owned_negotiated_facts_without_side_effects() {
+        let mut session = live_session();
+        let state = session.state().clone();
+        let snapshot = session.snapshot();
+
+        let RequestDispatch::Immediate { response, update } =
+            dispatch_request(&mut session, Request::GetHealth, 42).unwrap()
+        else {
+            panic!("GetHealth must complete immediately");
+        };
+        let Response::Health(health) = response else {
+            panic!("GetHealth must return Health");
+        };
+        assert_eq!(health.session_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(health.protocol_version, PROTOCOL_VERSION);
+        assert_eq!(health.backend_name, "fake");
+        assert_eq!(
+            health.bound_interfaces,
+            vec![InterfaceVersion {
+                name: "fixture_window_manager_v1".to_owned(),
+                version: 7,
+            }]
+        );
+        assert!(health.layer_shell_served);
+        assert_eq!(health.degraded_codes, None);
+        assert_eq!(health.uptime_ms, 42);
+        assert_eq!(update, SessionUpdate::unchanged());
+        assert_eq!(session.state(), &state);
+        assert_eq!(session.snapshot(), snapshot);
+    }
+
+    #[test]
+    fn startup_degraded_handoff_is_bounded_incarnation_specific_and_total() {
+        let root = fixture_dir("degraded-handoff");
+        let realm_dir = root.join("realm");
+        fs::create_dir(&realm_dir).unwrap();
+        fs::set_permissions(&realm_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let handoff = realm_dir.join("degraded.4242");
+        fs::write(
+            &handoff,
+            "version=1\npid=4242\ncode=NO-XWAYLAND\ncode=NO-GSETTINGS\n",
+        )
+        .unwrap();
+        fs::set_permissions(&handoff, fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert_eq!(
+            super::read_degraded_handoff(&root, &handoff).unwrap(),
+            vec!["NO-XWAYLAND".to_owned(), "NO-GSETTINGS".to_owned()]
+        );
+
+        fs::set_permissions(&handoff, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(super::read_degraded_handoff(&root, &handoff).is_err());
+        fs::set_permissions(&handoff, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&handoff, "version=1\npid=4242\ncode=NOT-A-REAL-CODE\n").unwrap();
+        assert!(super::read_degraded_handoff(&root, &handoff).is_err());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1404,7 +1633,7 @@ mod tests {
             Request::ReloadTheme,
         ] {
             assert!(matches!(
-                dispatch_request(&mut session, request).unwrap(),
+                dispatch_request(&mut session, request, 0).unwrap(),
                 RequestDispatch::Immediate {
                     response: Response::Error { .. },
                     ..
@@ -1430,20 +1659,80 @@ mod tests {
             Request::Spawn(vec!["true".to_owned()]),
         ];
         for request in requests {
-            let result = dispatch_request(&mut session, request).unwrap();
+            let result = dispatch_request(&mut session, request, 0).unwrap();
             assert!(matches!(
                 result,
                 RequestDispatch::Immediate { .. } | RequestDispatch::Pending { .. }
             ));
         }
         assert!(matches!(
-            dispatch_request(&mut session, Request::Subscribe).unwrap(),
+            dispatch_request(&mut session, Request::Subscribe, 0).unwrap(),
             RequestDispatch::Subscribe(_)
         ));
         assert!(matches!(
-            dispatch_request(&mut session, Request::Quit).unwrap(),
+            dispatch_request(&mut session, Request::Quit, 0).unwrap(),
             RequestDispatch::Quit(_)
         ));
+    }
+
+    #[test]
+    fn production_startup_theme_preparation_seeds_once_and_refuses_malformed_current() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "runtime::tests::startup_theme_preparation_subprocess",
+                "--nocapture",
+            ])
+            .env("REALM_STARTUP_THEME_FIXTURE", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated startup-theme fixture failed: {output:?}"
+        );
+    }
+
+    #[test]
+    fn startup_theme_preparation_subprocess() {
+        if std::env::var_os("REALM_STARTUP_THEME_FIXTURE").is_none() {
+            return;
+        }
+        // fork/exec inherits whichever process-wide umask a parallel endpoint
+        // fixture held at spawn time. This exact subprocess has no peer tests,
+        // so establish the ordinary production-login mask before bootstrap.
+        rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o022));
+        let fixture = fixture_dir("startup-theme");
+        let root = fixture.join("fresh-config");
+        assert!(!root.exists());
+        let first = super::prepare_startup_theme(&root).unwrap();
+        assert_eq!(
+            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let current = fs::read(root.join("realm/generated/current")).unwrap();
+
+        let second = super::prepare_startup_theme(&root).unwrap();
+        assert_eq!(second, first);
+        assert_eq!(
+            fs::read(root.join("realm/generated/current")).unwrap(),
+            current
+        );
+
+        fs::write(root.join("realm/generated/current"), b"malformed\n").unwrap();
+        let malformed = fs::read(root.join("realm/generated/current")).unwrap();
+        assert!(super::prepare_startup_theme(&root).is_err());
+        assert_eq!(
+            fs::read(root.join("realm/generated/current")).unwrap(),
+            malformed
+        );
+
+        let missing_parent = fixture.join("missing-parent/config");
+        assert!(super::prepare_startup_theme(&missing_parent).is_err());
+        assert!(
+            !fixture.join("missing-parent").exists(),
+            "bootstrap recursively created an absent configuration-root parent"
+        );
+        fs::remove_dir_all(fixture).unwrap();
     }
 
     #[test]
@@ -1461,6 +1750,7 @@ mod tests {
                         std::io::Error::new(std::io::ErrorKind::BrokenPipe, "test ready receiver")
                     })
                 },
+                None,
             )
         });
 
@@ -1520,6 +1810,7 @@ mod tests {
             clock,
             sampler,
             persistence,
+            Instant::now(),
         );
         let started = Instant::now();
         let quit = owners.session.begin_direct_quit().unwrap();
@@ -1666,6 +1957,7 @@ mod tests {
             clock,
             sampler,
             persistence,
+            Instant::now(),
         );
 
         let now = Instant::now();
