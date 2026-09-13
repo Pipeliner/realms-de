@@ -189,6 +189,20 @@ mv "$fixture_root/README.next" "$fixture_root/README.md"
 expect_fail stale-fedora-installroot-status "$fixture_root" \
     'README status must name the Fedora RPM installroot evidence'
 
+fixture_root=$(make_fixture stale-ubuntu-installroot-status)
+sed 's/exact Ubuntu Realm and private River packages clean-install together in an empty amd64 Noble root/Ubuntu package installation remains pending/' \
+    "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail stale-ubuntu-installroot-status "$fixture_root" \
+    'README status must name the Ubuntu package-pair installroot evidence'
+
+fixture_root=$(make_fixture stale-portal-status)
+sed 's/FileChooser cancel, Settings read, and nonempty ScreenCast buffer/functional portal verification remains pending/' \
+    "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail stale-portal-status "$fixture_root" \
+    'README status must name the bounded functional portal evidence'
+
 fixture_root=$(make_fixture missing-ci-invocation)
 sed '/\.\/docs\/test-readme-truth-snapshot\.sh/d' \
     "$fixture_root/.github/workflows/ci.yml" >"$fixture_root/ci.next.yml"
