@@ -33,6 +33,16 @@ offline closures and provenance records before a package build may consume
 them. This specification neither deletes the current records nor treats a
 top-level archive as an offline build input.
 
+The Realm-scoped Nix package path SHALL also build Yazi `25.4.8` from the
+selected retained source archive, lockfile and vendor archive above. It SHALL
+not substitute nixpkgs' moving Yazi package: `26.8.15` uses a different keymap
+section name and cannot consume the selected `25.4.8` configuration unchanged.
+This pin applies only inside `support.reusedTools`; it is not a global nixpkgs
+overlay. The normal nixpkgs Yazi wrapper may still supply its declared optional
+runtime tools around the retained unwrapped binary. Evaluation and the
+installed-session fixture SHALL assert the exact `25.4.8` version, and its
+build has no fetch path beyond the already retained archives.
+
 ## Offline bundle contract
 
 For each selected tool, the retained build input SHALL contain, and the
@@ -334,7 +344,7 @@ terminals keep their original selectors and receive no live reload.
 | B1 | Given a selected tool or Realm-workspace source bundle, when its intake linkage is validated, then archive, lockfile, every resolved Cargo source, vendor tree, source-replacement config, digest records, and dependency license report agree exactly. | To be implemented: source-bundle linkage fixture. |
 | B2 | Given retained-only Debian and Fedora source kits and their actual package build paths with networking disabled and empty Cargo caches, when source-kit recursion, emitted package documentation, selected bundles, the complete Realm workspace build, and all package-relevant staged workspace tests run (excluding only non-packaged `realm-agent-sdd`), then no hidden workspace is accepted, the installed guide names only the retained-kit workflow, all Cargo invocations use `--frozen --offline --locked`, deterministic source/VCS metadata where applicable, and no recipe fetch path exists. | `packaging/tool-sources/test-native-source-kits.sh`; `packaging/tool-sources/test-native-builds.sh` (Realm-workspace portion; selected Yazi/Starship bundle integration remains follow-on work) |
 | B3 | Given a native package install and direct or systemd-user Realm session launch, when executable and PATH ownership are inspected, then only `/usr/lib/realm/bin/*` owns the three Realm tools, Realm-launched applications resolve them, and neither user manager nor DBus activation receives the private PATH, including with `REALM_IMPORT_PATH=1`. | To be implemented: package/session ownership fixture. |
-| B4 | Given a rendered Realm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it, then a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Realm feature. | To be implemented: rendered-config runtime fixture. |
+| B4 | Given a rendered Realm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it on native or Nix package paths, then the executable reports exactly `25.4.8`, a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Realm feature. | `packaging/tool-sources/test-tool-configs.sh`; retained native and installed Nix runtime fixtures |
 | B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | To be implemented: dependency-license fixture. |
 | B6 | Given a complete current generation N, when the typed terminal binding launches Foot and zsh, then exact argv/environment select only N, Starship renders Realm's prompt, Yazi loads all three generation-local files, `Ctrl+p` launches btop with N's exact config/theme arguments, and both TUI screens visibly use their selected Realm configuration. Given a valid pre-profile generation, terminal refuses without mutation; after explicit apply a complete later generation launches successfully. User configuration remains untouched, prior committed generations remain present, and no mutable/live-reload path is used. | `fixed_consumers` exact profile tests; installed Nix terminal/Yazi/btop fixture |
 | B7 | Given a complete N and no explicit user qt6ct override, when packaged GTK 3, GTK 4 and Qt 6 applications start below N's selected terminal, then the actual toolkit/plugin loaders consume N's named GTK CSS and N's qt6ct colour scheme, including actual qt6ct expansion of `$REALM_GENERATION`, and the VM retains nonempty application frames. A pre-existing qt6ct configuration remains byte-identical and is reported as an override rather than Realm-palette success. | fixed-consumer selector tests; packaged parser probes; installed Nix application fixture |

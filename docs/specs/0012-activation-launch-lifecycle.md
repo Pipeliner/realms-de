@@ -114,10 +114,11 @@ The daemon's off-loop child reaper from SPEC 0003 reaps that exited direct
 consumer, so a zombie cannot continue satisfying the process-lease liveness
 check and pin N until the daemon itself exits.
 
-The packaged session must make the literal `foot` and `fuzzel` basenames
-reachable in the worker and inherited consumer-exec `PATH`. Native packages use
-their normal `/usr/bin` dependencies. The Nix package prepends the exact
-`support.reusedTools` path, which contains both programs, to the installed
+The packaged session must make the literal `foot`, `fuzzel`, `zsh`, `starship`,
+`yazi` and `btop` basenames reachable in the worker and inherited consumer-exec
+`PATH`. Native packages use their normal `/usr/bin` dependencies. The Nix
+package prepends the exact `support.reusedTools` path, which contains all six
+programs, to the installed
 `realm-wm.service` environment. The NixOS module must also place the Realm
 package itself and those tools in the generated service drop-in's `PATH`: a
 default-path drop-in may not replace the package unit's helper and
