@@ -152,6 +152,8 @@ class PortalClient:
                 raise RuntimeError(
                     f"{method} returned {returned_path!r}, expected {expected_path!r}"
                 )
+            if timed_out:
+                raise TimeoutError(f"{method} portal response exceeded {timeout_ms} ms")
             # call_sync may itself iterate the thread-default context. Do not
             # enter a fresh loop if the response was already dispatched.
             if not response:
