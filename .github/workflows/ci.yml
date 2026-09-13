@@ -158,6 +158,7 @@ jobs:
           ./packaging/tool-sources/test-bundle-linkage.sh
           ./packaging/tool-sources/test-no-live-fetch.sh
           ./packaging/tool-sources/test-native-source-kits.sh
+          ./packaging/tool-sources/test-native-cargo-wrapper.sh
       - name: Prepare lifecycle-capable native package temporary directory
         id: native-temp
         run: |

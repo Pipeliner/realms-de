@@ -4,6 +4,7 @@ set -eu
 
 root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 kit_builder=$root/packaging/tool-sources/build-native-source-kits.sh
+cargo_wrapper=$root/packaging/tool-sources/native-cargo-wrapper.sh
 native_tmp=${REALM_NATIVE_TMPDIR:-${TMPDIR:-/tmp}}
 failures=0
 
@@ -120,31 +121,7 @@ exit 97
 EOF
         chmod +x "$directory/$command"
     done
-    cat >"$directory/cargo" <<'EOF'
-#!/bin/sh
-printf 'cargo|cwd=%s|home=%s|args=%s\n' "$PWD" "${CARGO_HOME:-}" "$*" >>"${REALM_SENTINEL_LOG:?}"
-if ! cmp -s "${CARGO_HOME:?}/config.toml" "${REALM_EXPECTED_CARGO_CONFIG:?}" \
-    || find "$CARGO_HOME" -mindepth 1 ! -path "$CARGO_HOME/config.toml" \
-        -print -quit | grep . >/dev/null; then
-    printf 'cargo-home-not-retained-config|home=%s\n' "$CARGO_HOME" >>"$REALM_SENTINEL_LOG"
-    exit 96
-fi
-set +e
-"${REALM_REAL_CARGO:?}" "$@"
-status=$?
-set -e
-printf 'cargo-result|status=%s\n' "$status" >>"$REALM_SENTINEL_LOG"
-if [ "$status" -eq 0 ] && [ "${1:-}" = build ]; then
-    for bin in realmctl realm-wm realm-bar; do
-        if [ -x "${REALM_EXPECTED_TARGET_DIR:?}/release/$bin" ]; then
-            printf 'cargo-output|binary=%s|executable=yes\n' "$bin" >>"$REALM_SENTINEL_LOG"
-        else
-            printf 'cargo-output|binary=%s|executable=no\n' "$bin" >>"$REALM_SENTINEL_LOG"
-        fi
-    done
-fi
-exit "$status"
-EOF
+    cp "$cargo_wrapper" "$directory/cargo"
     chmod +x "$directory/cargo"
 }
 
