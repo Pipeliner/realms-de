@@ -113,6 +113,8 @@ jobs:
           set -euo pipefail
           root="$RUNNER_TEMP/noble-root"
           sudo debootstrap --variant=minbase noble "$root" http://archive.ubuntu.com/ubuntu
+          sudo mount --types proc proc "$root/proc"
+          trap 'sudo umount "$root/proc"' EXIT
           printf '%s\n' \
             'deb http://archive.ubuntu.com/ubuntu noble main universe' \
             'deb http://archive.ubuntu.com/ubuntu noble-updates main universe' \

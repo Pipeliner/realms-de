@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 builder="$repo_root/packaging/river/run-noble-river-package-build.sh"
 rules="$repo_root/packaging/debian-river/rules"
+workflow="$repo_root/.github/workflows/distro.yml"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -16,6 +17,18 @@ grep -A1 -Fx 'override_dh_dwz:' "$rules" | grep -Fqx "${make_tab}:" || {
     echo 'Noble River rules do not narrowly omit optional dwz processing' >&2
     exit 1
 }
+river_job=$(sed -n '/^  ubuntu-river-debian:/,/^  ubuntu-debian-package:/p' \
+    "$workflow")
+dollar='$'
+root_proc="${dollar}root/proc"
+proc_mount="sudo mount --types proc proc \"${root_proc}\""
+proc_cleanup="trap 'sudo umount \"${root_proc}\"' EXIT"
+for proc_contract in "$proc_mount" "$proc_cleanup"; do
+    printf '%s\n' "$river_job" | grep -Fx "          $proc_contract" >/dev/null || {
+        echo "Noble clean-root job omits procfs contract: $proc_contract" >&2
+        exit 1
+    }
+done
 
 mkdir -p "$tmpdir/bin" "$tmpdir/source/debian"
 : >"$tmpdir/source/debian/control"
