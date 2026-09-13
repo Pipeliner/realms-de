@@ -3,7 +3,7 @@ use std::fs;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,6 +13,7 @@ struct RunningStub {
     child: Child,
     pid_path: PathBuf,
     args_path: PathBuf,
+    probes_path: PathBuf,
     selectors_path: PathBuf,
     pid_gate_path: PathBuf,
     stop_gate_path: PathBuf,
@@ -95,13 +96,70 @@ fn install_stopping_stub(directory: &Path, name: &str) {
     fs::set_permissions(path, PermissionsExt::from_mode(0o700)).unwrap();
 }
 
-fn spawn_consumer(root: &Path, stub_dir: &Path, kind: &str) -> RunningStub {
+fn install_foot_stub(directory: &Path) {
+    let path = directory.join("foot");
+    fs::write(
+        &path,
+        r#"#!/bin/sh
+if [ "${1-}" = "--check-config" ]; then
+    printf '%s\n' "$@" >> "$REALM_TEST_PROBES"
+    case "${2-}" in
+        */foot-modern.ini)
+            printf '%s\n' 'modern probe diagnostic' >&2
+            if [ "$REALM_TEST_FOOT_MODE" = modern ] ||
+                [ "$REALM_TEST_FOOT_MODE" = exec-failure ]; then
+                exit 0
+            fi
+            if [ "$REALM_TEST_FOOT_MODE" = deadline ]; then
+                while [ ! -e "$REALM_TEST_PROBE_GATE" ]; do :; done
+            fi
+            exit 41
+            ;;
+        */foot.ini)
+            if [ "$REALM_TEST_FOOT_MODE" = legacy ]; then
+                exit 0
+            fi
+            printf '%s\n' 'legacy probe diagnostic' >&2
+            if [ "$REALM_TEST_FOOT_MODE" = deadline ]; then
+                printf '%s\n' "$$" > "$REALM_TEST_PROBE_PID"
+                while :; do :; done
+            fi
+            exit 42
+            ;;
+        *)
+            printf '%s\n' 'probe did not receive a generated Foot config' >&2
+            exit 43
+            ;;
+    esac
+fi
+if [ "$REALM_TEST_FOOT_MODE" = exec-failure ]; then
+    printf '%s\n' 'final Foot launch diagnostic' >&2
+    exit 77
+fi
+: > "$REALM_TEST_PID"
+: > "$REALM_TEST_ARGS"
+: > "$REALM_TEST_SELECTORS"
+while [ ! -e "$REALM_TEST_PID_GATE" ]; do :; done
+printf '%s\n' "$$" > "$REALM_TEST_PID"
+printf '%s\n' "$@" > "$REALM_TEST_ARGS"
+printf '%s\n' "${REALM_GENERATION-unset}" "${ZDOTDIR-unset}" "${STARSHIP_CONFIG-unset}" "${YAZI_CONFIG_HOME-unset}" "${GTK_THEME-unset}" "${XDG_DATA_DIRS-unset}" "${QT_QPA_PLATFORMTHEME-unset}" "${XDG_CONFIG_DIRS-unset}" > "$REALM_TEST_SELECTORS"
+while [ ! -e "$REALM_TEST_STOP_GATE" ]; do :; done
+kill -STOP "$$"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(path, PermissionsExt::from_mode(0o700)).unwrap();
+}
+
+fn consumer_command(root: &Path, stub_dir: &Path, kind: &str, foot_mode: &str) -> Command {
     let pid_path = root.join(format!("{kind}.pid"));
     let args_path = root.join(format!("{kind}.args"));
+    let probes_path = root.join(format!("{kind}.probes"));
     let selectors_path = root.join(format!("{kind}.selectors"));
     let pid_gate_path = root.join(format!("{kind}.pid-gate"));
     let stop_gate_path = root.join(format!("{kind}.stop-gate"));
-    let child = Command::new(env!("CARGO_BIN_EXE_realm-wm"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_realm-wm"));
+    command
         .args(["--fixed-consumer", kind])
         .env("XDG_CONFIG_HOME", root)
         .env_remove("HOME")
@@ -110,19 +168,38 @@ fn spawn_consumer(root: &Path, stub_dir: &Path, kind: &str) -> RunningStub {
         .env("XDG_CONFIG_DIRS", "/existing/config:/second/config")
         .env("REALM_TEST_PID", &pid_path)
         .env("REALM_TEST_ARGS", &args_path)
+        .env("REALM_TEST_PROBES", &probes_path)
         .env("REALM_TEST_SELECTORS", &selectors_path)
         .env("REALM_TEST_PID_GATE", &pid_gate_path)
         .env("REALM_TEST_STOP_GATE", &stop_gate_path)
+        .env("REALM_TEST_FOOT_MODE", foot_mode)
+        .env("REALM_TEST_PROBE_GATE", root.join("probe-gate"))
+        .env("REALM_TEST_PROBE_PID", root.join("probe-pid"));
+    command
+}
+
+fn spawn_consumer_with_foot_mode(
+    root: &Path,
+    stub_dir: &Path,
+    kind: &str,
+    foot_mode: &str,
+) -> RunningStub {
+    let child = consumer_command(root, stub_dir, kind, foot_mode)
         .spawn()
         .unwrap();
     RunningStub {
         child,
-        pid_path,
-        args_path,
-        selectors_path,
-        pid_gate_path,
-        stop_gate_path,
+        pid_path: root.join(format!("{kind}.pid")),
+        args_path: root.join(format!("{kind}.args")),
+        probes_path: root.join(format!("{kind}.probes")),
+        selectors_path: root.join(format!("{kind}.selectors")),
+        pid_gate_path: root.join(format!("{kind}.pid-gate")),
+        stop_gate_path: root.join(format!("{kind}.stop-gate")),
     }
+}
+
+fn spawn_consumer(root: &Path, stub_dir: &Path, kind: &str) -> RunningStub {
+    spawn_consumer_with_foot_mode(root, stub_dir, kind, "modern")
 }
 
 fn lease_names(root: &Path) -> Vec<String> {
@@ -137,7 +214,7 @@ fn lease_names(root: &Path) -> Vec<String> {
 #[test]
 fn fixed_consumers_exec_exact_generation_argv_environment_and_hold_the_ordinary_process_lease() {
     let stubs = tempfile::tempdir().unwrap();
-    install_stopping_stub(stubs.path(), "foot");
+    install_foot_stub(stubs.path());
     install_stopping_stub(stubs.path(), "fuzzel");
 
     for kind in ["terminal", "launcher"] {
@@ -155,7 +232,7 @@ fn fixed_consumers_exec_exact_generation_argv_environment_and_hold_the_ordinary_
             vec![
                 format!(
                     "--config={}",
-                    generation_path.join("foot/foot.ini").display()
+                    generation_path.join("foot/foot-modern.ini").display()
                 ),
                 "--log-level=error".to_owned(),
                 "--override=key-bindings.spawn-terminal=none".to_owned(),
@@ -177,6 +254,21 @@ fn fixed_consumers_exec_exact_generation_argv_environment_and_hold_the_ordinary_
                 .collect::<Vec<_>>(),
             expected_args.iter().map(String::as_str).collect::<Vec<_>>()
         );
+        if kind == "terminal" {
+            assert_eq!(
+                fs::read_to_string(&running.probes_path)
+                    .unwrap()
+                    .lines()
+                    .collect::<Vec<_>>(),
+                [
+                    "--check-config".to_owned(),
+                    format!(
+                        "--config={}",
+                        generation_path.join("foot/foot-modern.ini").display()
+                    ),
+                ],
+            );
+        }
         let expected_selectors = if kind == "terminal" {
             vec![
                 generation_path.display().to_string(),
@@ -238,6 +330,131 @@ fn fixed_consumers_exec_exact_generation_argv_environment_and_hold_the_ordinary_
             "a later apply removed N after Foot exited"
         );
     }
+}
+
+#[test]
+fn terminal_uses_legacy_config_only_after_the_modern_probe_rejects_it() {
+    let root = tempfile::tempdir().unwrap();
+    realm_theme::apply(root.path()).unwrap();
+    let stubs = tempfile::tempdir().unwrap();
+    install_foot_stub(stubs.path());
+    let generation = fs::read_to_string(root.path().join("realm/generated/current"))
+        .unwrap()
+        .trim()
+        .to_owned();
+    let generation_path = root
+        .path()
+        .join("realm/generated/generations")
+        .join(generation);
+
+    let mut running =
+        spawn_consumer_with_foot_mode(root.path(), stubs.path(), "terminal", "legacy");
+    let pid = running.wait_until_stopped();
+    assert_eq!(
+        fs::read_to_string(&running.probes_path)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "--check-config".to_owned(),
+            format!(
+                "--config={}",
+                generation_path.join("foot/foot-modern.ini").display()
+            ),
+            "--check-config".to_owned(),
+            format!(
+                "--config={}",
+                generation_path.join("foot/foot.ini").display()
+            ),
+        ],
+    );
+    assert_eq!(
+        fs::read_to_string(&running.args_path)
+            .unwrap()
+            .lines()
+            .next(),
+        Some(
+            format!(
+                "--config={}",
+                generation_path.join("foot/foot.ini").display()
+            )
+            .as_str()
+        ),
+    );
+    assert!(running.resume_and_wait(pid).success());
+}
+
+#[test]
+fn terminal_refuses_two_invalid_foot_configs_without_executing_a_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    realm_theme::apply(root.path()).unwrap();
+    let stubs = tempfile::tempdir().unwrap();
+    install_foot_stub(stubs.path());
+
+    let output = consumer_command(root.path(), stubs.path(), "terminal", "invalid")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    assert!(!output.status.success());
+    assert!(!stderr.contains("modern probe diagnostic"), "{stderr}");
+    assert!(stderr.contains("legacy probe diagnostic"), "{stderr}");
+    assert!(
+        stderr.contains("Foot rejected both generated configs"),
+        "{stderr}"
+    );
+    assert!(!root.path().join("terminal.args").exists());
+    assert!(lease_names(root.path()).is_empty());
+}
+
+#[test]
+fn terminal_does_not_suppress_the_selected_foot_process_diagnostic() {
+    let root = tempfile::tempdir().unwrap();
+    realm_theme::apply(root.path()).unwrap();
+    let stubs = tempfile::tempdir().unwrap();
+    install_foot_stub(stubs.path());
+
+    let output = consumer_command(root.path(), stubs.path(), "terminal", "exec-failure")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    assert_eq!(output.status.code(), Some(77));
+    assert!(!stderr.contains("modern probe diagnostic"), "{stderr}");
+    assert!(stderr.contains("final Foot launch diagnostic"), "{stderr}");
+}
+
+#[test]
+fn terminal_foot_probes_share_one_deadline_and_reap_the_timed_out_child() {
+    let root = tempfile::tempdir().unwrap();
+    realm_theme::apply(root.path()).unwrap();
+    let stubs = tempfile::tempdir().unwrap();
+    install_foot_stub(stubs.path());
+
+    let started = Instant::now();
+    let mut command = consumer_command(root.path(), stubs.path(), "terminal", "deadline");
+    let child = command.stderr(Stdio::piped()).spawn().unwrap();
+    thread::sleep(Duration::from_millis(650));
+    fs::write(root.path().join("probe-gate"), b"release\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    let elapsed = started.elapsed();
+    let probe_pid = fs::read_to_string(root.path().join("probe-pid"))
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    assert!(!output.status.success());
+    assert!(elapsed >= Duration::from_millis(650), "elapsed {elapsed:?}");
+    assert!(elapsed < Duration::from_millis(1400), "elapsed {elapsed:?}");
+    assert!(stderr.contains("Foot config probe timed out"), "{stderr}");
+    assert!(
+        !Path::new(&format!("/proc/{probe_pid}")).exists(),
+        "timed-out Foot probe {probe_pid} remained alive",
+    );
+    assert!(!root.path().join("terminal.args").exists());
+    assert!(lease_names(root.path()).is_empty());
 }
 
 #[test]
@@ -307,7 +524,7 @@ fn terminal_rejects_an_incomplete_valid_generation_before_exec() {
     assert!(
         String::from_utf8(output.stderr)
             .unwrap()
-            .contains("required output zsh/.zshrc is unavailable"),
+            .contains("required output foot/foot-modern.ini is unavailable"),
         "missing output was not identified"
     );
 }

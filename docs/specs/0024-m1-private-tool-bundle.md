@@ -1,7 +1,7 @@
 # SPEC 0024 — M1 private Yazi and Starship tool bundle
 
-- **Status:** Accepted (2026-08-31; retained-tool and terminal GTK/Qt
-  refinements 2026-09-13)
+- **Status:** Accepted (2026-08-31; retained-tool, dual-Foot-config, and
+  terminal GTK/Qt refinements 2026-09-13)
 - **Milestone:** M1
 - **Issue:** [#134](https://github.com/Pipeliner/realms-de/issues/134)
 - **Refines:** [SPEC 0023](0023-m1-tool-source-intake.md)

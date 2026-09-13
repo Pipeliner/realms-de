@@ -1229,7 +1229,7 @@ exec ${realm}/bin/realmctl --json doctor > {shlex.quote(report_path)} 2> {shlex.
       )
       machine.succeed(
           "sudo -u alice ${pkgs.foot}/bin/foot --check-config "
-          f"--config={generation_root}/foot/foot.ini"
+          f"--config={generation_root}/foot/foot-modern.ini"
       )
 
       machine.send_key("meta_l-ret")
@@ -1246,7 +1246,7 @@ exec ${realm}/bin/realmctl --json doctor > {shlex.quote(report_path)} 2> {shlex.
           "${pkgs.foot}/bin/foot",
           [
               "foot",
-              f"--config={generation_root}/foot/foot.ini",
+              f"--config={generation_root}/foot/foot-modern.ini",
               "--log-level=error",
               "--override=key-bindings.spawn-terminal=none",
               "zsh",
@@ -1308,6 +1308,8 @@ exec ${realm}/bin/realmctl --json doctor > {shlex.quote(report_path)} 2> {shlex.
       # framebuffer, then prove the real shell is accepting and executing input
       # with a marker that does not occur contiguously in the command itself.
       machine.wait_for_text("alice@machine", timeout=OCR_TIMEOUT)
+      terminal_screen = machine.get_screen_text().lower()
+      assert "deprecated" not in terminal_screen, terminal_screen
       machine.screenshot("realm-terminal-prompt")
       machine.send_chars("printf 'REALM-%s-READY\\n' SHELL\n")
       machine.wait_for_text("REALM-SHELL-READY", timeout=OCR_TIMEOUT)

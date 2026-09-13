@@ -79,6 +79,12 @@ sed -i 's/{{ background\.void\.bare }}/112233/' "$fixture/configs/templates/foot
 expect_fail foot-raw-colour 'foot.ini' "$checker" --root "$fixture"
 cp "$root/configs/templates/foot.ini" "$fixture/configs/templates/foot.ini"
 
+sed -i 's/{{ background\.void\.bare }}/112233/' \
+    "$fixture/configs/templates/foot-modern.ini"
+expect_fail foot-modern-raw-colour 'foot-modern.ini' "$checker" --root "$fixture"
+cp "$root/configs/templates/foot-modern.ini" \
+    "$fixture/configs/templates/foot-modern.ini"
+
 sed -i '/^cursor={{ background\.void\.bare }} {{ accent\.violet\.bare }}$/d' \
     "$fixture/configs/templates/foot.ini"
 sed -i '/^style=block$/a color={{ background.void.bare }} {{ accent.violet.bare }}' \

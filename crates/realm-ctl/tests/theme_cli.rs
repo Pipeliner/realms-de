@@ -488,6 +488,7 @@ fn diff_after_palette_edit_is_sorted_and_does_not_mutate_generation_tree() {
         changes.lines().collect::<Vec<_>>(),
         [
             "byte-different btop/themes/realm.theme",
+            "byte-different foot/foot-modern.ini",
             "byte-different foot/foot.ini",
             "byte-different fuzzel/fuzzel.ini",
             "byte-different gtk-3.0/realm.css",

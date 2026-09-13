@@ -1,8 +1,8 @@
 # SPEC 0011 — Immutable theme activation generations
 
 - **Status:** Accepted (2026-08-29; fixed-consumer bootstrap, packaged-Foot
-  parser, retained terminal-profile, read-only and pinned-CLI btop, and
-  terminal-descendant GTK/Qt refinements 2026-09-13)
+  parser and dual-config selection, retained terminal-profile, read-only and
+  pinned-CLI btop, and terminal-descendant GTK/Qt refinements 2026-09-13)
 - **Milestone:** M1
 - **Decision:** [ADR 0017](../adr/0017-immutable-theme-activation-generations.md)
 - **Issue:** [#131](https://github.com/Pipeliner/realms-de/issues/131)
@@ -492,8 +492,8 @@ from the packaged session's inherited `PATH`; packaging must make `foot`,
 rejected generation is a visible launch failure, never permission to omit
 `--config=`.
 The terminal executor validates this complete manifest-listed set before exec:
-`foot/foot.ini`, `foot/foot-modern.ini`, `zsh/.zshrc`, `starship.toml`, `yazi/yazi.toml`,
-`yazi/keymap.toml`, `yazi/theme.toml`, `btop/btop.conf`, and
+`foot/foot.ini`, `foot/foot-modern.ini`, `zsh/.zshrc`, `starship.toml`,
+`yazi/yazi.toml`, `yazi/keymap.toml`, `yazi/theme.toml`, `btop/btop.conf`, and
 `btop/themes/realm.theme`. The terminal-descendant GTK/Qt tranche additionally
 requires `share/themes/realm/gtk-3.0/gtk.css`,
 `share/themes/realm/gtk-4.0/gtk.css`, `qt6ct/qt6ct.conf`, and

@@ -14,6 +14,7 @@ EXPECTED = {
     "gtk3.css",
     "gtk4.css",
     "foot.ini",
+    "foot-modern.ini",
     "zshrc",
     "yazi.toml",
     "yazi-keymap.toml",
@@ -303,6 +304,7 @@ class Checker:
             self.fail(path, text, match.start(), text[match.start():end])
 
     def foot(self, path: Path, text: str) -> None:
+        section = "[colors-dark]" if path.name == "foot-modern.ini" else "[colors]"
         in_colours = False
         colour_keys = {
             "background", "foreground", "selection-background", "selection-foreground", "urls",
@@ -315,7 +317,7 @@ class Checker:
         for raw in text.splitlines(keepends=True):
             line = raw.rstrip("\r\n")
             if line.startswith("[") and line.endswith("]"):
-                in_colours = line == "[colors]"
+                in_colours = line == section
             elif in_colours and "=" in line:
                 key, value = line.split("=", 1)
                 value = value.strip()
@@ -335,7 +337,7 @@ class Checker:
                         self.fail(path, text, offset, line)
             offset += len(raw)
         if seen != colour_keys:
-            self.errors.append(f"{path.as_posix()}: missing required [colors] key")
+            self.errors.append(f"{path.as_posix()}: missing required {section} key")
 
     def fuzzel(self, path: Path, text: str) -> None:
         self.ini_colour_section(path, text, re.compile(rf"{PLACEHOLDER}ff"), "fuzzel")
@@ -436,6 +438,7 @@ class Checker:
             "gtk3.css": self.css,
             "gtk4.css": self.css,
             "foot.ini": self.foot,
+            "foot-modern.ini": self.foot,
             "fuzzel.ini": self.fuzzel,
             "qt6ct-colors.conf": self.qt,
             "zshrc": self.raw_hex,

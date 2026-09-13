@@ -4,9 +4,14 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use realm_theme::generation::GenerationStore;
+
+const FOOT_PROBE_BUDGET: Duration = Duration::from_secs(1);
+const FOOT_PROBE_POLL: Duration = Duration::from_millis(5);
 
 /// The two MVP programs that consume one selected theme generation directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +55,7 @@ impl FixedConsumer {
         match self {
             Self::Terminal => &[
                 "foot/foot.ini",
+                "foot/foot-modern.ini",
                 "zsh/.zshrc",
                 "starship.toml",
                 "yazi/yazi.toml",
@@ -110,6 +116,74 @@ fn prepend_xdg_search_root(
     Ok(value)
 }
 
+fn wait_for_foot_probe(
+    mut child: std::process::Child,
+    deadline: Instant,
+) -> Result<ExitStatus, String> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(
+                    FOOT_PROBE_POLL.min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(
+                    "Foot config probe timed out after the shared one-second deadline".into(),
+                );
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("could not wait for Foot config probe: {error}"));
+            }
+        }
+    }
+}
+
+fn probe_foot_config(
+    config: &Path,
+    deadline: Instant,
+    exploratory: bool,
+) -> Result<ExitStatus, String> {
+    if Instant::now() >= deadline {
+        return Err("Foot config probe timed out after the shared one-second deadline".into());
+    }
+    let mut command = Command::new("foot");
+    command
+        .arg(OsStr::new("--check-config"))
+        .arg(config_argument(config));
+    if exploratory {
+        command.stdout(Stdio::null()).stderr(Stdio::null());
+    }
+    let child = command
+        .spawn()
+        .map_err(|error| format!("could not start Foot config probe: {error}"))?;
+    wait_for_foot_probe(child, deadline)
+}
+
+fn select_foot_config(generation: &Path) -> Result<PathBuf, String> {
+    let deadline = Instant::now() + FOOT_PROBE_BUDGET;
+    let modern = generation.join("foot/foot-modern.ini");
+    let modern_status = probe_foot_config(&modern, deadline, true)?;
+    if modern_status.success() {
+        return Ok(modern);
+    }
+
+    let legacy = generation.join("foot/foot.ini");
+    let legacy_status = probe_foot_config(&legacy, deadline, false)?;
+    if legacy_status.success() {
+        return Ok(legacy);
+    }
+
+    Err(format!(
+        "Foot rejected both generated configs (modern: {modern_status}; legacy: {legacy_status})"
+    ))
+}
+
 /// Lease current for this process and replace it with the fixed consumer.
 pub fn exec_from_env(consumer: FixedConsumer) -> Result<(), String> {
     let root = config_root_from_env()?;
@@ -134,7 +208,11 @@ pub fn exec_from_env(consumer: FixedConsumer) -> Result<(), String> {
     } else {
         None
     };
-    let config = config_argument(&generation.join(consumer.outputs()[0]));
+    let config = config_argument(&if consumer == FixedConsumer::Terminal {
+        select_foot_config(generation)?
+    } else {
+        generation.join(consumer.outputs()[0])
+    });
     let mut command = Command::new(consumer.executable());
     command.arg(config);
     if consumer == FixedConsumer::Terminal {

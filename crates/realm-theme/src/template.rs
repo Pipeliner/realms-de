@@ -114,6 +114,12 @@ pub fn templates() -> Vec<Template> {
             },
         },
         Template {
+            id: "foot-modern",
+            source: ::core::include_str!("../../../configs/templates/foot-modern.ini"),
+            target: PathBuf::from("foot/foot-modern.ini"),
+            reload: Reload::None,
+        },
+        Template {
             id: "zsh-profile",
             source: ::core::include_str!("../../../configs/templates/zshrc"),
             target: PathBuf::from("zsh/.zshrc"),
@@ -180,9 +186,29 @@ pub fn templates() -> Vec<Template> {
 mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
     use std::process::Command;
 
     use super::templates;
+
+    #[test]
+    fn foot_configs_are_byte_equivalent_except_for_the_supported_section_header() {
+        let mut catalogue = templates().into_iter();
+        let legacy = catalogue
+            .find(|template| template.id == "foot")
+            .expect("legacy Foot template");
+        let modern = catalogue
+            .find(|template| template.id == "foot-modern")
+            .expect("modern Foot template");
+
+        assert_eq!(legacy.target, PathBuf::from("foot/foot.ini"));
+        assert_eq!(modern.target, PathBuf::from("foot/foot-modern.ini"));
+        assert_eq!(
+            legacy.source.replacen("[colors]", "[colors-dark]", 1),
+            modern.source,
+            "Foot variants differed by more than the one supported section header",
+        );
+    }
 
     #[test]
     fn terminal_tool_profile_is_complete_and_generation_local() {
@@ -371,6 +397,10 @@ mod tests {
                 (
                     "foot",
                     ::core::include_str!("../../../configs/templates/foot.ini")
+                ),
+                (
+                    "foot-modern",
+                    ::core::include_str!("../../../configs/templates/foot-modern.ini")
                 ),
                 (
                     "zsh-profile",
