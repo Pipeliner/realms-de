@@ -1,7 +1,8 @@
 # SPEC 0007 — Control-socket transport and security
 
 - **Status:** Accepted (2026-08-28; endpoint feasibility correction 2026-09-10;
-  transport-liveness correction 2026-09-11)
+  transport-liveness correction 2026-09-11; session-entry precreation
+  correction 2026-09-13)
 - **Milestone:** M2
 - **Decisions:** [ADR 0004](../adr/0004-ndjson-control-socket.md)
 - **Amends:** [SPEC 0001](0001-realm-core-contracts.md), [SPEC 0003](0003-realm-session.md), [SPEC 0006](0006-realm-ctl.md)
@@ -282,6 +283,13 @@ object with any other type, owner, or mode is rejected unchanged and is never
 chmodded. Because umask is process-global, all server endpoint preparation,
 through successful bind and verification, must finish while the process is
 single-threaded. Clients never create `realm`.
+
+Before the server starts, the session entry may need the fixed `realm`
+directory for `session.pid`. If that directory is absent, the entry creates it
+at exact mode `0700` under a scoped umask of `0077`, so later server validation
+admits the same directory. If an entry already exists, the session entry does
+not chmod, replace, or otherwise repair it; the server remains the authority
+that validates or rejects the existing object.
 
 Linux provides neither `bindat` nor `connectat`. Every bind and connect,
 including the stale probe and every shared-crate client attempt, therefore uses
@@ -855,6 +863,7 @@ interoperability; A12 is #38. The real combined-loop performance budget is
 | A1 | Given an absent, relative, non-directory, symlinked, foreign-owned, or not-exactly-`0700` runtime path (including modes missing owner bits), or any secure `openat2` failure, when resolved, then the specified path error is returned and no fallback or override is read | `realm_control::tests::runtime_capability_rejects_every_unsafe_input_and_openat2_failure` |
 | A2 | Given a hostile ambient umask, when the server prepares a missing fixed descendant, then `realm` is exactly `0700` and the old umask is restored; given the same absence on a client, it does not create `realm` | `realm_control::tests::server_creates_realm_exactly_once_under_scoped_umask`; client half in #41: `realm_control::tests::client_endpoint_missing_realm_is_retryable_and_creates_nothing` |
 | A2a | Given an actual retained runtime-fd bridge that is missing, inaccessible, mismatched, or otherwise unusable, or a canonical or worst-case procfd address that overflows Linux `sockaddr_un` including its terminating NUL, when server endpoint preparation begins, then it fails before creating `realm` or inspecting/mutating `ctl.sock` and never falls back to the canonical or another path | `realm_control::tests::actual_runtime_procfd_bridge_is_verified_before_mutation`, `realm_control::tests::missing_inaccessible_or_mismatched_procfd_fails_before_mutation`, `realm_control::tests::sockaddr_un_overflow_fails_before_mutation_without_fallback` |
+| A2b | Given the session entry starts the compositor under the usual ambient umask with no `realm` directory, when it records `session.pid`, then the newly created directory is exactly `0700`; given an existing unsafe directory, the entry leaves its identity and mode unchanged for server validation to reject | `packaging/session/test-runtime-dir-mode.sh` |
 | A3 | Given an unsafe realm object or unsafe existing `ctl.sock`, when an endpoint is prepared, then the object is rejected and remains byte/identity unchanged | `realm_control::tests::unsafe_realm_and_socket_entries_are_preserved` |
 | A4 | Given a reachable listener or an unchanged refused stale socket, when another server prepares the endpoint, then the live entry is preserved and only the unchanged refused identity is reclaimed | `realm_control::tests::live_listener_is_preserved_and_verified_refusal_is_reclaimed` |
 | A5 | Given immediate refusal, `EAGAIN`, `EINPROGRESS`, completion success/refusal/error, timeout, poll failure, or unexpected `EALREADY`, when the one-shot nonblocking stale probe runs, then only immediate or completed `ECONNREFUSED` is a stale candidate and every other result preserves the entry | `realm_control::tests::linux_stale_probe_completion_table_is_total` |
