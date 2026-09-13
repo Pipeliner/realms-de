@@ -1,8 +1,8 @@
 # Static files, mapped from the source tree into the binary package.
 #
-# Built binaries are handled by override_dh_auto_install in debian/rules,
-# because none of them exist yet (pre-alpha) and dh_install fails on a missing
-# source file. The realm-session.target.wants symlinks are created there too —
+# Built binaries are handled by override_dh_auto_install in debian/rules so all
+# three required outputs fail packaging immediately if absent. The
+# realm-session.target.wants symlinks are created there too —
 # see SPEC 0005 §4 for why they are shipped rather than left to [Install].
 #
 # The wrapper is committed executable, and dh_install preserves that.

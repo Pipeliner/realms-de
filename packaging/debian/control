@@ -17,14 +17,15 @@ Source: realm
 Section: x11
 Priority: optional
 Maintainer: realm contributors <vadim.evard@gmail.com>
-# Ubuntu 24.04's default rustc/cargo is 1.75, below realm's declared MSRV of 1.85
-# (Cargo.toml). The archive carries versioned toolchain packages: rustc-1.85 and
-# cargo-1.85 are present as 1.85.1+dfsg0ubuntu2~bpo0 (verified against noble's
-# package lists on 2026-08-26). Those are named first, and debian/rules puts the
-# newest versioned toolchain it finds on PATH and checks it before building.
+# Ubuntu 24.04's default rustc/cargo is 1.75, below realm's declared MSRV of 1.89
+# (Cargo.toml). Noble Updates carries rustc-1.89 and cargo-1.89 as
+# 1.89.0+dfsg~24.04-0ubuntu0.24.04.2 (verified against Ubuntu's package index on
+# 2026-09-13). Those are named first, and debian/rules puts the newest versioned
+# toolchain it finds on PATH and checks it before building.
 Build-Depends: debhelper-compat (= 13),
-               cargo-1.85 | cargo (>= 1.85),
-               rustc-1.85 | rustc (>= 1.85),
+               cargo-1.89 | cargo (>= 1.89),
+               rustc-1.89 | rustc (>= 1.89),
+               fonts-dejavu-core,
                pkg-config,
                python3,
                zstd
@@ -85,9 +86,9 @@ Description: keyboard-first, gapless-tiling Wayland desktop environment
  The compositor is river 0.4, driven by realm's own window manager over
  river-window-management-v1.
  .
- THIS PACKAGE IS PRE-ALPHA (0.1.0) AND DOES NOT INSTALL A WORKING DESKTOP.
- realmctl is installed with its `theme apply`, `theme lint`, and `theme diff`
- commands. The window manager and bar are not written yet.
+ THIS PACKAGE IS PRE-ALPHA (0.1.0). Its recipe requires realmctl, realm-wm and
+ realm-bar, but clean installation, River resolution and graphical login on
+ Ubuntu remain unverified.
  What it installs today is the session contract: the wayland-session entry, the
  session wrapper that performs the systemd/D-Bus environment handshake, the
  systemd user units and the palette. Logging into it gives you river with no
