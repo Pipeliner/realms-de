@@ -87,6 +87,26 @@ if ! grep -F -q -e 'realm-session-boots/realmctl-doctor.json' "$workflow"; then
     fail 'live VM artifact must retain realmctl doctor JSON'
 fi
 
+if ! grep -F -q -e "\".#checks.\$system.session-boots-evidence\"" "$workflow"; then
+    fail 'Nix CI must build the VM evidence producer before the public status gate'
+fi
+
+if ! grep -F -q -e "if: always() && steps.reference-build.outputs.vm_artifacts == 'true'" "$workflow"; then
+    fail 'live VM evidence upload must run after a failed public status gate'
+fi
+
+if ! grep -F -q -e 'realm-session-boots/driver.log' "$workflow" \
+    || ! grep -F -q -e 'realm-session-boots/test-status' "$workflow"; then
+    fail 'live VM evidence upload must retain the driver log and exact status'
+fi
+
+if ! grep -F -q -e 'session-boots-evidence =' "$checks" \
+    || [ "$(grep -F -c -e 'overrideTestDerivation' "$checks")" -lt 2 ] \
+    || ! grep -F -q -e "\${session-boots-evidence}/test-status" "$checks" \
+    || ! grep -F -q -e 'check-vm-evidence-status.sh' "$checks"; then
+    fail 'public session-boots must gate the retained evidence driver status'
+fi
+
 if grep -F -q -e 're.sub(' "$checks" \
     && ! grep -E -q -e '^[[:space:]]+import re$' "$checks"; then
     fail 'Nix VM prompt proof must import its regular-expression dependency'

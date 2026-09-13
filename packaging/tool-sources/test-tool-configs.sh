@@ -59,11 +59,15 @@ grep -F -q 'linemode = "size"' "$manager"
 grep -F -q 'on = "<C-p>"' "$keymap"
 # The dollar and command-substitution forms are the literal selectors under test.
 # shellcheck disable=SC2016
-grep -F -q 'btop --config=\"$REALM_GENERATION/btop/btop.conf\"' "$keymap"
+grep -F -q 'btop --config \"$REALM_GENERATION/btop/btop.conf\"' "$keymap"
 # shellcheck disable=SC2016
 grep -F -q 'eval "$(starship init zsh)"' "$profile"
 # shellcheck disable=SC2016
-grep -F -q 'command btop --config="$REALM_GENERATION/btop/btop.conf"' "$profile"
+grep -F -q 'command btop --config "$REALM_GENERATION/btop/btop.conf"' "$profile"
+if grep -F -q -- '--config=' "$keymap" || grep -F -q -- '--config=' "$profile"; then
+    echo "pinned btop launch uses an unsupported equals-form config option" >&2
+    exit 1
+fi
 python3 - "$starship" <<'PY'
 import sys
 
