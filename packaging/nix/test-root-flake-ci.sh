@@ -94,6 +94,13 @@ mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
 expect_fail missing-fixture-suite "$fixture_root" \
     'normal Nix CI must invoke the root-flake fixture suite'
 
+fixture_root=$(make_fixture missing-portal-helper-imports)
+sed '/portal-helper-imports/d' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-portal-helper-imports "$fixture_root" \
+    'Nix CI must run the portal helper import smoke before the VM'
+
 fixture_root=$(make_fixture missing-portal-evidence-upload)
 sed '/realm-session-boots\/portal-roundtrip\.json/d' \
     "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"

@@ -45,6 +45,14 @@
 
   package = realm;
 
+  # Execute the packaged helper's exact GI import path before spending time on
+  # the graphical VM. This catches a typelib placed in a non-default output;
+  # importing the Python source on the host cannot prove that closure.
+  portal-helper-imports = pkgs.runCommand "realm-portal-helper-imports" { } ''
+    ${portalVmHelper}/bin/realm-portal-vm --check-imports
+    touch $out
+  '';
+
   # Keep the package output contract explicit. Unlike a source-text check,
   # this runs against the real derivation and fails if postInstall cannot place
   # either workspace binary in the package output.

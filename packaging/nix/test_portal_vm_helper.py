@@ -1,14 +1,26 @@
 import unittest
+from unittest import mock
 
 from portal_vm_helper import (
     PortalClient,
     frame_evidence,
+    main,
     request_path,
     single_stream_node,
 )
 
 
 class PortalVmHelperContract(unittest.TestCase):
+    @mock.patch("portal_vm_helper.run")
+    @mock.patch("portal_vm_helper.load_namespaces")
+    def test_import_only_mode_loads_namespaces_without_opening_portals(
+        self, load_namespaces, run
+    ):
+        with mock.patch("sys.argv", ["realm-portal-vm", "--check-imports"]):
+            self.assertEqual(main(), 0)
+        load_namespaces.assert_called_once_with()
+        run.assert_not_called()
+
     def test_request_path_matches_portal_sender_convention(self):
         self.assertEqual(
             request_path(":1.42", "realm_file"),

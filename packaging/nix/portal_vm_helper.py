@@ -249,15 +249,26 @@ def _consume_frame(gst: Any, fd: int, node_id: int) -> dict[str, Any]:
         pipeline.set_state(gst.State.NULL)
 
 
-def run() -> dict[str, Any]:
+def load_namespaces() -> tuple[Any, Any, Any, Any]:
+    """Load the exact GI namespaces required by the packaged VM helper."""
     import gi
 
     gi.require_version("Gio", "2.0")
     gi.require_version("Gst", "1.0")
     gi.require_version("GstApp", "1.0")
-    from gi.repository import Gio, GLib, Gst  # pylint: disable=import-outside-toplevel
+    from gi.repository import (  # pylint: disable=import-outside-toplevel
+        Gio,
+        GLib,
+        Gst,
+        GstApp,
+    )
 
     Gst.init(None)
+    return Gio, GLib, Gst, GstApp
+
+
+def run() -> dict[str, Any]:
+    Gio, GLib, Gst, _gst_app = load_namespaces()
     connection = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     portal = PortalClient(connection, Gio, GLib)
 
@@ -370,6 +381,11 @@ def run() -> dict[str, Any]:
 
 def main() -> int:
     try:
+        if sys.argv[1:] == ["--check-imports"]:
+            load_namespaces()
+            return 0
+        if sys.argv[1:]:
+            raise ValueError("expected no arguments or exactly --check-imports")
         evidence = run()
     except Exception as error:  # The VM driver needs one concise failure boundary.
         print(f"realm portal VM helper: {error}", file=sys.stderr)

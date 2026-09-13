@@ -4,7 +4,7 @@
 { pkgs, lib, src }:
 let
   python = pkgs.python3.withPackages (packages: [ packages.pygobject3 ]);
-  giTypelibPath = lib.makeSearchPath "lib/girepository-1.0" [
+  giTypelibPath = lib.makeSearchPathOutput "out" "lib/girepository-1.0" [
     pkgs.glib
     pkgs.gst_all_1.gstreamer
     pkgs.gst_all_1.gst-plugins-base
