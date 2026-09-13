@@ -154,8 +154,17 @@ class PortalVmHelperContract(unittest.TestCase):
             remote_name = "org.freedesktop.DBus.Error.UnknownMethod"
 
         class Connection:
-            def __init__(self, response_code):
+            def __init__(
+                self,
+                response_code,
+                *,
+                front_request_exported=False,
+                close_succeeds_after=None,
+            ):
                 self.response_code = response_code
+                self.front_request_exported = front_request_exported
+                self.close_succeeds_after = close_succeeds_after
+                self.close_attempts = 0
                 self.callback = None
                 self.unsubscribed = None
 
@@ -172,6 +181,19 @@ class PortalVmHelperContract(unittest.TestCase):
             def call_sync(self, _bus, path, _interface, method, *_args):
                 if method == "OpenFile":
                     return Reply()
+                if method == "Introspect" and self.front_request_exported:
+                    return mock.Mock(
+                        unpack=lambda: (
+                            f'<interface name="{REQUEST_INTERFACE}"></interface>',
+                        )
+                    )
+                if method == "Close":
+                    self.close_attempts += 1
+                    if (
+                        self.close_succeeds_after is not None
+                        and self.close_attempts >= self.close_succeeds_after
+                    ):
+                        return mock.Mock()
                 self.assert_close_path = path
                 raise RemoteError("request already completed")
 
@@ -247,6 +269,18 @@ class PortalVmHelperContract(unittest.TestCase):
         self.assertEqual(outcome["completion"], "response")
         self.assertEqual(outcome["response_code"], 1)
         self.assertEqual(connection.assert_close_path, expected)
+        self.assertEqual(connection.unsubscribed, 7)
+
+        connection = Connection(
+            None,
+            front_request_exported=True,
+            close_succeeds_after=2,
+        )
+        GLib.connection = connection
+        portal = PortalClient(connection, Gio, GLib)
+        outcome = portal.filechooser_roundtrip(None, "realm_file")
+        self.assertEqual(outcome["completion"], "closed")
+        self.assertEqual(connection.close_attempts, 2)
         self.assertEqual(connection.unsubscribed, 7)
 
         for response_code, message in [

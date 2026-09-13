@@ -16,6 +16,7 @@ PORTAL_BUS = "org.freedesktop.portal.Desktop"
 PORTAL_PATH = "/org/freedesktop/portal/desktop"
 REQUEST_INTERFACE = "org.freedesktop.portal.Request"
 SESSION_INTERFACE = "org.freedesktop.portal.Session"
+INTROSPECT_INTERFACE = "org.freedesktop.DBus.Introspectable"
 
 
 def request_path(unique_name: str, token: str) -> str:
@@ -169,8 +170,31 @@ class PortalClient:
             raise RuntimeError(f"{method} portal response was {response!r}")
         return expected_path, response["results"]
 
-    def close(self, path: str, interface: str) -> None:
-        self.call(interface, "Close", None, "()", path=path, timeout_ms=2_000)
+    def close(
+        self, path: str, interface: str, *, timeout_ms: int = 2_000
+    ) -> None:
+        self.call(interface, "Close", None, "()", path=path, timeout_ms=timeout_ms)
+
+    def request_is_exported(self, path: str, *, timeout_ms: int = 250) -> bool:
+        """Distinguish a live front request from a completed request path."""
+        try:
+            reply = self.call(
+                INTROSPECT_INTERFACE,
+                "Introspect",
+                None,
+                "(s)",
+                path=path,
+                timeout_ms=timeout_ms,
+            )
+        except Exception as error:
+            if self.gio.DBusError.get_remote_error(error) in {
+                "org.freedesktop.DBus.Error.UnknownMethod",
+                "org.freedesktop.DBus.Error.UnknownObject",
+            }:
+                return False
+            raise
+        xml = reply.unpack()[0]
+        return f'<interface name="{REQUEST_INTERFACE}">' in xml
 
     def filechooser_roundtrip(
         self, parameters: Any, token: str, *, timeout_ms: int = 2_000
@@ -222,6 +246,26 @@ class PortalClient:
                 "response_code": code,
             }
 
+        def wait_for_response(wait_ms: int) -> bool:
+            nonlocal response_wait_loop
+            wait_timed_out = False
+            response_wait_loop = self.glib.MainLoop()
+
+            def on_wait_timeout() -> bool:
+                nonlocal wait_timed_out
+                wait_timed_out = True
+                response_wait_loop.quit()
+                return self.glib.SOURCE_REMOVE
+
+            timeout_source = self.glib.timeout_add(wait_ms, on_wait_timeout)
+            try:
+                response_wait_loop.run()
+            finally:
+                response_wait_loop = None
+                if not wait_timed_out:
+                    self.glib.source_remove(timeout_source)
+            return bool(response)
+
         try:
             started = time.monotonic()
             reply = self.call(
@@ -242,36 +286,54 @@ class PortalClient:
             if response:
                 return completed_response()
 
-            try:
-                self.close(expected_path, REQUEST_INTERFACE)
-            except Exception as error:
-                remote_error = self.gio.DBusError.get_remote_error(error)
-                if remote_error != "org.freedesktop.DBus.Error.UnknownMethod":
-                    raise
+            close_deadline = time.monotonic() + timeout_ms / 1000
+            while True:
+                try:
+                    remaining_seconds = close_deadline - time.monotonic()
+                    if remaining_seconds <= 0:
+                        raise TimeoutError(
+                            "FileChooser backend request was not exported within "
+                            f"{timeout_ms} ms"
+                        )
+                    remaining_ms = max(1, int(remaining_seconds * 1000))
+                    self.close(
+                        expected_path,
+                        REQUEST_INTERFACE,
+                        timeout_ms=remaining_ms,
+                    )
+                    break
+                except Exception as error:
+                    remote_error = self.gio.DBusError.get_remote_error(error)
+                    if remote_error != "org.freedesktop.DBus.Error.UnknownMethod":
+                        raise
 
-                if not response:
-                    wait_timed_out = False
-                    response_wait_loop = self.glib.MainLoop()
+                    remaining_seconds = close_deadline - time.monotonic()
+                    if remaining_seconds <= 0:
+                        raise TimeoutError(
+                            "FileChooser backend request was not exported within "
+                            f"{timeout_ms} ms"
+                        ) from error
+                    remaining_ms = max(1, int(remaining_seconds * 1000))
+                    if not self.request_is_exported(
+                        expected_path, timeout_ms=min(250, remaining_ms)
+                    ):
+                        if not response:
+                            wait_for_response(250)
+                        if not response:
+                            raise RuntimeError(
+                                "FileChooser request disappeared without an exact Response"
+                            ) from error
+                        return completed_response()
 
-                    def on_wait_timeout() -> bool:
-                        nonlocal wait_timed_out
-                        wait_timed_out = True
-                        response_wait_loop.quit()
-                        return self.glib.SOURCE_REMOVE
-
-                    timeout_source = self.glib.timeout_add(250, on_wait_timeout)
-                    try:
-                        response_wait_loop.run()
-                    finally:
-                        response_wait_loop = None
-                        if not wait_timed_out:
-                            self.glib.source_remove(timeout_source)
-
-                if not response:
-                    raise RuntimeError(
-                        "FileChooser request disappeared without an exact Response"
-                    ) from error
-                return completed_response()
+                    remaining_seconds = close_deadline - time.monotonic()
+                    if remaining_seconds <= 0:
+                        raise TimeoutError(
+                            "FileChooser backend request was not exported within "
+                            f"{timeout_ms} ms"
+                        ) from error
+                    remaining_ms = max(1, int(remaining_seconds * 1000))
+                    if wait_for_response(min(50, remaining_ms)):
+                        return completed_response()
 
             return {
                 "handle": expected_path,
