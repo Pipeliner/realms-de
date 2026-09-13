@@ -81,7 +81,7 @@ fn lease_names(root: &Path) -> Vec<String> {
 }
 
 #[test]
-fn fixed_consumers_exec_exact_generation_argv_and_hold_the_ordinary_process_lease() {
+fn fixed_consumers_exec_exact_generation_argv_environment_and_hold_the_ordinary_process_lease() {
     let stubs = tempfile::tempdir().unwrap();
     install_stopping_stub(stubs.path(), "foot");
     install_stopping_stub(stubs.path(), "fuzzel");

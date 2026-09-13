@@ -163,7 +163,7 @@
       checks = forAllSystems (
         pkgs:
         import ./packaging/nix/checks.nix {
-          inherit pkgs lib nixosModule sourceRevision;
+          inherit pkgs lib nixosModule sourceRevision support;
           src = self;
           realm = realmPackage pkgs;
           desktopAdmissionVmTest = desktopAdmissionVmTest pkgs;

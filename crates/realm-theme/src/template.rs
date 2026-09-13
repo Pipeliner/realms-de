@@ -179,7 +179,14 @@ mod tests {
                 (
                     "zsh-profile",
                     "zsh/.zshrc".into(),
-                    include_str!("../../../configs/templates/zshrc").to_owned(),
+                    concat!(
+                        "eval \"$(starship init zsh)\"\n",
+                        "btop() {\n",
+                        "  command btop --config=\"$REALM_GENERATION/btop/btop.conf\" \\\n",
+                        "    --themes-dir=\"$REALM_GENERATION/btop/themes\" \"$@\"\n",
+                        "}\n",
+                    )
+                    .to_owned(),
                 ),
                 (
                     "yazi-config",

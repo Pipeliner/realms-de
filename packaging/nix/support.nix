@@ -68,12 +68,73 @@ rec {
         "realm: river ${v} differs from the tested ${riverTested}; re-verify the window-manager mapping before shipping this combination."
         pkgs.river;
 
+  # Realm's generated Yazi configuration targets the selected v25.4 schema.
+  # Build that exact release from the retained, digest-checked source and
+  # vendor archives; nixpkgs' moving Yazi is intentionally not substituted.
+  yaziRetained = "25.4.8";
+  yaziRetainedSource =
+    pkgs:
+    pkgs.runCommand "realm-yazi-${yaziRetained}-source"
+      {
+        nativeBuildInputs = [
+          pkgs.gnutar
+          pkgs.zstd
+        ];
+      }
+      ''
+        mkdir -p "$out"
+        tar -xzf \
+          ${src + "/packaging/tool-sources/bundles/yazi-25.4.8/source.tar.gz"} \
+          -C "$out" --strip-components=1
+        tar --zstd -xf \
+          ${src + "/packaging/tool-sources/bundles/yazi-25.4.8/vendor.tar.zst"} \
+          -C "$out"
+        install -m 0644 \
+          ${src + "/packaging/tool-sources/bundles/yazi-25.4.8/Cargo.lock"} \
+          "$out/Cargo.lock"
+      '';
+
+  yaziUnwrappedFor =
+    pkgs:
+    (rustPlatformFor pkgs).buildRustPackage {
+      pname = "yazi";
+      version = yaziRetained;
+      src = yaziRetainedSource pkgs;
+      cargoVendorDir = "vendor";
+      cargoBuildFlags = [
+        "--package"
+        "yazi-fm"
+        "--package"
+        "yazi-cli"
+      ];
+      strictDeps = true;
+      preBuild = ''
+        export CFLAGS="''${CFLAGS-} -std=gnu17"
+      '';
+      env = {
+        SOURCE_DATE_EPOCH = "1744112829";
+        VERGEN_GIT_SHA = "99ea3b74c4260a724b43af812df0f68ef59395b7";
+        VERGEN_GIT_COMMIT_DATE = "2025-04-08";
+        VERGEN_BUILD_DATE = "2025-04-08";
+      };
+      buildInputs = [ pkgs.rust-jemalloc-sys ];
+      postInstall = ''
+        install -Dm444 assets/yazi.desktop -t "$out/share/applications"
+        install -Dm444 assets/logo.png "$out/share/pixmaps/yazi.png"
+      '';
+      meta = pkgs.yazi-unwrapped.meta // {
+        changelog = "https://github.com/sxyazi/yazi/blob/v${yaziRetained}/CHANGELOG.md";
+      };
+    };
+
+  yaziFor = pkgs: pkgs.yazi.override { yazi-unwrapped = yaziUnwrappedFor pkgs; };
+
   # ── the desktop realm assembles itself out of ──────────────────────────────
   # Reused rather than rewritten (ADR 0007 / S8). Runtime dependencies of the
   # *desktop*, not build inputs of the crate.
   reusedTools =
     pkgs: with pkgs; [
-      yazi # charon — file manager
+      (yaziFor pkgs) # charon — retained file manager
       btop # horus — monitor
       starship # thoth — prompt
       zsh # thoth — shell

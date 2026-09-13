@@ -12,8 +12,16 @@
   desktopAdmissionVmTest,
   nixosModule,
   sourceRevision,
+  support,
   vmControlHelper,
 }:
+let
+  realmYazi = lib.findFirst (
+    package: lib.getName package == "yazi"
+  ) null (support.reusedTools pkgs);
+in
+assert realmYazi != null;
+assert realmYazi.version == "25.4.8";
 {
   # The session wrapper is the file most likely to break a login, and the only
   # shell in the repo. Keep it clean.
@@ -309,6 +317,10 @@ EOF
       # the compositor and the D-Bus tooling are present.
       machine.succeed("realm-session --version")
       machine.succeed("realm-session --check")
+      machine.succeed(
+          "test \"$(yazi --version)\" = "
+          "'Yazi 25.4.8 (99ea3b74c4260a724b43af812df0f68ef59395b7 2025-04-08)'"
+      )
 
       # river 0.4.x, the compositor realm drives. `-version` (one dash) is
       # river's own spelling. Anything below 0.4 does not implement
@@ -522,7 +534,14 @@ EOF
       )
 
       previous_generation = generation
-      machine.succeed(as_alice("realmctl", "theme", "apply"))
+      machine.succeed(
+          as_alice(
+              "XDG_CONFIG_HOME=/home/alice/.config",
+              "realmctl",
+              "theme",
+              "apply",
+          )
+      )
       generation = machine.succeed(
           "cat /home/alice/.config/realm/generated/current"
       ).strip()
