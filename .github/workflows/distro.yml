@@ -3,9 +3,9 @@
 # built through the tracked RPM spec, but the workflow does not install the RPM,
 # start a graphical session, exercise SELinux, or establish architecture support.
 #
-# Today these jobs build and test the Rust workspace. The point is scaffolding:
-# when realm-session pulls in Wayland, D-Bus and systemd, the distro that
-# disagrees will say so on the commit that broke it.
+# The ordinary distro jobs build and test the Rust workspace. The bounded
+# Ubuntu River closure job additionally proves the feature-bearing private
+# source closure selected by ADR 0022; it does not build a Debian package.
 name: distro
 
 on:
@@ -26,6 +26,67 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  ubuntu-river-closure:
+    name: Ubuntu 24.04 private River closure probe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Noble closure build prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes \
+            bison \
+            build-essential \
+            ca-certificates \
+            curl \
+            git \
+            hwdata \
+            libcap-dev \
+            libegl-dev \
+            libevdev-dev \
+            libexpat1-dev \
+            libffi-dev \
+            libgbm-dev \
+            libgl-dev \
+            libgles-dev \
+            libinput-dev \
+            libpciaccess-dev \
+            libpthread-stubs0-dev \
+            libseat-dev \
+            libudev-dev \
+            libx11-dev \
+            libxcb-composite0-dev \
+            libxcb-ewmh-dev \
+            libxcb-icccm4-dev \
+            libxcb-render0-dev \
+            libxcb-res0-dev \
+            libxcb-xfixes0-dev \
+            libxcb1-dev \
+            meson \
+            ninja-build \
+            patchelf \
+            pkg-config \
+            python3 \
+            xkb-data \
+            xwayland \
+            xz-utils
+      - name: Validate and acquire pinned closure sources
+        run: |
+          set -euo pipefail
+          packaging/river/test-closure-manifest.sh
+          packaging/river/acquire-noble-closure.sh \
+            packaging/river/sources.toml \
+            "$RUNNER_TEMP/realm-river-cache"
+      - name: Build offline and probe the private closure
+        run: |
+          set -euo pipefail
+          packaging/river/run-noble-closure-probe.sh \
+            packaging/river/sources.toml \
+            "$RUNNER_TEMP/realm-river-cache" \
+            "$RUNNER_TEMP/realm-river-prefix"
+
   ubuntu-debian-package:
     name: Ubuntu 24.04 Debian package
     runs-on: ubuntu-24.04
