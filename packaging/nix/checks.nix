@@ -383,8 +383,10 @@ EOF
       )
       assert tiled["data"]["whichkey"] is True, tiled
       machine.wait_for_text("Realm VM sample", timeout=OCR_TIMEOUT)
-      # The strip has no "which-key" heading; assert its actual prompt.
-      machine.wait_for_text("grimoire.*full spellbook", timeout=OCR_TIMEOUT)
+      # The strip has no heading. Its distinctive launcher label proves it is
+      # rendered; exact OCR of the small full-spellbook prompt is unreliable.
+      # Neither the sample applications nor the bar title contains this label.
+      machine.wait_for_text("hecate", timeout=OCR_TIMEOUT)
       write_artifact("control-tiled-state.json", tiled_raw)
       machine.screenshot("realm-tiled-desktop")
 
