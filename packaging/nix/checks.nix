@@ -527,7 +527,7 @@ EOF
       assert '${pkgs.fuzzel}/bin' in daemon_path, daemon_path
       assert '${pkgs.zsh}/bin' in daemon_path, daemon_path
       assert '${pkgs.starship}/bin' in daemon_path, daemon_path
-      assert '${pkgs.yazi}/bin' in daemon_path, daemon_path
+      assert '${realmYazi}/bin' in daemon_path, daemon_path
       assert '${pkgs.btop}/bin' in daemon_path, daemon_path
 
       # Check the user-manager publication against the installed daemon that
