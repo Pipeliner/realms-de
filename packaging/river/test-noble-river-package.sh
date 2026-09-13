@@ -5,6 +5,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 checker="$repo_root/packaging/river/check-noble-river-package.py"
 control="$repo_root/packaging/debian-river/control"
 rules="$repo_root/packaging/debian-river/rules"
+realm_control="$repo_root/packaging/debian/control"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -26,6 +27,10 @@ for expected in \
 done
 grep -F 'REALM_LOGICAL_PREFIX := /usr/lib/realm' "$rules" >/dev/null || {
     echo 'Noble River rules omit the logical private prefix' >&2
+    exit 1
+}
+grep -F 'realm-river (>= 0.4.8) | river (>= 0.4.0),' "$realm_control" >/dev/null || {
+    echo 'Realm control does not require the selected private River version' >&2
     exit 1
 }
 
@@ -57,6 +62,41 @@ EOF
 make_package "$tmpdir/canonical" "$tmpdir/canonical.deb"
 "$checker" "$tmpdir/canonical.deb"
 
+cp -R "$tmpdir/canonical" "$tmpdir/private-dependency"
+sed -i \
+    's/^Depends:.*/Depends: libinput-bin (>= 1.25.0), libwlroots-0.20-0 (= 0.20.0)/' \
+    "$tmpdir/private-dependency/DEBIAN/control"
+dpkg-deb --build "$tmpdir/private-dependency" "$tmpdir/private-dependency.deb" >/dev/null
+if "$checker" "$tmpdir/private-dependency.deb" >"$tmpdir/out" 2>"$tmpdir/err"; then
+    echo "package checker accepted a dependency on a bundled private library" >&2
+    exit 1
+elif ! grep -F 'dependency on bundled private library is forbidden: libwlroots-0.20-0' \
+    "$tmpdir/err" >/dev/null; then
+    cat "$tmpdir/err" >&2
+    exit 1
+fi
+
+for companion in \
+    libdrm-amdgpu1 \
+    libdrm-intel1 \
+    libdrm-nouveau2 \
+    libdrm-radeon1; do
+    cp -R "$tmpdir/canonical" "$tmpdir/$companion"
+    sed -i \
+        "s/^Depends:.*/Depends: libinput-bin (>= 1.25.0), $companion/" \
+        "$tmpdir/$companion/DEBIAN/control"
+    dpkg-deb --build "$tmpdir/$companion" "$tmpdir/$companion.deb" >/dev/null
+    if "$checker" "$tmpdir/$companion.deb" >"$tmpdir/out" 2>"$tmpdir/err"; then
+        echo "package checker accepted a dependency on bundled $companion" >&2
+        exit 1
+    elif ! grep -F \
+        "dependency on bundled private library is forbidden: $companion" \
+        "$tmpdir/err" >/dev/null; then
+        cat "$tmpdir/err" >&2
+        exit 1
+    fi
+done
+
 cp -R "$tmpdir/canonical" "$tmpdir/usr-bin"
 mkdir -p "$tmpdir/usr-bin/usr/bin"
 : >"$tmpdir/usr-bin/usr/bin/river"
@@ -77,6 +117,18 @@ if "$checker" "$tmpdir/development.deb" >"$tmpdir/out" 2>"$tmpdir/err"; then
     echo "package checker accepted development files" >&2
     exit 1
 elif ! grep -F 'development or build payload is forbidden' "$tmpdir/err" >/dev/null; then
+    cat "$tmpdir/err" >&2
+    exit 1
+fi
+
+cp -R "$tmpdir/canonical" "$tmpdir/build-tree"
+mkdir -p "$tmpdir/build-tree/usr/lib/realm/build-cache"
+: >"$tmpdir/build-tree/usr/lib/realm/build-cache/object.o"
+dpkg-deb --build "$tmpdir/build-tree" "$tmpdir/build-tree.deb" >/dev/null
+if "$checker" "$tmpdir/build-tree.deb" >"$tmpdir/out" 2>"$tmpdir/err"; then
+    echo "package checker accepted an arbitrary private-prefix build tree" >&2
+    exit 1
+elif ! grep -F 'payload path is not an allowed runtime file' "$tmpdir/err" >/dev/null; then
     cat "$tmpdir/err" >&2
     exit 1
 fi
