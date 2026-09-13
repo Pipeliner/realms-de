@@ -13,8 +13,12 @@ clap = { workspace = true }
 realm-core = { workspace = true }
 realm-control = { workspace = true }
 realm-theme = { path = "../realm-theme", version = "0.1.0" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 wayland-client = { workspace = true }
+zbus = { workspace = true }
+fontdb = "=0.23.0"
+ttf-parser = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

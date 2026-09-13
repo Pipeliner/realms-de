@@ -17,12 +17,17 @@ use wayland_client::{
     Connection, Dispatch, QueueHandle,
 };
 
+mod doctor;
 #[allow(dead_code)]
 mod retry;
 
 #[derive(Parser)]
-#[command(name = "realmctl")]
+#[command(name = "realmctl", version)]
 struct Cli {
+    #[arg(long, global = true)]
+    json: bool,
+    #[arg(long, global = true)]
+    palette: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -31,6 +36,13 @@ struct Cli {
 enum Command {
     Theme(Theme),
     WaitDisplay(WaitDisplayArgs),
+    Doctor(DoctorArgs),
+}
+
+#[derive(Args)]
+struct DoctorArgs {
+    #[arg(long)]
+    portal_roundtrip: bool,
 }
 
 #[derive(Args)]
@@ -82,18 +94,12 @@ struct RootArgs {
 struct DiffArgs {
     #[arg(long)]
     config_root: Option<PathBuf>,
-    #[arg(long)]
-    json: bool,
 }
 
 #[derive(Args)]
 pub struct LintArgs {
     #[arg(long)]
     config_root: Option<PathBuf>,
-    #[arg(long)]
-    palette: Option<PathBuf>,
-    #[arg(long)]
-    json: bool,
 }
 
 pub trait Env {
@@ -125,8 +131,14 @@ where
         }
     };
 
-    match cli.command {
+    let Cli {
+        command,
+        json,
+        palette,
+    } = cli;
+    match command {
         Command::WaitDisplay(args) => run_wait_display(args, env),
+        Command::Doctor(args) => doctor::run(env, json, palette.as_deref(), args.portal_roundtrip),
         Command::Theme(Theme {
             command: ThemeCommand::Apply(args),
         }) => {
@@ -149,12 +161,12 @@ where
                     Err(error) => return usage_error(&error),
                 },
             };
-            run_diff(&root, args.json)
+            run_diff(&root, json)
         }
         Command::Theme(Theme {
             command: ThemeCommand::Lint(args),
         }) => {
-            let root = match &args.palette {
+            let root = match &palette {
                 Some(_) => PathBuf::new(),
                 None => match args.config_root.clone() {
                     Some(root) => root,
@@ -164,7 +176,7 @@ where
                     },
                 },
             };
-            match run_lint(&args, &root) {
+            match run_lint(&root, palette.as_deref(), json) {
                 Ok(exit) => exit,
                 Err(error) => failure(&error),
             }
@@ -358,13 +370,13 @@ fn default_config_root(env: &impl Env) -> Result<PathBuf, String> {
         .ok_or_else(|| "no XDG_CONFIG_HOME or HOME for realm configuration".into())
 }
 
-pub fn run_lint(args: &LintArgs, root: &Path) -> Result<ExitCode, String> {
-    let palette = match &args.palette {
+pub fn run_lint(root: &Path, palette_path: Option<&Path>, json: bool) -> Result<ExitCode, String> {
+    let palette = match palette_path {
         Some(path) => Palette::load(path).map_err(|error| error.to_string())?,
         None => realm_theme::load_lint_palette(root).map_err(|error| error.to_string())?,
     };
     let report = realm_theme::lint(&palette);
-    if args.json {
+    if json {
         print_lint_json(&report);
     } else {
         for separation in &report.separations {
@@ -446,6 +458,7 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use realm_theme::generation::GenerationId;
 
     fn generation() -> GenerationId {
@@ -484,5 +497,37 @@ mod tests {
             report.stderr,
             "theme apply failed: activation is unconfirmed for candidate 0123456789abcdef0123456789abcdef; inspect generation state before retrying: \"pointer \\\"unknown\\\"\\ninspect\"\n"
         );
+    }
+
+    #[test]
+    fn doctor_accepts_global_overrides_before_or_after_the_command() {
+        for args in [
+            [
+                "realmctl",
+                "--json",
+                "--palette",
+                "/tmp/palette.toml",
+                "doctor",
+                "--portal-roundtrip",
+            ],
+            [
+                "realmctl",
+                "doctor",
+                "--portal-roundtrip",
+                "--json",
+                "--palette",
+                "/tmp/palette.toml",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(cli.json);
+            assert_eq!(cli.palette.as_deref(), Some(Path::new("/tmp/palette.toml")));
+            assert!(matches!(
+                cli.command,
+                Command::Doctor(DoctorArgs {
+                    portal_roundtrip: true
+                })
+            ));
+        }
     }
 }
