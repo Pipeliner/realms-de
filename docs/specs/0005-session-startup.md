@@ -3,9 +3,8 @@
 - **Status:** Draft — the NixOS session-discovery contract, startup step 3,
   XWayland display discovery and publication, current-incarnation
   doctor-health handoff, distro-native swayidle/swaylock selection, and the
-  host-policy/lock-before-suspend lid boundary are accepted; the idle blank and
-  lock timeouts below remain unresolved
-  (`needs-human`)
+  host-policy/lock-before-suspend lid boundary and the accepted 5-minute
+  dim/10-minute lock defaults are accepted
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
   [ADR 0013](../adr/0013-river-window-management-backend.md),
@@ -82,9 +81,8 @@ the session through NixOS display-manager session data, and assert both the
 `realm.desktop` identity and its rewritten `Exec` target. A test that uses no
 display manager may test package contents directly, but must not claim to test
 NixOS session discovery.
-- Choosing the idle blank and lock timeouts — see **Open questions**. The
-  locker, idle client and host-policy/lock-before-suspend lid boundary are
-  accepted below.
+- The locker, idle client, host-policy/lock-before-suspend lid boundary, and
+  5-minute dim/10-minute lock defaults are accepted below.
 
 ## Behaviour
 
@@ -703,7 +701,7 @@ gate (ADR 0011's guard).
 | `units/wm` | `realm-wm.service` `ActiveState=active`; `ConditionResult` reported separately | **N1** — a condition-skipped unit read as success | VM |
 | `units/bar` | `realm-bar.service` active or cleanly restarting | Bar gone unnoticed | VM |
 | `units/restart-policy` | The shipped units carry the policy in §4 | A crashed bar taking the session down | **CI** |
-| `units/idle-lock` | An idle and a lock unit are part of `graphical-session.target`; the idle unit follows host lid policy and locks through logind's before-sleep path | Host-initiated suspend reaches sleep before lock readiness | VM *(idle-timeout assertions blocked on OQ-1)* |
+| `units/idle-lock` | An idle and a lock unit are part of `graphical-session.target`; dim occurs after 5 minutes, lock/blank after 10 minutes, and host suspend follows the before-sleep lock path | Host-initiated suspend reaches sleep before lock readiness or idle defaults drift | VM |
 | `wm/attached` | realm holds river's window-management global; on refusal reports a possible foreign holder, and names it only when independent evidence identifies it | **N2** — inert compositor, or a restart loop against a stale holder | VM |
 | `wm/layer-shell` | realm is serving `river-layer-shell-v1` | The bar never appears, and it looks like the bar's fault | VM |
 | `wm/capabilities` | `Capabilities`, including `unsupported` ([INTERFACES.md §1](../INTERFACES.md)) | A backend gap that looks like a bug | VM |
@@ -789,7 +787,7 @@ Rows this component is responsible for not causing, from
 | `XDG_CURRENT_DESKTOP` unset | Session integration | Step 1; `env/desktop/*`; A5 |
 | No portal backend installed | Session integration | §5 named dependencies and `realm-portals.conf`; `portal/config`; A13 |
 | Session dies with a client | Session integration | §4 `PartOf`/`Wants`, never `BindsTo`/`Requires`; A12 |
-| No lock/idle handling | Session integration | §4 `realm-idle.service`; `units/idle-lock`; A16; idle-timeout assertions remain blocked on OQ-1 |
+| No lock/idle handling | Session integration | §4 `realm-idle.service`; `units/idle-lock`; A16 |
 | XWayland apps unstyled or scaled wrong | Session integration | §3 XWayland; `env/xwayland` |
 | Cursor theme unset | Session integration | Steps 1 and 5; `env/cursor`; A7 |
 | `realm-session` dies | river | §2 supervision policy and ledger recovery; A10 |
@@ -830,8 +828,8 @@ register yet. They are recorded here as findings for a human to add.
 
 ## Open questions
 
-- **OQ-1 — the idle blank and lock timeouts. `needs-human`.** Locker selection
-  and the lid/suspend boundary are resolved; these two durations remain open.
+- **OQ-1 — resolved.** Dim after 5 minutes and lock/blank after 10 minutes;
+  the lid/suspend boundary remains the separately accepted host-policy path.
 
   *Locker (resolved).* river 0.4 implements `ext-session-lock-v1` and reports
   `session_locked`/`session_unlocked` to the window manager, so realm can disable
@@ -863,13 +861,8 @@ register yet. They are recorded here as findings for a human to add.
   host policy. If the host ignores the lid, Realm does too. On resume the
   compositor-owned lock remains until authentication.
 
-  *Idle defaults (unresolved).* Candidates remain: (a) no idle action by
-  default; (b) blank at 5 min and lock at 10 min; (c) lock at 15 min. A
-  proposal, not a decision: (b). **These are user-visible defaults and must not
-  be guessed.** A desktop that locks after 60 seconds is one whose owner may
-  disable locking entirely, which is worse than a deliberate default. A human
-  still decides these two durations; that does not reopen A16's suspend-order
-  contract.
+  *Idle defaults (resolved).* Dim after 5 minutes of inactivity and lock/blank
+  after 10 minutes. This does not reopen A16's suspend-order contract.
 
 - **OQ-2 — ScreenCast under river 0.4.** Does river 0.4.8 still export
   `wlr-screencopy-unstable-v1`, and does `xdg-desktop-portal-wlr` work when

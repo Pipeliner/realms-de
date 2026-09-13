@@ -309,9 +309,9 @@ On resume the compositor-owned lock remains until authentication. This decision
 does not choose whether a particular host suspends, docks, or ignores a closed
 lid.
 
-A human must still set the **idle defaults**: how long until the screen blanks
-and how long until it locks. Those two user-visible defaults are not settled by
-the locker or lid-policy decisions.
+The accepted idle defaults are: dim after 5 minutes of inactivity and lock/
+blank after 10 minutes. These defaults are independent of the host lid policy;
+host-initiated suspend still follows the lock-before-suspend path above.
 
 The dependency SPEC 0005 could not confirm is now **resolved**: river does
 implement `ext-idle-notify-v1`. `river/InputManager.zig` creates a
