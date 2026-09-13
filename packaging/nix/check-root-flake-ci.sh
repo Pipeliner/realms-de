@@ -37,4 +37,25 @@ if ! grep -F -q -e './packaging/nix/test-root-flake-ci.sh' "$workflow"; then
     fail 'normal Nix CI must invoke the root-flake fixture suite'
 fi
 
+for artifact in \
+    realm-gtk3-toolkit.png \
+    realm-gtk4-toolkit.png \
+    realm-qt6-toolkit.png \
+    control-gtk3-toolkit-state.json \
+    control-gtk4-toolkit-state.json \
+    control-qt6-toolkit-state.json \
+    gtk3-toolkit-openat.log \
+    gtk3-toolkit-stderr.log \
+    gtk4-toolkit-openat.log \
+    gtk4-toolkit-stderr.log \
+    qt6-toolkit-openat.log \
+    qt6-toolkit-stderr.log \
+    qt6-user-override-openat.log \
+    qt6-user-override-stderr.log
+do
+    if ! grep -F -q -e "\${{ runner.temp }}/realm-session-boots/$artifact" "$workflow"; then
+        fail "live VM evidence must retain $artifact"
+    fi
+done
+
 echo 'root-flake CI contract: pass'

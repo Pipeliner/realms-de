@@ -67,6 +67,30 @@ expect_fail() {
 fixture_root=$(make_fixture canonical)
 expect_pass canonical-root-flake-contract "$fixture_root"
 
+for artifact in \
+    realm-gtk3-toolkit.png \
+    realm-gtk4-toolkit.png \
+    realm-qt6-toolkit.png \
+    control-gtk3-toolkit-state.json \
+    control-gtk4-toolkit-state.json \
+    control-qt6-toolkit-state.json \
+    gtk3-toolkit-openat.log \
+    gtk3-toolkit-stderr.log \
+    gtk4-toolkit-openat.log \
+    gtk4-toolkit-stderr.log \
+    qt6-toolkit-openat.log \
+    qt6-toolkit-stderr.log \
+    qt6-user-override-openat.log \
+    qt6-user-override-stderr.log
+do
+    fixture_root=$(make_fixture "missing-$artifact")
+    sed "/$artifact/d" "$fixture_root/.github/workflows/distro.yml" \
+        >"$fixture_root/workflow.yml"
+    mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+    expect_fail "missing-$artifact" "$fixture_root" \
+        "live VM evidence must retain $artifact"
+done
+
 fixture_root=$(make_fixture missing-flake)
 rm -f "$fixture_root/flake.nix"
 expect_fail missing-flake "$fixture_root" 'root flake.nix is required'

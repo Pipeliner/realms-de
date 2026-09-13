@@ -160,6 +160,10 @@ EOF
           pkgs.yazi
           pkgs.btop
           pkgs.firefox
+          pkgs.gtk3.dev
+          pkgs.gtk4.dev
+          pkgs.qt6ct
+          pkgs.strace
           (pkgs.makeDesktopItem {
             name = "realm-browser-test";
             desktopName = "Realm Browser Test";
@@ -267,6 +271,73 @@ EOF
 
       def write_artifact(name, content):
           (Path(machine.out_dir) / name).write_text(content, encoding="utf-8")
+
+      def wait_for_managed_window_count(expected, description):
+          return wait_for_state(
+              lambda response: sum(
+                  cell["windows"] for cell in response["data"]["orbits"]
+              ) == expected,
+              description,
+          )
+
+      def exercise_toolkit(
+          command,
+          name,
+          required_paths,
+          expected_text,
+          diagnostic_pattern,
+          screenshot=None,
+      ):
+          trace = f"/tmp/realm-{name}.trace"
+          stderr = f"/tmp/realm-{name}.stderr"
+          done = f"/tmp/realm-{name}.done"
+          machine.succeed(
+              f"rm -f {shlex.quote(trace)} {shlex.quote(stderr)} "
+              f"{shlex.quote(done)}"
+          )
+          machine.send_chars(
+              "${pkgs.strace}/bin/strace -f -qq -e trace=openat "
+              f"-o {shlex.quote(trace)} {command} 2> {shlex.quote(stderr)}; "
+              "realm_probe_status=$?; printf '%s\\n' \"$realm_probe_status\" "
+              f"> {shlex.quote(done)}\n"
+          )
+          managed_raw, managed = wait_for_managed_window_count(
+              2, f"{name} application window"
+          )
+          assert managed["data"]["focused_title"] == expected_text, managed
+          machine.wait_for_text(expected_text, timeout=OCR_TIMEOUT)
+          if screenshot is not None:
+              write_artifact(f"control-{name}-state.json", managed_raw)
+              machine.screenshot(screenshot)
+              screenshot_path = Path(machine.out_dir) / f"{screenshot}.png"
+              assert screenshot_path.stat().st_size > 0, screenshot_path
+          machine.send_key("meta_l-q")
+          wait_for_managed_window_count(1, f"{name} application close")
+          machine.wait_until_succeeds(
+              f"test -s {shlex.quote(done)}", timeout=STATE_TIMEOUT
+          )
+          assert machine.succeed(f"cat {shlex.quote(done)}").strip() == "0"
+          machine.fail(
+              f"grep -E -i -q {shlex.quote(diagnostic_pattern)} "
+              f"{shlex.quote(stderr)}"
+          )
+          matched_trace = []
+          for required_path in required_paths:
+              quoted_match = shlex.quote(f'"{required_path}"')
+              machine.succeed(
+                  f"grep -F {quoted_match} {shlex.quote(trace)} "
+                  "| grep -E -q '= [0-9]+$'"
+              )
+              matched_trace.append(
+                  machine.succeed(
+                      f"grep -F {quoted_match} {shlex.quote(trace)}"
+                  )
+              )
+          write_artifact(f"{name}-openat.log", "".join(matched_trace))
+          write_artifact(
+              f"{name}-stderr.log",
+              machine.succeed(f"cat {shlex.quote(stderr)}"),
+          )
 
       def log_startup_diagnostics():
           commands = [
@@ -497,7 +568,79 @@ EOF
           zsh_environment["YAZI_CONFIG_HOME"]
           == f"{generation_root}/yazi"
       ), zsh_environment
+      assert zsh_environment["GTK_THEME"] == "realm", zsh_environment
+      assert (
+          zsh_environment["XDG_DATA_DIRS"].split(":", 1)[0]
+          == f"{generation_root}/share"
+      ), zsh_environment
+      assert (
+          zsh_environment["QT_QPA_PLATFORMTHEME"] == "qt6ct"
+      ), zsh_environment
+      assert (
+          zsh_environment["XDG_CONFIG_DIRS"].split(":", 1)[0]
+          == generation_root
+      ), zsh_environment
       machine.wait_for_text("alice@machine :: ~ ~%", timeout=OCR_TIMEOUT)
+
+      gtk3_css = f"{generation_root}/share/themes/realm/gtk-3.0/gtk.css"
+      gtk4_css = f"{generation_root}/share/themes/realm/gtk-4.0/gtk.css"
+      qt6ct_config = f"{generation_root}/qt6ct/qt6ct.conf"
+      qt6ct_colours = f"{generation_root}/qt6ct/colors/realm.conf"
+      machine.succeed(
+          f"cmp --silent {shlex.quote(gtk3_css)} "
+          f"{shlex.quote(generation_root + '/gtk-3.0/realm.css')}"
+      )
+      machine.succeed(
+          f"cmp --silent {shlex.quote(gtk4_css)} "
+          f"{shlex.quote(generation_root + '/gtk-4.0/realm.css')}"
+      )
+      machine.succeed("test ! -e /home/alice/.config/qt6ct/qt6ct.conf")
+
+      exercise_toolkit(
+          "${pkgs.gtk3.dev}/bin/gtk3-widget-factory",
+          "gtk3-toolkit",
+          [gtk3_css],
+          "Widget Factory",
+          r"(css|theme).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(css|theme)",
+          screenshot="realm-gtk3-toolkit",
+      )
+      exercise_toolkit(
+          "${pkgs.gtk4.dev}/bin/gtk4-widget-factory",
+          "gtk4-toolkit",
+          [gtk4_css],
+          "Widget Factory",
+          r"(css|theme).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(css|theme)",
+          screenshot="realm-gtk4-toolkit",
+      )
+      exercise_toolkit(
+          "${pkgs.qt6ct}/bin/qt6ct",
+          "qt6-toolkit",
+          [qt6ct_config, qt6ct_colours],
+          "Qt6 Configuration Tool",
+          r"(qt6ct|palette|colou?r.scheme|config).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(qt6ct|palette|colou?r.scheme|config)",
+          screenshot="realm-qt6-toolkit",
+      )
+
+      machine.succeed(
+          "install -d -o alice -g users -m 0700 /home/alice/.config/qt6ct && "
+          "printf '%s\\n' '[Appearance]' 'custom_palette=false' "
+          "> /home/alice/.config/qt6ct/qt6ct.conf && "
+          "chown alice:users /home/alice/.config/qt6ct/qt6ct.conf && "
+          "chmod 0600 /home/alice/.config/qt6ct/qt6ct.conf"
+      )
+      user_qt6ct_digest = machine.succeed(
+          "sha256sum /home/alice/.config/qt6ct/qt6ct.conf"
+      ).split()[0]
+      exercise_toolkit(
+          "${pkgs.qt6ct}/bin/qt6ct",
+          "qt6-user-override",
+          ["/home/alice/.config/qt6ct/qt6ct.conf"],
+          "Qt6 Configuration Tool",
+          r"(qt6ct|palette|colou?r.scheme|config).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(qt6ct|palette|colou?r.scheme|config)",
+      )
+      assert machine.succeed(
+          "sha256sum /home/alice/.config/qt6ct/qt6ct.conf"
+      ).split()[0] == user_qt6ct_digest
 
       machine.succeed(
           "install -d -o alice -g users -m 0755 /tmp/realm-yazi-proof && "
@@ -692,6 +835,9 @@ EOF
       # these exact compositor framebuffer captures.
       captures = []
       for filename, state_file in [
+          ("realm-gtk3-toolkit.png", "control-gtk3-toolkit-state.json"),
+          ("realm-gtk4-toolkit.png", "control-gtk4-toolkit-state.json"),
+          ("realm-qt6-toolkit.png", "control-qt6-toolkit-state.json"),
           ("realm-tiled-desktop.png", "control-tiled-state.json"),
           ("realm-grimoire.png", "control-grimoire-state.json"),
       ]:

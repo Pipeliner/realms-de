@@ -223,6 +223,20 @@ jobs:
           path: |
             ${{ runner.temp }}/realm-session-boots/realm-tiled-desktop.png
             ${{ runner.temp }}/realm-session-boots/realm-grimoire.png
+            ${{ runner.temp }}/realm-session-boots/realm-gtk3-toolkit.png
+            ${{ runner.temp }}/realm-session-boots/realm-gtk4-toolkit.png
+            ${{ runner.temp }}/realm-session-boots/realm-qt6-toolkit.png
+            ${{ runner.temp }}/realm-session-boots/control-gtk3-toolkit-state.json
+            ${{ runner.temp }}/realm-session-boots/control-gtk4-toolkit-state.json
+            ${{ runner.temp }}/realm-session-boots/control-qt6-toolkit-state.json
+            ${{ runner.temp }}/realm-session-boots/gtk3-toolkit-openat.log
+            ${{ runner.temp }}/realm-session-boots/gtk3-toolkit-stderr.log
+            ${{ runner.temp }}/realm-session-boots/gtk4-toolkit-openat.log
+            ${{ runner.temp }}/realm-session-boots/gtk4-toolkit-stderr.log
+            ${{ runner.temp }}/realm-session-boots/qt6-toolkit-openat.log
+            ${{ runner.temp }}/realm-session-boots/qt6-toolkit-stderr.log
+            ${{ runner.temp }}/realm-session-boots/qt6-user-override-openat.log
+            ${{ runner.temp }}/realm-session-boots/qt6-user-override-stderr.log
             ${{ runner.temp }}/realm-session-boots/capture-provenance.json
             ${{ runner.temp }}/realm-session-boots/control-get-state.json
             ${{ runner.temp }}/realm-session-boots/control-tiled-state.json
