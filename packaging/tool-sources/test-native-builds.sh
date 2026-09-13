@@ -210,20 +210,15 @@ assert_current_package_guide() {
         || grep -F 'git archive' "$guide_output" >/dev/null; then
         fail "$guide_name package installed a guide with a forbidden build workflow"
     fi
-    if ! grep -F 'packaging/tool-sources/build-native-source-kits.sh' \
+    if ! grep -F 'package builds and verification run in CI only' \
         "$guide_output" >/dev/null; then
-        fail "$guide_name package installed a guide without the retained-kit producer"
+        fail "$guide_name package installed a guide without the CI-only packaging policy"
     fi
-    case $guide_name in
-        Debian)
-            required_install='sudo apt install devscripts debhelper rustc-1.89 cargo-1.89 pkg-config python3 zstd fonts-dejavu-core'
-            ;;
-        RPM)
-            required_install='sudo dnf install rpm-build rust cargo systemd-rpm-macros make python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts'
-            ;;
-    esac
-    if ! grep -F -x "$required_install" "$guide_output" >/dev/null; then
-        fail "$guide_name package installed a guide without its clean-host build prerequisites"
+    if grep -F 'packaging/tool-sources/build-native-source-kits.sh' \
+        "$guide_output" >/dev/null \
+        || grep -E 'sudo (apt|dnf) install .*\b(devscripts|debhelper|rpm-build)\b' \
+            "$guide_output" >/dev/null; then
+        fail "$guide_name package installed a guide with local packaging instructions"
     fi
 }
 

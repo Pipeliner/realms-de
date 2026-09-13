@@ -169,10 +169,12 @@ allowed packaging-metadata directories as well as at kit top level.
 The installed native-package build guide SHALL come from tracked outer
 packaging metadata, not from the identity-bound archive's historical
 `docs/INSTALL.md`. The emitted Debian and RPM packages SHALL document
-`build-native-source-kits.sh` and SHALL NOT retain the superseded checkout
+the CI-only package build and verification workflow, without local source-kit
+producer commands or packaging-toolchain installation instructions, and SHALL
+NOT retain the superseded checkout
 `ln -s packaging/debian` or moving `git archive ... HEAD` workflows. Updating
 package guidance SHALL NOT mutate or regenerate the canonical source authority.
-Its clean-host prerequisite commands SHALL include the direct native recipe
+The CI clean-host prerequisite commands SHALL include the direct native recipe
 requirements: Debian `pkg-config` and Fedora `make`. Because the package-native
 test phase exercises SPEC 0004's raster/text-cache tests, both package recipes
 and their CI prerequisite installs SHALL also supply a real DejaVu fallback
