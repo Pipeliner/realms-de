@@ -224,6 +224,28 @@ meaning on GCC 16 and newer without suppressing incompatible-type diagnostics.
 This compatibility selection applies only to the selected Yazi build, not the
 Realm workspace or Starship builds.
 
+The native-package fixture SHALL distinguish build authority from runtime
+validation. All three Cargo builds, the workspace Cargo test, and every package
+preparation step remain under the retained-Cargo and forbidden-network-command
+instrumentation. Only the already-built Yazi/ya/Starship runtime validation MAY
+replace that instrumented `PATH` with the fixture-supplied
+`REALM_RUNTIME_PATH`; before that validation the recipe SHALL remove inherited
+Cargo/rustc selector and build-output variables. The runtime validation remains
+inside the same mandatory network namespace and SHALL NOT compile or fetch.
+The fixture SHALL prove that an injected package build fetch is still refused
+before Cargo and that its build log contains exactly the three selected builds
+and one selected test.
+
+Starship's stable retained identity is the first line of `starship --version`,
+which SHALL be exactly `starship 1.23.0`. Additional upstream version lines
+report compiler and build metadata; the fixture MAY record them but SHALL NOT
+claim they are deterministic retained identity. The deterministic source/VCS
+metadata requirements above apply to the selected Yazi/ya build. Debian and RPM
+MAY apply different native compile and link flags, so their complete ELF bytes
+are not comparable artifacts. The cross-directory reproducibility assertion
+SHALL instead compare the exact normalized Yazi and ya version/commit/date
+lines emitted by both packages; any mismatch fails.
+
 After retained-bundle verification and unpacking, Fedora preparation SHALL
 remove executable permission bits from staged regular Rust source (`*.rs`)
 files before compilation and debug-source collection. Source bytes and retained
