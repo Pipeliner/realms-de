@@ -1,7 +1,8 @@
 # SPEC 0011 — Immutable theme activation generations
 
 - **Status:** Accepted (2026-08-29; fixed-consumer bootstrap, packaged-Foot
-  parser, retained terminal-profile and read-only btop refinements 2026-09-13)
+  parser, retained terminal-profile, read-only btop, and pinned-btop CLI
+  refinements 2026-09-13)
 - **Milestone:** M1
 - **Decision:** [ADR 0017](../adr/0017-immutable-theme-activation-generations.md)
 - **Issue:** [#131](https://github.com/Pipeliner/realms-de/issues/131)
@@ -504,10 +505,13 @@ YAZI_CONFIG_HOME=<N>/yazi
 ```
 
 The generation-local `.zshrc` initializes the inherited `starship` executable
-and defines `btop` to invoke the inherited executable with exactly
-`--config=<N>/btop/btop.conf` and `--themes-dir=<N>/btop/themes`, followed by
-the caller's arguments. The Yazi keymap's `Ctrl+p` invokes the same exact btop
-configuration and theme-directory arguments as a blocking command. The
+and defines `btop` to invoke the inherited executable with exactly four
+arguments before any caller arguments: `--config`, `<N>/btop/btop.conf`,
+`--themes-dir`, and `<N>/btop/themes`. The Yazi keymap's `Ctrl+p` invokes the
+same exact five-element argv including executable basename as a blocking
+command. The pinned btop 1.4.7 parser accepts each option only as its own token
+followed by a path token; the superficially similar `--config=<path>` and
+`--themes-dir=<path>` forms are unknown arguments and are forbidden. The
 launcher invocation uses fuzzel's default XDG-application mode. Only the fuzzel
 UI consumes N: an application that fuzzel starts remains ADR 0018's explicitly
 unverified direct launch and must not be reported as a Realm profile or as
@@ -642,6 +646,7 @@ candidate with a partially validated or mixed generation.
 | G15 | Given an old complete N or a pre-profile valid N, when apply publishes N+1, Foot exits and more generations are published, then production apply/recovery/startup exposes no generation-reclamation operation and every valid committed tree remains byte-for-byte present. Terminal against the old complete N continues to consume N; terminal against the pre-profile N refuses the missing exact output before exec and the explicit apply path makes a later complete generation launchable. The test-only GC model is not linked as a production API. |
 | G16 | Given a clean first login that publishes a generation from the current built-in catalogue, when the installed Foot parser checks that generation's `foot/foot.ini`, then it accepts the complete file without a rejected configuration key. The check neither repairs nor replaces an existing valid historical generation. |
 | G17 | Given a built-in apply containing `btop/btop.conf`, when publication commits the generation, then that output is exact mode 0400 before selection, an ordinary same-UID write-open is refused, and selection still reads the manifest-bound bytes. A pre-profile generation without that output and all other existing output/control modes remain unchanged. |
+| G18 | Given a generation path containing spaces, when the generated zsh wrapper or Yazi `Ctrl+p` command launches the pinned btop, then both produce exactly `btop`, `--config`, `<N>/btop/btop.conf`, `--themes-dir`, `<N>/btop/themes` before any caller arguments; neither emits an equals-form option that btop 1.4.7 rejects. |
 
 ## Boundaries
 
