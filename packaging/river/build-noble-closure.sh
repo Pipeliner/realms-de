@@ -90,6 +90,10 @@ meson_install wayland-protocols -Dtests=false
 meson_install libdrm \
     -Dtests=false -Dcairo-tests=disabled -Dman-pages=disabled \
     -Dvalgrind=disabled -Dinstall-test-programs=false
+meson_install libinput \
+    -Dmtdev=true -Dlibwacom=true \
+    -Dtests=false -Dinstall-tests=false -Ddocumentation=false \
+    -Ddebug-gui=false -Dlua-plugins=disabled
 meson_install pixman -Dtests=disabled -Ddemos=disabled -Dgtk=disabled \
     -Dlibpng=disabled -Dopenmp=disabled
 meson_install libxkbcommon \

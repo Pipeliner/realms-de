@@ -52,6 +52,7 @@ names = [
     "libwayland-client.so.0",
     "libdrm.so.2",
     "libdrm_amdgpu.so.1",
+    "libinput.so.10",
     "libpixman-1.so.0",
     "libxkbcommon.so.0",
     "libdisplay-info.so.0",
@@ -80,6 +81,12 @@ sed "s|$prefix/lib/libdrm_amdgpu.so.1|/usr/lib/libdrm_amdgpu.so.1|" \
     "$canonical" >"$external_companion"
 expect_fail external-libdrm-companion \
     "private-family resolution escaped prefix: libdrm_amdgpu.so.1" "$external_companion"
+
+external_libinput="$tmpdir/external-libinput.log"
+sed "s|$prefix/lib/libinput.so.10|/usr/lib/libinput.so.10|" \
+    "$canonical" >"$external_libinput"
+expect_fail external-libinput \
+    "private-family resolution escaped prefix: libinput.so.10" "$external_libinput"
 
 missing="$tmpdir/missing.log"
 grep -v 'libdisplay-info' "$canonical" >"$missing"

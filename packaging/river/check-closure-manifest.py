@@ -22,6 +22,7 @@ ARCHIVE_NAMES = {
     "wayland",
     "wayland-protocols",
     "libdrm",
+    "libinput",
     "pixman",
     "libxkbcommon",
     "libdisplay-info",

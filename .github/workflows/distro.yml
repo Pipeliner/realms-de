@@ -52,11 +52,12 @@ jobs:
             libgbm-dev \
             libgl-dev \
             libgles-dev \
-            libinput-dev \
+            libmtdev-dev \
             libpciaccess-dev \
             libpthread-stubs0-dev \
             libseat-dev \
             libudev-dev \
+            libwacom-dev \
             libx11-dev \
             libxcb-composite0-dev \
             libxcb-ewmh-dev \

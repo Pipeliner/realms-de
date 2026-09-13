@@ -94,6 +94,14 @@ if ! "$checker" --repo-root "$repo_root" --emit archives "$manifest" \
 fi
 pass_count=$((pass_count + 1))
 printf 'ok %s - canonical Meson build-tool pin\n' "$pass_count"
+if ! "$checker" --repo-root "$repo_root" --emit archives "$manifest" \
+    | grep -Fx -- $'libinput\tlibinput-1.31.3.tar.gz\thttps://gitlab.freedesktop.org/libinput/libinput/-/archive/1.31.3/libinput-1.31.3.tar.gz\tb6749bf6f1890f6631c0a70a027c35fec9d2e096a39f720548896e41474a9854' \
+        >/dev/null; then
+    echo "not ok $((pass_count + 1)) - canonical libinput runtime pin is absent" >&2
+    exit 1
+fi
+pass_count=$((pass_count + 1))
+printf 'ok %s - canonical libinput runtime pin\n' "$pass_count"
 
 require_zig_record() {
     local name=$1
