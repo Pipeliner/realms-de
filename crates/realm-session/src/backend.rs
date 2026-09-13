@@ -9,13 +9,24 @@ use std::num::{NonZeroU32, NonZeroU64, TryFromIntError};
 use std::os::fd::BorrowedFd;
 use std::time::Instant;
 
-use realm_core::ipc::Capabilities;
+use realm_core::ipc::{Capabilities, InterfaceVersion};
 use realm_core::layout::{Placement, Rect, Workarea};
 use realm_core::WinId;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Result returned by compositor backend operations.
 pub type BackendResult<T> = std::result::Result<T, BackendError>;
+
+/// Immutable facts established by one successful backend connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendConnection {
+    /// Behaviours the backend can honour.
+    pub capabilities: Capabilities,
+    /// Protocol interfaces actually bound, in stable backend order.
+    pub bound_interfaces: Vec<InterfaceVersion>,
+    /// Whether Realm's layer-shell service is active on this connection.
+    pub layer_shell_served: bool,
+}
 
 /// Stable compositor-owned identity used to recover Realm window ids.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -452,8 +463,8 @@ pub trait WmBackend: Send {
     /// Human-readable backend name shown by `realmctl doctor`.
     fn name(&self) -> &str;
 
-    /// Connect and report what the backend can honour.
-    fn connect(&mut self) -> BackendResult<Capabilities>;
+    /// Connect and report capabilities plus the protocol facts actually bound.
+    fn connect(&mut self) -> BackendResult<BackendConnection>;
 
     /// Bind a stable backend identity to Realm's allocated window id.
     ///
@@ -508,10 +519,10 @@ mod tests {
 
     use super::{
         BackendBindingId, BackendBindingSpec, BackendBindingState, BackendCapacityResource,
-        BackendContractError, BackendError, BackendEvent, BackendExitPolicy, BackendModifier,
-        BackendNextKeyEdge, BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn,
-        BackendPolicyTurnId, BackendPollInterest, BackendProtocolErrorKind, BackendReady,
-        BackendResult, BackendSubmission, BackendTicket, BackendWindowId, WmBackend,
+        BackendConnection, BackendContractError, BackendError, BackendEvent, BackendExitPolicy,
+        BackendModifier, BackendNextKeyEdge, BackendPolicyEvent, BackendPolicyResponse,
+        BackendPolicyTurn, BackendPolicyTurnId, BackendPollInterest, BackendProtocolErrorKind,
+        BackendReady, BackendResult, BackendSubmission, BackendTicket, BackendWindowId, WmBackend,
         KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE_HZ, MAX_BACKEND_INPUT_DEVICES,
         MAX_BACKEND_LIBINPUT_DEVICES, MAX_BACKEND_OUTPUTS, MAX_BACKEND_SEATS,
         MAX_CONFIGURED_BINDINGS, MAX_MANAGED_WINDOWS, MAX_POLICY_EVENTS, MAX_POLICY_TEXT_BYTES,
@@ -555,14 +566,18 @@ mod tests {
             "contract"
         }
 
-        fn connect(&mut self) -> BackendResult<Capabilities> {
-            Ok(Capabilities {
-                exact_geometry: false,
-                server_side_borders: false,
-                hide_show: false,
-                explicit_ordering: false,
-                fullscreen: false,
-                unsupported: vec!["exact-geometry".to_owned()],
+        fn connect(&mut self) -> BackendResult<BackendConnection> {
+            Ok(BackendConnection {
+                capabilities: Capabilities {
+                    exact_geometry: false,
+                    server_side_borders: false,
+                    hide_show: false,
+                    explicit_ordering: false,
+                    fullscreen: false,
+                    unsupported: vec!["exact-geometry".to_owned()],
+                },
+                bound_interfaces: Vec::new(),
+                layer_shell_served: false,
             })
         }
 

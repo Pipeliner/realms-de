@@ -163,7 +163,8 @@ fn connect_bootstraps_required_globals_in_accepted_order() {
     let fixture = thread::spawn(|| serve_bootstrap(server, false));
     let mut backend = RiverBackend::from_socket(client).unwrap();
 
-    let capabilities = backend.connect().unwrap();
+    let connection = backend.connect().unwrap();
+    let capabilities = connection.capabilities;
 
     assert!(capabilities.exact_geometry);
     assert!(capabilities.server_side_borders);
@@ -171,6 +172,21 @@ fn connect_bootstraps_required_globals_in_accepted_order() {
     assert!(capabilities.explicit_ordering);
     assert!(capabilities.fullscreen);
     assert!(capabilities.unsupported.is_empty());
+    assert_eq!(
+        connection
+            .bound_interfaces
+            .iter()
+            .map(|interface| (interface.name.as_str(), interface.version))
+            .collect::<Vec<_>>(),
+        [
+            ("river_window_manager_v1", 5),
+            ("river_xkb_bindings_v1", 3),
+            ("river_layer_shell_v1", 1),
+            ("river_input_manager_v1", 2),
+            ("river_libinput_config_v1", 2),
+        ]
+    );
+    assert!(connection.layer_shell_served);
     assert_eq!(
         fixture.join().unwrap().bindings,
         [

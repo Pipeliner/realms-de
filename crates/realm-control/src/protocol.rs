@@ -487,6 +487,7 @@ impl ConnectionMachine {
 
     fn queue_terminal_error(&mut self, now: Instant, message: &str) {
         let reply = Response::Error {
+            kind: realm_core::ipc::ErrorKind::UnknownRequest,
             message: message.to_owned(),
         };
         let Some(bytes) = encode_response(&reply) else {

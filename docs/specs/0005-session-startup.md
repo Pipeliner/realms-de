@@ -1,7 +1,8 @@
 # SPEC 0005 — Session startup and desktop integration
 
-- **Status:** Draft — the NixOS session-discovery contract and startup step 3
-  are accepted; open questions below remain unresolved (`needs-human`)
+- **Status:** Draft — the NixOS session-discovery contract, startup step 3, and
+  current-incarnation doctor-health handoff are accepted; open questions below
+  remain unresolved (`needs-human`)
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
   [ADR 0013](../adr/0013-river-window-management-backend.md),
@@ -552,6 +553,24 @@ a display: with a stub compositor that creates a socket file, the entry's
 ordering, discovery, logging and fallback logic all run. That is what makes A1,
 A2 and A4 CI rows rather than VM rows.
 
+**Current-incarnation health handoff.** The append-only session log is not a
+safe source for `realmctl doctor`: it contains earlier incarnations and a
+reader cannot infer which historical `DEGRADED` line is still in force. After
+the last pre-client degradation probe and before starting any client, the entry
+writes the finalized code set to the unique mode-`0600` file
+`$XDG_RUNTIME_DIR/realm/degraded.$MAIN_PID`, under umask `0077`, and passes that
+exact absolute path to `realm-wm` as `REALM_DEGRADED_FILE`. On the systemd path
+the entry sets that one internal manager environment value immediately before
+starting the target; it is not part of the public session/D-Bus activation
+import set. On the direct path the child inherits it normally. The file is a
+bounded, versioned ASCII record containing the entry pid and one known code per
+line. `realm-wm` reads it once before connecting to River, rejects malformed,
+oversized or unknown records, and carries the resulting codes in
+`SessionHealth`; it never scans the historical log. Cleanup removes only its
+own pid-named file, so an older entry cannot erase a later incarnation's
+record. A missing or rejected handoff is itself reported explicitly by
+`session/degraded`, never converted into an empty healthy list.
+
 ### 7. Session teardown
 
 Triggered by the compositor exiting, or by `EXIT INT TERM HUP` on the entry, or
@@ -622,7 +641,7 @@ gate (ADR 0011's guard).
 | `env/agree` | Process and systemd hold the same exact values; the D-Bus activation channel is reported separately as an explicitly unobservable functional proxy | The import ran too early or was skipped | VM |
 | `env/list-matches-entry` | `doctor`'s variable list equals the session entry's | A variable added in one place and forgotten in the other | **CI** |
 | `env/cursor` | `XCURSOR_THEME`/`SIZE` agree in the process and systemd views, the theme resolves on disk, and GSettings agrees; no exact D-Bus value is claimed | Black X11 arrow; cursor resizes across windows | VM |
-| `env/xwayland` | `DISPLAY` agrees in the process and systemd views when XWayland is up, its socket answers, and integer-scale policy is in force; the D-Bus value is reported as unobservable | X11 apps absent or blurred | VM |
+| `env/xwayland` | `DISPLAY` agrees in the process and systemd views when XWayland is up and its socket answers; the D-Bus value is reported as unobservable. The integer-only policy has no separately published runtime value and is not claimed as probed | X11 apps absent or blurred | VM |
 | `units/target` | `realm-session.target` active, and its `.wants` symlinks exist | A target that starts nothing and reports success | VM |
 | `units/wm` | `realm-wm.service` `ActiveState=active`; `ConditionResult` reported separately | **N1** — a condition-skipped unit read as success | VM |
 | `units/bar` | `realm-bar.service` active or cleanly restarting | Bar gone unnoticed | VM |
@@ -638,15 +657,18 @@ gate (ADR 0011's guard).
 | `portal/screencast` | The interface exists and the configured impl implements it | Screen share silently produces nothing | VM; the real capture is **HARDWARE** |
 | `session/socket` | `$XDG_RUNTIME_DIR/realm/ctl.sock` answers `Hello` | — | VM |
 | `session/protocol-version` | Matches `realm_core::ipc::PROTOCOL_VERSION` | Bar and session disagree | **CI** |
-| `session/degraded` | Reports each `DEGRADED` code in force this session | A degraded session pretending to be healthy | **CI** (degraded paths) |
+| `session/degraded` | Reports each `DEGRADED` code in this incarnation from the bounded handoff above, never by scanning historical logs | A degraded session pretending to be healthy | **CI** (degraded paths) |
 | `fonts/glyphs` | `realm_core::glyphs::Probe::summary()` | Tofu in the bar | **CI** |
 | `tools/floors` | Reused tools present at their version floors (ADR 0007) | charon or horus missing | **CI** |
 
 Two constraints on `doctor` that come from this spec rather than from SPEC 0006:
 
-1. **It must not shell out to tools that may be absent.** `xlsclients`,
+1. **It must not shell out to optional display-inspection tools.** `xlsclients`,
    `xdpyinfo` and `wayland-info` are not guaranteed on any of the three targets.
-   `doctor` opens the sockets and makes the bus calls itself.
+   `doctor` opens the sockets and makes the bus calls itself. The one
+   non-reused-tool exception is bounded `gsettings get` for the cursor theme
+   and size: `gsettings` is already a declared session dependency, and its
+   absence, timeout or missing schema is the finding rather than a silent pass.
 2. **It must run outside a session** and report "no realm session running"
    rather than failing confusingly. Half of its value is being run over SSH by
    someone whose desktop will not start.
@@ -662,7 +684,7 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 |---|---|---|---|
 | A1 | Given a stub compositor that creates `$XDG_RUNTIME_DIR/wayland-9` after 3 s and a pre-existing `wayland-0`, when the entry runs, then it discovers `wayland-9` (not `wayland-0`, not a guess), proceeds only after discovery, and completes within the deadline | CI | |
 | A2 | Given the session entry source, when the ordering test runs, then the identity exports precede the compositor start, and the two imports precede every client start, every `gsettings` call and every other D-Bus touch | CI | |
-| A3 | Given the entry's variable list, the units' `ConditionEnvironment=` set and `doctor`'s list, when the consistency test runs, then all three name the same variables | CI | |
+| A3 | Given the entry's import-variable list and `doctor`'s list, when the consistency test runs, then they name the same variables; a separate assertion keeps both client units' intentionally narrower `ConditionEnvironment=WAYLAND_DISPLAY` guard | CI | |
 | A4 | Given a container with no reachable `systemd --user` and no `dbus-update-activation-environment`, when the entry runs against a stub compositor, then it logs exactly one `DEGRADED NO-SYSTEMD-USER` line and one `DEGRADED NO-DBUS-ACTIVATION` line, starts the clients directly under the bounded respawn loop, and does not hang | CI | |
 | A5 | Given a booted session, when `systemctl --user show-environment` is read and a VM-only D-Bus-activated probe reports its own inherited environment, then every imported variable is present in both with values equal to the compositor's `/proc/<pid>/environ`; `doctor` itself continues to label D-Bus activation values unobservable and uses the portal proxy | VM | |
 | A6 | Given a session started with the D-Bus import deliberately suppressed and no earlier activation supplied the graphical-session values, when `doctor` runs and its portal proxy cannot become usable, then `env/wayland-display/dbus` fails, names the twenty-five second hang, reports only the observed proxy failure plus possible causes and the import remedy, and exits non-zero | VM | |
@@ -672,7 +694,7 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A10 | Given a running session with three windows, when `realm-wm` is killed, then it is restarted within `RestartSec`, the ledger is recovered from the snapshot, the three windows return to their projected rectangles, and `realm-bar.service` never leaves `active` | VM | |
 | A11 | Given a stale window manager already holding river's window-management global, when `realm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed; it names the holding process only if an independent observation identifies it, otherwise it states that the holder identity is unavailable | VM | |
 | A12 | Given a running session, when `realm-bar` is killed, then it is restarted, and `realm-session.target` and `realm-wm.service` both stay `active` throughout | VM | |
-| A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the running portal chose the backends named in `realm-portals.conf` | VM | |
+| A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the effective configuration and installed `.portal` metadata name the required backends without claiming the running portal disclosed its selected backend identity | VM | |
 | A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
 | A16 | Given a real laptop, when the lid is closed, then the session locks within the configured delay and the screen is blank on reopen until authentication | **HARDWARE** *(blocked on OQ-1)* | |

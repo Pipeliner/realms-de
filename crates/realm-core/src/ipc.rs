@@ -43,7 +43,7 @@ use crate::state::RealmState;
 
 /// Protocol version. Bumped on any breaking change; clients refuse a mismatch
 /// rather than misinterpreting fields.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Window-manager features a backend can honour exactly.
 ///
@@ -65,6 +65,54 @@ pub struct Capabilities {
     pub unsupported: Vec<String>,
 }
 
+/// One compositor protocol interface actually bound by the session backend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterfaceVersion {
+    /// Stable protocol interface name.
+    pub name: String,
+    /// Negotiated object version.
+    pub version: u32,
+}
+
+/// Health facts owned by one live session-daemon incarnation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionHealth {
+    /// Session daemon build version.
+    pub session_version: String,
+    /// Wire version served by this daemon.
+    pub protocol_version: u32,
+    /// Human-readable backend identity.
+    pub backend_name: String,
+    /// Behaviours the connected backend can honour.
+    pub capabilities: Capabilities,
+    /// Protocol interfaces actually bound, in backend-defined stable order.
+    pub bound_interfaces: Vec<InterfaceVersion>,
+    /// Whether Realm is actively serving its layer-shell bridge.
+    pub layer_shell_served: bool,
+    /// Current entry degradation codes, or `None` when the handoff was unavailable.
+    pub degraded_codes: Option<Vec<String>>,
+    /// Milliseconds elapsed on the monotonic daemon-incarnation clock.
+    pub uptime_ms: u64,
+}
+
+/// Stable machine-readable application refusal category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ErrorKind {
+    /// The decoded request is not supported by this server.
+    UnknownRequest,
+    /// A request argument is malformed or outside its accepted domain.
+    BadArgument,
+    /// A one-based orbit number does not name a Realm orbit.
+    NoSuchOrbit,
+    /// The operation requires a focused window and none exists.
+    NoFocusedWindow,
+    /// The live backend cannot currently accept the operation.
+    BackendRefused,
+    /// The server encountered an internal application failure.
+    Internal,
+}
+
 /// A command sent to the session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "cmd", content = "arg")]
@@ -80,6 +128,8 @@ pub enum Request {
     GetState,
     /// Ask for the session-owned keymap once.
     GetKeymap,
+    /// Ask for health facts owned by this daemon incarnation.
+    GetHealth,
     /// Stream a [`Event::State`] on every change until the connection closes.
     Subscribe,
     /// Show an orbit (one-based).
@@ -132,10 +182,14 @@ pub enum Response {
     State(Box<RealmState>),
     /// Full session-owned keymap.
     Keymap(Box<Keymap>),
+    /// Health facts for this daemon incarnation.
+    Health(Box<SessionHealth>),
     /// Window order for one or more orbits.
     Ledger(Vec<OrbitLedger>),
     /// Command refused.
     Error {
+        /// Stable refusal category.
+        kind: ErrorKind,
         /// Human-readable reason.
         message: String,
     },
@@ -150,6 +204,10 @@ pub struct OrbitLedger {
     pub rune: String,
     /// The orbit's name.
     pub name: String,
+    /// Whether this orbit is currently active.
+    pub active: bool,
+    /// The orbit's selected layout.
+    pub layout: Layout,
     /// Windows in ledger order.
     pub windows: Vec<LedgerEntry>,
 }
@@ -308,6 +366,8 @@ mod tests {
             orbit: 1,
             rune: "ᚠ".into(),
             name: "triptych".into(),
+            active: true,
+            layout: Layout::Triptych,
             windows: vec![LedgerEntry {
                 id: WinId(7),
                 app_id: "odin".into(),
@@ -324,6 +384,67 @@ mod tests {
         let response = Response::Keymap(Box::default());
         let frame = encode(&response).unwrap();
         assert_eq!(decode::<Response>(&frame).unwrap(), response);
+    }
+
+    #[test]
+    fn protocol_v2_bundle_round_trips_and_preserves_hello_envelope() {
+        assert_eq!(PROTOCOL_VERSION, 2);
+        let hello = Request::Hello {
+            version: 1,
+            client: "older-realmctl".to_owned(),
+        };
+        assert_eq!(
+            encode(&hello).unwrap(),
+            "{\"cmd\":\"hello\",\"arg\":{\"version\":1,\"client\":\"older-realmctl\"}}\n"
+        );
+        assert_eq!(decode::<Request>(&encode(&hello).unwrap()).unwrap(), hello);
+
+        let health = Response::Health(Box::new(SessionHealth {
+            session_version: "0.1.0".to_owned(),
+            protocol_version: PROTOCOL_VERSION,
+            backend_name: "river".to_owned(),
+            capabilities: Capabilities {
+                exact_geometry: true,
+                server_side_borders: true,
+                hide_show: true,
+                explicit_ordering: true,
+                fullscreen: true,
+                unsupported: Vec::new(),
+            },
+            bound_interfaces: vec![InterfaceVersion {
+                name: "river_window_manager_v1".to_owned(),
+                version: 5,
+            }],
+            layer_shell_served: true,
+            degraded_codes: Some(vec!["NO-GSETTINGS".to_owned()]),
+            uptime_ms: 42,
+        }));
+        assert_eq!(
+            decode::<Response>(&encode(&health).unwrap()).unwrap(),
+            health
+        );
+
+        let application_error = Response::Error {
+            kind: ErrorKind::BackendRefused,
+            message: "backend disconnected".to_owned(),
+        };
+        assert_eq!(
+            decode::<Response>(&encode(&application_error).unwrap()).unwrap(),
+            application_error
+        );
+
+        let ledger = Response::Ledger(vec![OrbitLedger {
+            orbit: 1,
+            rune: "ᚠ".to_owned(),
+            name: "triptych".to_owned(),
+            active: true,
+            layout: Layout::Triptych,
+            windows: Vec::new(),
+        }]);
+        assert_eq!(
+            decode::<Response>(&encode(&ledger).unwrap()).unwrap(),
+            ledger
+        );
     }
 
     #[test]
