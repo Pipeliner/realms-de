@@ -367,6 +367,11 @@ jobs:
             ${{ runner.temp }}/realm-session-boots/realm-terminal-prompt.png
             ${{ runner.temp }}/realm-session-boots/capture-provenance.json
             ${{ runner.temp }}/realm-session-boots/realmctl-doctor.json
+            ${{ runner.temp }}/realm-session-boots/realmctl-doctor-direct-dbus-control.json
+            ${{ runner.temp }}/realm-session-boots/realmctl-doctor-direct-dbus-omitted.json
+            ${{ runner.temp }}/realm-session-boots/realmctl-doctor-direct-dbus-control.stderr
+            ${{ runner.temp }}/realm-session-boots/realmctl-doctor-direct-dbus-omitted.stderr
+            ${{ runner.temp }}/realm-session-boots/realmctl-doctor-direct-dbus-metadata.json
             ${{ runner.temp }}/realm-session-boots/control-get-state.json
             ${{ runner.temp }}/realm-session-boots/control-tiled-state.json
             ${{ runner.temp }}/realm-session-boots/control-grimoire-state.json

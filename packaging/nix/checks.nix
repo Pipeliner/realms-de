@@ -803,6 +803,211 @@ EOF
       ]:
           assert doctor_by_id[check_id]["status"] == "ok", doctor
       write_artifact("realmctl-doctor.json", doctor_raw)
+
+      # B12 is a paired direct-activation probe, not a mutation of the
+      # supported systemd portal units. Each dbus-run-session daemon starts
+      # without Realm's graphical variables and without systemd activation;
+      # the child restores the same process environment for doctor in both
+      # cases, while only the control publishes it to the fresh bus. This is
+      # the accepted no-systemd form of the session import and keeps the live
+      # user manager and its already-started portal from masking the omission.
+      machine.succeed(
+          "test -f /run/current-system/sw/share/dbus-1/services/"
+          "org.freedesktop.portal.Desktop.service"
+      )
+      machine.succeed(
+          "test -f /run/current-system/sw/share/dbus-1/services/"
+          "org.freedesktop.impl.portal.desktop.gtk.service"
+      )
+      direct_display = machine.succeed(
+          "systemctl --user --machine=alice@ show-environment | "
+          "sed -n 's/^DISPLAY=//p'"
+      ).strip()
+      assert direct_display.startswith(":"), direct_display
+
+      def direct_activation_doctor(import_environment):
+          mode = "control" if import_environment else "omitted"
+          report_path = f"/tmp/realmctl-doctor-direct-dbus-{mode}.json"
+          bus_path = f"/tmp/realmctl-doctor-direct-dbus-{mode}.bus"
+          features_path = f"/tmp/realmctl-doctor-direct-dbus-{mode}.features"
+          error_path = f"/tmp/realmctl-doctor-direct-dbus-{mode}.stderr"
+          import_command = (
+              "${pkgs.dbus}/bin/dbus-update-activation-environment "
+              "WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE "
+              "XDG_SESSION_DESKTOP XDG_RUNTIME_DIR XCURSOR_THEME XCURSOR_SIZE"
+              if import_environment
+              else ":"
+          )
+          inner_script = f"""
+set -eu
+features="$(${pkgs.systemd}/bin/busctl --user get-property org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus Features)"
+assertion_bus_id="$(${pkgs.systemd}/bin/busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetId)"
+case "$features" in
+  *SystemdActivation*)
+    printf '%s\n' "fresh bus unexpectedly delegates activation: $features" >&2
+    exit 97
+    ;;
+esac
+printf '%s\n' "$assertion_bus_id" > {shlex.quote(bus_path)}
+printf '%s\n' "$features" > {shlex.quote(features_path)}
+export HOME=/home/alice
+export XDG_RUNTIME_DIR=/run/user/1000
+export WAYLAND_DISPLAY={shlex.quote(imported_wayland)}
+export DISPLAY={shlex.quote(direct_display)}
+export XDG_CURRENT_DESKTOP=realm
+export XDG_SESSION_TYPE=wayland
+export XDG_SESSION_DESKTOP=realm
+export XCURSOR_THEME=Adwaita
+export XCURSOR_SIZE=24
+{import_command}
+exec ${realm}/bin/realmctl --json doctor > {shlex.quote(report_path)} 2> {shlex.quote(error_path)}
+"""
+          direct_command = shlex.join([
+              "systemd-run",
+              "--user",
+              "--machine=alice@",
+              "--wait",
+              "--pipe",
+              "--quiet",
+              "--collect",
+              f"--unit=realm-doctor-direct-dbus-{mode}",
+              "--property=KillMode=control-group",
+              "--property=RuntimeMaxSec=5s",
+              "--property=TimeoutStopSec=1s",
+              "${pkgs.coreutils}/bin/env",
+              "-u", "DBUS_SESSION_BUS_ADDRESS",
+              "-u", "WAYLAND_DISPLAY",
+              "-u", "DISPLAY",
+              "-u", "XDG_CURRENT_DESKTOP",
+              "-u", "XDG_SESSION_TYPE",
+              "-u", "XDG_SESSION_DESKTOP",
+              "-u", "XDG_RUNTIME_DIR",
+              "-u", "XCURSOR_THEME",
+              "-u", "XCURSOR_SIZE",
+              "HOME=/home/alice",
+              "XDG_DATA_DIRS=/run/current-system/sw/share",
+              "${pkgs.dbus}/bin/dbus-run-session",
+              "--dbus-daemon=${pkgs.dbus}/bin/dbus-daemon",
+              "--",
+              "${pkgs.bash}/bin/bash",
+              "-c",
+              inner_script,
+          ])
+          started = time.monotonic()
+          try:
+              status, output = machine.execute(
+                  direct_command,
+                  timeout=EXIT_TIMEOUT,
+              )
+          except Exception as error:
+              status = None
+              output = f"driver exception: {error}\n"
+          elapsed_ms = round((time.monotonic() - started) * 1000)
+          report_status, report_raw = machine.execute(f"cat {report_path}")
+          bus_status, bus_id = machine.execute(f"cat {bus_path}")
+          features_status, features = machine.execute(f"cat {features_path}")
+          error_status, doctor_error = machine.execute(f"cat {error_path}")
+          diagnostics = output + doctor_error
+          return {
+              "report_raw": report_raw,
+              "report_status": report_status,
+              "bus_id": bus_id.strip(),
+              "bus_status": bus_status,
+              "features": features.strip(),
+              "features_status": features_status,
+              "error_status": error_status,
+              "status": status,
+              "elapsed_ms": elapsed_ms,
+              "stderr": diagnostics,
+          }
+
+      direct_activation_control = direct_activation_doctor(import_environment=True)
+      direct_activation_omitted = direct_activation_doctor(import_environment=False)
+      write_artifact(
+          "realmctl-doctor-direct-dbus-control.json",
+          direct_activation_control["report_raw"],
+      )
+      write_artifact(
+          "realmctl-doctor-direct-dbus-omitted.json",
+          direct_activation_omitted["report_raw"],
+      )
+      write_artifact(
+          "realmctl-doctor-direct-dbus-control.stderr",
+          direct_activation_control["stderr"],
+      )
+      write_artifact(
+          "realmctl-doctor-direct-dbus-omitted.stderr",
+          direct_activation_omitted["stderr"],
+      )
+      write_artifact(
+          "realmctl-doctor-direct-dbus-metadata.json",
+          json.dumps(
+              {
+                  mode: {
+                      key: observation[key]
+                      for key in [
+                          "bus_id", "bus_status", "features",
+                          "features_status", "status", "elapsed_ms",
+                          "report_status", "error_status",
+                      ]
+                  }
+                  for mode, observation in [
+                      ("control", direct_activation_control),
+                      ("omitted", direct_activation_omitted),
+                  ]
+              },
+              sort_keys=True,
+              separators=(",", ":"),
+          ) + "\n",
+      )
+
+      for mode, observation in [
+          ("control", direct_activation_control),
+          ("omitted", direct_activation_omitted),
+      ]:
+          if observation["status"] != 1:
+              machine.log(
+                  f"direct D-Bus {mode} doctor exited {observation['status']} "
+                  f"after {observation['elapsed_ms']} ms:\n"
+                  f"{observation['stderr']}"
+              )
+          assert observation["status"] == 1, observation
+          assert observation["report_status"] == 0, observation
+          assert observation["bus_status"] == 0, observation
+          assert observation["features_status"] == 0, observation
+          assert observation["error_status"] == 0, observation
+          assert "SystemdActivation" not in observation["features"], observation
+
+      control_raw = direct_activation_control["report_raw"]
+      control_doctor = json.loads(control_raw)
+      control_bus_id = direct_activation_control["bus_id"]
+      omitted_raw = direct_activation_omitted["report_raw"]
+      omitted_doctor = json.loads(omitted_raw)
+      omitted_bus_id = direct_activation_omitted["bus_id"]
+      assert control_bus_id != omitted_bus_id, (control_bus_id, omitted_bus_id)
+      control_by_id = {
+          check["id"]: check for check in control_doctor["checks"]
+      }
+      omitted_by_id = {
+          check["id"]: check for check in omitted_doctor["checks"]
+      }
+      assert control_by_id["env/wayland-display/dbus"]["status"] == "ok", control_doctor
+      assert control_by_id["portal/config"]["status"] == "ok", control_doctor
+      omitted_dbus = omitted_by_id["env/wayland-display/dbus"]
+      assert omitted_dbus["status"] == "fail", omitted_doctor
+      assert omitted_dbus["symptom"] == (
+          "file dialogs hang for about 25 seconds, then fail"
+      ), omitted_dbus
+      assert omitted_dbus["cause"] == (
+          "the activation environment, portal service, or selected backend may be broken"
+      ), omitted_dbus
+      assert omitted_dbus["remedy"] == (
+          "before first bus use run dbus-update-activation-environment --systemd "
+          "WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE "
+          "XDG_SESSION_DESKTOP XDG_RUNTIME_DIR; then verify portal packages"
+      ), omitted_dbus
+      assert omitted_by_id["portal/config"]["status"] == "ok", omitted_doctor
+
       # XWayland is useful only if the wrapper learns its assigned DISPLAY and
       # publishes it before either launcher starts. The purpose-built D-Bus
       # service acquires its configured name before recording its activation

@@ -92,4 +92,28 @@ if grep -F -q -e 're.sub(' "$checks" \
     fail 'Nix VM prompt proof must import its regular-expression dependency'
 fi
 
+if ! grep -F -q -e 'direct_activation_control = direct_activation_doctor(import_environment=True)' "$checks" \
+    || ! grep -F -q -e 'direct_activation_omitted = direct_activation_doctor(import_environment=False)' "$checks" \
+    || ! grep -F -q -e 'assert "SystemdActivation" not in observation["features"], observation' "$checks" \
+    || ! grep -F -q -e 'assert control_bus_id != omitted_bus_id' "$checks" \
+    || ! grep -F -q -e 'assert control_by_id["env/wayland-display/dbus"]["status"] == "ok"' "$checks" \
+    || ! grep -F -q -e 'assert omitted_dbus["status"] == "fail"' "$checks"; then
+    fail 'doctor VM must compare imported and omitted fresh direct D-Bus activation'
+fi
+
+if ! grep -F -q -e '"--property=KillMode=control-group",' "$checks" \
+    || ! grep -F -q -e '"--property=RuntimeMaxSec=5s",' "$checks" \
+    || ! grep -F -q -e '"--property=TimeoutStopSec=1s",' "$checks" \
+    || ! grep -F -q -e 'elapsed_ms = round((time.monotonic() - started) * 1000)' "$checks"; then
+    fail 'direct D-Bus doctor probes must retain their bounded control-group cleanup'
+fi
+
+if ! grep -F -q -e 'realm-session-boots/realmctl-doctor-direct-dbus-control.json' "$workflow" \
+    || ! grep -F -q -e 'realm-session-boots/realmctl-doctor-direct-dbus-omitted.json' "$workflow" \
+    || ! grep -F -q -e 'realm-session-boots/realmctl-doctor-direct-dbus-control.stderr' "$workflow" \
+    || ! grep -F -q -e 'realm-session-boots/realmctl-doctor-direct-dbus-omitted.stderr' "$workflow" \
+    || ! grep -F -q -e 'realm-session-boots/realmctl-doctor-direct-dbus-metadata.json' "$workflow"; then
+    fail 'live VM artifact must retain both direct D-Bus doctor reports and diagnostics'
+fi
+
 echo 'root-flake CI contract: pass'
