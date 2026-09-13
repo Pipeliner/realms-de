@@ -11,7 +11,7 @@ sed '/^main() {$/,$d' "$session" >"$tmp/session-functions.sh"
 
 start_fixture_compositor() {
 	local runtime=$1
-	XDG_RUNTIME_DIR=$runtime /bin/bash -c '
+	XDG_RUNTIME_DIR=$runtime "$BASH" -c '
 		. "$1"
 		REALM_COMPOSITOR=true
 		REALM_COMPOSITOR_ARGS=
