@@ -26,7 +26,7 @@ class ObservationTests(unittest.TestCase):
     def write_xwininfo(self, source: str) -> Path:
         executable = self.root / "xwininfo"
         executable.write_text(
-            "#!/usr/bin/env python3\n" + textwrap.dedent(source),
+            f"#!{sys.executable}\n" + textwrap.dedent(source),
             encoding="utf-8",
         )
         executable.chmod(0o755)
@@ -58,7 +58,7 @@ class ObservationTests(unittest.TestCase):
 
         result = self.observe(executable)
 
-        self.assertTrue(result["viewable"])
+        self.assertTrue(result["viewable"], result)
         self.assertEqual(result["window_ids"], ["0x40000a"])
         self.assertEqual(result["tree"]["status"], 0)
         self.assertEqual(result["stats"][0]["status"], 0)
@@ -106,7 +106,7 @@ class ObservationTests(unittest.TestCase):
         result = self.observe(executable, command_timeout="0.1s")
 
         self.assertLess(time.monotonic() - started, 2)
-        self.assertEqual(result["tree"]["status"], 124)
+        self.assertEqual(result["tree"]["status"], 124, result)
         self.assertFalse(result["viewable"])
 
     def test_stalled_window_stats_has_the_same_command_bound(self) -> None:
@@ -125,7 +125,7 @@ class ObservationTests(unittest.TestCase):
         result = self.observe(executable, command_timeout="0.1s")
 
         self.assertLess(time.monotonic() - started, 2)
-        self.assertEqual(result["stats"][0]["status"], 124)
+        self.assertEqual(result["stats"][0]["status"], 124, result)
         self.assertFalse(result["viewable"])
 
     def test_cli_emits_the_complete_diagnostic_snapshot(self) -> None:
@@ -161,7 +161,7 @@ class ObservationTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         result = json.loads(completed.stdout)
-        self.assertTrue(result["viewable"])
+        self.assertTrue(result["viewable"], result)
         self.assertIn("Map State: IsViewable", result["stats"][0]["output"])
 
 
