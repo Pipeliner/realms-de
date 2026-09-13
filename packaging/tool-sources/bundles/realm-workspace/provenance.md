@@ -7,12 +7,12 @@ package recipe.
 ## Bound source
 
 - Repository: `https://github.com/pipeliner/realms-de`
-- Commit: `feebf06e5e9b59c7128781bb4a02806695910130`
-- Commit timestamp: `2026-09-13T05:16:48Z` (`1789276608`)
+- Commit: `d3a38511ed5f611ac3d7fc3437eb3d67ccbb6111`
+- Commit timestamp: `2026-09-13T05:19:36Z` (`1789276776`)
 - Workspace version: `0.1.0`
 - Canonical archive: `source.tar.gz`
 - Canonical archive SHA-256:
-  `4c0b699d9ddae75ac40bc7789f81b6d9db4513472af83b456bcbf4d8266a8e18`
+  `e785d802ffae58ede05015892446b06a06c999a3fa7d3d4c8efca2d3ac9c8850`
 
 The archive was generated directly from the exact bound Git commit with
 `git archive --format=tar.gz --prefix=realm-workspace/ <commit> .
