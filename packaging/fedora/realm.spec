@@ -106,9 +106,11 @@ The compositor is river 0.4, driven by realm's own window manager over
 river-window-management-v1.
 
 THIS PACKAGE IS PRE-ALPHA AND DOES NOT INSTALL A WORKING DESKTOP. Its recipe
-requires realmctl, realm-wm and realm-bar plus the session contract. Clean
-installation, River compatibility, graphical login and SELinux runtime
-behaviour on Fedora remain unverified.
+requires realmctl, realm-wm and realm-bar plus the session contract. CI installs
+the exact RPM into an empty Fedora 44 root with normal dependency resolution
+and runs the installed realmctl/palette and River version probes. Graphical
+login, portal, River session compatibility and SELinux runtime behaviour on
+Fedora remain unverified.
 
 %prep
 %autosetup

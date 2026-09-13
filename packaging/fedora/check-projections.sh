@@ -113,7 +113,7 @@ docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A1 | Given the machine-check
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A2 | Given the required distro matrix, when `status = "pre-alpha"`, then it contains one Fedora lane named as a Cargo smoke and uses the exact official Fedora 44 digest above; when `status = "unsupported"`, it contains no required Fedora lane; neither state adds a Fedora 41/Fedora 43 lane, runner, or architecture claim | *Planned (#138):* `fedora_baseline::required_ci_uses_one_pinned_f44_cargo_smoke` |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A3 | Given the Fedora RPM metadata, when it is inspected, then it identifies Fedora 44, requires Fedora's `river >= 0.4.0`, contains no `realm-river` alternative or false “River unavailable on Fedora” claim, and continues to state that the package is pre-alpha and not a working desktop | *Planned (#138):* `fedora_baseline::rpm_metadata_matches_the_f44_pre_alpha_contract` |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A6 | Given a seeded stale live-support claim such as `Fedora 41+`, when the consistency guard runs, then it fails; given an exact reviewed historical exception in a superseded ADR or third-party history, then it passes without treating that text as current support | *Planned (#138):* `fedora_baseline::stale_live_claims_fail_and_exact_history_exceptions_pass` |
-docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A8 | Given current user-facing and normative documentation, when the consistency guard and doc review run, then Fedora 41 is absent from live Realm support/install examples, Fedora 44 is described as the sole pre-alpha baseline, no text upgrades the Cargo smoke to RPM/session evidence, and no direct Fedora 41 to Fedora 44 OS upgrade is called supported | *Planned (#138):* `fedora_baseline::docs_state_the_evidence_level_truthfully` plus review of rendered Markdown |
+docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A8 | Given current user-facing and normative documentation, when the consistency guard and doc review run, then Fedora 41 is absent from live Realm support/install examples, Fedora 44 is described as the sole pre-alpha baseline, the exact RPM installroot evidence is distinguished from graphical-session, portal and SELinux evidence, and no direct Fedora 41 to Fedora 44 OS upgrade is called supported | *Planned (#138):* `fedora_baseline::docs_state_the_evidence_level_truthfully` plus review of rendered Markdown |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A9 | Given the completed #138 diff, when scope is reviewed, then it contains no Yazi/Starship source decision, package publishing/signing infrastructure, extra Fedora lane, KVM/native-runner acquisition, scheduled network job, Fedora 41 fixture, generation rollback design, or `flake.lock` strategy | Required reviewer checklist on the #138 pull request |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::- Fedora Bodhi: F41 `archived`, EOL 2025-12-15; F42 `archived`, EOL
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::  2026-05-27; F43 `current`, EOL 2026-12-02; F44 `current`, EOL 2027-06-02.
@@ -382,7 +382,41 @@ assert_ci_invocation() {
     fi
 }
 
-assert_fedora_build_evidence_boundary() {
+rpm_lane_line_count() {
+    exact_line=$1
+    awk -v exact_line="$exact_line" '
+        /^  [[:alnum:]_-]+:$/ {
+            job = $0
+            sub(/^  /, "", job)
+            sub(/:$/, "", job)
+        }
+        job == "fedora-rpm-package" && $0 == exact_line { count++ }
+        END { print count + 0 }
+    ' "$workflow"
+}
+
+assert_exact_rpm_lane_line() {
+    exact_line=$1
+    message=$2
+    [ "$(rpm_lane_line_count "$exact_line")" -eq 1 ] || fail "$message"
+}
+
+assert_normal_rpm_install_resolution() {
+    if ! awk '
+        /^  [[:alnum:]_-]+:$/ {
+            job = $0
+            sub(/^  /, "", job)
+            sub(/:$/, "", job)
+        }
+        job == "fedora-rpm-package" && /dnf .*--installroot=.* install / { installs++ }
+        job == "fedora-rpm-package" && /dnf .*--installroot=.*--(nodeps|skip-broken|allowerasing)/ { escape++ }
+        END { exit(installs == 1 && escape == 0 ? 0 : 1) }
+    ' "$workflow"; then
+        fail 'RPM installroot must use one normal DNF dependency transaction'
+    fi
+}
+
+assert_fedora_installroot_evidence_boundary() {
     # A claim may span lines, so examine complete paragraphs in every discovered
     # projection instead of only known current files or single matching lines.
     projection_files=$(projection_paths | sed "s#^#$root/#")
@@ -391,9 +425,13 @@ assert_fedora_build_evidence_boundary() {
         function inspect_paragraph() {
             lower = tolower(paragraph)
             fedora = "(fedora[[:space:]]*(44|lane)|f44|fedora[-:]44)"
-            runtime = "(clean[-[:space:]]*install|package[[:space:]]+installation|graphical|session|selinux)"
-            boundary = "(does[[:space:]]+not|do[[:space:]]+not|cannot|not[[:space:]]+(clean|install|graphical|session|selinux|evidence|support|working)|no[[:space:]]+(clean|package|graphical|session|selinux|architecture)|no.*(clean|package|graphical|session|selinux).*evidence|unverified|unsupported|neither|nor[[:space:]]|without|outside|blocked)"
-            if (lower ~ fedora && lower ~ runtime && lower !~ boundary) {
+            install = "(clean[-[:space:]]*install|package[[:space:]]+installation)"
+            unproved = "(graphical|session|portal|selinux)"
+            boundary = "(does[[:space:]]+not|do[[:space:]]+not|cannot|not[[:space:]]+(clean|install|graphical|session|portal|selinux|gpu|hardware|upgrade|daily|evidence|support|working)|no[[:space:]]+(clean|package|graphical|session|portal|selinux|gpu|hardware|upgrade|daily|architecture)|no.*(clean|package|graphical|session|portal|selinux|gpu|hardware|upgrade|daily).*evidence|unverified|unsupported|neither|nor[[:space:]]|without|outside|blocked|distinct[[:space:]]+from)"
+            if (lower ~ fedora && lower ~ install && lower !~ /installroot/ && lower !~ boundary) {
+                exit 1
+            }
+            if (lower ~ fedora && lower ~ unproved && lower !~ boundary) {
                 exit 1
             }
         }
@@ -431,7 +469,7 @@ assert_fedora_build_evidence_boundary() {
             inspect_paragraph()
         }
     ' $projection_files; then
-        fail 'Fedora evidence exceeds build-only contract'
+        fail 'Fedora evidence exceeds bounded installroot contract'
     fi
 }
 
@@ -449,6 +487,38 @@ case "$status" in
             [ "$rpmbuild_spec_target_count" -eq 1 ]; }; then
             fail 'RPM lane must run the retained-source producer and Source0 RPM build'
         fi
+        assert_exact_rpm_lane_line '      - name: Clean-install exact RPM and probe installed commands' \
+            'RPM lane must clean-install and probe the exact built RPM'
+        assert_exact_rpm_lane_line '        shell: bash' \
+            'RPM installroot step must explicitly use Bash'
+        # shellcheck disable=SC2016 # These are literal workflow commands.
+        assert_exact_rpm_lane_line '                if [ "$(rpm -qp --queryformat "%{NAME}" "$candidate")" = realm ]; then' \
+            'RPM lane must select outputs by exact queried RPM name'
+        # shellcheck disable=SC2016 # These are literal workflow commands.
+        assert_exact_rpm_lane_line '          if [ "${#realm_rpms[@]}" -ne 1 ]; then' \
+            'RPM lane must require exactly one built Realm RPM'
+        # shellcheck disable=SC2016 # These are literal workflow commands.
+        assert_exact_rpm_lane_line '          built_nevra=$(rpm -qp --queryformat "%{NEVRA}" "$realm_rpm")' \
+            'RPM lane must identify the exact built Realm RPM'
+        # shellcheck disable=SC2016 # These are literal workflow commands.
+        assert_exact_rpm_lane_line '          test ! -e "$install_root"' \
+            'RPM lane must begin with an empty installroot'
+        # shellcheck disable=SC2016 # These are literal workflow commands.
+        assert_exact_rpm_lane_line '          dnf -y --installroot="$install_root" --releasever=44 --use-host-config install "$realm_rpm"' \
+            'RPM lane must install the exact built RPM through Fedora 44 repositories'
+        # shellcheck disable=SC2016 # These are literal workflow commands.
+        assert_exact_rpm_lane_line '          installed_nevra=$(rpm --root "$install_root" -q --queryformat "%{NEVRA}" realm)' \
+            'RPM lane must query the installroot Realm NEVRA'
+        # shellcheck disable=SC2016 # These are literal workflow commands.
+        assert_exact_rpm_lane_line '          test "$installed_nevra" = "$built_nevra"' \
+            'RPM lane must prove installed and built Realm NEVRA match'
+        # shellcheck disable=SC2016 # These are literal workflow commands.
+        assert_exact_rpm_lane_line '          chroot "$install_root" /usr/bin/realmctl theme lint --palette /usr/share/realm/palette.toml' \
+            'RPM lane must run the installed realmctl against the installed palette'
+        # shellcheck disable=SC2016 # These are literal workflow commands.
+        assert_exact_rpm_lane_line '          chroot "$install_root" /usr/bin/river -version' \
+            'RPM lane must run the installed River version probe'
+        assert_normal_rpm_install_resolution
         assert_contains .github/workflows/distro.yml 'pinned base/current packages' \
             'Fedora lane must say pinned base/current packages'
         ;;
@@ -511,8 +581,8 @@ assert_contains README.md 'Today Fedora 44 is the sole Fedora' \
     'README must identify Fedora 44 as the sole pre-alpha Fedora baseline'
 assert_contains docs/INSTALL.md '| Fedora 44 (pre-alpha) | RPM from the retained-only source kit' \
     'INSTALL must identify the Fedora 44 retained-only source-kit RPM build'
-assert_contains docs/ARCHITECTURE.md '| **Fedora 44 (pre-alpha)** | exactly one pinned Cargo-smoke lane plus exactly one retained-source RPM-build lane' \
-    'ARCHITECTURE must identify the two Fedora 44 pre-alpha build lanes'
+assert_contains docs/ARCHITECTURE.md '| **Fedora 44 (pre-alpha)** | exactly one pinned Cargo-smoke lane plus exactly one retained-source RPM-build/installroot lane' \
+    'ARCHITECTURE must identify the two Fedora 44 pre-alpha lanes'
 assert_contains docs/ARCHITECTURE.md 'Target plan and current evidence:' \
     'ARCHITECTURE must not claim every target is already supported and tested in CI'
 assert_contains docs/MVP.md 'Fedora uses its official native candidate' \
@@ -532,7 +602,7 @@ if current_matches '(vendor|vendors|vendored).*River.*(every target|all three (t
     fail 'universal River sourcing claim'
 fi
 
-assert_fedora_build_evidence_boundary
+assert_fedora_installroot_evidence_boundary
 fi
 
 historical_allowlist() {
@@ -576,10 +646,10 @@ docs/specs/0009-fedora-44-pre-alpha-baseline.md:::third-party historical facts, 
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::1. ADR 0010's header/index must mark its Fedora 41-or-later baseline and the
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::The correction must not describe a direct Fedora 41 to Fedora 44 operating
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A1 | Given the machine-checked inventory of live Fedora claims, when `status = "pre-alpha"` it is validated, then the only admitted release is exactly `44`; when `status = "unsupported"`, no Fedora release is admitted; `41`, `42`, `43`, `44+`, `latest`, Rawhide, and implicit newer releases are always rejected as current Realm targets | *Planned (#138):* `fedora_baseline::only_fedora_44_is_a_live_target`; includes one failing fixture per rejected form and one unsupported-state fixture |
-docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A2 | Given the repository workflow files, when `status = "pre-alpha"`, then exactly one `fedora-44-cargo-smoke` Cargo lane and exactly one `fedora-rpm-package` retained-source RPM build lane resolve to the exact official Fedora 44 digest above; no other Fedora-family container image is present anywhere under `.github/workflows/`, regardless of scalar or mapping YAML syntax. The RPM lane runs the retained-source-kit producer, copies `Source0` and the RPM spec into the build tree, and invokes `rpmbuild -bb --nodeps`, but does not clean-install the resulting package. Cargo and RPM build facts are allowed; neither lane is graphical-session or SELinux evidence. When `status = "unsupported"`, it contains no required Fedora lane; neither state adds a Fedora 41/Fedora 43 lane, runner, or architecture claim | `packaging/fedora/test-check-projections.sh`: `fedora_baseline::required_ci_uses_one_pinned_f44_cargo_smoke_and_one_retained_source_rpm_build` |
+docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A2 | Given the repository workflow files, when `status = "pre-alpha"`, then exactly one `fedora-44-cargo-smoke` Cargo lane and exactly one `fedora-rpm-package` retained-source RPM build lane resolve to the exact official Fedora 44 digest above; no other Fedora-family container image is present anywhere under `.github/workflows/`, regardless of scalar or mapping YAML syntax. The RPM lane runs the retained-source producer and `rpmbuild -bb --nodeps`, then selects exactly one built RPM named `realm`, installs that exact file into a new empty Fedora 44 installroot using normal DNF dependency resolution without `--nodeps`, `--skip-broken`, `--allowerasing`, or dependency suppression, proves its built and installed NEVRA match, and chroots to run `/usr/bin/realmctl theme lint --palette /usr/share/realm/palette.toml` plus `/usr/bin/river -version`. This is clean-install and bounded installed-command evidence only; neither lane is graphical-session, portal, SELinux, GPU/hardware, upgrade, or daily-driver evidence. When `status = "unsupported"`, it contains no required Fedora lane; neither state adds a Fedora 41/Fedora 43 lane, runner, or architecture claim | `packaging/fedora/test-check-projections.sh`: `fedora_baseline::required_ci_uses_one_pinned_f44_cargo_smoke_and_one_exact_rpm_installroot` |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A3 | Given the Fedora RPM metadata, when it is inspected, then it identifies Fedora 44, requires Fedora's `river >= 0.4.0`, contains no `realm-river` alternative or false “River unavailable on Fedora” claim, and continues to state that the package is pre-alpha and not a working desktop | *Planned (#138):* `fedora_baseline::rpm_metadata_matches_the_f44_pre_alpha_contract` |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A6 | Given a seeded stale live-support claim such as `Fedora 41+`, when the consistency guard runs, then it fails; given an exact reviewed historical exception in a superseded ADR or third-party history, then it passes without treating that text as current support | *Planned (#138):* `fedora_baseline::stale_live_claims_fail_and_exact_history_exceptions_pass` |
-docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A8 | Given current user-facing and normative documentation, when the consistency guard and doc review run, then Fedora 41 is absent from live Realm support/install examples, Fedora 44 is described as the sole pre-alpha baseline, no text upgrades the Cargo smoke to RPM/session evidence, and no direct Fedora 41 to Fedora 44 OS upgrade is called supported | *Planned (#138):* `fedora_baseline::docs_state_the_evidence_level_truthfully` plus review of rendered Markdown |
+docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A8 | Given current user-facing and normative documentation, when the consistency guard and doc review run, then Fedora 41 is absent from live Realm support/install examples, Fedora 44 is described as the sole pre-alpha baseline, the exact RPM installroot evidence is distinguished from graphical-session, portal and SELinux evidence, and no direct Fedora 41 to Fedora 44 OS upgrade is called supported | *Planned (#138):* `fedora_baseline::docs_state_the_evidence_level_truthfully` plus review of rendered Markdown |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::| A9 | Given the completed #138 diff, when scope is reviewed, then it contains no Yazi/Starship source decision, package publishing/signing infrastructure, extra Fedora lane, KVM/native-runner acquisition, scheduled network job, Fedora 41 fixture, generation rollback design, or `flake.lock` strategy | Required reviewer checklist on the #138 pull request |
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::- Fedora Bodhi: F41 `archived`, EOL 2025-12-15; F42 `archived`, EOL
 docs/specs/0009-fedora-44-pre-alpha-baseline.md:::  2026-05-27; F43 `current`, EOL 2026-12-02; F44 `current`, EOL 2027-06-02.
