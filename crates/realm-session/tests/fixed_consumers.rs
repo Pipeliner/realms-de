@@ -32,11 +32,8 @@ impl RunningStub {
     }
 
     fn resume_and_wait(&mut self, pid: u32) -> ExitStatus {
-        let status = Command::new("/bin/kill")
-            .args(["-CONT", &pid.to_string()])
-            .status()
-            .unwrap();
-        assert!(status.success());
+        let pid = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
+        rustix::process::kill_process(pid, rustix::process::Signal::CONT).unwrap();
         self.child.wait().unwrap()
     }
 }
