@@ -321,6 +321,7 @@ EOF
       import datetime as dt
       import hashlib
       import json
+      import re
       import shlex
       import time
       from pathlib import Path

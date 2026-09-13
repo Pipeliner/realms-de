@@ -179,4 +179,11 @@ mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
 expect_fail missing-doctor-evidence "$fixture_root" \
     'live VM artifact must retain realmctl doctor JSON'
 
+fixture_root=$(make_fixture missing-prompt-regex-import)
+sed '/^      import re$/d' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail missing-prompt-regex-import "$fixture_root" \
+    'Nix VM prompt proof must import its regular-expression dependency'
+
 printf 'PASS: %d root-flake CI guard fixtures\n' "$tests_run"
