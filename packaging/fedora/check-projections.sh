@@ -581,8 +581,8 @@ assert_contains README.md 'Today Fedora 44 is the sole Fedora' \
     'README must identify Fedora 44 as the sole pre-alpha Fedora baseline'
 assert_contains docs/INSTALL.md '| Fedora 44 (pre-alpha) | RPM from the retained-only source kit' \
     'INSTALL must identify the Fedora 44 retained-only source-kit RPM build'
-assert_contains docs/ARCHITECTURE.md '| **Fedora 44 (pre-alpha)** | exactly one pinned Cargo-smoke lane plus exactly one retained-source RPM-build lane' \
-    'ARCHITECTURE must identify the two Fedora 44 pre-alpha build lanes'
+assert_contains docs/ARCHITECTURE.md '| **Fedora 44 (pre-alpha)** | exactly one pinned Cargo-smoke lane plus exactly one retained-source RPM-build/installroot lane' \
+    'ARCHITECTURE must identify the two Fedora 44 pre-alpha lanes'
 assert_contains docs/ARCHITECTURE.md 'Target plan and current evidence:' \
     'ARCHITECTURE must not claim every target is already supported and tested in CI'
 assert_contains docs/MVP.md 'Fedora uses its official native candidate' \
