@@ -340,7 +340,46 @@ def license_rows(report: Path, vendor: Path) -> set[tuple[str, str]]:
     return covered
 
 
-def materialize_stage(source: Path, vendor: Path, config: Path, destination: Path) -> Path:
+def apply_bound_source_patch(source: Path, bundle: Path, record: dict[str, str]) -> None:
+    patch = under_root(bundle.resolve(), "source_patch", record["source_patch"])
+    if patch.is_symlink() or not patch.is_file():
+        raise SystemExit("source patch is missing or symlinked")
+    if hashlib.sha256(patch.read_bytes()).hexdigest() != record["source_patch_sha256"]:
+        raise SystemExit("source patch SHA-256 mismatch")
+    if record["source_patch_target"] != "build.rs":
+        raise SystemExit("source patch target differs from build.rs")
+    headers = [
+        line for line in patch.read_bytes().splitlines()
+        if line.startswith((b"--- ", b"+++ "))
+    ]
+    if headers != [b"--- a/build.rs", b"+++ b/build.rs"]:
+        raise SystemExit("source patch does not target build.rs exactly")
+
+    target = source / "build.rs"
+    if target.is_symlink() or not target.is_file():
+        raise SystemExit("source patch target is missing or symlinked")
+    if hashlib.sha256(target.read_bytes()).hexdigest() != record["source_patch_pre_sha256"]:
+        raise SystemExit("source patch preimage SHA-256 mismatch")
+    result = subprocess.run(
+        [
+            "patch", "--batch", "--forward", "--fuzz=0", "--strip=1",
+            "--input", str(patch),
+        ],
+        cwd=source,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise SystemExit("source patch cannot be applied exactly")
+    if hashlib.sha256(target.read_bytes()).hexdigest() != record["source_patch_post_sha256"]:
+        raise SystemExit("source patch postimage SHA-256 mismatch")
+
+
+def materialize_stage(
+        source: Path, vendor: Path, config: Path, destination: Path,
+        patch_bundle: Path | None = None,
+        patch_record: dict[str, str] | None = None) -> Path:
     destination = Path(os.path.abspath(destination))
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
@@ -353,6 +392,8 @@ def materialize_stage(source: Path, vendor: Path, config: Path, destination: Pat
         shutil.copytree(vendor, staged / "vendor")
         (staged / ".cargo").mkdir()
         shutil.copyfile(config, staged / ".cargo" / "config.toml")
+        if patch_bundle is not None and patch_record is not None:
+            apply_bound_source_patch(staged / "source", patch_bundle, patch_record)
         previous = temporary_root / "previous"
         if destination.exists():
             destination.rename(previous)
@@ -375,6 +416,10 @@ def validate_bundle(root: Path, destination: Path | None = None) -> Path | None:
         "version", "commit", "commit_timestamp", "source", "source_sha256",
         "lockfile_sha256", "cargo_config_sha256", "license_report_sha256",
     }
+    source_patch_fields = {
+        "source_patch", "source_patch_sha256", "source_patch_target",
+        "source_patch_pre_sha256", "source_patch_post_sha256",
+    }
     basic_fields = required | vendor_fields
     basic_archive_fields = required | archive_fields
     bound_archive_fields = basic_archive_fields | bound_fields
@@ -384,6 +429,9 @@ def validate_bundle(root: Path, destination: Path | None = None) -> Path | None:
     realm_bundle = record.get("name") == "realm-workspace"
     if realm_bundle:
         valid_fields = frozenset(record) == frozenset(realm_fields)
+    elif (record.get("name"), record.get("version")) == ("starship", "1.23.0"):
+        valid_fields = frozenset(record) == frozenset(
+            bound_archive_fields | source_patch_fields)
     else:
         valid_fields = frozenset(record) in {
             frozenset(basic_fields), frozenset(basic_archive_fields), frozenset(bound_archive_fields),
@@ -404,6 +452,16 @@ def validate_bundle(root: Path, destination: Path | None = None) -> Path | None:
         hash_key = f"{key}_sha256"
         if hash_key in record and hashlib.sha256(path.read_bytes()).hexdigest() != record[hash_key]:
             raise SystemExit(f"{key} SHA-256 mismatch")
+    patch_bundle = None
+    if "source_patch" in record:
+        patch_bundle = root
+        patch = under_root(root, "source_patch", record["source_patch"])
+        if patch.is_symlink() or not patch.is_file():
+            raise SystemExit("source patch is missing or symlinked")
+        if hashlib.sha256(patch.read_bytes()).hexdigest() != record["source_patch_sha256"]:
+            raise SystemExit("source patch SHA-256 mismatch")
+        if record["source_patch_target"] != "build.rs":
+            raise SystemExit("source patch target differs from build.rs")
 
     source_temporary = None
     source = None
@@ -474,7 +532,9 @@ def validate_bundle(root: Path, destination: Path | None = None) -> Path | None:
     if destination is not None:
         if source is None:
             raise SystemExit("bundle does not contain a staged source authority")
-        return materialize_stage(source, vendor, paths["cargo_config"], destination)
+        return materialize_stage(
+            source, vendor, paths["cargo_config"], destination,
+            patch_bundle, record if patch_bundle is not None else None)
     return None
 
 

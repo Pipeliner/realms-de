@@ -114,12 +114,8 @@ make_sentinels() {
     directory=$1
     mkdir -p "$directory"
     for command in git curl wget ssh scp; do
-        sed "s/@COMMAND@/$command/g" >"$directory/$command" <<'EOF'
-#!/bin/sh
-printf 'forbidden|command=@COMMAND@|cwd=%s|args=%s\n' "$PWD" "$*" >>"${REALM_SENTINEL_LOG:?}"
-exit 97
-EOF
-        chmod +x "$directory/$command"
+        ln -s "$root/packaging/tool-sources/native-command-sentinel.sh" \
+            "$directory/$command"
     done
     cp "$cargo_wrapper" "$directory/cargo"
     chmod +x "$directory/cargo"
@@ -308,6 +304,25 @@ accepts_offline_cargo() {
     if grep '^forbidden|' "$log" >/dev/null; then
         fail "$name invoked Git or a network command"
     fi
+    git_metadata=$output.git-metadata
+    grep '^git-metadata-denied|' "$log" >"$git_metadata" || true
+    cat >"$git_metadata.expected" <<EOF
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=2|args=status --porcelain
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=2|args=status --porcelain
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=3|args=status --porcelain --untracked-files=all
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=2|args=rev-parse HEAD
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=3|args=rev-parse --short HEAD
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=3|args=log -1 --pretty=format:%an
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=3|args=log -1 --pretty=format:%ae
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=4|args=show --pretty=format:%ct --date=raw -s
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=3|args=symbolic-ref --short HEAD
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=4|args=tag -l --contains HEAD
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=4|args=describe --tags --abbrev=0 HEAD
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=3|args=describe --tags HEAD
+EOF
+    if ! cmp "$git_metadata.expected" "$git_metadata"; then
+        fail "$name did not deny the exact pinned Starship Git metadata attempts"
+    fi
     if grep '^rustc-selector|' "$log" >/dev/null; then
         fail "$name honored an inherited rustc selector"
     fi
@@ -315,8 +330,8 @@ accepts_offline_cargo() {
         fail "$name did not use an otherwise-empty Cargo home containing the retained source configuration"
     fi
     cargo_count=$(grep -c '^cargo|' "$log" || true)
-    if [ "$cargo_count" -ne 4 ]; then
-        fail "$name made $cargo_count Cargo invocations instead of three builds and one test"
+    if [ "$cargo_count" -ne 5 ]; then
+        fail "$name made $cargo_count Cargo invocations instead of three builds, one test and one metadata query"
     fi
     build_count=$(grep -c '|args=build ' "$log" || true)
     test_count=$(grep -c '|args=test ' "$log" || true)
@@ -350,6 +365,11 @@ accepts_offline_cargo() {
     case $test_invocation in
         *"|args=test --release --frozen --offline --locked --workspace --exclude realm-agent-sdd|cflags="*) ;;
         *) fail "$name did not run the exact package-relevant workspace test selection" ;;
+    esac
+    metadata_invocation=$(grep '|args=-V|' "$log" || true)
+    case $metadata_invocation in
+        "cargo|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|home=${REALM_EXPECTED_STARSHIP_CARGO_HOME}|args=-V|cflags="*) ;;
+        *) fail "$name did not isolate the exact Starship Cargo version query" ;;
     esac
     for bin in realmctl realm-wm realm-bar yazi ya starship; do
         if ! grep -F -x "cargo-output|binary=$bin|executable=yes" "$log" >/dev/null; then
@@ -443,8 +463,8 @@ accepts_offline_cargo() {
         fail "$name Cargo test did not execute the staged workspace tests"
     fi
     result_count=$(grep -c '^cargo-result|status=0$' "$log" || true)
-    if [ "$result_count" -ne 4 ]; then
-        fail "$name did not complete all four real Cargo invocations successfully"
+    if [ "$result_count" -ne 5 ]; then
+        fail "$name did not complete all five real Cargo invocations successfully"
     fi
     grep '^cargo|' "$log" >"$output.cargo"
     while IFS= read -r invocation; do
@@ -453,6 +473,11 @@ accepts_offline_cargo() {
             | *"|cwd=${REALM_EXPECTED_YAZI_SOURCE}|home=${REALM_EXPECTED_YAZI_CARGO_HOME}|"* \
             | *"|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|home=${REALM_EXPECTED_STARSHIP_CARGO_HOME}|"*) ;;
             *) fail "$name invoked Cargo outside a selected retained stage" ;;
+        esac
+        case $invocation in
+            *"|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|home=${REALM_EXPECTED_STARSHIP_CARGO_HOME}|args=-V|"*)
+                continue
+                ;;
         esac
         for flag in --frozen --offline --locked; do
             case " $invocation " in
