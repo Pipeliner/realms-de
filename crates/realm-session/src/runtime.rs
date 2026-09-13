@@ -16,6 +16,7 @@ use realm_core::ipc::{ErrorKind, Request, Response};
 use realm_core::ledger::OrbitId;
 
 use crate::backend::{BackendError, BackendReady, BackendTicket, WmBackend, WorkerCapacityError};
+use crate::consumer::FixedConsumer;
 use crate::modules::{ClockModule, ModuleSampler, ModuleSnapshot};
 use crate::persistence::{PersistCompletion, PersistCompletionError, PersistenceCoordinator};
 use crate::session::{
@@ -75,6 +76,12 @@ pub enum RuntimeError {
     /// The control transport failed outside a peer-local close boundary.
     #[error(transparent)]
     Control(#[from] ControlError),
+    /// The fixed-consumer configuration root could not be resolved.
+    #[error("theme configuration: {0}")]
+    Configuration(String),
+    /// The fresh-login generation could not be retained or published safely.
+    #[error(transparent)]
+    Theme(#[from] realm_theme::Error),
     /// A worker reported a persistence sequence the owner did not issue.
     #[error(transparent)]
     Persistence(#[from] PersistCompletionError),
@@ -418,8 +425,11 @@ impl<B: WmBackend> RuntimeOwners<B> {
         for effect in update.effects.drain(..) {
             match effect {
                 SessionEffect::Spawn(argv) => jobs.push(ProcessJob::Spawn(argv)),
+                SessionEffect::Terminal => {
+                    jobs.push(ProcessJob::FixedConsumer(FixedConsumer::Terminal));
+                }
                 SessionEffect::Launcher => {
-                    jobs.push(ProcessJob::Spawn(vec!["fuzzel".to_owned()]));
+                    jobs.push(ProcessJob::FixedConsumer(FixedConsumer::Launcher));
                 }
                 SessionEffect::ReloadTheme => {
                     eprintln!("realm-wm: ignored retired key-derived theme reload");
@@ -878,8 +888,17 @@ where
     F: FnOnce() -> Result<B, BackendError>,
 {
     let runtime = production_runtime_dir()?;
+    let config_root =
+        crate::consumer::config_root_from_env().map_err(RuntimeError::Configuration)?;
+    prepare_startup_theme(&config_root)?;
     let degraded_codes = load_degraded_handoff(&runtime);
     run_daemon_with(runtime, make_backend, notify_ready, degraded_codes)
+}
+
+fn prepare_startup_theme(
+    config_root: &std::path::Path,
+) -> Result<realm_theme::generation::GenerationId, RuntimeError> {
+    realm_theme::ensure_current(config_root).map_err(RuntimeError::from)
 }
 
 fn load_startup_snapshot(
@@ -1641,6 +1660,29 @@ mod tests {
             dispatch_request(&mut session, Request::Quit, 0).unwrap(),
             RequestDispatch::Quit(_)
         ));
+    }
+
+    #[test]
+    fn production_startup_theme_preparation_seeds_once_and_refuses_malformed_current() {
+        let root = fixture_dir("startup-theme");
+        let first = super::prepare_startup_theme(&root).unwrap();
+        let current = fs::read(root.join("realm/generated/current")).unwrap();
+
+        let second = super::prepare_startup_theme(&root).unwrap();
+        assert_eq!(second, first);
+        assert_eq!(
+            fs::read(root.join("realm/generated/current")).unwrap(),
+            current
+        );
+
+        fs::write(root.join("realm/generated/current"), b"malformed\n").unwrap();
+        let malformed = fs::read(root.join("realm/generated/current")).unwrap();
+        assert!(super::prepare_startup_theme(&root).is_err());
+        assert_eq!(
+            fs::read(root.join("realm/generated/current")).unwrap(),
+            malformed
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

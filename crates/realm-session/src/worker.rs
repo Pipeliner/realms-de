@@ -5,8 +5,9 @@ use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+use std::process::{Child, Command};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,6 +18,7 @@ use crate::backend::{
     WorkerCapacityError, WorkerCapacityResource, MAX_SNAPSHOT_BYTES, MAX_WORKER_JOBS,
     MAX_WORKER_RESULTS, WORKER_SHUTDOWN_TIMEOUT_MS,
 };
+use crate::consumer::FixedConsumer;
 use crate::session::SessionSnapshotV1;
 
 /// Process work executed away from the compositor event loop.
@@ -24,6 +26,8 @@ use crate::session::SessionSnapshotV1;
 pub enum ProcessJob {
     /// Spawn one argv vector without a shell.
     Spawn(Vec<String>),
+    /// Spawn this daemon's private fixed-consumer child mode.
+    FixedConsumer(FixedConsumer),
 }
 
 #[derive(Debug)]
@@ -38,6 +42,11 @@ enum WorkerMessage {
     Process(ProcessJob),
     SnapshotAvailable,
     Seal,
+}
+
+struct ChildOwner {
+    sender: SyncSender<Child>,
+    count: Arc<AtomicUsize>,
 }
 
 /// One terminal result returned by the worker.
@@ -112,6 +121,7 @@ pub struct Worker {
     sealed_at: Option<Instant>,
     fence_acknowledged: bool,
     pending_result_notifications: u64,
+    owned_children: Arc<AtomicUsize>,
 }
 
 impl Worker {
@@ -121,17 +131,30 @@ impl Worker {
         let (message_tx, message_rx) = mpsc::sync_channel(MAX_WORKER_JOBS + 2);
         let (snapshot_tx, snapshot_rx) = mpsc::sync_channel(1);
         let (result_tx, result_rx) = mpsc::sync_channel(MAX_WORKER_RESULTS);
+        let (child_tx, child_rx) = mpsc::sync_channel(MAX_WORKER_JOBS);
+        let owned_children = Arc::new(AtomicUsize::new(0));
+        let reaper_owned_children = Arc::clone(&owned_children);
+        std::thread::Builder::new()
+            .name("realm-child-reaper".to_owned())
+            .spawn(move || child_reaper(child_rx, reaper_owned_children))?;
         let thread_event_fd = event_fd.clone();
         let thread_path = snapshot_path.clone();
+        let daemon_executable = std::env::current_exe()?;
+        let child_owner = ChildOwner {
+            sender: child_tx,
+            count: Arc::clone(&owned_children),
+        };
         std::thread::Builder::new()
             .name("realm-worker".to_owned())
             .spawn(move || {
                 worker_main(
                     thread_path,
+                    daemon_executable,
                     message_rx,
                     snapshot_rx,
                     result_tx,
                     thread_event_fd,
+                    child_owner,
                 );
             })?;
         Ok(Self {
@@ -146,6 +169,7 @@ impl Worker {
             sealed_at: None,
             fence_acknowledged: false,
             pending_result_notifications: 0,
+            owned_children,
         })
     }
 
@@ -175,7 +199,8 @@ impl Worker {
         count: usize,
     ) -> Result<WorkerReservation, WorkerCapacityError> {
         let admitted = self
-            .outstanding_process
+            .owned_children
+            .load(Ordering::SeqCst)
             .saturating_add(self.reserved_process)
             .saturating_add(count);
         if self.sealed_at.is_some() || admitted > MAX_WORKER_JOBS {
@@ -215,10 +240,15 @@ impl Worker {
             .reserved_process
             .checked_sub(reservation.count)
             .expect("reservation belongs to this single-owner worker");
+        self.owned_children
+            .fetch_add(reservation.count, Ordering::SeqCst);
+        let mut unsent = reservation.count;
         for job in jobs {
-            self.messages
-                .try_send(WorkerMessage::Process(job))
-                .map_err(|_| WorkerError::Disconnected)?;
+            if self.messages.try_send(WorkerMessage::Process(job)).is_err() {
+                self.owned_children.fetch_sub(unsent, Ordering::SeqCst);
+                return Err(WorkerError::Disconnected);
+            }
+            unsent -= 1;
             self.outstanding_process += 1;
         }
         Ok(())
@@ -339,10 +369,12 @@ impl Worker {
 
 fn worker_main(
     snapshot_path: PathBuf,
+    daemon_executable: PathBuf,
     messages: Receiver<WorkerMessage>,
     snapshots: Receiver<Option<SnapshotJob>>,
     results: SyncSender<WorkerResult>,
     event_fd: Arc<OwnedFd>,
+    child_owner: ChildOwner,
 ) {
     while let Ok(message) = messages.recv() {
         let sealing = matches!(message, WorkerMessage::Seal);
@@ -351,7 +383,15 @@ fn worker_main(
                 WorkerResult::SnapshotRead(read_snapshot_bounded(&snapshot_path))
             }
             WorkerMessage::Process(ProcessJob::Spawn(argv)) => WorkerResult::Process {
-                result: spawn_argv(argv),
+                result: spawn_owned(spawn_argv(argv), &child_owner),
+            },
+            WorkerMessage::Process(ProcessJob::FixedConsumer(consumer)) => WorkerResult::Process {
+                result: spawn_owned(
+                    Command::new(&daemon_executable)
+                        .args(["--fixed-consumer", consumer.as_str()])
+                        .spawn(),
+                    &child_owner,
+                ),
             },
             WorkerMessage::SnapshotAvailable => {
                 if send_result(&results, &event_fd, WorkerResult::SnapshotRequested).is_err() {
@@ -379,11 +419,68 @@ fn worker_main(
     }
 }
 
-fn spawn_argv(argv: Vec<String>) -> io::Result<()> {
+fn spawn_argv(argv: Vec<String>) -> io::Result<Child> {
     let Some(program) = argv.first() else {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty argv"));
     };
-    Command::new(program).args(&argv[1..]).spawn().map(|_| ())
+    Command::new(program).args(&argv[1..]).spawn()
+}
+
+fn spawn_owned(child: io::Result<Child>, owner: &ChildOwner) -> io::Result<()> {
+    match child {
+        Ok(child) => {
+            if owner.sender.try_send(child).is_err() {
+                std::process::abort();
+            }
+            Ok(())
+        }
+        Err(error) => {
+            owner.count.fetch_sub(1, Ordering::SeqCst);
+            Err(error)
+        }
+    }
+}
+
+fn child_reaper(children: Receiver<Child>, owned_children: Arc<AtomicUsize>) {
+    const REAP_INTERVAL: Duration = Duration::from_millis(100);
+    let mut live = Vec::with_capacity(MAX_WORKER_JOBS);
+    let mut disconnected = false;
+    loop {
+        if live.is_empty() {
+            match children.recv() {
+                Ok(child) => live.push(child),
+                Err(_) => return,
+            }
+        } else if !disconnected {
+            match children.recv_timeout(REAP_INTERVAL) {
+                Ok(child) => live.push(child),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => disconnected = true,
+            }
+        } else {
+            std::thread::sleep(REAP_INTERVAL);
+        }
+        while let Ok(child) = children.try_recv() {
+            live.push(child);
+        }
+        let mut index = 0;
+        while index < live.len() {
+            match live[index].try_wait() {
+                Ok(Some(_)) => {
+                    let mut child = live.swap_remove(index);
+                    if child.wait().is_err() {
+                        std::process::abort();
+                    }
+                    owned_children.fetch_sub(1, Ordering::SeqCst);
+                }
+                Ok(None) => index += 1,
+                Err(_) => std::process::abort(),
+            }
+        }
+        if disconnected && live.is_empty() {
+            return;
+        }
+    }
 }
 
 fn send_result(
@@ -558,6 +655,125 @@ mod tests {
             assert!(Instant::now() < deadline, "worker did not report spawn");
             std::thread::yield_now();
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_spawn_releases_its_owned_child_capacity() {
+        let root = fixture_dir("failed-spawn-capacity");
+        let mut worker = Worker::start(root.join("ledger.json")).unwrap();
+        let reservation = worker.reserve_process_jobs(1).unwrap();
+        worker
+            .commit(
+                reservation,
+                vec![ProcessJob::Spawn(vec![
+                    "/definitely/absent/realm-command".into()
+                ])],
+            )
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some(WorkerResult::Process { result }) = worker.try_result().unwrap() {
+                assert!(result.is_err());
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "worker did not report failed spawn"
+            );
+            std::thread::yield_now();
+        }
+        let all = worker.reserve_process_jobs(MAX_WORKER_JOBS).unwrap();
+        worker.cancel(all);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_reaps_a_later_short_child_while_an_older_child_is_alive() {
+        let root = fixture_dir("owned-child-reaping");
+        let long_pid = root.join("long.pid");
+        let short_pid = root.join("short.pid");
+        let mut worker = Worker::start(root.join("ledger.json")).unwrap();
+        let reservation = worker.reserve_process_jobs(2).unwrap();
+        worker
+            .commit(
+                reservation,
+                vec![
+                    ProcessJob::Spawn(vec![
+                        "/bin/sh".into(),
+                        "-c".into(),
+                        format!("echo $$ > {}; kill -STOP $$", long_pid.display()),
+                    ]),
+                    ProcessJob::Spawn(vec![
+                        "/bin/sh".into(),
+                        "-c".into(),
+                        format!("echo $$ > {}", short_pid.display()),
+                    ]),
+                ],
+            )
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut results = 0;
+        while results < 2 {
+            if let Some(WorkerResult::Process { result }) = worker.try_result().unwrap() {
+                result.unwrap();
+                results += 1;
+            }
+            assert!(Instant::now() < deadline, "worker children did not start");
+            std::thread::yield_now();
+        }
+        let read_pid = |path: &std::path::Path| loop {
+            if let Some(pid) = fs::read_to_string(path)
+                .ok()
+                .and_then(|raw| raw.trim().parse::<u32>().ok())
+            {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "child pid was not published");
+            std::thread::yield_now();
+        };
+        let long = read_pid(&long_pid);
+        let short = read_pid(&short_pid);
+        let reaped_deadline = Instant::now() + Duration::from_secs(2);
+        let short_reaped = loop {
+            if !PathBuf::from(format!("/proc/{short}")).exists() {
+                break true;
+            }
+            if Instant::now() >= reaped_deadline {
+                break false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+
+        let remaining = worker.reserve_process_jobs(MAX_WORKER_JOBS - 1).unwrap();
+        assert!(worker.reserve_process_jobs(1).is_err());
+        worker.cancel(remaining);
+
+        for signal in ["-TERM", "-CONT"] {
+            assert!(std::process::Command::new("/bin/kill")
+                .args([signal, &long.to_string()])
+                .status()
+                .unwrap()
+                .success());
+        }
+        let released_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(all) = worker.reserve_process_jobs(MAX_WORKER_JOBS) {
+                worker.cancel(all);
+                break;
+            }
+            assert!(
+                Instant::now() < released_deadline,
+                "reaping the final child did not release its owned-child capacity"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            short_reaped,
+            "the later short child remained present as an unreaped zombie"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
