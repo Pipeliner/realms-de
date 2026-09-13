@@ -21,9 +21,11 @@ make_fixture() {
     name=$1
     fixture_root="$tmp_dir/$name"
     mkdir -p "$fixture_root/.github/workflows"
+    mkdir -p "$fixture_root/packaging/nix"
     cp "$repo_root/flake.nix" "$fixture_root/flake.nix"
     cp "$repo_root/flake.lock" "$fixture_root/flake.lock"
     cp "$repo_root/.github/workflows/distro.yml" "$fixture_root/.github/workflows/distro.yml"
+    cp "$repo_root/packaging/nix/checks.nix" "$fixture_root/packaging/nix/checks.nix"
     printf '%s\n' "$fixture_root"
 }
 
@@ -107,5 +109,36 @@ sed '/realm-session-boots\/portal-roundtrip\.json/d' \
 mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
 expect_fail missing-portal-evidence-upload "$fixture_root" \
     'live VM evidence upload must retain portal-roundtrip.json'
+
+fixture_root=$(make_fixture portal-window-delete-instead-of-cancel)
+sed 's/machine.send_key("alt-c")/machine.send_key("esc")/' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail portal-window-delete-instead-of-cancel "$fixture_root" \
+    'portal VM must activate the explicit GTK Cancel response'
+
+fixture_root=$(make_fixture portal-failure-skips-status)
+sed 's/f"(if {portal_command}/f"({portal_command}/' \
+    "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"
+mv "$fixture_root/checks.nix" "$fixture_root/packaging/nix/checks.nix"
+expect_fail portal-failure-skips-status "$fixture_root" \
+    'portal VM must record helper status after success or failure'
+
+failure_status="$tmp_dir/helper.status"
+(
+    set -e
+    if sh -c 'exit 7'; then
+        realm_portal_status=0
+    else
+        realm_portal_status=$?
+    fi
+    printf '%s\n' "$realm_portal_status" >"$failure_status"
+)
+tests_run=$((tests_run + 1))
+if [ "$(cat "$failure_status")" != 7 ]; then
+    echo 'FAIL: set -e helper wrapper did not retain nonzero status' >&2
+    exit 1
+fi
+printf 'ok %d - portal-failure-status-behaviour\n' "$tests_run"
 
 printf 'PASS: %d root-flake CI guard fixtures\n' "$tests_run"

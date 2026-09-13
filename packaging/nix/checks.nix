@@ -465,8 +465,10 @@ EOF
               "realm-portal-vm",
           ])
           machine.succeed(
-              f"({portal_command} > {portal_output_path} "
-              f"2> {portal_error_path}; printf '%s\\n' $? > {portal_status_path}) "
+              f"(if {portal_command} > {portal_output_path} "
+              f"2> {portal_error_path}; then "
+              f"realm_portal_status=0; else realm_portal_status=$?; fi; "
+              f"printf '%s\\n' \"$realm_portal_status\" > {portal_status_path}) "
               "< /dev/null > /dev/null 2>&1 &"
           )
           machine.wait_until_succeeds(
@@ -484,12 +486,12 @@ EOF
           )
           assert chooser_state["reply"] == "state", chooser_state
           machine.wait_for_text("Realm portal VM", timeout=OCR_TIMEOUT)
-          machine.send_key("esc")
+          machine.send_key("alt-c")
           wait_for_state(
               lambda response: sum(
                   cell["windows"] for cell in response["data"]["orbits"]
               ) == 0,
-              "portal file chooser close after Escape",
+              "portal file chooser close after explicit Cancel",
           )
 
           machine.wait_until_succeeds(

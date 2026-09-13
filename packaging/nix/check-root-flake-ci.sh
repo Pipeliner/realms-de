@@ -22,6 +22,9 @@ fail() {
 [ -f "$root/flake.nix" ] || fail 'root flake.nix is required'
 [ -f "$root/flake.lock" ] || fail 'root flake.lock is required'
 
+checks="$root/packaging/nix/checks.nix"
+[ -f "$checks" ] || fail 'installed Nix VM check is required'
+
 workflow="$root/.github/workflows/distro.yml"
 [ -f "$workflow" ] || fail 'distro workflow is required'
 
@@ -43,6 +46,15 @@ fi
 
 if ! grep -F -q -e "\${{ runner.temp }}/realm-session-boots/portal-roundtrip.json" "$workflow"; then
     fail 'live VM evidence upload must retain portal-roundtrip.json'
+fi
+
+if ! grep -F -q -e 'machine.send_key("alt-c")' "$checks"; then
+    fail 'portal VM must activate the explicit GTK Cancel response'
+fi
+
+if ! grep -F -q -e 'f"(if {portal_command} > {portal_output_path} "' "$checks" \
+    || ! grep -F -q -e 'f"realm_portal_status=0; else realm_portal_status=$?; fi; "' "$checks"; then
+    fail 'portal VM must record helper status after success or failure'
 fi
 
 echo 'root-flake CI contract: pass'
