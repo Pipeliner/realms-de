@@ -476,6 +476,10 @@ mod tests {
             std::process::id()
         ));
         fs::create_dir(&path).unwrap();
+        // Listener fixtures temporarily change the process-wide umask while
+        // binding. Keep this independently owned directory traversable even
+        // when it was created during that concurrent operation.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         path
     }
 
