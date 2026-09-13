@@ -211,7 +211,8 @@ jobs:
               ".#checks.$system.shellcheck" \
               ".#checks.$system.package" \
               ".#checks.$system.packaged-binaries" \
-              ".#checks.$system.realm-sdd-git-runtime"
+              ".#checks.$system.realm-sdd-git-runtime" \
+              ".#checks.$system.xwayland-window-observation"
           fi
 
       - name: Upload live Realm VM evidence

@@ -379,6 +379,22 @@ outcome rather than an imported empty string. When discovery succeeds,
 is then published to both the systemd user manager and the D-Bus activation
 environment before any Realm client starts.
 
+The installed-VM proof separates X11-client readiness from Realm's observation:
+the pinned `xmessage` child has a unique test title, the X server's root window
+tree must identify exactly one window with that title, and that window's X
+attributes must report `Map State: IsViewable` before the test waits for Realm's
+managed-window count to increase. A failure before that boundary is an
+X11 launch/mapping failure; a failure after it is a River/Realm window-management
+failure. Mapping and Realm observation share the existing 60-second VM window
+starting before activation; they are not two sequential waits. On either
+failure, the evidence retains the root window tree and the exact child's
+journal-backed stderr. Every root-tree and window-attribute query, including a
+diagnostic query after failure, runs through locked nixpkgs' `coreutils timeout`
+with a two-second termination deadline and a one-second forced-kill grace; the
+driver command is also capped by the shared remaining time. An unresponsive X
+server cannot extend the observation wait without bound. A live child pid alone
+is not evidence that an X11 window mapped.
+
 `doctor` must not shell out to `xlsclients` or `xdpyinfo` to check this: neither
 is guaranteed installed on any of the three targets. It connects to
 `/tmp/.X11-unix/X<N>` itself.
@@ -705,7 +721,7 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
 | A16 | Given a real laptop, when the lid is closed, then the session locks within the configured delay and the screen is blank on reopen until authentication | **HARDWARE** *(blocked on OQ-1)* | |
-| A17 | Given an installed NixOS VM session running the pinned XWayland-enabled River, when a purpose-built session-bus service is activated and acquires its configured bus name, then the non-empty `DISPLAY` inherited by `realm-wm`, the systemd user manager and that D-Bus-activated service is identical; the service invokes the pinned xmessage package's public `bin/xmessage` wrapper and the child executable resolves to that same package's exact `bin/.xmessage-wrapped` payload selected by locked nixpkgs' X file-search wrapper hook; Realm reports one additional managed X11 window; and the test reaps the client. This proves discovery, both publication paths and XWayland window management, but does not claim Xresources or scaling behaviour. | VM | |
+| A17 | Given an installed NixOS VM session running the pinned XWayland-enabled River, when a purpose-built session-bus service is activated and acquires its configured bus name, then the non-empty `DISPLAY` inherited by `realm-wm`, the systemd user manager and that D-Bus-activated service is identical; the service invokes the pinned xmessage package's public `bin/xmessage` wrapper and the child executable resolves to that same package's exact `bin/.xmessage-wrapped` payload selected by locked nixpkgs' X file-search wrapper hook; the X server's root tree identifies exactly one window with that child's unique test title and its X attributes report `Map State: IsViewable` before Realm reports one additional managed X11 window; and the test reaps the client. This proves discovery, both publication paths and XWayland window management, attributes a pre-map failure separately from a River/Realm observation failure, but does not claim Xresources or scaling behaviour. | VM | |
 
 **Split: 17 criteria — 4 CI, 11 VM, 2 HARDWARE.**
 
