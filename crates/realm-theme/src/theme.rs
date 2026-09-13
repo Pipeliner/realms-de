@@ -300,7 +300,7 @@ pub fn apply(root: &Path) -> Result<GenerationPublicationOutcome> {
 /// ambiguous first publication are errors; this operation does not repair or
 /// choose a fallback generation.
 pub fn ensure_current(root: &Path) -> Result<crate::generation::GenerationId> {
-    let config = ConfigRoot::open(root)?;
+    let config = ConfigRoot::open_or_create_final(root)?;
     let input_root = config
         .fd
         .try_clone()
@@ -589,6 +589,51 @@ impl ConfigRoot {
             Err(Errno::NOENT) => Ok(None),
             Err(error) => Err(Error::Generation(format!("configuration root: {error}"))),
         }
+    }
+
+    /// Open the captured configuration root, creating only its final component
+    /// for a first login whose safe parent already exists.
+    fn open_or_create_final(root: &Path) -> Result<Self> {
+        let root = normalized_root_spelling(root);
+        match crate::generation::open_directory_chain_no_follow(&root) {
+            Ok(fd) => return Ok(Self { fd }),
+            Err(Errno::NOENT) => {}
+            Err(error) => return Err(Error::Generation(format!("configuration root: {error}"))),
+        }
+
+        let parent_path = root
+            .parent()
+            .ok_or_else(|| Error::Generation("configuration root has no existing parent".into()))?;
+        let name = root
+            .file_name()
+            .ok_or_else(|| Error::Generation("configuration root has no final component".into()))?;
+        let parent = crate::generation::open_directory_chain(parent_path)
+            .map_err(|error| Error::Generation(format!("configuration root parent: {error}")))?;
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let mut created = false;
+        match mkdirat(&parent, name, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+            Ok(()) => created = true,
+            Err(Errno::EXIST) => {}
+            Err(error) => return Err(Error::Generation(format!("configuration root: {error}"))),
+        }
+        let fd = openat(&parent, name, flags, Mode::empty())
+            .map_err(|error| Error::Generation(format!("configuration root: {error}")))?;
+        if created {
+            fchmod(&fd, Mode::RUSR | Mode::WUSR | Mode::XUSR)
+                .map_err(|error| Error::Generation(format!("configuration root: {error}")))?;
+            let stat = fstat(&fd).map_err(|error| Error::Generation(error.to_string()))?;
+            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+                || stat.st_uid != rustix::process::getuid().as_raw()
+                || Mode::from_raw_mode(stat.st_mode).bits() != 0o700
+            {
+                return Err(Error::Generation(
+                    "created configuration root must be a current-UID mode-0700 directory".into(),
+                ));
+            }
+        }
+        fsync(&parent)
+            .map_err(|error| Error::Generation(format!("configuration root parent: {error}")))?;
+        Ok(Self { fd })
     }
 
     fn load_lint_palette(&self) -> Result<Palette> {

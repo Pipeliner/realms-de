@@ -1713,6 +1713,13 @@ mod tests {
             fs::read(root.join("realm/generated/current")).unwrap(),
             malformed
         );
+
+        let missing_parent = fixture.join("missing-parent/config");
+        assert!(super::prepare_startup_theme(&missing_parent).is_err());
+        assert!(
+            !fixture.join("missing-parent").exists(),
+            "bootstrap recursively created an absent configuration-root parent"
+        );
         fs::remove_dir_all(fixture).unwrap();
     }
 
