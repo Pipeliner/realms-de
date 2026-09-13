@@ -477,10 +477,12 @@ nothing in Firefox", with no error anywhere.
 
 **`xdg-desktop-portal-wlr` requires the compositor to serve
 `wlr-screencopy-unstable-v1`** and, for output selection, a chooser
-(`slurp` for the default `simple` chooser). *Whether river 0.4.8 still exports
-`wlr-screencopy-unstable-v1`, and whether xdpw functions when window management
-lives outside the compositor, is unverified.* This is **OQ-2** and it is the
-reason A15 is a hardware row.
+(`slurp` for the default `simple` chooser), plus a live per-user PipeWire
+service. Merely installing the PipeWire client library linked by xdpw does not
+start that service. The NixOS module enables it explicitly. The VM guard may
+select xdpw's `none` chooser only in its node configuration so one emulated
+output is selected without synthetic pointer input; the shipped chooser policy
+remains unchanged.
 
 **Verification, not assumption.** A portal that answers on D-Bus is not proof
 that it works.
@@ -500,9 +502,16 @@ that it works.
   it is not the default. *The exact `busctl call` spelling is derived from the
   interface signature and should be confirmed once in the VM test rather than
   trusted from here.*
-- ScreenCast: `doctor` asserts the `org.freedesktop.portal.ScreenCast` interface
-  is present and that the configured impl is one that implements it. Whether a
-  frame actually arrives is a hardware test with a human at the keyboard.
+- Settings: the installed VM calls `org.freedesktop.portal.Settings.ReadAll`
+  and requires its typed result rather than treating interface introspection as
+  a reply.
+- ScreenCast: `doctor` still asserts the interface and configured implementation.
+  The stronger installed-VM guard completes `CreateSession`, `SelectSources`,
+  and `Start`, obtains the restricted remote from `OpenPipeWireRemote`, and
+  consumes a nonempty video buffer from the returned PipeWire node. This proves
+  one emulated River output can reach one portal client through xdpw and
+  PipeWire. It does **not** prove a real browser exposes the chooser or that a
+  physical machine captures a useful stream; A15 remains hardware-only.
 
 ### 6. Non-systemd and non-D-Bus paths
 
@@ -654,7 +663,8 @@ gate (ADR 0011's guard).
 | `portal/answers` | `org.freedesktop.portal.Desktop` responds without a pause | The 25 s hang | VM |
 | `portal/config` | A `realm-portals.conf` is found and names a backend per interface | Behaviour that changes with what is installed | **CI** (file) / VM (effect) |
 | `portal/filechooser` | `--portal-roundtrip`: a handle within 2 s | "Open File does nothing" | VM |
-| `portal/screencast` | The interface exists and the configured impl implements it | Screen share silently produces nothing | VM; the real capture is **HARDWARE** |
+| `portal/settings` | `Settings.ReadAll` returns its typed settings map through the running proxy/backend path | Toolkit settings silently fall back | VM |
+| `portal/screencast` | The interface/configured implementation checks pass and the installed VM consumes a nonempty buffer from the restricted PipeWire node returned by a complete ScreenCast request sequence | Screen share silently produces nothing | VM; the browser picker and physical-machine capture remain **HARDWARE** |
 | `session/socket` | `$XDG_RUNTIME_DIR/realm/ctl.sock` answers `Hello` | — | VM |
 | `session/protocol-version` | Matches `realm_core::ipc::PROTOCOL_VERSION` | Bar and session disagree | **CI** |
 | `session/degraded` | Reports each `DEGRADED` code in this incarnation from the bounded handoff above, never by scanning historical logs | A degraded session pretending to be healthy | **CI** (degraded paths) |
@@ -695,11 +705,12 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A11 | Given a stale window manager already holding river's window-management global, when `realm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed; it names the holding process only if an independent observation identifies it, otherwise it states that the holder identity is unavailable | VM | |
 | A12 | Given a running session, when `realm-bar` is killed, then it is restarted, and `realm-session.target` and `realm-wm.service` both stay `active` throughout | VM | |
 | A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the effective configuration and installed `.portal` metadata name the required backends without claiming the running portal disclosed its selected backend identity | VM | |
+| A13a | Given the installed graphical VM with its test-only noninteractive output chooser and per-user PipeWire service, when one persistent portal client calls `FileChooser.OpenFile` and closes its returned request, reads `Settings.ReadAll`, completes the ScreenCast request/session sequence, and opens the restricted PipeWire remote, then the FileChooser handle arrives within 2 s, the Settings reply has its specified map type, and one nonempty video buffer is consumed from the returned node; this does not satisfy A15 | VM | |
 | A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
 | A16 | Given a real laptop, when the lid is closed, then the session locks within the configured delay and the screen is blank on reopen until authentication | **HARDWARE** *(blocked on OQ-1)* | |
 
-**Split: 16 criteria — 4 CI, 10 VM, 2 HARDWARE.**
+**Split: 17 criteria — 4 CI, 11 VM, 2 HARDWARE.**
 
 ## Budgets
 
