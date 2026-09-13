@@ -94,16 +94,22 @@ The private source set is required because Noble remains below these floors:
    empty cache, downloads every archive to its canonical manifest filename,
    and verifies its SHA-256 before it may be used. It extracts the selected Zig
    binary only after its checksum passes.
-2. Acquisition runs `zig fetch --global-cache-dir <cache>` once for each of the
-   five declared Zig URLs and requires the returned content hash to equal the
-   manifest. The resulting `<cache>/p/<hash>` directories are the only Zig
-   package inputs admitted to compilation.
+2. Zig 0.16 `fetch` requires a project root and writes unpacked packages to its
+   project-local `zig-pkg/` directory. Acquisition therefore creates one
+   dedicated cache-local fetch root containing only a minimal `build.zig`, runs
+   `zig fetch --global-cache-dir <cache>/zig-global` from that root once for
+   each of the five declared Zig URLs, and requires each returned content hash
+   to equal the manifest. The resulting
+   `<cache>/zig-fetch-root/zig-pkg/<hash>` directories are the only Zig package
+   inputs admitted to compilation; the global cache is not treated as the
+   unpacked package authority.
 3. Compilation is invoked only through a wrapper which creates a fresh network
    namespace. The inner build verifies that its network namespace differs from
    the caller's and has no interface other than a down loopback device. Failure
    to create or verify the namespace is fatal. Every Meson setup uses
-   `--wrap-mode=nofallback`; River uses `zig build --system <cache>/p`, whose
-   upstream contract disables network access.
+   `--wrap-mode=nofallback`; River uses
+   `zig build --system <cache>/zig-fetch-root/zig-pkg`, whose upstream contract
+   disables network access.
 4. Builds install into one new private prefix with `bin/`, `lib/`, `include/`
    and `share/`. `PATH` and `PKG_CONFIG_PATH` put that prefix ahead of Noble for
    all later builds. The order is:
@@ -132,7 +138,8 @@ The private source set is required because Noble remains below these floors:
 7. River installs with:
 
    ```text
-   zig build --system <cache>/p -Doptimize=ReleaseSafe -Dcpu=baseline \
+   zig build --system <cache>/zig-fetch-root/zig-pkg \
+     -Doptimize=ReleaseSafe -Dcpu=baseline \
      -Dxwayland -Dman-pages=false --prefix <private-prefix> install
    ```
 

@@ -110,7 +110,7 @@ if [[ ! -x "$zig" ]]; then
 fi
 (
     cd "$river_source"
-    "$zig" build --system "$cache/zig-cache/p" \
+    "$zig" build --system "$cache/zig-fetch-root/zig-pkg" \
         -Doptimize=ReleaseSafe -Dcpu=baseline -Dxwayland -Dman-pages=false \
         --prefix "$prefix" install
 )

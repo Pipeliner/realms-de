@@ -17,7 +17,8 @@ if [[ -e "$cache" ]]; then
 fi
 
 "$checker" --repo-root "$repo_root" "$manifest"
-mkdir -p "$cache/archives" "$cache/tools" "$cache/zig-cache"
+mkdir -p "$cache/archives" "$cache/tools" "$cache/zig-global" \
+    "$cache/zig-fetch-root"
 
 while IFS=$'\t' read -r name filename url digest; do
     destination="$cache/archives/$filename"
@@ -35,15 +36,22 @@ if [[ ! -x "$zig" ]]; then
     echo "closure acquisition: selected Zig executable is absent" >&2
     exit 1
 fi
+printf '%s\n' \
+    'const std = @import("std");' \
+    'pub fn build(_: *std.Build) void {}' \
+    >"$cache/zig-fetch-root/build.zig"
 
 while IFS=$'\t' read -r name url content_hash; do
     echo "zig fetch: $name $url"
-    fetched_hash=$("$zig" fetch --global-cache-dir "$cache/zig-cache" "$url")
+    fetched_hash=$(
+        cd "$cache/zig-fetch-root"
+        "$zig" fetch --global-cache-dir "$cache/zig-global" "$url"
+    )
     if [[ "$fetched_hash" != "$content_hash" ]]; then
         echo "closure acquisition: Zig hash mismatch for $name" >&2
         exit 1
     fi
-    if [[ ! -d "$cache/zig-cache/p/$content_hash" ]]; then
+    if [[ ! -d "$cache/zig-fetch-root/zig-pkg/$content_hash" ]]; then
         echo "closure acquisition: Zig package cache is absent for $name" >&2
         exit 1
     fi
