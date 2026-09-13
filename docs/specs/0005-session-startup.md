@@ -508,18 +508,16 @@ that it works.
   the interface signature and should be confirmed once in the VM test rather
   than trusted from here.*
 - The installed VM fixture subscribes to `Request.Response` on the
-  token-derived path before issuing `OpenFile`. A successful Close ends the
-  interaction and emits no Response. The front portal may return the handle
-  before its backend has exported the corresponding implementation request; if
-  the first Close returns `UnknownMethod` while the front request still
-  introspects as the exact Request interface, the fixture retries Close only
-  within the same bounded close deadline. If a Response already ended the
-  interaction and removed the front Request before Close, only an observed
-  Response on that exact path with success or user-cancel status satisfies the
-  fixture; `UnknownMethod` without either a still-exported exact front Request
-  or that completed Response, and the portal's catch-all failure status, do
-  not. This is an A13a VM-fixture refinement, not an additional `realmctl
-  doctor` obligation; A13 remains authoritative for the on-demand command.
+  token-derived path before issuing `OpenFile`. After the exact request handle
+  returns within two seconds, the helper atomically publishes that handle and
+  elapsed time in a VM-only readiness marker while retaining the same D-Bus
+  connection. The driver then requires the chooser to be both a managed River
+  window and visibly rendered, sends Escape through River, and requires the
+  exact request path to emit user-cancel response code 1 within the existing
+  finite VM state/UI deadlines. A missing, success, or catch-all failure
+  response does not satisfy the fixture. This is an A13a VM-fixture refinement,
+  not an additional `realmctl doctor` obligation: A13 and the on-demand command
+  retain their separate `Request.Close` probe.
 - Settings: the installed VM calls `org.freedesktop.portal.Settings.ReadAll`
   and requires its typed result rather than treating interface introspection as
   a reply. This is an A13a fixture obligation, not a new `realmctl doctor`
@@ -730,7 +728,7 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A11 | Given a stale window manager already holding river's window-management global, when `realm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed; it names the holding process only if an independent observation identifies it, otherwise it states that the holder identity is unavailable | VM | |
 | A12 | Given a running session, when `realm-bar` is killed, then it is restarted, and `realm-session.target` and `realm-wm.service` both stay `active` throughout | VM | |
 | A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the effective configuration and installed `.portal` metadata name the required backends without claiming the running portal disclosed its selected backend identity | VM | |
-| A13a | Given the installed graphical VM with its test-only noninteractive output chooser and per-user PipeWire service, when the pre-VM packaged-helper import check loads Gio, GStreamer, and GstApp and one persistent portal client subscribes on the exact token-derived FileChooser request path before `OpenFile`, closes the returned live request (retrying a backend-establishment `UnknownMethod` only while the exact front Request still introspects live and within the bounded close deadline) or verifies its already-observed success/user-cancel Response, reads `Settings.ReadAll`, completes the ScreenCast request/session sequence, and opens the restricted PipeWire remote, then the FileChooser handle arrives within 2 s, an unproven `UnknownMethod` or catch-all failure response is rejected, the Settings reply has its specified map type, one nonempty video buffer is consumed from the returned node, and the uploaded VM evidence retains the FileChooser completion plus the node id, mapped byte count, dimensions, and digest in `portal-roundtrip.json`; this does not satisfy A15 | VM | `packaging/nix/test_portal_vm_helper.py` — `import-only`, `filechooser-response-close-race`, `filechooser-backend-establishment-race`; `packaging/nix/test-root-flake-ci.sh` — `portal-helper-imports`, `portal-evidence-upload` |
+| A13a | Given the installed graphical VM with its test-only noninteractive ScreenCast chooser and per-user PipeWire service, when the pre-VM packaged-helper import check loads Gio, GStreamer, and GstApp and one persistent portal client subscribes on the exact token-derived FileChooser request path before `OpenFile`, publishes a VM-only readiness marker only after that exact handle returns within 2 s, and keeps waiting while the driver observes the actual managed and rendered chooser and sends Escape through River, then the exact request emits user-cancel response code 1 within the finite VM state/UI deadlines; the same client reads `Settings.ReadAll`, completes the ScreenCast request/session sequence, and opens the restricted PipeWire remote; a missing, success, or catch-all FileChooser response is rejected, the Settings reply has its specified map type, one nonempty video buffer is consumed from the returned node, and the uploaded VM evidence retains the FileChooser response plus the node id, mapped byte count, dimensions, and digest in `portal-roundtrip.json`; this does not replace A13's separate `realmctl doctor --portal-roundtrip` Close probe and does not satisfy A15 | VM | `packaging/nix/test_portal_vm_helper.py` — `import-only`, `filechooser-rendered-cancel-response`; `packaging/nix/test-root-flake-ci.sh` — `portal-helper-imports`, `portal-evidence-upload` |
 | A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
 | A16 | Given a real laptop, when the lid is closed, then the session locks within the configured delay and the screen is blank on reopen until authentication | **HARDWARE** *(blocked on OQ-1)* | |

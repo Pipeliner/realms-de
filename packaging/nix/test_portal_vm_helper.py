@@ -1,4 +1,7 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from portal_vm_helper import (
@@ -126,12 +129,8 @@ class PortalVmHelperContract(unittest.TestCase):
                 "realm_create",
             )
 
-    def test_filechooser_response_close_race_needs_exact_completed_response(self):
+    def test_filechooser_marks_valid_handle_then_requires_user_cancel_response(self):
         expected = request_path(":1.42", "realm_file")
-
-        class Reply:
-            def unpack(self):
-                return (expected,)
 
         class Child:
             def __init__(self, value):
@@ -150,21 +149,10 @@ class PortalVmHelperContract(unittest.TestCase):
             def get_child_value(self, index):
                 return Child(self.code if index == 0 else {})
 
-        class RemoteError(Exception):
-            remote_name = "org.freedesktop.DBus.Error.UnknownMethod"
-
         class Connection:
-            def __init__(
-                self,
-                response_code,
-                *,
-                front_request_exported=False,
-                close_succeeds_after=None,
-            ):
+            def __init__(self, response_code, returned_path=expected):
                 self.response_code = response_code
-                self.front_request_exported = front_request_exported
-                self.close_succeeds_after = close_succeeds_after
-                self.close_attempts = 0
+                self.returned_path = returned_path
                 self.callback = None
                 self.unsubscribed = None
 
@@ -180,32 +168,24 @@ class PortalVmHelperContract(unittest.TestCase):
 
             def call_sync(self, _bus, path, _interface, method, *_args):
                 if method == "OpenFile":
-                    return Reply()
-                if method == "Introspect" and self.front_request_exported:
-                    return mock.Mock(
-                        unpack=lambda: (
-                            f'<interface name="{REQUEST_INTERFACE}"></interface>',
-                        )
-                    )
+                    return mock.Mock(unpack=lambda: (self.returned_path,))
                 if method == "Close":
-                    self.close_attempts += 1
-                    if (
-                        self.close_succeeds_after is not None
-                        and self.close_attempts >= self.close_succeeds_after
-                    ):
-                        return mock.Mock()
-                self.assert_close_path = path
-                raise RemoteError("request already completed")
+                    raise AssertionError("the VM chooser must be cancelled through River")
+                raise AssertionError(f"unexpected method {method}")
 
         class Loop:
-            def __init__(self, connection):
+            def __init__(self, connection, ready_path):
                 self.connection = connection
-                self.quit_called = False
+                self.ready_path = ready_path
 
             def quit(self):
-                self.quit_called = True
+                pass
 
             def run(self):
+                if not self.ready_path.exists():
+                    raise AssertionError("response wait began before the readiness marker")
+                if self.connection.response_code == "raise":
+                    raise RuntimeError("response loop failed")
                 if self.connection.response_code is None:
                     GLib.timeout_callback()
                 else:
@@ -227,20 +207,25 @@ class PortalVmHelperContract(unittest.TestCase):
         class GLib:
             SOURCE_REMOVE = False
             connection = None
+            ready_path = None
             timeout_callback = None
+            expire_immediately = False
+            removed_sources = []
 
             @staticmethod
             def MainLoop():
-                return Loop(GLib.connection)
+                return Loop(GLib.connection, GLib.ready_path)
 
             @staticmethod
             def timeout_add(_timeout_ms, callback):
                 GLib.timeout_callback = callback
+                if GLib.expire_immediately:
+                    callback()
                 return 9
 
             @staticmethod
             def source_remove(_source):
-                pass
+                GLib.removed_sources.append(_source)
 
         GLib.VariantType = VariantType
 
@@ -250,49 +235,68 @@ class PortalVmHelperContract(unittest.TestCase):
         class DBusSignalFlags:
             NONE = 0
 
-        class DBusError:
-            @staticmethod
-            def get_remote_error(error):
-                return getattr(error, "remote_name", None)
-
         class Gio:
             pass
 
         Gio.DBusCallFlags = DBusCallFlags
         Gio.DBusSignalFlags = DBusSignalFlags
-        Gio.DBusError = DBusError
+        with tempfile.TemporaryDirectory() as directory:
+            ready_path = Path(directory) / "filechooser-ready.json"
+            GLib.ready_path = ready_path
 
-        connection = Connection(1)
-        GLib.connection = connection
-        portal = PortalClient(connection, Gio, GLib)
-        outcome = portal.filechooser_roundtrip(None, "realm_file")
-        self.assertEqual(outcome["completion"], "response")
-        self.assertEqual(outcome["response_code"], 1)
-        self.assertEqual(connection.assert_close_path, expected)
-        self.assertEqual(connection.unsubscribed, 7)
+            connection = Connection(1)
+            GLib.connection = connection
+            portal = PortalClient(connection, Gio, GLib)
+            outcome = portal.filechooser_roundtrip(
+                None, "realm_file", ready_path=ready_path
+            )
+            self.assertEqual(outcome["completion"], "response")
+            self.assertEqual(outcome["response_code"], 1)
+            self.assertEqual(connection.unsubscribed, 7)
+            self.assertEqual(
+                json.loads(ready_path.read_text(encoding="utf-8")),
+                {"elapsed_ms": 0, "handle": expected},
+            )
 
-        connection = Connection(
-            None,
-            front_request_exported=True,
-            close_succeeds_after=2,
-        )
-        GLib.connection = connection
-        portal = PortalClient(connection, Gio, GLib)
-        outcome = portal.filechooser_roundtrip(None, "realm_file")
-        self.assertEqual(outcome["completion"], "closed")
-        self.assertEqual(connection.close_attempts, 2)
-        self.assertEqual(connection.unsubscribed, 7)
+            for response_code, message in [
+                (None, "response exceeded 120000 ms"),
+                (0, "expected user-cancel response 1, got 0"),
+                (2, "expected user-cancel response 1, got 2"),
+            ]:
+                with self.subTest(response_code=response_code):
+                    ready_path.unlink(missing_ok=True)
+                    connection = Connection(response_code)
+                    GLib.connection = connection
+                    portal = PortalClient(connection, Gio, GLib)
+                    with self.assertRaisesRegex((RuntimeError, TimeoutError), message):
+                        portal.filechooser_roundtrip(
+                            None, "realm_file", ready_path=ready_path
+                        )
 
-        for response_code, message in [
-            (None, "without an exact Response"),
-            (2, "failure response 2"),
-        ]:
-            with self.subTest(response_code=response_code):
-                connection = Connection(response_code)
-                GLib.connection = connection
-                portal = PortalClient(connection, Gio, GLib)
-                with self.assertRaisesRegex(RuntimeError, message):
-                    portal.filechooser_roundtrip(None, "realm_file")
+            ready_path.unlink(missing_ok=True)
+            GLib.expire_immediately = True
+            connection = Connection(None)
+            GLib.connection = connection
+            portal = PortalClient(connection, Gio, GLib)
+            with self.assertRaisesRegex(TimeoutError, "response exceeded 120000 ms"):
+                portal.filechooser_roundtrip(None, "realm_file", ready_path=ready_path)
+            GLib.expire_immediately = False
+
+            ready_path.unlink(missing_ok=True)
+            connection = Connection("raise")
+            GLib.connection = connection
+            portal = PortalClient(connection, Gio, GLib)
+            with self.assertRaisesRegex(RuntimeError, "response loop failed"):
+                portal.filechooser_roundtrip(None, "realm_file", ready_path=ready_path)
+            self.assertEqual(GLib.removed_sources[-1], 9)
+
+            ready_path.unlink(missing_ok=True)
+            connection = Connection(1, returned_path=expected + "_wrong")
+            GLib.connection = connection
+            portal = PortalClient(connection, Gio, GLib)
+            with self.assertRaisesRegex(RuntimeError, "expected"):
+                portal.filechooser_roundtrip(None, "realm_file", ready_path=ready_path)
+            self.assertFalse(ready_path.exists())
 
 
 if __name__ == "__main__":

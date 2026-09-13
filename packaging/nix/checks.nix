@@ -429,34 +429,81 @@ EOF
       ).strip()
       assert imported_wayland == daemon_wayland and imported_wayland
 
+      # Use the library client itself. The initial state proves Hello and
+      # GetState reached the production server; no realmctl command is added.
+      initial_raw, initial = control("state")
+      assert initial["reply"] == "state", initial
+      assert initial["data"]["whichkey"] is True, initial
+      assert sum(cell["windows"] for cell in initial["data"]["orbits"]) == 0, initial
+      write_artifact("control-get-state.json", initial_raw)
+
       # Exercise the actual installed proxy, GTK and wlr backends, and the
       # per-user PipeWire graph. The helper retains one D-Bus connection so the
-      # request/session handles remain owned by the same caller. Receiving a
-      # node id is not enough: it maps and hashes one nonempty video buffer from
-      # the restricted FD returned by OpenPipeWireRemote.
+      # request/session handles remain owned by the same caller. The driver
+      # waits for a validated request marker, observes the real GTK chooser as
+      # a managed and rendered River window, and cancels it with a real key.
+      # Receiving a ScreenCast node id is not enough: the helper maps and hashes
+      # one nonempty video buffer from the restricted PipeWire FD.
+      portal_ready_path = "/tmp/realm-portal-filechooser-ready.json"
+      portal_output_path = "/tmp/realm-portal-roundtrip.json"
+      portal_error_path = "/tmp/realm-portal-roundtrip.stderr"
+      portal_status_path = "/tmp/realm-portal-roundtrip.status"
       try:
           machine.wait_until_succeeds(
               "systemctl --user --machine=alice@ is-active --quiet pipewire.socket",
               timeout=STATE_TIMEOUT,
           )
-          portal_raw = machine.succeed(
-              shlex.join([
-                  "sudo",
-                  "-u",
-                  "alice",
-                  "env",
-                  "XDG_RUNTIME_DIR=/run/user/1000",
-                  "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
-                  f"WAYLAND_DISPLAY={imported_wayland}",
-                  "realm-portal-vm",
-              ]),
-              timeout=STATE_TIMEOUT,
+          portal_command = shlex.join([
+              "sudo",
+              "-u",
+              "alice",
+              "env",
+              "XDG_RUNTIME_DIR=/run/user/1000",
+              "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+              f"WAYLAND_DISPLAY={imported_wayland}",
+              f"REALM_PORTAL_FILECHOOSER_READY={portal_ready_path}",
+              "realm-portal-vm",
+          ])
+          machine.succeed(
+              f"({portal_command} > {portal_output_path} "
+              f"2> {portal_error_path}; printf '%s\\n' $? > {portal_status_path}) &"
           )
+          machine.wait_until_succeeds(
+              f"test -s {portal_ready_path}", timeout=STATE_TIMEOUT
+          )
+          portal_ready = json.loads(machine.succeed(f"cat {portal_ready_path}"))
+          assert portal_ready["elapsed_ms"] <= 2000, portal_ready
+          assert portal_ready["handle"].endswith("/realm_file"), portal_ready
+
+          _chooser_raw, chooser_state = wait_for_state(
+              lambda response: sum(
+                  cell["windows"] for cell in response["data"]["orbits"]
+              ) == 1,
+              "managed portal file chooser",
+          )
+          assert chooser_state["reply"] == "state", chooser_state
+          machine.wait_for_text("Realm portal VM", timeout=OCR_TIMEOUT)
+          machine.send_key("esc")
+          wait_for_state(
+              lambda response: sum(
+                  cell["windows"] for cell in response["data"]["orbits"]
+              ) == 0,
+              "portal file chooser close after Escape",
+          )
+
+          machine.wait_until_succeeds(
+              f"test -s {portal_status_path}", timeout=OCR_TIMEOUT
+          )
+          portal_status = machine.succeed(f"cat {portal_status_path}").strip()
+          assert portal_status == "0", (
+              portal_status,
+              machine.succeed(f"cat {portal_error_path}"),
+          )
+          portal_raw = machine.succeed(f"cat {portal_output_path}")
           portal = json.loads(portal_raw)
           assert portal["filechooser"]["elapsed_ms"] <= 2000, portal
-          assert portal["filechooser"]["completion"] in {"closed", "response"}, portal
-          if portal["filechooser"]["completion"] == "response":
-              assert portal["filechooser"]["response_code"] in {0, 1}, portal
+          assert portal["filechooser"]["completion"] == "response", portal
+          assert portal["filechooser"]["response_code"] == 1, portal
           assert portal["settings"]["reply_type"] == "(a{sa{sv}})", portal
           assert portal["screencast"]["node_id"] > 0, portal
           assert portal["screencast"]["buffer_bytes"] > 0, portal
@@ -467,16 +514,12 @@ EOF
               "systemctl --user --machine=alice@ is-active --quiet pipewire.service"
           )
       except Exception:
+          for path in [portal_ready_path, portal_status_path, portal_error_path]:
+              status, output = machine.execute(f"cat {path}")
+              machine.log(f"portal helper {path} (exit {status}):\n{output}")
           log_portal_diagnostics()
           raise
       write_artifact("portal-roundtrip.json", portal_raw)
-
-      # Use the library client itself. The initial state proves Hello and
-      # GetState reached the production server; no realmctl command is added.
-      initial_raw, initial = control("state")
-      assert initial["reply"] == "state", initial
-      assert initial["data"]["whichkey"] is True, initial
-      write_artifact("control-get-state.json", initial_raw)
 
       modules_raw, modules = wait_for_state(
           lambda response: [
