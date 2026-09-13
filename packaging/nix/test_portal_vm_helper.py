@@ -246,7 +246,12 @@ class PortalVmHelperContract(unittest.TestCase):
 
             connection = Connection(1)
             GLib.connection = connection
-            portal = PortalClient(connection, Gio, GLib)
+            portal = PortalClient(
+                connection,
+                Gio,
+                GLib,
+                monotonic=mock.Mock(side_effect=[100.0, 100.004]),
+            )
             outcome = portal.filechooser_roundtrip(
                 None, "realm_file", ready_path=ready_path
             )
@@ -255,7 +260,7 @@ class PortalVmHelperContract(unittest.TestCase):
             self.assertEqual(connection.unsubscribed, 7)
             self.assertEqual(
                 json.loads(ready_path.read_text(encoding="utf-8")),
-                {"elapsed_ms": 0, "handle": expected},
+                {"elapsed_ms": 4, "handle": expected},
             )
 
             for response_code, message in [

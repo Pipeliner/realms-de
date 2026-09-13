@@ -64,10 +64,18 @@ def _deep_unpack(value: Any) -> Any:
 
 
 class PortalClient:
-    def __init__(self, connection: Any, gio: Any, glib: Any) -> None:
+    def __init__(
+        self,
+        connection: Any,
+        gio: Any,
+        glib: Any,
+        *,
+        monotonic: Any = time.monotonic,
+    ) -> None:
         self.connection = connection
         self.gio = gio
         self.glib = glib
+        self.monotonic = monotonic
         unique_name = connection.get_unique_name()
         if unique_name is None:
             raise RuntimeError("session bus connection has no unique name")
@@ -216,7 +224,7 @@ class PortalClient:
         )
 
         try:
-            started = time.monotonic()
+            started = self.monotonic()
             reply = self.call(
                 "org.freedesktop.portal.FileChooser",
                 "OpenFile",
@@ -224,7 +232,7 @@ class PortalClient:
                 "(o)",
                 timeout_ms=open_timeout_ms,
             )
-            elapsed_ms = round((time.monotonic() - started) * 1000)
+            elapsed_ms = round((self.monotonic() - started) * 1000)
             returned_path = reply.unpack()[0]
             if returned_path != expected_path or elapsed_ms > open_timeout_ms:
                 raise RuntimeError(
