@@ -28,7 +28,11 @@ fi
 started=$(date +%s)
 while :; do
   now=$(date +%s)
-  state=$(snapshot)
+  if ! state=$(snapshot 2>&1); then
+    printf '%s monitor query failed; retrying\n' "$(date -u +%FT%TZ)" >&2
+    sleep "$interval"
+    continue
+  fi
   printf '%s\n' "$state"
   if (( now - started >= max_seconds )); then
     exit 0
