@@ -159,7 +159,7 @@ jobs:
             "$RUNNER_TEMP/realm-river_0.4.8-1_amd64.deb" \
             "$RUNNER_TEMP/realm-native-artifacts/ubuntu/"
       - name: Upload exact Ubuntu native VM packages
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: realm-native-ubuntu-${{ github.sha }}
           if-no-files-found: error
@@ -239,7 +239,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/realm-native-artifacts/fedora"
           cp "$realm_rpm" "$RUNNER_TEMP/realm-native-artifacts/fedora/"
       - name: Upload exact Fedora native VM package
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: realm-native-fedora-${{ github.sha }}
           if-no-files-found: error
@@ -309,7 +309,7 @@ jobs:
             "$RUNNER_TEMP/realm-native-vm-evidence"
       - name: Upload native graphical-session evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: realm-native-session-${{ matrix.target }}-${{ github.sha }}
           if-no-files-found: error
@@ -438,7 +438,7 @@ jobs:
 
       - name: Upload live Realm VM evidence
         if: steps.reference-build.outputs.vm_artifacts == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: realm-live-vm-${{ github.sha }}
           if-no-files-found: error
