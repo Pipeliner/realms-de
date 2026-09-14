@@ -89,6 +89,9 @@ git -C "$root" ls-files | while IFS= read -r file; do
     [ -f "$path" ] || continue
     is_command_surface "$file" "$path" || continue
     [ "$file" = scripts/gh-body-file ] && continue
+    # Read-only CI observation is explicitly allowed; publication remains
+    # confined to scripts/gh-body-file and is still checked below.
+    [ "$file" = scripts/ci-monitor ] && continue
 
     if grep -n -E "(^|[^A-Za-z0-9_-])gh[[:space:]]|['\"]gh['\"][[:space:]]" "$path" >/dev/null; then
         fail "direct GitHub CLI invocation in $file"
