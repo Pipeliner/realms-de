@@ -118,15 +118,20 @@ generated from the same `palette.toml` (ADR 0005).
 
 **8. Ship an idle and lock unit.**
 
-An idle daemon and a lock screen, started as part of the session, wired to
-lid-close and to `loginctl lock-session`. A laptop that closes its lid and stays
-unlocked is a security failure, not a missing feature.
+An idle daemon and a lock screen are started as part of the session and wired
+to `loginctl lock-session` and logind's before-sleep path. The host's logind
+policy remains authoritative for the lid switch: Realm neither forces suspend
+nor adds an independent lid listener. When that host policy decides to suspend
+for a lid close or any other reason, Realm must acquire the documented delay
+path and complete `swaylock -f` readiness before allowing suspend to proceed.
+If the host policy ignores a lid close, Realm does not reinterpret it.
 
 The locker **must** be an `ext-session-lock-v1` client, never a layer-shell
 overlay: under [ADR 0013](0013-river-window-management-backend.md) an overlay
 locker would depend on `realm-session` serving layer shell, so a crash in realm
-would expose the desktop. Which client we ship is still open; see *Needs a
-human*. The idle daemon may be any `ext-idle-notify-v1` client.
+would expose the desktop. Realm selects the distro-native PAM build of
+**swaylock**, version 1.7 or newer, and **swayidle** as the idle client. The idle
+blank and lock timeouts remain the user-visible decision below.
 
 **9. `realmctl doctor` verifies every one of the above.**
 
@@ -205,11 +210,22 @@ is not reversible: it is imposed by how D-Bus activation works.
 - *Planned (M3):* a consistency test asserting the variable list in the session
   entry matches the list the doctor checks.
 
-## Needs a human
+## Locker selection and remaining needs-human policy
 
-**Which lock screen does realm ship?** This is a security default and remains a
-human's call. What follows corrects two premises this section originally got
-wrong, so that the choice is at least between accurate options.
+**Realm ships swaylock.** This technical selection is accepted for M3. The
+supported Ubuntu 24.04 package is 1.7.2, Fedora 44 supplies 1.8.5, and locked
+nixpkgs supplies 1.8.6; all satisfy the first swaylock release line that carries
+`staging/ext-session-lock/ext-session-lock-v1.xml`. The tagged 1.7.2 build
+selects PAM when available and installs the `swaylock` PAM service. NixOS does
+not enable Sway's module, so Realm must explicitly declare
+`security.pam.services.swaylock = {}` beside the package. A build without PAM
+is not a supported Realm locker.
+
+This choice reuses maintained native packages on every supported distribution,
+adds no private compiler or library closure, and follows swayidle's documented
+`-w` plus `swaylock -f` readiness pairing. It gives up gtklock's Realm-shaped
+surface and waylock's smaller implementation, but neither trade justifies a
+new retained package path for the MVP.
 
 ### What is settled
 
@@ -222,9 +238,9 @@ would expose the desktop. Under `ext-session-lock-v1` the compositor keeps the
 session locked even if the locker dies. Any overlay-based locker is therefore
 out.
 
-That argument rules options in and out; it does not choose between the two
-remaining candidates, because **both are true `ext-session-lock-v1` clients** —
-waylock directly, gtklock via the `gtk-session-lock-0` library.
+That argument rules options in and out. Swaylock is also a true
+`ext-session-lock-v1` client, so selecting it does not weaken the compositor-
+owned locked state.
 
 ### Two corrections
 
@@ -242,7 +258,7 @@ waylock directly, gtklock via the `gtk-session-lock-0` library.
   and Nix retain their ADR 0010/0013 source decisions, so the objection remains
   removed there. This correction does not choose a locker.
 
-### The two candidates
+### Alternatives retained for reversal
 
 | | `waylock` | `gtklock` |
 |---|---|---|
@@ -256,7 +272,7 @@ waylock directly, gtklock via the `gtk-session-lock-0` library.
 Writing our own (`realm-ward`) stays out of scope: getting a lock screen wrong is
 the worst class of bug in a desktop. Not before M6, if ever.
 
-### The disagreement, and where I come down
+### Prior disagreement
 
 `docs/specs/0005-session-startup.md` recommends **gtklock**;
 `docs/integration/session-services.md` recommends **waylock**. Both are working
@@ -280,14 +296,22 @@ repeated regression, whereas a smaller attack surface is never *felt*. Someone
 who weights the daily experience over the tail risk should choose gtklock, and
 that is a defensible reading of the same facts.
 
-**Recommendation: `waylock`, with the fidelity loss documented in ADR 0005's
-limits table.** A human should confirm they accept that trade.
+The M3 decision above supersedes the prior waylock recommendation and SPEC
+0005's gtklock recommendation. Either remains a reversible later choice, but
+neither blocks the distro-native swaylock path.
 
-### Idle policy
+### Idle and suspend policy
+
+The lid boundary is resolved: Realm follows host lid policy and does not add a
+second lid-switch policy. Whenever logind is about to suspend, including a
+suspend selected by that host lid policy, Realm locks before suspend completes.
+On resume the compositor-owned lock remains until authentication. This decision
+does not choose whether a particular host suspends, docks, or ignores a closed
+lid.
 
 The accepted idle defaults are: dim after 5 minutes of inactivity and lock/
 blank after 10 minutes. These defaults are independent of the host lid policy;
-host-initiated suspend follows the lock-before-suspend path.
+host-initiated suspend still follows the lock-before-suspend path above.
 
 The dependency SPEC 0005 could not confirm is now **resolved**: river does
 implement `ext-idle-notify-v1`. `river/InputManager.zig` creates a

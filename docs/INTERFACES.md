@@ -579,6 +579,10 @@ pub trait WmBackend: Send {
     /// Return queued-work and conditional read/write interest without side effects.
     fn poll_interest(&self) -> BackendPollInterest;
 
+    /// Report whether backend-observed lock state immediately suspends Realm
+    /// binding input, including repeat, before its public policy boundary.
+    fn binding_input_suspended(&self) -> bool;
+
     /// Perform one bounded nonblocking protocol quantum and expose at most one event.
     fn service(
         &mut self,
@@ -827,6 +831,13 @@ immediate fatal backend-incarnation error and is never translated into ordinary
 readable readiness. `POLLIN`, `POLLERR`, and `POLLHUP` map separately into
 `BackendReady::readable` and `BackendReady::terminal` so a live prepared guard
 is consumed and post-cutoff payload cannot masquerade as terminal completion.
+`binding_input_suspended()` is a read-only, infallible private-state snapshot.
+River changes it to true as soon as bounded dispatch observes
+`session_locked`, before the required later `manage_start`, and keeps it true
+until `session_unlocked` reaches its policy boundary. The outer runtime checks
+it after backend service and before repeat service, immediately disarms the
+timer, and consumes any retained ready expiry without calling Session. It is
+not a public lock event, Session mode, or response-state authority.
 Under [ADR 0021](adr/0021-bounded-wayland-ingress-and-dispatch.md),
 one `service` invocation selects exactly one phase: dequeue one normalized
 public event, dispatch at most one queued protocol event, admit one bounded

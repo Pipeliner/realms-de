@@ -20,7 +20,8 @@ use crate::consumer::FixedConsumer;
 use crate::modules::{ClockModule, ModuleSampler, ModuleSnapshot};
 use crate::persistence::{PersistCompletion, PersistCompletionError, PersistenceCoordinator};
 use crate::session::{
-    QuitAfter, Session, SessionActionError, SessionEffect, SessionEventError, SessionUpdate,
+    QuitAfter, RepeatTimerDirective, Session, SessionActionError, SessionEffect, SessionEventError,
+    SessionUpdate,
 };
 use crate::timers::SessionTimers;
 use crate::turn::{backend_turn, BackendTurn};
@@ -308,7 +309,11 @@ impl<B: WmBackend> RuntimeOwners<B> {
         ) {
             return Ok(false);
         }
-        match backend_turn(&mut self.session, ready, now)? {
+        let turn = backend_turn(&mut self.session, ready, now)?;
+        if self.session.backend_binding_input_suspended() {
+            self.timers.apply_repeat(&RepeatTimerDirective::Disarm)?;
+        }
+        match turn {
             BackendTurn::Idle | BackendTurn::Progressed => Ok(false),
             BackendTurn::Updated(update) => {
                 self.handle_session_update(now, update)?;
@@ -595,7 +600,12 @@ impl<B: WmBackend> RuntimeOwners<B> {
 
     /// Consume one coalesced repeat expiry.
     pub fn service_repeat(&mut self, now: Instant) -> Result<(), RuntimeError> {
-        if self.timers.consume_repeat()? {
+        let expired = self.timers.consume_repeat()?;
+        if self.session.backend_binding_input_suspended() {
+            self.timers.apply_repeat(&RepeatTimerDirective::Disarm)?;
+            return Ok(());
+        }
+        if expired {
             let update = self.session.fire_key_repeat()?;
             self.handle_session_update(now, update)?;
         }
@@ -1284,8 +1294,11 @@ mod tests {
     use realm_core::layout::Workarea;
     use realm_core::ledger::Dir;
     use realm_core::WinId;
+    use rustix::time::timerfd_gettime;
 
-    use super::{dispatch_request, run_daemon_with, ClockRuntime, RequestDispatch};
+    use super::{
+        dispatch_request, run_daemon_with, ClockRuntime, RepeatTimerDirective, RequestDispatch,
+    };
     use crate::backend::{
         BackendBindingSpec, BackendConnection, BackendContractError, BackendEvent,
         BackendExitPolicy, BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn,
@@ -1298,11 +1311,26 @@ mod tests {
     use crate::timers::SessionTimers;
     use crate::worker::Worker;
 
-    struct FakeBackend(File);
+    struct FakeBackend {
+        event_fd: File,
+        suspend_on_service: bool,
+        input_suspended: bool,
+    }
 
     impl FakeBackend {
         fn new() -> Self {
-            Self(File::open("/dev/null").unwrap())
+            Self {
+                event_fd: File::open("/dev/null").unwrap(),
+                suspend_on_service: false,
+                input_suspended: false,
+            }
+        }
+
+        fn locking() -> Self {
+            Self {
+                suspend_on_service: true,
+                ..Self::new()
+            }
         }
     }
 
@@ -1359,15 +1387,19 @@ mod tests {
         }
 
         fn event_fd(&self) -> BorrowedFd<'_> {
-            self.0.as_fd()
+            self.event_fd.as_fd()
         }
 
         fn poll_interest(&self) -> BackendPollInterest {
             BackendPollInterest {
-                immediate: false,
+                immediate: self.suspend_on_service,
                 readable: true,
                 writable: false,
             }
+        }
+
+        fn binding_input_suspended(&self) -> bool {
+            self.input_suspended
         }
 
         fn service(
@@ -1375,12 +1407,19 @@ mod tests {
             _ready: BackendReady,
             _now: Instant,
         ) -> BackendResult<Option<BackendEvent>> {
+            if self.suspend_on_service {
+                self.input_suspended = true;
+            }
             Ok(None)
         }
     }
 
     fn live_session() -> Session<FakeBackend> {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        live_session_with(FakeBackend::new())
+    }
+
+    fn live_session_with(backend: FakeBackend) -> Session<FakeBackend> {
+        let mut session = Session::connect(backend).unwrap();
         session
             .handle_backend_event(BackendEvent::PolicyTurn(BackendPolicyTurn {
                 id: BackendPolicyTurnId::new(1).unwrap(),
@@ -1832,6 +1871,69 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("retained backend immediate interest starved shutdown")
             .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn backend_observed_lock_disarms_repeat_before_delayed_policy_boundary() {
+        let root = endpoint_fixture_dir("lock-repeat-gap");
+        let runtime = test_runtime_dir(&root).unwrap();
+        let snapshot_path = runtime.path().join("realm/ledger.json");
+        let bound = runtime.prepare_server_endpoint().unwrap().bind().unwrap();
+        let worker = Worker::start(snapshot_path).unwrap();
+        let mut session = live_session_with(FakeBackend::locking());
+        let focus = session
+            .keymap()
+            .bindings
+            .iter()
+            .position(|binding| binding.key == "j")
+            .and_then(|index| crate::backend::BackendBindingId::new(index as u32 + 1))
+            .expect("default repeatable focus binding");
+        let armed = session
+            .handle_backend_event(BackendEvent::PolicyTurn(BackendPolicyTurn {
+                id: BackendPolicyTurnId::new(3).unwrap(),
+                drains: None,
+                events: vec![BackendPolicyEvent::BindingPressed(focus)],
+            }))
+            .unwrap();
+        let persistence = PersistenceCoordinator::new(None);
+        let control = bound.activate().unwrap().into_server(Instant::now());
+        let timers = SessionTimers::new().unwrap();
+        let clock = ClockRuntime::utc();
+        let sampler = ModuleSampler::fixture().unwrap();
+        let mut owners = super::RuntimeOwners::new(
+            session,
+            control,
+            worker,
+            timers,
+            clock,
+            sampler,
+            persistence,
+            Instant::now(),
+        );
+        owners.handle_session_update(Instant::now(), armed).unwrap();
+        let before = timerfd_gettime(owners.timers.repeat_fd()).unwrap();
+        assert!(before.it_value.tv_sec != 0 || before.it_value.tv_nsec != 0);
+        owners
+            .timers
+            .apply_repeat(&RepeatTimerDirective::Arm {
+                delay: Duration::from_millis(1),
+                interval: Duration::from_millis(40),
+            })
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(3));
+
+        owners
+            .service_backend(Instant::now(), super::NOT_READY)
+            .unwrap();
+
+        assert!(owners.session.backend_binding_input_suspended());
+        let after = timerfd_gettime(owners.timers.repeat_fd()).unwrap();
+        assert_eq!(after.it_value.tv_sec, 0);
+        assert_eq!(after.it_value.tv_nsec, 0);
+        owners.service_repeat(Instant::now()).unwrap();
+        assert!(!owners.session.has_active_backend_transaction());
+        assert!(!owners.timers.consume_repeat().unwrap());
         fs::remove_dir_all(root).unwrap();
     }
 
