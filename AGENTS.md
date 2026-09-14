@@ -16,6 +16,7 @@ the same change whenever a contract changes.
 ## Repository operations
 
 - Run `gh` outside the sandbox.
+- When sandboxing is suspected to explain a diagnostic failure, hang, or inaccessible dependency, rerun the same read-only/diagnostic command in the unsandboxed execution context before treating it as a repository defect. This does not authorize local package builds or installation; packaging remains CI-only.
 - At every Symphony iteration, inspect and handle the complete open pull-request
   queue, including automated dependency PRs, before selecting the next issue.
 - Commit and push completed repository work unless the user explicitly says
