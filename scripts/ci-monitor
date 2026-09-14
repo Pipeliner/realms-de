@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Read-only monitor for the required main-branch GitHub workflow matrix.
+# Packaging and workflow mutation remain CI-only and are never performed here.
+
+interval=${CI_MONITOR_INTERVAL_SECONDS:-30}
+max_seconds=${CI_MONITOR_MAX_SECONDS:-1800}
+mode=once
+if [[ ${1:-} == "--watch" ]]; then
+  mode=watch
+fi
+
+repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+
+snapshot() {
+  gh run list --repo "$repo" --limit 30 --json databaseId,status,conclusion,name,headBranch,headSha,updatedAt |
+    jq -r '
+      .[] | select(.headBranch == "main" and (.name == "ci" or .name == "distro" or .name == "palette")) |
+      [.databaseId,.name,.status,(.conclusion // ""),.headSha,.updatedAt] | @tsv'
+}
+
+if [[ $mode == once ]]; then
+  snapshot
+  exit 0
+fi
+
+started=$(date +%s)
+while :; do
+  now=$(date +%s)
+  state=$(snapshot)
+  printf '%s\n' "$state"
+  if (( now - started >= max_seconds )); then
+    exit 0
+  fi
+  if ! printf '%s\n' "$state" | awk -F '\t' '$3 == "in_progress" || $3 == "queued" { active=1 } END { exit !active }'; then
+    exit 0
+  fi
+  sleep "$interval"
+done
