@@ -17,6 +17,17 @@ of independently verified manual locking and idle timers. Default MVP CI must
 retain manual lock, authentication, binding suppression and real idle timing
 checks while excluding the suspend roundtrip; retain its reproducer separately
 for explicit post-MVP execution. Do not claim laptop suspend protection.
+The retained Nix driver reproducer requires the explicit environment opt-in
+`REALM_POST_MVP_SUSPEND=1`; unset, empty or other values exclude only the
+suspend slice. Manual lock and real idle checks before that slice, and normal
+terminal/logout checks after it, remain mandatory. This opt-in is for a future
+explicit CI diagnostic invocation, not a new default flake-check gate; local
+packaging remains prohibited.
+On an explicitly selected CI runner, build the driver with
+`nix build .#checks.x86_64-linux.session-boots.driver`, then invoke
+`REALM_POST_MVP_SUSPEND=1 ./result/bin/nixos-test-driver`. This sets the
+environment on the driver process directly; setting it around `nix flake
+check` is not a supported opt-in because the build sandbox need not inherit it.
 
 Use distro-provided PAM-backed swaylock supporting ext-session-lock-v1
 (minimum 1.7) and systemd-enabled swayidle. NixOS explicitly enables swaylock's

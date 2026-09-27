@@ -25,6 +25,28 @@ source = textwrap.dedent(
     source[source.index("      import datetime"):source.rfind("    '';" )]
 )
 tree = ast.parse(source)
+gate = next((node for node in tree.body if isinstance(node, ast.If)
+             and isinstance(node.test, ast.Compare)
+             and ast.unparse(node.test) == "os.environ.get('REALM_POST_MVP_SUSPEND') == '1'"), None)
+assert gate is not None, 'default MVP still executes deferred suspend acceptance'
+for value, expected in ((None, []), ('', []), ('0', []), ('1', ['suspend'])):
+    namespace = {'os': SimpleNamespace(environ={} if value is None else
+                                      {'REALM_POST_MVP_SUSPEND': value}), 'observed': []}
+    inert_gate = ast.If(test=gate.test, body=ast.parse("observed.append('suspend')").body,
+                       orelse=[])
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[inert_gate], type_ignores=[])),
+                 '<real suspend opt-in>', 'exec'), namespace)
+    assert namespace['observed'] == expected
+gate_index = tree.body.index(gate)
+before = ast.unparse(ast.Module(body=tree.body[:gate_index], type_ignores=[]))
+after = ast.unparse(ast.Module(body=tree.body[gate_index + 1:], type_ignores=[]))
+assert "idle_results['stopped_without_live_idle'] = True" in before
+assert 'lock_results.append(' in before
+assert 'terminal_pid = wait_for_single_user_process' in after
+assert "control('quit')" in after
+assert 'arm_suspend_socket_timeouts' in ast.unparse(gate)
+# Existing helper and acceptance tests still exercise the retained opt-in body.
+tree.body[gate_index:gate_index + 1] = gate.body
 suspend_try = next(node for node in tree.body if isinstance(node, ast.Try)
                    and any(isinstance(handler.type, ast.Name) and handler.type.id == 'TimeoutError'
                            for handler in node.handlers))

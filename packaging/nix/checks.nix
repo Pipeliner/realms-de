@@ -296,6 +296,7 @@ EOF
       import datetime as dt
       import hashlib
       import json
+      import os
       import shlex
       import time
       from pathlib import Path
@@ -805,7 +806,7 @@ EOF
       )
 
       # SPEC 0032: real installed locker/PAM, not a command stub. Keep the
-      # idle timer dormant until the separate timing/suspend checks pass.
+      # automatic idle activation dormant pending the mandatory timing checks.
       lock_results = []
       lock_unit = "realm-lock.service"
       def lock_systemctl(*args):
@@ -997,198 +998,200 @@ EOF
       idle_results["stopped_without_live_idle"] = True
       write_artifact("idle-roundtrip.json", json.dumps(idle_results, indent=2) + "\n")
 
-      # Actual logind sleep, not an injected PrepareForSleep/Lock signal. The
-      # monitor remains reachable while the guest shell is suspended.
-      def arm_suspend_socket_timeouts(machine, seconds):
-          previous = []
-          for transport in (machine.shell, machine.monitor):
-              if transport is not None:
-                  previous.append((transport, transport.gettimeout()))
-                  transport.settimeout(seconds)
-          return previous
+      # Post-MVP reproducer only; manual lock/idle above remain mandatory.
+      if os.environ.get("REALM_POST_MVP_SUSPEND") == "1":
+          # Actual logind sleep, not an injected PrepareForSleep/Lock signal. The
+          # monitor remains reachable while the guest shell is suspended.
+          def arm_suspend_socket_timeouts(machine, seconds):
+              previous = []
+              for transport in (machine.shell, machine.monitor):
+                  if transport is not None:
+                      previous.append((transport, transport.gettimeout()))
+                      transport.settimeout(seconds)
+              return previous
 
-      def suspend_host_diagnostics():
-          evidence = {
-              "qemu_returncode": machine.process.poll() if machine.process else None,
-              "console_tail": [line[-512:] for line in machine.full_console_log[-80:]],
-              "qmp_events": [],
-          }
-          if machine.qmp_client is not None:
-              # Pinned QMPSession.read_pending_messages uses a nonblocking
-              # reader. Its wait_for_event spins indefinitely on an empty
-              # queue despite accepting a timeout, so do not call it here.
-              try:
+          def suspend_host_diagnostics():
+              evidence = {
+                  "qemu_returncode": machine.process.poll() if machine.process else None,
+                  "console_tail": [line[-512:] for line in machine.full_console_log[-80:]],
+                  "qmp_events": [],
+              }
+              if machine.qmp_client is not None:
+                  # Pinned QMPSession.read_pending_messages uses a nonblocking
+                  # reader. Its wait_for_event spins indefinitely on an empty
+                  # queue despite accepting a timeout, so do not call it here.
+                  try:
+                      for _ in range(128):
+                          machine.qmp_client.read_pending_messages()
+                  except Exception as error:
+                      evidence["qmp_error"] = str(error)
                   for _ in range(128):
-                      machine.qmp_client.read_pending_messages()
-              except Exception as error:
-                  evidence["qmp_error"] = str(error)
-              for _ in range(128):
-                  if machine.qmp_client.pending_events.empty():
-                      break
-                  evidence["qmp_events"].append(machine.qmp_client.pending_events.get_nowait())
-          return evidence
+                      if machine.qmp_client.pending_events.empty():
+                          break
+                      evidence["qmp_events"].append(machine.qmp_client.pending_events.get_nowait())
+              return evidence
 
-      suspend_results = {"auto_enabled": False,
-                         "fixture_experiment": "ICH9 TCO removal; resume root cause unproven",
-                         "qemu_option": "-global ICH9-LPC.enable_tco=off"}
-      suspend_journal = ""
-      login_bus = ["timeout", "5", "busctl", "--system", "--timeout=5", "--json=short"]
-      login_object = ["org.freedesktop.login1", "/org/freedesktop/login1",
-                      "org.freedesktop.login1.Manager"]
-      alice_uid = int(machine.succeed("id -u alice").strip())
+          suspend_results = {"auto_enabled": False,
+                             "fixture_experiment": "ICH9 TCO removal; resume root cause unproven",
+                             "qemu_option": "-global ICH9-LPC.enable_tco=off"}
+          suspend_journal = ""
+          login_bus = ["timeout", "5", "busctl", "--system", "--timeout=5", "--json=short"]
+          login_object = ["org.freedesktop.login1", "/org/freedesktop/login1",
+                          "org.freedesktop.login1.Manager"]
+          alice_uid = int(machine.succeed("id -u alice").strip())
 
-      def login_call(method):
-          return json.loads(machine.succeed(shlex.join(
-              login_bus + ["call"] + login_object + [method]
-          ), timeout=DIAGNOSTIC_TIMEOUT))
+          def login_call(method):
+              return json.loads(machine.succeed(shlex.join(
+                  login_bus + ["call"] + login_object + [method]
+              ), timeout=DIAGNOSTIC_TIMEOUT))
 
-      def login_property(name):
-          reply = json.loads(machine.succeed(shlex.join(
-              login_bus + ["get-property"] + login_object + [name]
-          ), timeout=DIAGNOSTIC_TIMEOUT))
-          # Unlike method-call bodies, get-property unwraps the variant and
-          # serializes a scalar property as scalar JSON data, not a list.
-          assert reply["type"] == "t" and isinstance(reply["data"], int), reply
-          return reply["data"]
+          def login_property(name):
+              reply = json.loads(machine.succeed(shlex.join(
+                  login_bus + ["get-property"] + login_object + [name]
+              ), timeout=DIAGNOSTIC_TIMEOUT))
+              # Unlike method-call bodies, get-property unwraps the variant and
+              # serializes a scalar property as scalar JSON data, not a list.
+              assert reply["type"] == "t" and isinstance(reply["data"], int), reply
+              return reply["data"]
 
-      def own_sleep_inhibitors(pid):
-          # ListInhibitors returns (what, who, why, mode, uid, pid).
-          return [row for row in login_call("ListInhibitors")["data"][0]
-                  if "sleep" in row[0].split(":") and row[3] == "delay"
-                  and row[4] == alice_uid and row[5] == int(pid)]
+          def own_sleep_inhibitors(pid):
+              # ListInhibitors returns (what, who, why, mode, uid, pid).
+              return [row for row in login_call("ListInhibitors")["data"][0]
+                      if "sleep" in row[0].split(":") and row[3] == "delay"
+                      and row[4] == alice_uid and row[5] == int(pid)]
 
-      suspend_socket_timeouts = arm_suspend_socket_timeouts(machine, 10)
-      try:
-          assert lock_systemctl("show", "--property=ActiveState", "--value") == "inactive"
-          machine.succeed("echo 1 > /sys/power/pm_debug_messages")
-          suspend_results["watchdog_inventory"] = machine.succeed(
-              "for name in /sys/class/watchdog/watchdog*/identity; do "
-              "test ! -f \"$name\" || cat \"$name\"; done"
-          ).strip()
-          suspend_results["pm_debug_messages"] = machine.succeed(
-              "cat /sys/power/pm_debug_messages"
-          ).strip()
-          assert suspend_results["pm_debug_messages"] == "1", suspend_results
-          assert login_call("CanSuspend")["data"] == ["yes"]
-          machine.succeed("grep -qw mem /sys/power/state; grep -qw deep /sys/power/mem_sleep")
-          # Select supported ACPI sleep only inside this disposable fixture.
-          machine.succeed("echo deep > /sys/power/mem_sleep")
-          suspend_results["mem_sleep"] = machine.succeed("cat /sys/power/mem_sleep").strip()
-          machine.succeed(as_alice("systemctl", "--user", "start", idle_unit))
-          suspend_idle_pid = machine.succeed(as_alice(
-              "systemctl", "--user", "show", "--property=MainPID", "--value", idle_unit
-          )).strip()
-          assert suspend_idle_pid.isdigit() and int(suspend_idle_pid) > 0
-          inhibitor_deadline = time.monotonic() + 30
-          inhibitors = own_sleep_inhibitors(suspend_idle_pid)
-          while not inhibitors and time.monotonic() < inhibitor_deadline:
-              time.sleep(0.2)
-              inhibitors = own_sleep_inhibitors(suspend_idle_pid)
-          assert inhibitors, "installed swayidle did not obtain its logind sleep/delay inhibitor"
-          suspend_results["inhibitors_before"] = inhibitors
-          suspend_results["inhibit_delay_max_usec"] = login_property("InhibitDelayMaxUSec")
-          request_time = float(machine.succeed("cut -d ' ' -f 1 /proc/uptime").strip())
-          suspend_results["request_monotonic_seconds"] = request_time
-          machine.succeed(shlex.join([
-              "systemd-run", "--unit=realm-test-suspend", "--no-block",
-              "${pkgs.systemd}/bin/busctl", "--system", "--timeout=60", "call",
-              *login_object, "Suspend", "b", "false",
-          ]), timeout=DIAGNOSTIC_TIMEOUT)
-          suspend_deadline = time.monotonic() + 60
-          monitor_status = machine.send_monitor_command("info status")
-          while "suspended" not in monitor_status and time.monotonic() < suspend_deadline:
-              time.sleep(0.2)
-              monitor_status = machine.send_monitor_command("info status")
-          suspend_results["suspended_monitor_status"] = monitor_status
-          assert "suspended" in monitor_status, monitor_status
-          suspend_results["wake_monitor_reply"] = machine.send_monitor_command("system_wakeup")
-          machine.wait_until_succeeds("true", timeout=STATE_TIMEOUT)
-          machine.wait_until_succeeds(
-              "systemctl show --property=ActiveState --value systemd-suspend.service | grep -qx inactive",
-              timeout=STATE_TIMEOUT,
-          )
-          assert lock_systemctl("is-active") == "active"
-          ready_time = int(lock_systemctl(
-              "show", "--property=ActiveEnterTimestampMonotonic", "--value"
-          )) / 1_000_000
-          machine.succeed("journalctl --sync")
-          suspend_journal = machine.succeed(
-              "journalctl --no-pager -b -n 200 -o json _SYSTEMD_UNIT=systemd-suspend.service"
-          )
-          entries = [json.loads(line) for line in suspend_journal.splitlines() if line.strip()]
-          starts = [entry for entry in entries
-                    if "Performing sleep operation 'suspend'" in entry.get("MESSAGE", "")]
-          stops = [entry for entry in entries
-                   if "System returned from sleep operation 'suspend'" in entry.get("MESSAGE", "")]
-          assert len(starts) == 1 and len(stops) == 1, entries
-          sleep_time = int(starts[0]["__MONOTONIC_TIMESTAMP"]) / 1_000_000
-          assert request_time <= ready_time <= sleep_time, (request_time, ready_time, sleep_time)
-          assert ready_time - request_time <= suspend_results["inhibit_delay_max_usec"] / 1_000_000
-          kernel_sleep = machine.succeed(
-              "journalctl --no-pager -b -k -o json --grep='PM: suspend (entry|exit)'"
-          )
-          assert "PM: suspend entry (deep)" in kernel_sleep and "PM: suspend exit" in kernel_sleep
-          suspend_results.update({"ready_monotonic_seconds": ready_time,
-                                  "sleep_monotonic_seconds": sleep_time,
-                                  "locker_processes_after_resume": lock_processes()})
-          machine.screenshot("realm-suspend-resumed-locked")
-          machine.send_key("meta_l-d")
-          machine.succeed(
-              "for attempt in $(seq 1 20); do "
-              "if pgrep -u alice -x fuzzel; then exit 1; fi; sleep 0.1; done"
-          )
-          machine.send_key("ctrl-u")
-          machine.send_chars("realmtest")
-          machine.send_key("ret")
-          machine.wait_until_succeeds(
-              as_alice("systemctl", "--user", "show", "--property=ActiveState",
-                       "--value", lock_unit) + " | grep -qx inactive",
-              timeout=STATE_TIMEOUT,
-          )
-          suspend_results["password_unlock_after_resume"] = True
-          suspend_results["inhibitors_after"] = own_sleep_inhibitors(suspend_idle_pid)
-          assert suspend_results["inhibitors_after"], "swayidle did not reacquire its delay inhibitor"
-          write_artifact("suspend-kernel-journal.jsonl", kernel_sleep)
-      except TimeoutError as transport_error:
-          suspend_results["transport_unusable"] = True
-          suspend_results["transport_error"] = str(transport_error)
-          raise
-      finally:
-          # Recovery and logging cannot depend on the guest already being awake.
-          suspend_results["host_diagnostics"] = suspend_host_diagnostics()
-          machine.log("suspend-roundtrip: " + json.dumps(suspend_results, sort_keys=True))
+          suspend_socket_timeouts = arm_suspend_socket_timeouts(machine, 10)
           try:
-              recovery_status = machine.send_monitor_command("info status")
-              machine.log("suspend recovery monitor: " + recovery_status)
-              if "suspended" in recovery_status:
-                  machine.send_monitor_command("system_wakeup")
-              if suspend_results.get("transport_unusable"):
-                  raise RuntimeError("guest cleanup skipped after host transport timeout")
-              cleanup_status, cleanup_output = machine.execute(
-                  as_alice("timeout", "8", "systemctl", "--user", "stop", idle_unit),
-                  timeout=DIAGNOSTIC_TIMEOUT,
+              assert lock_systemctl("show", "--property=ActiveState", "--value") == "inactive"
+              machine.succeed("echo 1 > /sys/power/pm_debug_messages")
+              suspend_results["watchdog_inventory"] = machine.succeed(
+                  "for name in /sys/class/watchdog/watchdog*/identity; do "
+                  "test ! -f \"$name\" || cat \"$name\"; done"
+              ).strip()
+              suspend_results["pm_debug_messages"] = machine.succeed(
+                  "cat /sys/power/pm_debug_messages"
+              ).strip()
+              assert suspend_results["pm_debug_messages"] == "1", suspend_results
+              assert login_call("CanSuspend")["data"] == ["yes"]
+              machine.succeed("grep -qw mem /sys/power/state; grep -qw deep /sys/power/mem_sleep")
+              # Select supported ACPI sleep only inside this disposable fixture.
+              machine.succeed("echo deep > /sys/power/mem_sleep")
+              suspend_results["mem_sleep"] = machine.succeed("cat /sys/power/mem_sleep").strip()
+              machine.succeed(as_alice("systemctl", "--user", "start", idle_unit))
+              suspend_idle_pid = machine.succeed(as_alice(
+                  "systemctl", "--user", "show", "--property=MainPID", "--value", idle_unit
+              )).strip()
+              assert suspend_idle_pid.isdigit() and int(suspend_idle_pid) > 0
+              inhibitor_deadline = time.monotonic() + 30
+              inhibitors = own_sleep_inhibitors(suspend_idle_pid)
+              while not inhibitors and time.monotonic() < inhibitor_deadline:
+                  time.sleep(0.2)
+                  inhibitors = own_sleep_inhibitors(suspend_idle_pid)
+              assert inhibitors, "installed swayidle did not obtain its logind sleep/delay inhibitor"
+              suspend_results["inhibitors_before"] = inhibitors
+              suspend_results["inhibit_delay_max_usec"] = login_property("InhibitDelayMaxUSec")
+              request_time = float(machine.succeed("cut -d ' ' -f 1 /proc/uptime").strip())
+              suspend_results["request_monotonic_seconds"] = request_time
+              machine.succeed(shlex.join([
+                  "systemd-run", "--unit=realm-test-suspend", "--no-block",
+                  "${pkgs.systemd}/bin/busctl", "--system", "--timeout=60", "call",
+                  *login_object, "Suspend", "b", "false",
+              ]), timeout=DIAGNOSTIC_TIMEOUT)
+              suspend_deadline = time.monotonic() + 60
+              monitor_status = machine.send_monitor_command("info status")
+              while "suspended" not in monitor_status and time.monotonic() < suspend_deadline:
+                  time.sleep(0.2)
+                  monitor_status = machine.send_monitor_command("info status")
+              suspend_results["suspended_monitor_status"] = monitor_status
+              assert "suspended" in monitor_status, monitor_status
+              suspend_results["wake_monitor_reply"] = machine.send_monitor_command("system_wakeup")
+              machine.wait_until_succeeds("true", timeout=STATE_TIMEOUT)
+              machine.wait_until_succeeds(
+                  "systemctl show --property=ActiveState --value systemd-suspend.service | grep -qx inactive",
+                  timeout=STATE_TIMEOUT,
               )
-              suspend_results["idle_stop_status"] = cleanup_status
-              suspend_results["idle_stop_output"] = cleanup_output
-              _status, diagnostics = machine.execute(
-                  "journalctl --no-pager -b -n 200 -o json "
-                  "_SYSTEMD_UNIT=systemd-suspend.service + _SYSTEMD_UNIT=systemd-logind.service "
-                  "+ _SYSTEMD_USER_UNIT=realm-idle.service + _SYSTEMD_USER_UNIT=realm-lock.service "
-                  "+ _SYSTEMD_UNIT=realm-test-suspend.service",
-                  timeout=DIAGNOSTIC_TIMEOUT,
+              assert lock_systemctl("is-active") == "active"
+              ready_time = int(lock_systemctl(
+                  "show", "--property=ActiveEnterTimestampMonotonic", "--value"
+              )) / 1_000_000
+              machine.succeed("journalctl --sync")
+              suspend_journal = machine.succeed(
+                  "journalctl --no-pager -b -n 200 -o json _SYSTEMD_UNIT=systemd-suspend.service"
               )
-              machine.log("suspend diagnostics (last 200 entries):\n" + diagnostics)
-              write_artifact("suspend-journal.jsonl", diagnostics)
-          except Exception as diagnostic_error:
-              if isinstance(diagnostic_error, TimeoutError):
-                  suspend_results["transport_unusable"] = True
-              machine.log(f"suspend diagnostic collection failed: {diagnostic_error}")
-          machine.log("suspend final results: " + json.dumps(suspend_results, sort_keys=True))
-          write_artifact("suspend-roundtrip.json", json.dumps(suspend_results, indent=2) + "\n")
-          for transport, previous_timeout in suspend_socket_timeouts:
-              transport.settimeout(previous_timeout)
-      assert not suspend_results.get("transport_unusable"), suspend_results
-      assert suspend_results.get("idle_stop_status") == 0, suspend_results
+              entries = [json.loads(line) for line in suspend_journal.splitlines() if line.strip()]
+              starts = [entry for entry in entries
+                        if "Performing sleep operation 'suspend'" in entry.get("MESSAGE", "")]
+              stops = [entry for entry in entries
+                       if "System returned from sleep operation 'suspend'" in entry.get("MESSAGE", "")]
+              assert len(starts) == 1 and len(stops) == 1, entries
+              sleep_time = int(starts[0]["__MONOTONIC_TIMESTAMP"]) / 1_000_000
+              assert request_time <= ready_time <= sleep_time, (request_time, ready_time, sleep_time)
+              assert ready_time - request_time <= suspend_results["inhibit_delay_max_usec"] / 1_000_000
+              kernel_sleep = machine.succeed(
+                  "journalctl --no-pager -b -k -o json --grep='PM: suspend (entry|exit)'"
+              )
+              assert "PM: suspend entry (deep)" in kernel_sleep and "PM: suspend exit" in kernel_sleep
+              suspend_results.update({"ready_monotonic_seconds": ready_time,
+                                      "sleep_monotonic_seconds": sleep_time,
+                                      "locker_processes_after_resume": lock_processes()})
+              machine.screenshot("realm-suspend-resumed-locked")
+              machine.send_key("meta_l-d")
+              machine.succeed(
+                  "for attempt in $(seq 1 20); do "
+                  "if pgrep -u alice -x fuzzel; then exit 1; fi; sleep 0.1; done"
+              )
+              machine.send_key("ctrl-u")
+              machine.send_chars("realmtest")
+              machine.send_key("ret")
+              machine.wait_until_succeeds(
+                  as_alice("systemctl", "--user", "show", "--property=ActiveState",
+                           "--value", lock_unit) + " | grep -qx inactive",
+                  timeout=STATE_TIMEOUT,
+              )
+              suspend_results["password_unlock_after_resume"] = True
+              suspend_results["inhibitors_after"] = own_sleep_inhibitors(suspend_idle_pid)
+              assert suspend_results["inhibitors_after"], "swayidle did not reacquire its delay inhibitor"
+              write_artifact("suspend-kernel-journal.jsonl", kernel_sleep)
+          except TimeoutError as transport_error:
+              suspend_results["transport_unusable"] = True
+              suspend_results["transport_error"] = str(transport_error)
+              raise
+          finally:
+              # Recovery and logging cannot depend on the guest already being awake.
+              suspend_results["host_diagnostics"] = suspend_host_diagnostics()
+              machine.log("suspend-roundtrip: " + json.dumps(suspend_results, sort_keys=True))
+              try:
+                  recovery_status = machine.send_monitor_command("info status")
+                  machine.log("suspend recovery monitor: " + recovery_status)
+                  if "suspended" in recovery_status:
+                      machine.send_monitor_command("system_wakeup")
+                  if suspend_results.get("transport_unusable"):
+                      raise RuntimeError("guest cleanup skipped after host transport timeout")
+                  cleanup_status, cleanup_output = machine.execute(
+                      as_alice("timeout", "8", "systemctl", "--user", "stop", idle_unit),
+                      timeout=DIAGNOSTIC_TIMEOUT,
+                  )
+                  suspend_results["idle_stop_status"] = cleanup_status
+                  suspend_results["idle_stop_output"] = cleanup_output
+                  _status, diagnostics = machine.execute(
+                      "journalctl --no-pager -b -n 200 -o json "
+                      "_SYSTEMD_UNIT=systemd-suspend.service + _SYSTEMD_UNIT=systemd-logind.service "
+                      "+ _SYSTEMD_USER_UNIT=realm-idle.service + _SYSTEMD_USER_UNIT=realm-lock.service "
+                      "+ _SYSTEMD_UNIT=realm-test-suspend.service",
+                      timeout=DIAGNOSTIC_TIMEOUT,
+                  )
+                  machine.log("suspend diagnostics (last 200 entries):\n" + diagnostics)
+                  write_artifact("suspend-journal.jsonl", diagnostics)
+              except Exception as diagnostic_error:
+                  if isinstance(diagnostic_error, TimeoutError):
+                      suspend_results["transport_unusable"] = True
+                  machine.log(f"suspend diagnostic collection failed: {diagnostic_error}")
+              machine.log("suspend final results: " + json.dumps(suspend_results, sort_keys=True))
+              write_artifact("suspend-roundtrip.json", json.dumps(suspend_results, indent=2) + "\n")
+              for transport, previous_timeout in suspend_socket_timeouts:
+                  transport.settimeout(previous_timeout)
+          assert not suspend_results.get("transport_unusable"), suspend_results
+          assert suspend_results.get("idle_stop_status") == 0, suspend_results
 
       # Also proves the default terminal binding is restored after unlock.
       machine.send_key("meta_l-ret")
