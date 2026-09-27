@@ -1,0 +1,2 @@
+# Ubuntu's global /etc/zsh/zshrc otherwise dumps completion into ZDOTDIR.
+skip_global_compinit=1

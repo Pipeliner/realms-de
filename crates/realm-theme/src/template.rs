@@ -120,6 +120,12 @@ pub fn templates() -> Vec<Template> {
             reload: Reload::None,
         },
         Template {
+            id: "zsh-environment",
+            source: ::core::include_str!("../../../configs/templates/zshenv"),
+            target: PathBuf::from("zsh/.zshenv"),
+            reload: Reload::None,
+        },
+        Template {
             id: "zsh-profile",
             source: ::core::include_str!("../../../configs/templates/zshrc"),
             target: PathBuf::from("zsh/.zshrc"),
@@ -267,9 +273,15 @@ mod tests {
         let actual = templates()
             .into_iter()
             .filter_map(|template| {
-                ["zsh-profile", "yazi-config", "yazi-keymap", "btop-config"]
-                    .contains(&template.id)
-                    .then(|| (template.id, template.target, template.source.to_owned()))
+                [
+                    "zsh-environment",
+                    "zsh-profile",
+                    "yazi-config",
+                    "yazi-keymap",
+                    "btop-config",
+                ]
+                .contains(&template.id)
+                .then(|| (template.id, template.target, template.source.to_owned()))
             })
             .collect::<Vec<_>>();
 
@@ -277,9 +289,25 @@ mod tests {
             actual,
             vec![
                 (
+                    "zsh-environment",
+                    "zsh/.zshenv".into(),
+                    "# Ubuntu's global /etc/zsh/zshrc otherwise dumps completion into ZDOTDIR.\nskip_global_compinit=1\n".to_owned(),
+                ),
+                (
                     "zsh-profile",
                     "zsh/.zshrc".into(),
                     concat!(
+                        "autoload -Uz compinit\n",
+                        "realm_compdump_dir=\"${XDG_CACHE_HOME:-$HOME/.cache}/realm\"\n",
+                        "if mkdir -p -- \"$realm_compdump_dir\" 2>/dev/null \\\n",
+                        "    && [ -w \"$realm_compdump_dir\" ] \\\n",
+                        "    && { [ ! -e \"$realm_compdump_dir/zcompdump\" ] || [ -w \"$realm_compdump_dir/zcompdump\" ]; }; then\n",
+                        "  compinit -d \"$realm_compdump_dir/zcompdump\"\n",
+                        "else\n",
+                        "  compinit -D\n",
+                        "fi\n",
+                        "unset realm_compdump_dir\n",
+                        "\n",
                         "eval \"$(starship init zsh)\"\n",
                         "btop() {\n",
                         "  command btop --config \"$REALM_GENERATION/btop/btop.conf\" \\\n",
@@ -305,6 +333,144 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn ubuntu_global_completion_does_not_write_into_sealed_zdotdir() {
+        let root = tempfile::tempdir().unwrap();
+        let zdotdir = root.path().join("sealed/zsh");
+        let cache = root.path().join("cache");
+        fs::create_dir_all(&zdotdir).unwrap();
+        for (id, filename) in [("zsh-environment", ".zshenv"), ("zsh-profile", ".zshrc")] {
+            let source = templates()
+                .into_iter()
+                .find(|template| template.id == id)
+                .unwrap_or_else(|| panic!("missing generated {filename}"))
+                .source;
+            fs::write(zdotdir.join(filename), source).unwrap();
+        }
+        // Ubuntu's /etc/zsh/zshrc runs compinit between .zshenv and .zshrc.
+        // The fake below models only compinit's documented dump-file side effect;
+        // the native VM exercises the installed shell and package for real.
+        let status = Command::new("/bin/bash")
+            .arg("-c")
+            .arg(
+                r#"set -eu
+autoload() { :; }
+starship() { :; }
+compinit() {
+  case "${1-}" in
+    -d) test "$2" = "$XDG_CACHE_HOME/realm/zcompdump"; : > "$2" ;;
+    -D) : ;;
+    *) : > "$ZDOTDIR/.zcompdump" ;;
+  esac
+}
+. "$ZDOTDIR/.zshenv"
+if [ -z "${skip_global_compinit-}" ]; then compinit; fi
+. "$ZDOTDIR/.zshrc"
+test ! -e "$ZDOTDIR/.zcompdump"
+test -f "$XDG_CACHE_HOME/realm/zcompdump"
+"#,
+            )
+            .env("ZDOTDIR", &zdotdir)
+            .env("XDG_CACHE_HOME", &cache)
+            .env("HOME", root.path())
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "Zsh startup wrote into its sealed configuration tree"
+        );
+    }
+
+    #[test]
+    fn zsh_completion_without_writable_cache_never_uses_sealed_zdotdir() {
+        let root = tempfile::tempdir().unwrap();
+        let zdotdir = root.path().join("zsh");
+        fs::create_dir(&zdotdir).unwrap();
+        fs::write(root.path().join("cache"), "not a directory").unwrap();
+        let profile = templates()
+            .into_iter()
+            .find(|template| template.id == "zsh-profile")
+            .unwrap();
+        fs::write(zdotdir.join(".zshrc"), profile.source).unwrap();
+        let output = Command::new("/bin/bash")
+            .arg("-c")
+            .arg(
+                r#"set -eu
+autoload() { :; }
+starship() { :; }
+compinit() { test "${1-}" = -D; : > "$HOME/completion-ready"; }
+. "$ZDOTDIR/.zshrc"
+test -f "$HOME/completion-ready"
+test ! -e "$ZDOTDIR/.zcompdump"
+"#,
+            )
+            .env("ZDOTDIR", &zdotdir)
+            .env("XDG_CACHE_HOME", root.path().join("cache"))
+            .env("HOME", root.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "completion fallback failed: {output:?}"
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "cache fallback emitted an error: {output:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zsh_completion_falls_back_for_existing_unwritable_cache() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for readonly_dump in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let zdotdir = root.path().join("zsh");
+            let cache_dir = root.path().join("cache/realm");
+            fs::create_dir(&zdotdir).unwrap();
+            fs::create_dir_all(&cache_dir).unwrap();
+            let dump = cache_dir.join("zcompdump");
+            if readonly_dump {
+                fs::write(&dump, "old cache").unwrap();
+                fs::set_permissions(&dump, fs::Permissions::from_mode(0o444)).unwrap();
+            } else {
+                fs::set_permissions(&cache_dir, fs::Permissions::from_mode(0o555)).unwrap();
+            }
+            let profile = templates()
+                .into_iter()
+                .find(|template| template.id == "zsh-profile")
+                .unwrap();
+            fs::write(zdotdir.join(".zshrc"), profile.source).unwrap();
+            let output = Command::new("/bin/bash")
+                .arg("-c")
+                .arg(
+                    r#"set -eu
+autoload() { :; }
+starship() { :; }
+compinit() { test "${1-}" = -D; : > "$HOME/completion-ready"; }
+. "$ZDOTDIR/.zshrc"
+test -f "$HOME/completion-ready"
+test ! -e "$ZDOTDIR/.zcompdump"
+"#,
+                )
+                .env("ZDOTDIR", &zdotdir)
+                .env("XDG_CACHE_HOME", root.path().join("cache"))
+                .env("HOME", root.path())
+                .output()
+                .unwrap();
+            if readonly_dump {
+                fs::set_permissions(&dump, fs::Permissions::from_mode(0o644)).unwrap();
+            } else {
+                fs::set_permissions(&cache_dir, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            assert!(
+                output.status.success() && output.stderr.is_empty(),
+                "completion fallback failed (readonly_dump={readonly_dump}): {output:?}"
+            );
+        }
     }
 
     #[test]
@@ -402,7 +568,10 @@ mod tests {
             .unwrap();
         let zshrc_path = root.path().join("zshrc");
         fs::write(&zshrc_path, zshrc.source).unwrap();
-        let zsh_script = format!(". '{}'; btop 'caller argument'", zshrc_path.display());
+        let zsh_script = format!(
+            "autoload() {{ :; }}; compinit() {{ :; }}; mkdir() {{ :; }}; . '{}'; btop 'caller argument'",
+            zshrc_path.display()
+        );
         run(&zsh_script, &["caller argument"]);
 
         let keymap = templates()
@@ -453,6 +622,10 @@ mod tests {
                 (
                     "foot-modern",
                     ::core::include_str!("../../../configs/templates/foot-modern.ini")
+                ),
+                (
+                    "zsh-environment",
+                    ::core::include_str!("../../../configs/templates/zshenv")
                 ),
                 (
                     "zsh-profile",

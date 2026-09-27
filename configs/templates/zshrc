@@ -1,3 +1,14 @@
+autoload -Uz compinit
+realm_compdump_dir="${XDG_CACHE_HOME:-$HOME/.cache}/realm"
+if mkdir -p -- "$realm_compdump_dir" 2>/dev/null \
+    && [ -w "$realm_compdump_dir" ] \
+    && { [ ! -e "$realm_compdump_dir/zcompdump" ] || [ -w "$realm_compdump_dir/zcompdump" ]; }; then
+  compinit -d "$realm_compdump_dir/zcompdump"
+else
+  compinit -D
+fi
+unset realm_compdump_dir
+
 eval "$(starship init zsh)"
 btop() {
   command btop --config "$REALM_GENERATION/btop/btop.conf" \

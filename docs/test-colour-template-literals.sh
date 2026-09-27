@@ -47,7 +47,7 @@ expect_fail() {
 
 expect_pass shipped "$checker" --root "$fixture"
 
-for static_profile in zshrc yazi.toml yazi-keymap.toml btop.conf qt6ct.conf; do
+for static_profile in zshenv zshrc yazi.toml yazi-keymap.toml btop.conf qt6ct.conf; do
     printf '\n#abcdef\n' >>"$fixture/configs/templates/$static_profile"
     expect_fail "static-profile-raw-colour-$static_profile" \
         "$static_profile" "$checker" --root "$fixture"

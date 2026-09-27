@@ -40,6 +40,21 @@ def assert_consumer(process, root, executable):
     assert environment['XDG_CONFIG_DIRS'].split(':')[0] == root, process
 
 
+def shell_cache_state(guest, root, cache_path):
+    script = ("import json, pathlib\n"
+              + 'root = pathlib.Path(' + repr(root) + ')\n'
+              + 'cache = pathlib.Path(' + repr(cache_path) + ')\n'
+              + "entries = sorted('zsh/' + entry.name for entry in (root / 'zsh').iterdir())\n"
+              + "print(json.dumps({'entries': entries, 'dump_present': cache.is_file() and not cache.is_symlink()}))\n")
+    return json.loads(guest('sudo python3 -', script))
+
+
+def assert_shell_cache_transition(before, after):
+    expected = ['zsh/.zshenv', 'zsh/.zshrc']
+    assert before['entries'] == expected and not before['dump_present'], before
+    assert after['entries'] == expected and after['dump_present'], after
+
+
 def consumer_process_command(name, selected_config, mode='present'):
     return shlex.join(['sudo', 'python3', '/var/tmp/realm-native-vm/consumer_process.py',
                        name, selected_config if name == 'foot' else '', mode])
@@ -106,6 +121,9 @@ def main():
         generation = login['generation']
         root = '/home/alice/.config/realm/generated/generations/' + generation
         result.update(login=login, generation_root=root)
+        cache_path = '/home/alice/.cache/realm/zcompdump'
+        result['shell_cache_path'] = cache_path
+        result['shell_cache_before'] = shell_cache_state(guest, root, cache_path)
         result['foot_version'] = guest('/usr/bin/foot --version').strip()
         result['foot_config_probes'] = []
         def check_foot(path):
@@ -125,6 +143,14 @@ def main():
         assert shell['parent_pid'] == terminal['pid'], (terminal, shell)
         assert terminal['arguments'] == ['foot', '--config=' + selected_config,
             '--log-level=error', '--override=key-bindings.spawn-terminal=none', 'zsh'], terminal
+        assert not shell['environment'].get('XDG_CACHE_HOME'), shell
+        for _ in range(50):
+            result['shell_cache_after'] = shell_cache_state(guest, root, cache_path)
+            if (result['shell_cache_after']['dump_present']
+                    or result['shell_cache_after']['entries'] != result['shell_cache_before']['entries']):
+                break
+            time.sleep(0.1)
+        assert_shell_cache_transition(result['shell_cache_before'], result['shell_cache_after'])
         state(1, 'consumer-terminal')
         screenshot('consumer-terminal-a')
 

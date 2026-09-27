@@ -88,6 +88,19 @@ class ConsumerTests(unittest.TestCase):
                     evidence['environment']['YAZI_CONFIG_HOME'] = '/generation/B/yazi'
                 probe.assert_consumer(evidence, '/generation/A', '/usr/lib/realm/bin/yazi')
 
+    def test_real_shell_cache_transition_requires_external_dump_and_clean_generation(self):
+        clean = ['zsh/.zshenv', 'zsh/.zshrc']
+        before = {'entries': clean, 'dump_present': False}
+        after = {'entries': clean, 'dump_present': True}
+        probe.assert_shell_cache_transition(before, after)
+        for mutation in (
+            ({'entries': clean + ['zsh/.zcompdump'], 'dump_present': False}, after),
+            (before, {'entries': clean + ['zsh/.zcompdump'], 'dump_present': True}),
+            (before, {'entries': clean, 'dump_present': False}),
+        ):
+            with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                probe.assert_shell_cache_transition(*mutation)
+
 
 if __name__ == '__main__':
     unittest.main()

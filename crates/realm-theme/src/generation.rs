@@ -3540,7 +3540,7 @@ fn validate_directory_entries(
             .map_err(|error| error.to_string())?;
             validate_directory_entries(&child, &path, files, directories)?;
         } else {
-            return Err("sealed tree contains an unlisted entry".into());
+            return Err(format!("sealed tree contains an unlisted entry: {path:?}"));
         }
     }
     Ok(())
@@ -7189,6 +7189,19 @@ mod tests {
         );
         std::fs::create_dir(directory_generation.join("empty")).unwrap();
         assert!(directory_manifest.verify(&directory_generation).is_err());
+
+        let zsh_base = tempfile::tempdir().unwrap();
+        let (zsh_generation, zsh_manifest) = v1_fixture(
+            zsh_base.path(),
+            "0123456789abcdef0123456789abcdef",
+            "zsh/.zshrc",
+            b"sealed shell configuration",
+        );
+        std::fs::write(zsh_generation.join("zsh/.zcompdump"), "mutable cache").unwrap();
+        assert_eq!(
+            zsh_manifest.verify(&zsh_generation).unwrap_err(),
+            "sealed tree contains an unlisted entry: \"zsh/.zcompdump\""
+        );
     }
 
     #[cfg(unix)]

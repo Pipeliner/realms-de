@@ -1,6 +1,6 @@
 # SPEC 0022 — Colour-template literal guard
 
-- **Status:** Accepted (2026-08-31; Foot cursor-key correction 2026-09-13)
+- **Status:** Accepted (2026-08-31; Foot cursor-key correction 2026-09-13; sealed Zsh startup source 2026-09-27)
 - **Milestone:** M1
 - **Issue:** [#24](https://github.com/Pipeliner/realms-de/issues/24)
 - **Decisions:** [ADR 0005](../adr/0005-palette-toml-single-source.md), [SPEC 0002](0002-theme-pipeline.md)
@@ -16,10 +16,11 @@ Realm placeholder.
 
 ## Scope
 
-**In:** the eight source files currently embedded by `realm_theme::templates()`:
-`gtk3.css`, `gtk4.css`, `foot.ini`, `yazi-theme.toml`, `btop.theme`,
-`starship.toml`, `fuzzel.ini`, and `qt6ct-colors.conf`; exact diagnostics;
-hostile fixtures; and the palette CI workflow.
+**In:** the fifteen source files currently embedded by `realm_theme::templates()`:
+`gtk3.css`, `gtk4.css`, `foot.ini`, `foot-modern.ini`, `zshenv`, `zshrc`,
+`yazi.toml`, `yazi-keymap.toml`, `yazi-theme.toml`, `btop.conf`, `btop.theme`,
+`starship.toml`, `fuzzel.ini`, `qt6ct-colors.conf`, and `qt6ct.conf`; exact
+diagnostics, hostile fixtures, and the palette CI workflow.
 
 **Out:** colours in rendered generations; package/source extraction; a general
 CSS parser or named-colour table; user configuration; and changing palette
@@ -40,7 +41,7 @@ palette/prose allowances and rejection outside them; extraction adds no policy.
 
 1. One checked-in checker receives a repository root, scans the complete fixed
    template inventory, and exits nonzero on a violation. The inventory is
-   exactly the eight paths named above and must equal the set of literal
+   exactly the fifteen paths named above and must equal the set of literal
    `::core::include_str!("../../../configs/templates/<path>")` operands in
    `crates/realm-theme/src/template.rs`. A missing expected file, duplicate or
    additional template operand, additional file under `configs/templates/`, or
@@ -48,12 +49,12 @@ palette/prose allowances and rejection outside them; extraction adds no policy.
    removing a shipped template requires an accepted amendment and fixture
    update. The one top-level `pub fn templates()` definition is itself the
    catalogue: its body must be a direct tail `vec![Template { ... }, ...]`
-   expression containing only the eight direct `Template` records. Nested
+   expression containing only the fifteen direct `Template` records. Nested
    functions, conditionally disabled records, helper-return indirection, and
    records outside that direct vector are not catalogue evidence and cause a
    refusal. The source guard is lexical only: a compiled `realm_theme` unit
    test separately proves the actual `templates()` id-to-source-byte mapping
-   against the eight qualified built-in includes, so macro expansion cannot
+   against the fifteen qualified built-in includes, so macro expansion cannot
    substitute different compiled sources while preserving lexical text.
 2. Every diagnostic names the repository-relative path, one-based line, and
    the complete offending token or value. The palette workflow invokes this
@@ -113,7 +114,7 @@ palette/prose allowances and rejection outside them; extraction adds no policy.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| A1 | Given the exact shipped eight-template inventory and its literal Rust catalogue operands, when the checker runs, then it passes and detects a missing, additional, unclassified, catalogue-divergent, comment-spoofed, raw-string-spoofed, nested-function-spoofed, disabled-top-level-function-spoofed, or disabled-inner-decoy template source; the compiled mapping test also rejects macro-generated source substitution. | `docs/test-colour-template-literals.sh` — `shipped`, `missing-template`, `additional-template`, `catalogue-duplicate-operand`, `catalogue-redirected-source`, `catalogue-comment-spoof`, `catalogue-raw-string-spoof`, `catalogue-raw-byte-string-spoof`, `catalogue-raw-c-string-spoof`, `catalogue-nested-function-spoof`, `catalogue-cfg-disabled-top-level-spoof`, `catalogue-disabled-inner-decoy-spoof`; `template::tests::compiled_catalogue_embeds_the_declared_template_sources` |
+| A1 | Given the exact shipped fifteen-template inventory and its literal Rust catalogue operands, when the checker runs, then it passes and detects a missing, additional, unclassified, catalogue-divergent, comment-spoofed, raw-string-spoofed, nested-function-spoofed, disabled-top-level-function-spoofed, or disabled-inner-decoy template source; the compiled mapping test also rejects macro-generated source substitution. | `docs/test-colour-template-literals.sh` — `shipped`, `missing-template`, `additional-template`, `catalogue-duplicate-operand`, `catalogue-redirected-source`, `catalogue-comment-spoof`, `catalogue-raw-string-spoof`, `catalogue-raw-byte-string-spoof`, `catalogue-raw-c-string-spoof`, `catalogue-nested-function-spoof`, `catalogue-cfg-disabled-top-level-spoof`, `catalogue-disabled-inner-decoy-spoof`; `template::tests::compiled_catalogue_embeds_the_declared_template_sources` |
 | A2 | Given a GTK template with literal or malformed hex, or case-insensitive boundary-valid `rgb`/`rgba` outside a placeholder across CSS lexical spellings and lines, when the checker runs, then it fails with path, line, and complete token; a placeholder transform passes. | `docs/test-colour-template-literals.sh` — `gtk-rgb-across-crlf`, `gtk-malformed-hex` |
 | A3 | Given a Foot `[colors]` literal, invalid `alpha`, or the cursor colour misplaced as `[cursor].color`, a Fuzzel raw/malformed opacity composition, and a Qt raw/incorrect-alpha/empty/unclassified colour field, when the checker runs, then each fails; the shipped placeholder compositions pass. | `docs/test-colour-template-literals.sh` — `foot-invalid-alpha`, `foot-raw-colour`, `foot-misplaced-cursor-colour`, `fuzzel-raw-colour`, `fuzzel-invalid-opacity`, `qt-raw-colour`, `qt-unclassified-colour-field` |
 | A4 | Given btop, Yazi, or Starship with a target-position literal or malformed value outside a placeholder, including CRLF and repeated-literal fixtures, when the checker runs, then every violation is reported. | `docs/test-colour-template-literals.sh` — `btop-raw-colour`, `yazi-raw-colour`, `yazi-unquoted-colour`, `starship-literal`, `starship-non-placeholder-style` |

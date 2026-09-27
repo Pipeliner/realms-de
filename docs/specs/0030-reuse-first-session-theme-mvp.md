@@ -154,6 +154,19 @@ launch/probe code.
 One generation-derived child environment supplies REALM_GENERATION, ZDOTDIR,
 STARSHIP_CONFIG, YAZI_CONFIG_HOME, GTK_THEME and the Qt platform selector. GTK
 uses the generated named-theme aliases; Qt uses the generated qt6ct profile.
+The generated `ZDOTDIR` is a sealed output tree, never a cache directory.
+Ubuntu's global interactive Zsh startup invokes `compinit` before `.zshrc` and
+otherwise creates `.zcompdump` under `ZDOTDIR`. The generated `.zshenv` must
+suppress only that global invocation before it runs; the generated `.zshrc`
+must initialize completion itself with a dump under the user's writable XDG
+cache (or without a dump if the cache directory or an existing dump is not
+writable). Completion remains
+available, and no Zsh startup writes into the sealed generation. An unlisted
+generation entry still fails validation; its diagnostic names only the escaped
+relative entry so CI can identify the writer without accepting that mutation.
+The installed native terminal probe records the generated `zsh/` entry names
+before and after actual Zsh startup, and requires a completion dump to appear
+in the user's cache rather than in the sealed generation before re-applying.
 Generation search roots precede existing XDG_DATA_DIRS/XDG_CONFIG_DIRS, or their
 standard defaults if absent. XDG_CONFIG_HOME remains unchanged, preserving the
 precedence of a user's explicit qt6ct configuration. A nonempty explicitly
