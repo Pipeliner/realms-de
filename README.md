@@ -293,6 +293,7 @@ watched to fail before the implementation, and
 
 ```console
 $ cargo fmt --all && cargo clippy --all-targets -- -D warnings && cargo test
+$ scripts/check-colour-literals && scripts/check-colour-template-literals
 ```
 
 runs clean before every commit. Anything architectural gets an ADR. Anything
