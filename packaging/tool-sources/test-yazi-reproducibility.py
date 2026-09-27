@@ -11,6 +11,31 @@ HELPER = Path(__file__).with_name("check-yazi-reproducibility.sh")
 
 
 class Reproducibility(unittest.TestCase):
+    def test_direct_rules_export_distro_flags_and_preserve_overrides(self):
+        flags = ("CFLAGS", "CPPFLAGS", "CXXFLAGS", "LDFLAGS", "RUSTFLAGS")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bindir = root / "usr/lib/rust-1.90/bin"
+            bindir.mkdir(parents=True)
+            for name in ("cargo", "rustc"):
+                (bindir / name).symlink_to("/bin/true")
+            provider = bindir / "dpkg-buildflags"
+            provider.write_text('#!/bin/sh\nprintf "fixture-%s\\n" "$2"\n')
+            provider.chmod(0o755)
+            rules = HELPER.parents[1] / "debian/rules"
+            for overrides in ({}, {flag: "caller-" + flag for flag in flags}):
+                environment = {key: value for key, value in os.environ.items() if key not in flags}
+                environment.update(overrides)
+                environment["PATH"] = str(bindir) + ":" + os.environ["PATH"]
+                result = subprocess.run(
+                    ["make", "--no-print-directory", "-f", str(rules),
+                     "REALM_RUST_VERSIONED_ROOT=" + str(root),
+                     "--eval=print-flags:\n\t@env", "print-flags"],
+                    cwd=root, env=environment, capture_output=True, text=True, check=True)
+                actual = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+                for flag in flags:
+                    self.assertEqual(actual.get(flag), overrides.get(flag, "fixture-" + flag), flag)
+
     def exercise(self, different=False, preexisting=False):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

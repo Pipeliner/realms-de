@@ -62,6 +62,11 @@ export CARGO_TERM_COLOR = never
 # Direct invocation of the Yazi recipe uses the same distro flags that
 # Debhelper exports during a complete package build.
 CFLAGS ?= $(shell dpkg-buildflags --get CFLAGS)
+CPPFLAGS ?= $(shell dpkg-buildflags --get CPPFLAGS)
+CXXFLAGS ?= $(shell dpkg-buildflags --get CXXFLAGS)
+LDFLAGS ?= $(shell dpkg-buildflags --get LDFLAGS)
+RUSTFLAGS ?= $(shell dpkg-buildflags --get RUSTFLAGS)
+export CFLAGS CPPFLAGS CXXFLAGS LDFLAGS RUSTFLAGS
 
 # Ubuntu 24.04's default cargo is 1.75, below realm's MSRV of 1.89. The
 # versioned toolchain packages install under /usr/lib/rust-<version>/bin. The
