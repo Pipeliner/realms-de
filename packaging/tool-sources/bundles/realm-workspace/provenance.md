@@ -7,12 +7,12 @@ package recipe.
 ## Bound source
 
 - Repository: `https://github.com/pipeliner/realms-de`
-- Commit: `2227a67c7c3654b1e49d33842a4ddb5081841bdc`
-- Commit timestamp: `2026-09-14T11:08:55Z` (`1789384135`)
+- Commit: `ea9f7e7cc010006902f796828d2855cfafb15b92`
+- Commit timestamp: `2026-09-27T13:20:30Z` (`1790515230`)
 - Workspace version: `0.1.0`
 - Canonical archive: `source.tar.gz`
 - Canonical archive SHA-256:
-  `f987d8d2cf03b1fbd278f39e6ea25d692f8d1e02932ef1ee133a48e045e8f726`
+  `a1194aa9704651dd2760160169f4adf59cc09fb73bf28aedb6ce4ae00ec562e7`
 
 The archive was generated directly from the exact bound Git commit with
 `git archive --format=tar.gz --prefix=realm-workspace/ <commit> .
@@ -48,3 +48,9 @@ staged `vendor` directory for crates.io source replacement.
 The bundle record binds every final artifact by SHA-256.  Native package paths
 must consume those retained bytes and must not regenerate the archive, invoke
 Git, or fetch dependencies.
+
+## CI workspace dependency-edge refresh
+
+Commit `ea9f7e7cc010006902f796828d2855cfafb15b92` refreshed workspace dependency lists only. External package records and retained vendor, configuration and license-report bytes are unchanged and digest-verified.
+- Prior lock SHA-256: `835ee92fdbaaa335c36d99e795e590011e8613dc161b9aded60e50549263657a`
+- Refreshed lock SHA-256: `07a6aab2f12652213126b339939818a7a96090ce328298b6c5a080ee2ac3f5ce`
