@@ -222,6 +222,14 @@ consume B and form a managed window; close it normally. Retain before/after
 identity, selection, state and framebuffer evidence. A timeout or stale A owner
 fails rather than repairing the session in the fixture.
 
+The NixOS fixture uses Ly, whose initial automatic login does not repeat after
+logout. Its equivalent next-login probe gives only the test user a known fixture
+password and selects Ly's password input field. After normal quit, observe the
+visible greeter before submitting that password through real keyboard input.
+Reuse the native identity/selection assertions and verify real Foot/Zsh consume
+B. Do not restart the display manager, bypass PAM, remove stale runtime records,
+or change production authentication policy to make this test pass.
+
 ### Overlap scope resolved
 
 The owner confirmed one session on 2026-09-27 in response to the explicit

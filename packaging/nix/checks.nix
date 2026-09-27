@@ -54,6 +54,8 @@ assert realmYazi.version == "25.4.8";
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_portal_vm_helper.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_browser_screencast.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_window_controls.py"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_relogin.py"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/native-vm/test_relogin_roundtrip.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/native-vm/test_window_roundtrip.py"}
         bash ${src + "/packaging/session/test-portal-warmup.sh"}
         touch $out
@@ -249,6 +251,7 @@ EOF
         imports = [ nixosModule ];
         programs.realm.enable = true;
         services.displayManager.ly.enable = true;
+        services.displayManager.ly.settings.default_input = "password";
         services.displayManager.defaultSession = "realm";
         services.displayManager.autoLogin = {
           enable = true;
@@ -262,6 +265,7 @@ EOF
         };
         users.users.alice = {
           isNormalUser = true;
+          initialPassword = "realmtest";
         };
         services.dbus.packages = [ xwaylandProbeService ];
         environment.systemPackages = [
@@ -1515,15 +1519,76 @@ EOF
           json.dumps(provenance, indent=2, sort_keys=True) + "\n",
       )
 
-      # Quit is deliberately last. The helper only exits zero for the exact
-      # Response::Ok frame, so this output proves the requester's response
-      # drained before realm-wm asked River to end the session.
-      quit_raw, quit_response = control("quit")
-      assert quit_response == {"reply": "ok"}, quit_response
-      write_artifact("control-quit.json", quit_raw)
-      machine.wait_until_succeeds(
-          f"test ! -d /proc/{river_pid}", timeout=EXIT_TIMEOUT
-      )
+      # Normal Ly logout/relogin, never a display-manager restart.
+      relogin_probe = importlib.import_module("relogin_roundtrip")
+      consumer_probe = importlib.import_module("consumer_roundtrip")
+      relogin_result: dict[str, object] = {"passed": False}
+
+      def relogin_snapshot(previous):
+          return json.loads(machine.succeed(shlex.join([
+              "python3", "-c", relogin_probe.SNAPSHOT,
+              "/run/user/1000", json.dumps(previous),
+          ]), timeout=DIAGNOSTIC_TIMEOUT))
+
+      before_login = relogin_snapshot({})
+      assert before_login["login"]["generation"] == generation, before_login
+      assert next_generation != generation
+      relogin_result["before"] = before_login
+      try:
+          # Retain the original exact response-drain and River-exit assertions.
+          quit_raw, quit_response = control("quit")
+          assert quit_response == {"reply": "ok"}, quit_response
+          write_artifact("control-quit.json", quit_raw)
+          machine.wait_until_succeeds(
+              f"test ! -d /proc/{river_pid}", timeout=EXIT_TIMEOUT
+          )
+          # Ly 1.4.1 clears automatic-login mode after its first logout.
+          machine.wait_for_text("logged out", timeout=OCR_TIMEOUT)
+          machine.wait_for_text("password", timeout=OCR_TIMEOUT)
+          machine.screenshot("relogin-greeter")
+          machine.send_chars("realmtest\n")
+
+          def transitioned(last_try):
+              try:
+                  after = relogin_snapshot(before_login)
+                  relogin_probe.validate_transition(before_login, after, next_generation)
+              except (RequestedAssertionFailed, AssertionError, ValueError) as error:
+                  relogin_result["last_wait_error"] = str(error)
+                  if last_try:
+                      machine.log(f"relogin transition failed: {error}")
+                  return False
+              relogin_result["after"] = after
+              return True
+
+          retry(transitioned, timeout=STARTUP_TIMEOUT)
+          wait_for_managed_window_count(0, "fresh B session")
+          machine.send_key("meta_l-ret")
+          wait_for_managed_window_count(1, "B terminal managed")
+          next_root = f"/home/alice/.config/realm/generated/generations/{next_generation}"
+          consumers = {}
+          for name, executable in (("foot", "${pkgs.foot}/bin/foot"),
+                                   ("zsh", "${pkgs.zsh}/bin/zsh")):
+              wait_for_single_user_process(name)
+              process = json.loads(machine.succeed(shlex.join([
+                  "python3", "-c", consumer_probe.PROCESS, name,
+              ]), timeout=DIAGNOSTIC_TIMEOUT))
+              canonical_executable = machine.succeed(shlex.join([
+                  "readlink", "-f", executable,
+              ]), timeout=DIAGNOSTIC_TIMEOUT).strip()
+              consumer_probe.assert_consumer(process, next_root, canonical_executable)
+              consumers[name] = process
+          assert consumers["zsh"]["parent_pid"] == consumers["foot"]["pid"], consumers
+          relogin_result["consumers"] = consumers
+          machine.screenshot("relogin-terminal-b")
+          machine.send_key("meta_l-q")
+          wait_for_managed_window_count(0, "B terminal closed")
+          machine.wait_until_succeeds(
+              "! pgrep -u alice -x foot && ! pgrep -u alice -x zsh", timeout=EXIT_TIMEOUT
+          )
+          relogin_result["passed"] = True
+      finally:
+          machine.log(json.dumps(relogin_result))
+          write_artifact("relogin-roundtrip.json", json.dumps(relogin_result, indent=2))
     '';
   };
 }
