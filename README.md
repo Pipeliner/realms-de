@@ -135,6 +135,12 @@ What exists, honestly:
 | Package/session/portal assets | **Tracked pre-alpha contract; installed NixOS reference path verified in a VM and the exact Fedora RPM verified in an empty installroot.** Ubuntu 24.04 and Fedora native-package graphical VM jobs passed for merge `29e69684d1ff1d45629d7cdcc0b3d8b8ae6996dc` in [run 36327811527](https://github.com/Pipeliner/realms-de/actions/runs/36327811527), checked 2026-09-27; the overall run failed (Fedora contract guard and Nix X11 activation check). Physical hardware and full MVP acceptance remain pending. These artifacts do not include every newer theme/locking fix. |
 | Images | **Two real VM screenshots, plus design assets.** The PNGs above are unchanged compositor-framebuffer captures; the hand-drawn SVGs and design handoff's HTML prototypes remain diagrams and concepts. |
 
+The current native recipes include Realm-owned Yazi, `ya`, and Starship under
+`/usr/lib/realm/bin/`; they do not replace system commands. This private-tool
+packaging and its Realm-scoped consumer PATH are newer than the dated trial
+artifacts below. Their presence in the recipes is not evidence that the older
+trial contains them or that graphical consumer activation has been verified.
+
 Crates join the Cargo workspace only when they gain a real implementation, so a
 fresh clone always builds. If a crate is not in
 [`Cargo.toml`](Cargo.toml), it does not exist yet.

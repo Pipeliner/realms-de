@@ -515,6 +515,7 @@ jobs:
             ${{ runner.temp }}/realm-session-boots/lock-journal.txt
             ${{ runner.temp }}/realm-session-boots/idle-journal.jsonl
             ${{ runner.temp }}/realm-session-boots/idle-roundtrip.json
+            ${{ runner.temp }}/realm-session-boots/idle-login.txt
             ${{ runner.temp }}/realm-session-boots/realm-idle-locked.png
             ${{ runner.temp }}/realm-session-boots/realm-idle-wrong-password.png
             ${{ runner.temp }}/realm-session-boots/suspend-roundtrip.json

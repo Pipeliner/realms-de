@@ -101,6 +101,8 @@ Suspend is not a gate.
 
 Installed native and NixOS VM probes SHALL require the shipped link and observe
 the idle service active after graphical login without manually starting it.
+Canonical Nix evidence upload SHALL explicitly retain `idle-login.txt`, the
+fresh-login unit properties observed before the fixture stops idle.
 They then stop idle before the long controlled acceptance journey; existing
 manual locking and unchanged real 300/600-second timing checks remain required.
 Stopping in the disposable fixture is not production policy. Existing session
