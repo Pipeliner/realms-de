@@ -168,6 +168,21 @@ Require swayidle to reacquire its own sleep/delay inhibitor after resume.
 Retain structured inhibitor, timing and monitor evidence, bounded journals and a
 resumed-lock screenshot on success. On failure, wake the guest if necessary and
 emit available structured results and bounded diagnostics into the build log.
+The fixture SHALL also retain host-side QEMU process status, queued QMP events
+(including shutdown/reset reasons) and the last bounded console output before
+attempting guest-dependent recovery. These diagnostics SHALL remain usable when
+both guest shell and human monitor sockets are closed. The pinned driver's QMP
+event wait does not enforce its timeout while its event queue is empty; use only
+a finite number of its nonblocking message reads, never that wait API. Keep
+the kernel console enabled through suspend for this diagnostic fixture.
+CI run 36325164214 proved lock readiness before deep suspend, but both sockets
+were broken after wake and the log omitted the QEMU exit/event cause; it does
+not establish successful resume or justify changing firmware, reboot policy or
+the accepted deep-suspend path. QMP's
+[shutdown/reset events](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#event-SHUTDOWN)
+distinguish those causes; the
+[pinned driver implementation](https://github.com/NixOS/nixpkgs/blob/9fbb54b33e91ee4ca368e35a78e0613c720600b3/nixos/lib/test-driver/src/test_driver/machine/qmp.py)
+defines the nonblocking read boundary used here.
 The probe introduces no production unit or host-policy changes. Physical lid
 policy and backlight restoration, and native-distro acceptance, remain separate
 obligations; package auto-start remains disabled.

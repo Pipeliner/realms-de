@@ -248,6 +248,8 @@ EOF
         # module keeps xdpw's normal chooser for users and hardware acceptance.
         xdg.portal.wlr.settings.screencast.chooser_type = "none";
         virtualisation.memorySize = 2048;
+        # Keep resume/panic evidence visible if QEMU closes both driver sockets.
+        boot.kernelParams = [ "no_console_suspend" ];
         virtualisation.resolution = {
           x = 1920;
           y = 1080;
@@ -991,6 +993,27 @@ EOF
 
       # Actual logind sleep, not an injected PrepareForSleep/Lock signal. The
       # monitor remains reachable while the guest shell is suspended.
+      def suspend_host_diagnostics():
+          evidence = {
+              "qemu_returncode": machine.process.poll() if machine.process else None,
+              "console_tail": [line[-512:] for line in machine.full_console_log[-80:]],
+              "qmp_events": [],
+          }
+          if machine.qmp_client is not None:
+              # Pinned QMPSession.read_pending_messages uses a nonblocking
+              # reader. Its wait_for_event spins indefinitely on an empty
+              # queue despite accepting a timeout, so do not call it here.
+              try:
+                  for _ in range(128):
+                      machine.qmp_client.read_pending_messages()
+              except Exception as error:
+                  evidence["qmp_error"] = str(error)
+              for _ in range(128):
+                  if machine.qmp_client.pending_events.empty():
+                      break
+                  evidence["qmp_events"].append(machine.qmp_client.pending_events.get_nowait())
+          return evidence
+
       suspend_results = {"auto_enabled": False}
       suspend_journal = ""
       login_bus = ["timeout", "5", "busctl", "--system", "--timeout=5", "--json=short"]
@@ -1102,6 +1125,7 @@ EOF
           write_artifact("suspend-kernel-journal.jsonl", kernel_sleep)
       finally:
           # Recovery and logging cannot depend on the guest already being awake.
+          suspend_results["host_diagnostics"] = suspend_host_diagnostics()
           machine.log("suspend-roundtrip: " + json.dumps(suspend_results, sort_keys=True))
           try:
               recovery_status = machine.send_monitor_command("info status")
