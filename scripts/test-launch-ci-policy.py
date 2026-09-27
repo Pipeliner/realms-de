@@ -87,7 +87,14 @@ class LaunchPolicy(unittest.TestCase):
         self.assertEqual(upload['with']['path'].splitlines(), [
             '${{ steps.native-temp.outputs.path }}/evidence/*.out',
             '${{ steps.native-temp.outputs.path }}/evidence/*.log',
+            '${{ steps.native-temp.outputs.path }}/evidence/yazi-reproducibility.txt',
         ])
+
+    def test_native_fixture_has_bounded_cold_build_budget(self):
+        job = workflow('ci.yml')['jobs']['docs']
+        fixture = next(s for s in job['steps'] if s.get('name') == 'Check network-isolated native package paths')
+        self.assertEqual(int(fixture['timeout-minutes']), 120)
+        self.assertEqual(int(job['timeout-minutes']), 135)
 
 
 if __name__ == '__main__':

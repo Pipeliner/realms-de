@@ -15,8 +15,9 @@
 # change to one is a change to both.
 #
 # PRE-ALPHA: this fragment is not wired into a package manifest or exercised by
-# native CI. If that alternate route is activated, its payload is the same
-# mandatory three Realm binaries as debian/rules, not a partial package.
+# native CI. If that alternate route is activated, it must first gain the same
+# retained Yazi/Starship staging and private payload as debian/rules; listing
+# outputs that only debian/rules creates would make this fragment misleading.
 
 [package.metadata.deb]
 name = "realm"
@@ -33,7 +34,6 @@ section = "x11"
 priority = "optional"
 depends = "$auto, realm-river (>= 0.4.0) | river (>= 0.4.0), dbus-user-session, systemd, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, foot, fuzzel, btop, zsh"
 recommends = "fonts-ibm-plex, fonts-symbola, gsettings-desktop-schemas, xwayland, slurp"
-suggests = "yazi, starship"
 
 # Paths are relative to the workspace root; the trailing component is the
 # destination. Mirrors packaging/debian/install.

@@ -176,6 +176,14 @@ and their CI prerequisite installs SHALL also supply a real DejaVu fallback
 font: Debian/Ubuntu uses `fonts-dejavu-core`, while Fedora uses
 `dejavu-sans-fonts` and `dejavu-sans-mono-fonts`. The build must not inherit
 this test input accidentally from the CI host's font database.
+The CI font guard SHALL check exact font-package tokens in the retained
+RPM job's and native-fixture job's prerequisite install commands, not equality
+of the entire command line. Additional prerequisites or package reordering
+SHALL not fail this font contract; a missing font, similarly named package,
+comment-only mention or fonts installed only in a
+different job SHALL still fail. This prevents the stale full-line assertions
+triggered by adding the required `patch` prerequisite without weakening explicit
+font provisioning.
 
 The Debian and Fedora package paths SHALL unpack only these retained inputs and
 build using `cargo --frozen --offline --locked`. They MAY consume declared,
@@ -193,6 +201,55 @@ across supported Rust versions. A test fixture SHALL run the actual
 disabled and empty Cargo registry/Git caches, reject a
 closure/configuration/lockfile mismatch, and fail when an adversarial
 injected-fetch attempt is present in either recipe.
+
+The selected Starship 1.23.0 source invokes `shadow-rs` from its build script.
+Before native compilation, the selected-tool stager SHALL apply one
+Starship-specific, record-bound patch which extends `shadow-rs`'s upstream
+default deny set with `CARGO_TREE`. The bundle record SHALL bind the patch
+digest and the exact SHA-256 of `build.rs` before and after application. The
+stager SHALL first validate and unpack the original retained source archive
+unchanged, refuse a missing, symlinked, digest-mismatched, or path-escaping
+patch, refuse a preimage mismatch, apply the patch exactly once, and refuse a
+postimage mismatch. Staging repeatedly into the same destination SHALL replace
+the old stage with a fully materialized copy from the original archive and
+produce the same patched `build.rs`; it SHALL NOT apply the patch cumulatively
+or mutate the retained archive. A failed replacement SHALL restore the prior
+complete stage. Staging happens before compilation and makes no concurrent
+consumer or continuously-present-path guarantee. Native package build metadata
+and every CI lane which invokes the stager SHALL declare the `patch` utility
+rather than inherit it accidentally from the host.
+
+With `CARGO_TREE` denied, the pinned `shadow-rs` build still makes one
+unconditional `cargo -V` metadata query. The native fixture MAY classify only
+that exact invocation from the selected Starship source and Cargo
+home as build-script metadata. It SHALL execute the supplied real Cargo
+unchanged, retain the validated source-replacement configuration in the now
+populated Starship Cargo home, and require the query to succeed. This metadata
+query is not a recipe build/test invocation and does not weaken the requirement
+that the three authoritative builds and one workspace test use
+`--frozen --offline --locked`. `cargo tree`, any other nested Cargo command, a
+fifth authoritative build/test within either full package case, or Cargo from
+another source/home remains a failure. The separately recorded same-recipe
+Yazi reproducibility case SHALL execute exactly one additional offline Yazi
+build from its fresh selected source/home, with the same denied Git probes.
+
+Pinned `shadow-rs` also attempts local VCS metadata commands even though the
+retained source archive contains no Git repository. During the selected
+Starship stage, the fixture SHALL put a denying sentinel ahead of Git, require
+the exact read-only metadata attempts made by pinned `shadow-rs`, and prove
+that no real Git executable ran. The allowlisted attempts are limited to
+`status`, `rev-parse`, `log`, `show`, `tag`, `describe`, and `symbolic-ref`
+queries. Any acquisition or mutation command, including `fetch`, `clone`,
+`pull`, `checkout`, `reset`, `clean`, `init`, `add`, `commit`, or `tag` with a
+mutation argument, remains a failure. Network access remains disabled around
+the entire package path. This compositional fixture exception records and
+denies an upstream metadata attempt; it does not permit either native recipe to
+invoke Git or weaken the source archive's deterministic authority.
+
+The selected Yazi build additionally attempts exactly `git --version` from
+its `yazi-boot`, `yazi-dds`, and `yazi-cli` source directories. These three
+probes SHALL likewise be classified separately and denied without executing
+Git. Other arguments or directories remain forbidden.
 
 The fixture's disposable build tree SHALL be on a Linux filesystem that
 supports `O_TMPFILE` with file `fsync`, atomic `renameat2` publication/exchange,
@@ -220,6 +277,12 @@ logs are uploaded, not extracted package trees or source bundles. Each case
 announces its start in the live job log. Missing logs after a forced runner loss
 remain missing evidence, not a passing fixture. The timeout stays bounded;
 retaining diagnostics does not waive it or prove why the build exceeded it.
+The combined Debian/RPM cold-build fixture receives a 120-minute step budget
+inside a 135-minute job budget. This covers two real release builds and their
+tests; the earlier 15-minute cap expired while compiling the first workspace
+(CI run 36317915230), before either package driver could finish. This budget is
+an execution limit, not acceptance evidence: both drivers must still complete
+all assertions, and a timeout remains a failure.
 The evidence directory SHALL be under the fixture's dedicated `/tmp` parent,
 outside its disposable scratch child, rather than beneath runner-owned home
 directories. Before invoking native package drivers, CI SHALL prove file creation and append
@@ -227,6 +290,19 @@ from the same root-mapped network namespace used by the driver. Host-root write
 access alone is insufficient: capabilities in a child user namespace do not
 grant access through host-owned private ancestor directories. A failed probe
 SHALL report ancestor permissions and stop before the expensive package work.
+
+All fixture support files executed or read inside that namespace SHALL likewise
+be regular copies beneath the accessible fixture scratch directory before
+either package driver starts. In particular, command sentinels SHALL NOT
+symlink back into runner-owned checkout ancestors, and the same-recipe Yazi
+helper SHALL execute from the staged support copy. Each denying command keeps
+its command basename so metadata classification is unchanged. A namespace
+preflight SHALL read/parse every staged helper, execute every denying command
+and require its expected denial log/status, and execute the supplied Cargo and
+rustc version checks. An inaccessible support path SHALL stop before package
+work, never silently fall through to a real network/VCS executable. A lightweight
+regression SHALL remove access to the source ancestor after staging and still
+execute the staged sentinels and helper without producing packages.
 
 The Debian recipe's production resolver SHALL continue to select its complete
 versioned Cargo/rustc pair below `/usr/lib/rust-1.[89][0-9]/bin`.  The native
@@ -240,6 +316,15 @@ Cargo unchanged.  That input exists only to make the real nested Debhelper
 invocation reproducible in an isolated fixture; it SHALL be consumed by the
 resolver itself, not used to override its selected binary directory or bypass
 the completeness check.
+Fixture helper functions SHALL preserve the repository-root authority while
+constructing per-case toolchain directories, so repeated cases and the
+reproducibility helper continue resolving the same checked-out scripts.
+
+Starship version verification SHALL require a successful command exit and the exact selected version on the
+first output line and retain the complete output as evidence. Its additional
+build-metadata lines are not part of the version identity; they SHALL NOT make
+the selected version fail comparison. Empty output, a different version, or a
+version embedded after another first line SHALL fail.
 
 The Yazi build SHALL set deterministic source-date and VCS metadata. The intake
 record SHALL bind the selected tag to its upstream commit SHA and commit
@@ -249,6 +334,92 @@ SHALL not accept `vergen`'s fallback metadata as release evidence or assume that
 `SOURCE_DATE_EPOCH` alone controls it. The reproducibility fixture SHALL build
 in two different directories/times and either compare the normalized declared
 artifacts or explicitly record and justify every remaining non-identical field.
+The declared comparison artifacts are the pre-packaging `yazi` and `ya`
+executables from two clean builds using the same Debian Yazi recipe and supplied
+toolchain. The second build uses a fresh source kit and target directory. The
+fixture retains UTC execution times, paths and SHA-256 hashes and fails on any
+byte difference; no normalization is currently declared.
+Direct invocation of the shared Debian target SHALL export the same effective
+dpkg build-flag defaults as Debhelper: CFLAGS, CPPFLAGS, CXXFLAGS, LDFLAGS and
+RUSTFLAGS, while preserving explicit caller overrides. Run 36331107468 showed
+that restoring only CFLAGS left the other four empty in the repeat, including
+the missing Rust frame-pointer option. Such unequal inputs are not a valid
+same-recipe comparison; byte equality remains required after correcting them.
+The shared Debian Yazi recipe SHALL append Rust source-path remapping from the
+source-kit root to `/usr/src/realm-0.1.0`, covering staged sources and vendored
+dependencies. Run 36337157087 retained different absolute vendor paths in both
+executables despite equal Rust flags: C/C++ prefix maps do not remap Rust
+source locations. Preserve caller Rust flags and Cargo's encoded-flags
+precedence (including an explicitly empty encoded value), appending the map
+to the effective flag channel. This is compile-time path mapping, not binary
+normalization; the strict byte comparison remains unchanged.
+The CI diagnostic artifact SHALL include the explicit `yazi-reproducibility.txt`
+report as well as driver `.out` and sentinel `.log` files. On mismatch the helper
+SHALL print at most the last 40 report lines into the driver log, preserving
+the compared artifact hashes and first byte differences even if upload fails.
+Transparent Cargo instrumentation SHALL record effective `CFLAGS`, `CPPFLAGS`,
+`CXXFLAGS`, `LDFLAGS`, `RUSTFLAGS`, and `CARGO_ENCODED_RUSTFLAGS` for both builds
+without changing them. CI run 36324975517 completed both builds but lost the
+comparison report and did not record all flags; this proves a mismatch, not its
+cause. Do not retain binary artifacts or weaken byte equality to diagnose it.
+On a remaining mismatch after equivalent build flags, retain bounded textual
+ELF headers, section tables and notes for each compared file, plus embedded
+strings containing either build root. Missing diagnostic tools or malformed
+ELF input must be reported without replacing the original mismatch outcome.
+Include textual section-content hashes and selected rustc/C compiler/linker
+versions. The Cargo invocation recorder also retains only the allowlisted
+SOURCE_DATE_EPOCH and VERGEN git SHA/commit-date/build-date values actually
+passed to each build; no arbitrary environment dump is permitted.
+The byte offset alone is not evidence of a particular ELF field or root cause.
+
+Debian-versus-RPM
+installed-byte equality is not this comparison: their C flags and packaging
+strip operations differ. Both native installed-version checks remain required.
+
+For the selected `25.4.8` bundle, both native recipes SHALL set
+`SOURCE_DATE_EPOCH=1744112829`,
+`VERGEN_GIT_SHA=99ea3b74c4260a724b43af812df0f68ef59395b7`,
+`VERGEN_GIT_COMMIT_DATE=2025-04-08`, and
+`VERGEN_BUILD_DATE=2025-04-08`. These values are the Unix epoch, commit, and
+UTC date bound by that bundle's intake record. The native Yazi build SHALL
+append `-std=gnu17` to the package builder's inherited `CFLAGS`. The
+retained `onig_sys 69.8.1` source uses pre-C23 empty-parameter callback
+declarations; selecting GNU C17 preserves their intended unspecified-argument
+meaning on GCC 16 and newer without suppressing incompatible-type diagnostics.
+This compatibility selection applies only to the selected Yazi build, not the
+Realm workspace or Starship builds.
+
+After retained-bundle verification and unpacking, Fedora preparation SHALL
+remove executable permission bits from staged regular Rust source (`*.rs`)
+files before compilation and debug-source collection. Source bytes and retained
+archives remain unchanged; executable scripts and binaries keep their modes.
+Rust inner attributes are not script shebangs. RPM's normal shebang processing
+and debug-source generation remain enabled. A fixture SHALL verify those mode
+and content boundaries, and the native CI RPM build verifies integration.
+
+The retained Yazi runtime fixture SHALL set both the process working directory
+and `PWD` to its controlled directory. Yazi 25.4.8 prefers absolute `PWD` over
+the operating-system directory; an inherited package-build `PWD` must not make
+the fixture inspect the package source tree instead of its sample file.
+
+The Yazi build command SHALL select the `yazi-fm` and `yazi-cli` packages,
+which produce `yazi` and `ya`;
+the Starship build command SHALL select the `starship` binary. Both use their
+selected bundle's staged source, vendor tree, source-replacement configuration,
+and a bundle-local target directory with `--release --frozen --offline
+--locked`. Default features are retained; a feature-set change requires a
+specification amendment because it changes the supported executables.
+
+The outer native source kits SHALL carry exactly the Realm-workspace,
+`yazi-25.4.8`, and `starship-1.23.0` bundle authorities plus the narrow staging
+helpers needed to validate and materialize those inputs. They SHALL NOT contain
+a recursive copy of any bundle, a second source snapshot, or another hidden
+workspace. Before Cargo runs, the selected-tool stager SHALL validate the
+record-bound source archive, lockfile, vendor archive, source replacement, and
+license report, then materialize only that selected bundle into an empty
+package-local stage. The target mapping SHALL identify `retained:yazi@25.4.8`
+and `retained:starship@1.23.0` for Debian and Fedora; Nix continues to use its
+locked nixpkgs inputs.
 
 ## Executable ownership and session scope
 
@@ -281,9 +452,10 @@ and PATH isolation for both direct and systemd-user launch paths, including the
 
 ## Yazi v25.4 configuration migration
 
-The current Realm Yazi template targets a different schema and is not valid
-configuration evidence for Yazi `25.4.8`. Its migration is part of selecting
-that version, rather than a later cosmetic change.
+The Realm Yazi template has been migrated to the selected `25.4.8` schema. The
+static `packaging/tool-sources/test-tool-configs.sh` guard already proves the
+required names below and rejects the known legacy names. That source-level
+guard is necessary but does not replace the real retained-runtime fixture.
 
 The rendered template SHALL use Yazi v25.4's names as follows:
 
@@ -320,22 +492,24 @@ the Realm template, rather than only a nonempty default prompt.
 
 | # | Given / When / Then | Test |
 |---|---|---|
-| B1 | Given a selected tool or Realm-workspace source bundle, when its intake linkage is validated, then archive, lockfile, every resolved Cargo source, vendor tree, source-replacement config, digest records, and dependency license report agree exactly. | To be implemented: source-bundle linkage fixture. |
-| B2 | Given retained-only Debian and Fedora source kits and their actual package build paths with networking disabled and empty Cargo caches, when source-kit recursion, emitted package documentation, selected bundles, the complete Realm workspace build, and all package-relevant staged workspace tests run (excluding only non-packaged `realm-agent-sdd`), then no hidden workspace is accepted, the installed guide names only the retained-kit workflow, all Cargo invocations use `--frozen --offline --locked`, deterministic source/VCS metadata where applicable, and no recipe fetch path exists. | `packaging/tool-sources/test-native-source-kits.sh`; `packaging/tool-sources/test-native-builds.sh` (Realm-workspace portion; selected Yazi/Starship bundle integration remains follow-on work) |
-| B3 | Given a native package install and direct or systemd-user Realm session launch, when executable and PATH ownership are inspected, then only `/usr/lib/realm/bin/*` owns the three Realm tools, Realm-launched applications resolve them, and neither user manager nor DBus activation receives the private PATH, including with `REALM_IMPORT_PATH=1`. | To be implemented: package/session ownership fixture. |
-| B4 | Given a rendered Realm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it, then a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Realm feature. | To be implemented: rendered-config runtime fixture. |
-| B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | To be implemented: dependency-license fixture. |
+| B1 | Given a selected tool or Realm-workspace source bundle, when its intake linkage is validated, then archive, lockfile, every resolved Cargo source, vendor tree, source-replacement config, digest records, and dependency license report agree exactly. | `packaging/tool-sources/test-bundle-linkage.sh`; `packaging/tool-sources/check-bundle-linkage.py` |
+| B2 | Given retained-only Debian and Fedora source kits and their actual package build paths with networking disabled and empty Cargo caches, when source-kit recursion, emitted package documentation, selected bundles, the complete Realm workspace build, and all package-relevant staged workspace tests run (excluding only non-packaged `realm-agent-sdd`), then no hidden workspace is accepted, the installed guide names only the retained-kit workflow, all authoritative Cargo build/test invocations use `--frozen --offline --locked`, deterministic source/VCS metadata where applicable, the exact isolated Starship version query and denied upstream Git metadata probes are classified separately, and no recipe fetch path exists. | `packaging/tool-sources/test-native-source-kits.sh`; `packaging/tool-sources/test-native-builds.sh` |
+| B3 | Given a native package install and direct or systemd-user Realm session launch, when executable and PATH ownership are inspected, then only `/usr/lib/realm/bin/*` owns the three Realm tools, Realm-launched applications resolve them, and neither user manager nor DBus activation receives the private PATH, including with `REALM_IMPORT_PATH=1`. | `packaging/tool-sources/test-native-builds.sh`; `packaging/session/test-private-tool-path.sh` |
+| B4 | Given a rendered Realm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it, then a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Realm feature. | `packaging/tool-sources/test-tool-configs.sh`; selected-runtime assertions in `packaging/tool-sources/test-native-builds.sh` |
+| B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | `packaging/tool-sources/test-bundle-linkage.sh`; `packaging/tool-sources/check-bundle-linkage.py` |
 | B6 | Given an exact committed workspace revision with an unchanged retained lockfile, when its source authority needs rebinding, then read-only repository CI alone creates and validates the candidate archive/records and retains exactly those three files as an artifact without committing or pushing them; a mutable ref, changed lockfile, local packaging command, or unvalidated candidate is rejected. | CI rebind workflow projection and transformation fixtures; bundle-linkage validator in the rebind job. |
 
 ## Boundaries and follow-on work
 
-This specification completes the design required for SPEC 0023 A2 only. It
-does not claim A2 is implemented, does not establish target availability (A3),
-and does not establish immutable generation update or rollback behavior (A4).
-It also does not claim full user configuration integration: the actual generated
-templates are in `configs/templates/`, while the configuration directories
-described by ADR 0007 are not currently present. That integration gap requires
-its own accepted specification before it becomes a supported capability.
+This specification completes the design required for SPEC 0023 A2. Passing the
+native-build, installed-ownership, session-PATH, and retained-runtime fixtures
+establishes the selected tools' native package availability, but does not by
+itself close issue #134: immutable generation update and rollback behavior from
+SPEC 0023 A4 remains follow-on work. It also does not claim full user
+configuration integration: the actual generated templates are in
+`configs/templates/`, while the configuration directories described by ADR
+0007 are not currently present. That integration gap requires its own accepted
+specification before it becomes a supported capability.
 
 No public package repository, binary distribution, signing service, mirror,
 container registry, backend, or network service is introduced.

@@ -87,13 +87,34 @@ require_line "$tmp_dir/canonical/packaging/fedora/realm.spec" \
 require_line "$tmp_dir/canonical/.github/workflows/distro.yml" \
     "            fonts-dejavu-core \\" \
     'Ubuntu native-package CI does not install its test font explicitly'
-require_line "$tmp_dir/canonical/.github/workflows/distro.yml" \
-    '        run: dnf -y install --setopt=install_weak_deps=False git rpm-build rust cargo systemd-rpm-macros make python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts' \
-    'Fedora native-package CI does not install its test fonts explicitly'
-require_line "$tmp_dir/canonical/.github/workflows/ci.yml" \
-    '          sudo apt-get install -y --no-install-recommends debhelper rpm zstd fonts-dejavu-core' \
-    'native package fixture CI does not install its test font explicitly'
 expect_pass "$tmp_dir/canonical"
+
+cp -R "$tmp_dir/canonical" "$tmp_dir/fedora-more-prerequisites"
+replace_once "$tmp_dir/fedora-more-prerequisites/.github/workflows/distro.yml" \
+    'git rpm-build rust cargo' 'cargo rust rpm-build git additional-build-tool'
+expect_pass "$tmp_dir/fedora-more-prerequisites"
+
+for font in dejavu-sans-fonts dejavu-sans-mono-fonts; do
+    fixture="$tmp_dir/fedora-missing-$font"
+    cp -R "$tmp_dir/canonical" "$fixture"
+    # Change only the first install occurrence; a later job still has fonts.
+    replace_once "$fixture/.github/workflows/distro.yml" "$font" "$font-unrelated"
+    expect_fail "$fixture"
+done
+
+cp -R "$tmp_dir/canonical" "$tmp_dir/fedora-comment-only-font"
+replace_once "$tmp_dir/fedora-comment-only-font/.github/workflows/distro.yml" \
+    'dejavu-sans-fonts' 'unrelated # dejavu-sans-fonts'
+expect_fail "$tmp_dir/fedora-comment-only-font"
+
+cp -R "$tmp_dir/canonical" "$tmp_dir/native-more-prerequisites"
+replace_once "$tmp_dir/native-more-prerequisites/.github/workflows/ci.yml" \
+    'debhelper rpm zstd' 'zstd rpm debhelper additional-build-tool'
+expect_pass "$tmp_dir/native-more-prerequisites"
+cp -R "$tmp_dir/canonical" "$tmp_dir/native-missing-font"
+replace_once "$tmp_dir/native-missing-font/.github/workflows/ci.yml" \
+    'fonts-dejavu-core' 'fonts-dejavu-core-unrelated'
+expect_fail "$tmp_dir/native-missing-font"
 
 cp -R "$tmp_dir/canonical" "$tmp_dir/debian-hard-symbol"
 replace_once "$tmp_dir/debian-hard-symbol/packaging/debian/control" \
