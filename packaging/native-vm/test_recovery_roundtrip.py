@@ -4,8 +4,24 @@ import importlib
 from pathlib import Path
 import unittest
 
+from consumer_process import recovery_app_pids
+
 
 class RecoveryTests(unittest.TestCase):
+    def test_recovery_requires_three_selected_terminals_but_ignores_distro_server(self):
+        selected = b'foot\0--config=/login/A/foot/foot.ini\0zsh\0'
+        commands = {'10': b'foot\0--server\0', '11': selected, '12': selected,
+                    '13': selected, '14': b'foot\0--config=/login/B/foot/foot.ini\0zsh\0'}
+        self.assertEqual(recovery_app_pids(list(commands), '/login/A/foot/foot.ini',
+                                           lambda pid: commands[pid]), ['11', '12', '13'])
+        for removed in ('11', '12', '13'):
+            with self.subTest(removed=removed), self.assertRaises(AssertionError):
+                recovery_app_pids([pid for pid in commands if pid != removed],
+                                  '/login/A/foot/foot.ini', lambda pid: commands[pid])
+        commands['15'] = selected
+        with self.assertRaises(AssertionError):
+            recovery_app_pids(list(commands), '/login/A/foot/foot.ini', lambda pid: commands[pid])
+
     def test_apps_must_be_in_distinct_session_owned_scopes(self):
         apps = {str(pid): {'scope': 'run-' + str(pid) + '.scope', 'part_of': ['realm-session.target'],
                           'binds_to': ['realm-session.target'], 'start_time': pid * 10}

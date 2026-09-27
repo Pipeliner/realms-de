@@ -369,6 +369,10 @@ Native recovery records three distinct application scopes and their target
 dependencies before and after the crash. Native relogin deliberately leaves a
 terminal and its shell open at Quit and rejects surviving PID/start-time pairs
 after the next login, as well as requiring an initially empty next-login ledger.
+The recovery fixture identifies exactly its three Realm-launched terminals by
+the selected-login Foot config argument when recording scopes and checking
+closure. A distribution-owned Foot server is outside that set and may remain
+running; missing, extra, or replaced matching terminals still fail recovery.
 
 | Property | Value | Reason |
 |---|---|---|

@@ -214,6 +214,11 @@ observe the ledger's fullscreen state before recording fullscreen screenshots.
 The installed graphical-session CI journey opens Foot through the real default
 binding, observes its managed window and actual Zsh child, and records their
 selected-generation environment and Foot arguments.
+The process probe identifies exactly one Realm-launched terminal by its exact
+selected-login `--config=` argument, not by the `foot` process name alone:
+distribution-owned Foot servers may share that name. Zero or multiple matching
+terminals fail, and terminal closure requires the selected terminal and its
+shell to exit without requiring an unrelated distribution server to stop.
 The native fixture records the installed Foot version and independently checks
 the generated modern-then-legacy configuration variants with that binary's
 `--check-config`; the launched arguments must match the supported selection.

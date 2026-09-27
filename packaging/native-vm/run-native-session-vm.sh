@@ -313,6 +313,7 @@ run_native_session_vm() (
         -display none
         -vnc 127.0.0.1:1
         -monitor "unix:$monitor,server=on,wait=off"
+        -qmp "unix:${monitor}.qmp,server=on,wait=off"
         -serial "file:$serial_log"
     )
     qemu-system-x86_64 "${qemu_options[@]}" &
@@ -326,6 +327,7 @@ run_native_session_vm() (
         alice@127.0.0.1:/tmp/realm-native-packages/
     timeout 60 scp "${scp_options[@]}" \
         "$guest_probe" "$control_probe" "$check_inputs" \
+        "$script_dir/consumer_process.py" \
         "$script_dir/../nix/portal_vm_helper.py" \
         "$script_dir/../nix/browser_screencast.py" \
         "$script_dir/../nix/browser_screencast.html" \

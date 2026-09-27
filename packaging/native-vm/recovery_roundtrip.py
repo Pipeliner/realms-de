@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 
+from consumer_roundtrip import consumer_process_command
 from lock_roundtrip import complete_ppm, monitor_command
 from relogin_roundtrip import SNAPSHOT as IDENTITIES
 from window_roundtrip import SNAPSHOT, active
@@ -47,8 +48,13 @@ def validate_app_scopes(apps):
 
 
 APP_SCOPES = r'''
-import json, pathlib, subprocess
-pids = subprocess.check_output(['pgrep', '-u', 'alice', '-x', 'foot'], text=True).split()
+import json, pathlib, subprocess, sys
+sys.path.insert(0, '/var/tmp/realm-native-vm')
+from consumer_process import recovery_app_pids
+pids = recovery_app_pids(
+    subprocess.check_output(['pgrep', '-u', 'alice', '-x', 'foot'], text=True).split(),
+    sys.argv[1],
+    lambda pid: pathlib.Path('/proc', pid, 'cmdline').read_bytes())
 apps = {}
 for pid in pids:
     fields = pathlib.Path('/proc', pid, 'stat').read_text().rsplit(')', 1)[1].split()
@@ -94,6 +100,12 @@ def main():
     user = shlex.join(['sudo', 'runuser', '-u', 'alice', '--', 'env',
                       'XDG_RUNTIME_DIR=' + runtime,
                       'DBUS_SESSION_BUS_ADDRESS=unix:path=' + runtime + '/bus'])
+    login = json.loads(guest('cat ' + runtime + '/realm/session-theme.json'))
+    root = '/home/alice/.config/realm/generated/generations/' + login['generation']
+    previous_consumer = json.loads((evidence / 'consumer-roundtrip.json').read_text())
+    assert previous_consumer['passed'] and previous_consumer['login'] == login, previous_consumer
+    selected_config = previous_consumer['foot_config']
+    assert selected_config in (root + '/foot/foot-modern.ini', root + '/foot/foot.ini'), selected_config
 
     def key(chord):
         monitor_command(monitor, 'sendkey ' + chord)
@@ -111,7 +123,7 @@ def main():
         assert int(value['bar']['ActiveEnterTimestampMonotonic']) > 0, value['bar']
         assert value['bar']['NRestarts'].isdigit(), value['bar']
         value['durable'] = json.loads(guest('cat ' + runtime + '/realm/ledger.json'))
-        value['apps'] = json.loads(guest(user + ' python3 -', APP_SCOPES))
+        value['apps'] = json.loads(guest(user + ' python3 - ' + shlex.quote(selected_config), APP_SCOPES))
         validate_app_scopes(value['apps'])
         return value
 
@@ -206,7 +218,8 @@ def main():
         for remaining in (2, 1, 0):
             key('meta_l-q')
             wait(lambda: match(lambda value: count(value) == remaining), 'close recovery fixture')
-        wait(lambda: guest('! pgrep -u alice -x foot'), 'closed application processes')
+        wait(lambda: guest(consumer_process_command('foot', selected_config, 'absent')),
+             'closed application processes')
         result['passed'] = True
     finally:
         print(json.dumps(result, indent=2), flush=True)

@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 
-from consumer_roundtrip import PROCESS, assert_consumer
+from consumer_roundtrip import assert_consumer, consumer_process_command, select_foot_config
 from lock_roundtrip import complete_ppm, monitor_command
 
 
@@ -126,13 +126,19 @@ def main():
         result['before'] = before
         generation = guest('cat /home/alice/.config/realm/generated/current').strip()
         assert generation != before['login']['generation'], before
+        old_root = '/home/alice/.config/realm/generated/generations/' + before['login']['generation']
+        previous_consumer = json.loads((evidence / 'consumer-roundtrip.json').read_text())
+        assert previous_consumer['passed'], previous_consumer
+        old_config = previous_consumer['foot_config']
+        assert old_config in (old_root + '/foot/foot-modern.ini', old_root + '/foot/foot.ini'), old_config
         result['expected_generation'] = generation
         result['before_state'] = state(0)
         monitor_command(monitor, 'sendkey meta_l-ret')
         result['before_quit_state'] = wait(lambda: state(1), 20)
         before['applications'] = {}
         for name in ('foot', 'zsh'):
-            application = wait(lambda: json.loads(guest('sudo python3 - ' + name, PROCESS)), 20)
+            command = consumer_process_command(name, old_config)
+            application = wait(lambda: json.loads(guest(command)), 20)
             before['applications'][name] = [application['pid'], application['start_time']]
         screenshot('relogin-open-terminal-before-quit')
         result['quit_response'] = json.loads(guest(user + ' python3 - ' + runtime + '/realm/ctl.sock', QUIT))
@@ -146,9 +152,13 @@ def main():
         guest(user + ' timeout 10 systemctl --user is-active --quiet realm-session.target realm-wm.service realm-bar.service')
         monitor_command(monitor, 'sendkey meta_l-ret')
         root = '/home/alice/.config/realm/generated/generations/' + generation
+        new_config = select_foot_config(root, lambda path: subprocess.run(
+            ssh + [user + ' timeout 5 /usr/bin/foot --check-config --config=' + shlex.quote(path)],
+            capture_output=True, text=True, timeout=15).returncode == 0)
+        result['foot_config'] = new_config
 
         def consumer(name, executable):
-            value = json.loads(guest('sudo python3 - ' + name, PROCESS))
+            value = json.loads(guest(consumer_process_command(name, new_config)))
             assert_consumer(value, root, executable)
             return value
         terminal = wait(lambda: consumer('foot', '/usr/bin/foot'), 20)
@@ -159,7 +169,8 @@ def main():
         screenshot('relogin-terminal-b')
         monitor_command(monitor, 'sendkey meta_l-q')
         result['closed_state'] = wait(lambda: state(0), 20)
-        wait(lambda: guest('! pgrep -u alice -x foot && ! pgrep -u alice -x zsh'), 20)
+        wait(lambda: guest(consumer_process_command('foot', new_config, 'absent')
+                           + ' && ! pgrep -u alice -x zsh'), 20)
         result['passed'] = True
     finally:
         print(json.dumps(result, indent=2), flush=True)

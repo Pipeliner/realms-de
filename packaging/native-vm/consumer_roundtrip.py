@@ -40,21 +40,9 @@ def assert_consumer(process, root, executable):
     assert environment['XDG_CONFIG_DIRS'].split(':')[0] == root, process
 
 
-PROCESS = r'''
-import json, pathlib, subprocess, sys
-name = sys.argv[1]
-pids = subprocess.check_output(['pgrep', '-u', 'alice', '-x', name], text=True).split()
-assert len(pids) == 1, (name, pids)
-pid = pids[0]
-base = pathlib.Path('/proc') / pid
-fields = (base / 'stat').read_text().rsplit(')', 1)[1].split()
-assert fields[0] not in ('Z', 'X'), fields
-environment = dict(item.split('=', 1) for item in (base / 'environ').read_bytes().decode().split('\0') if '=' in item)
-print(json.dumps({'pid': int(pid), 'parent_pid': int(fields[1]), 'start_time': int(fields[19]),
-    'executable': str((base / 'exe').resolve(strict=True)),
-    'arguments': (base / 'cmdline').read_bytes().decode().rstrip('\0').split('\0'),
-    'environment': environment}))
-'''
+def consumer_process_command(name, selected_config, mode='present'):
+    return shlex.join(['sudo', 'python3', '/var/tmp/realm-native-vm/consumer_process.py',
+                       name, selected_config if name == 'foot' else '', mode])
 
 
 def main():
@@ -82,8 +70,9 @@ def main():
             time.sleep(0.05)
 
     def process(name):
-        wait('pgrep -u alice -x ' + shlex.quote(name))
-        value = json.loads(guest('sudo python3 - ' + shlex.quote(name), PROCESS))
+        command = consumer_process_command(name, selected_config)
+        wait(command + ' >/dev/null 2>&1')
+        value = json.loads(guest(command))
         result['processes'][name] = value
         (evidence / 'consumer-roundtrip.json').write_text(json.dumps(result, indent=2) + '\n')
         return value
@@ -169,7 +158,8 @@ printf '%s\\n' "$?" > /tmp/realm-native-yazi-exit
         wait('test -s /tmp/realm-native-yazi-exit && ! pgrep -u alice -x yazi')
         assert guest('cat /tmp/realm-native-yazi-exit').strip() == '0'
         key('meta_l-q')
-        wait('! pgrep -u alice -x foot && ! pgrep -u alice -x zsh')
+        selected_foot_absent = consumer_process_command('foot', selected_config, 'absent')
+        wait(selected_foot_absent + ' && ! pgrep -u alice -x zsh')
         state(0, 'consumer-closed')
         result['passed'] = True
     finally:

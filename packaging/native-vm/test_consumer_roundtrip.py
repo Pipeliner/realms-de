@@ -3,6 +3,8 @@ import importlib.util
 from pathlib import Path
 import unittest
 
+from consumer_process import require_one, selected_pids
+
 spec = importlib.util.spec_from_file_location('consumer', Path(__file__).with_name('consumer_roundtrip.py'))
 probe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(probe)
@@ -37,6 +39,31 @@ class ConsumerTests(unittest.TestCase):
     def test_foot_rejects_neither_variant_supported(self):
         with self.assertRaises(AssertionError):
             probe.select_foot_config('/A', lambda path: False)
+
+    def test_selected_terminal_ignores_distro_server_and_other_generation(self):
+        commands = {
+            '11': b'foot\0--server\0',
+            '12': b'foot\0--config=/generation/A/foot/foot.ini\0zsh\0',
+            '13': b'foot\0--config=/generation/B/foot/foot.ini\0zsh\0',
+        }
+        matches = selected_pids('foot', list(commands), '/generation/A/foot/foot.ini',
+                                lambda pid: commands[pid])
+        self.assertEqual(require_one('foot', matches), '12')
+
+    def test_selected_terminal_rejects_missing_and_duplicate_matches(self):
+        selected = b'foot\0--config=/generation/A/foot/foot.ini\0zsh\0'
+        commands = {'11': b'foot\0--server\0', '12': selected, '13': selected}
+        with self.assertRaises(AssertionError):
+            require_one('foot', selected_pids('foot', ['11'], '/generation/A/foot/foot.ini',
+                                              lambda pid: commands[pid]))
+        with self.assertRaises(AssertionError):
+            require_one('foot', selected_pids('foot', list(commands), '/generation/A/foot/foot.ini',
+                                              lambda pid: commands[pid]))
+
+    def test_consumer_probe_command_passes_exact_selected_config(self):
+        self.assertEqual(probe.consumer_process_command('foot', '/generation/A/foot/foot.ini'),
+                         'sudo python3 /var/tmp/realm-native-vm/consumer_process.py foot '
+                         '/generation/A/foot/foot.ini present')
 
     def evidence(self):
         return {'executable': '/usr/lib/realm/bin/yazi', 'environment': {
