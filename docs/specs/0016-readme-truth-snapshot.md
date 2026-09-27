@@ -1,6 +1,6 @@
 # SPEC 0016 — README truthfulness snapshot
 
-- **Status:** Accepted (2026-08-30; live-VM evidence amendment 2026-09-13)
+- **Status:** Accepted (2026-08-30; live-VM evidence amendment 2026-09-13; native-VM and snapshot refresh 2026-09-27)
 - **Milestone:** M0
 - **Issue:** [#8](https://github.com/Pipeliner/realms-de/issues/8)
 - **Decisions:** Standing orders S3, S10 and S15
@@ -70,20 +70,26 @@ surfaces render. The captures show foot with the current unthemed/default-font
 presentation, including visible ASCII glyph fallback; the README must not
 present that as the final themed desktop.
 
-That proof does not establish a completed M3 desktop, physical-hardware support,
-native Debian or Fedora installation, or functional portal integration.
+Those historical captures do not establish a completed M3 desktop or physical
+hardware support. Separately, run 36327811527 at merge revision
+`29e69684d1ff1d45629d7cdcc0b3d8b8ae6996dc` passed both native-package builds and
+Ubuntu 24.04/Fedora graphical VM jobs. Link that run and distinguish successful
+jobs from the overall failed run (Fedora source guard and Nix X11 checks).
+Physical hardware and full MVP acceptance remain pending; do not claim later
+browser, window-control or relogin probes passed from this earlier evidence.
 
 For this pre-alpha snapshot, the `crates/realm-session` manifest, library and
 backend contract, runtime owner, production `src/bin/realm-wm.rs` entrypoint,
 real-socket runtime fixture, and installed NixOS QEMU capture are checked
 evidence for the implemented daemon. README status must name the verified VM
-boundary without broadening it to physical hardware or native packages. For
+boundary without broadening it to physical hardware. Separate native evidence
+must identify its own run and revision. For
 `realm-bar`, its manifest, binary entrypoint, render contract tests, and paired
 which-key/grimoire captures are required artifacts. README status must call it
 implemented and verified in that same bounded VM environment.
 The `crates/realm-ctl` manifest and binary source are checked evidence for the
-implemented theme commands; the README must not imply that the full M3 control
-surface or `doctor` exists.
+implemented theme commands and bounded `doctor`; the README must not imply
+that the full M3 control surface is complete.
 `realm-theme` source/test evidence consists of its manifest, `src/lib.rs` and
 `src/theme.rs` containing Rust test evidence. The Nix module is
 `packaging/nix/nixos-module.nix`; native package-definition evidence is
@@ -99,7 +105,7 @@ these checked-in paths:
 ### 3. `needs-human` snapshot
 
 The `Needs a human` section is a dated snapshot of this GitHub query at
-`2026-08-30T06:18:36Z`:
+`2026-09-27`:
 
 ```text
 repo:Pipeliner/realms-de is:issue is:open label:needs-human
@@ -107,8 +113,8 @@ repo:Pipeliner/realms-de is:issue is:open label:needs-human
 
 It contains exactly one Markdown table row per snapshot issue. Each row has
 the structure `| [#number — exact GitHub title](exact issue URL) | factual,
-nonempty blocker |`, for exactly these issues: `#16`, `#17`, `#23`, `#24`,
-`#25`, `#30`, `#35`, `#132`, `#133`, `#134`, `#135`, `#166`, and `#168`.
+nonempty blocker |`, for exactly issue `#25`, titled
+`Template: GTK 3, GTK 4 and libadwaita stylesheets`.
 
 Every blocker is a short consequence already stated by the linked issue. It
 does not invent an option, recommendation, priority, owner or deadline. Closed
@@ -120,13 +126,22 @@ When a `needs-human` issue is opened, closed, or gains/loses that label, refresh
 the snapshot in the same documentation change; never silently leave it claiming
 to be live.
 
+Keep README current whenever shipped behavior, try-out instructions or verified
+delivery evidence changes. Refresh the README, this dated evidence contract and
+its fixtures together when their claims change; retain explicit limitations and
+do not present a successful job as a successful whole run.
+The current try-out instructions link the exact Ubuntu/Fedora artifacts from
+that verified run, disclose their 2026-12-26 expiry and possible earlier removal,
+and warn readers to preserve their existing desktop/display manager. These are
+CI trial artifacts, not releases or a completed MVP certification.
+
 ## Acceptance criteria
 
 | # | Given / When / Then | Test |
 |---|---|---|
 | A1 | Given the README before its first divider, when a visitor reads it, then it contains the five-part identity and both inspected VM captures; their caption identifies NixOS QEMU and River 0.4.8, links the original provenance and explicit review correction, reports the PNG-IHDR-derived 1280x800 dimensions, and makes no hardware or final-theme claim; given the rule section, it contains the three exact headings with ADR 0001/0005/0009 links. | `docs/test-readme-truth-snapshot.sh` — `intro-and-rules`, `capture-evidence` |
-| A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, installed-NixOS-VM-verified `realm-wm` and `realm-bar`, remaining hardware/native-package/portal boundary, present pre-alpha assets, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
-| A3 | Given the `2026-08-30T06:18:36Z` snapshot, when each `Needs a human` table row is checked, then it binds one exact issue number, URL and title to a nonempty factual blocker; exactly the 13 accepted rows exist and #34 does not. | `docs/test-readme-truth-snapshot.sh` — `needs-human-snapshot` |
+| A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, installed-NixOS-VM-verified `realm-wm` and `realm-bar`, separately linked native VM jobs and tested revision, failed overall-run boundary, remaining hardware/full-MVP boundary, present pre-alpha assets, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
+| A3 | Given the `2026-09-27` snapshot, when each `Needs a human` table row is checked, then it binds exact issue #25, URL and title to a nonempty factual blocker; exactly this one accepted row exists and obsolete rows do not. | `docs/test-readme-truth-snapshot.sh` — `needs-human-snapshot` |
 | A4 | Given the documentation CI job, when it runs on a pull request or push, then uncommented fixture and production-check commands run in the `docs` job without a network call. | `docs/test-readme-truth-snapshot.sh` — `workflow-invocation` |
 
 ## Failure modes
