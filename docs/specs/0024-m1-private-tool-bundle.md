@@ -129,6 +129,9 @@ consumer retains those three binding files as a CI artifact for provenance.
 No follow-up repository commit or manual workflow dispatch is required for
 ordinary source, documentation, policy, or workflow edits. The freshness check
 continues to compare the entire retained input scope; it is not weakened.
+Container jobs SHALL explicitly register their GitHub workspace as a trusted
+Git directory before source preparation, so host/container UID differences do
+not prevent the same immutable-commit checks from running.
 
 The Realm-workspace source-replacement configuration is a separately retained
 build input: native recipes SHALL stage it at the unpacked source root before

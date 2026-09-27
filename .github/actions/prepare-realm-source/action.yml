@@ -7,6 +7,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
         source_commit=$(git rev-parse HEAD)
         candidate="$RUNNER_TEMP/realm-source-${GITHUB_JOB}-${GITHUB_RUN_ATTEMPT}"
         python3 packaging/tool-sources/ci_rebind_realm_workspace.py \
