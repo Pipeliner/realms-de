@@ -756,7 +756,14 @@ where
     F: FnOnce() -> Result<B, BackendError>,
     R: FnOnce() -> std::io::Result<()>,
 {
-    run_daemon_with_environment(runtime, make_backend, ready, degraded_codes, Vec::new())
+    run_daemon_with_environment(
+        runtime,
+        make_backend,
+        ready,
+        degraded_codes,
+        Vec::new(),
+        false,
+    )
 }
 
 fn run_daemon_with_environment<B, F, R>(
@@ -765,6 +772,7 @@ fn run_daemon_with_environment<B, F, R>(
     ready: R,
     degraded_codes: Option<Vec<String>>,
     environment: Vec<(OsString, OsString)>,
+    session_scopes: bool,
 ) -> Result<(), RuntimeError>
 where
     B: WmBackend,
@@ -776,7 +784,7 @@ where
     let snapshot_path = runtime.path().join("realm/ledger.json");
     let bound = runtime.prepare_server_endpoint()?.bind()?;
 
-    let mut worker = Worker::start_with_environment(snapshot_path, environment)?;
+    let mut worker = Worker::start_with_launch_policy(snapshot_path, environment, session_scopes)?;
     let recovered = load_startup_snapshot(&mut worker)?;
     let mut persistence = PersistenceCoordinator::new(recovered.clone());
 
@@ -912,6 +920,7 @@ where
         notify_ready,
         degraded_codes,
         environment,
+        true,
     )
 }
 

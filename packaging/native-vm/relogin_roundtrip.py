@@ -49,6 +49,7 @@ for name in ('river', 'realm-wm', 'realm-bar'):
     processes[name] = identity(pids[0])
     assert processes[name] is not None, (name, pids)
 old = list(previous.get('processes', {}).values())
+old.extend(previous.get('applications', {}).values())
 if previous:
     old.append([previous['login']['owner_pid'], previous['login']['start_time']])
 print(json.dumps({'session': graphical[0], 'login': login, 'processes': processes,
@@ -127,6 +128,13 @@ def main():
         assert generation != before['login']['generation'], before
         result['expected_generation'] = generation
         result['before_state'] = state(0)
+        monitor_command(monitor, 'sendkey meta_l-ret')
+        result['before_quit_state'] = wait(lambda: state(1), 20)
+        before['applications'] = {}
+        for name in ('foot', 'zsh'):
+            application = wait(lambda: json.loads(guest('sudo python3 - ' + name, PROCESS)), 20)
+            before['applications'][name] = [application['pid'], application['start_time']]
+        screenshot('relogin-open-terminal-before-quit')
         result['quit_response'] = json.loads(guest(user + ' python3 - ' + runtime + '/realm/ctl.sock', QUIT))
 
         def transitioned():

@@ -49,6 +49,7 @@ struct ChildOwner {
     sender: SyncSender<Child>,
     count: Arc<AtomicUsize>,
     environment: Vec<(OsString, OsString)>,
+    session_scopes: bool,
 }
 
 /// One terminal result returned by the worker.
@@ -137,6 +138,14 @@ impl Worker {
         snapshot_path: PathBuf,
         environment: Vec<(OsString, OsString)>,
     ) -> io::Result<Self> {
+        Self::start_with_launch_policy(snapshot_path, environment, false)
+    }
+
+    pub(crate) fn start_with_launch_policy(
+        snapshot_path: PathBuf,
+        environment: Vec<(OsString, OsString)>,
+        session_scopes: bool,
+    ) -> io::Result<Self> {
         let event_fd = Arc::new(eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK)?);
         let (message_tx, message_rx) = mpsc::sync_channel(MAX_WORKER_JOBS + 2);
         let (snapshot_tx, snapshot_rx) = mpsc::sync_channel(1);
@@ -154,6 +163,7 @@ impl Worker {
             sender: child_tx,
             count: Arc::clone(&owned_children),
             environment,
+            session_scopes,
         };
         std::thread::Builder::new()
             .name("realm-worker".to_owned())
@@ -394,13 +404,23 @@ fn worker_main(
                 WorkerResult::SnapshotRead(read_snapshot_bounded(&snapshot_path))
             }
             WorkerMessage::Process(ProcessJob::Spawn(argv)) => WorkerResult::Process {
-                result: spawn_owned(spawn_argv(argv, &child_owner.environment), &child_owner),
+                result: spawn_owned(
+                    spawn_argv(argv, &child_owner.environment, child_owner.session_scopes),
+                    &child_owner,
+                ),
             },
             WorkerMessage::Process(ProcessJob::FixedConsumer(consumer)) => WorkerResult::Process {
                 result: spawn_owned(
-                    Command::new(&daemon_executable)
-                        .args(["--fixed-consumer", consumer.as_str()])
-                        .spawn(),
+                    launch_command(
+                        &[
+                            daemon_executable.as_os_str().to_owned(),
+                            "--fixed-consumer".into(),
+                            consumer.as_str().into(),
+                        ],
+                        &[],
+                        child_owner.session_scopes,
+                    )
+                    .and_then(|mut command| command.spawn()),
                     &child_owner,
                 ),
             },
@@ -430,14 +450,50 @@ fn worker_main(
     }
 }
 
-fn spawn_argv(argv: Vec<String>, environment: &[(OsString, OsString)]) -> io::Result<Child> {
+fn spawn_argv(
+    argv: Vec<String>,
+    environment: &[(OsString, OsString)],
+    session_scopes: bool,
+) -> io::Result<Child> {
+    launch_command(
+        &argv.into_iter().map(OsString::from).collect::<Vec<_>>(),
+        environment,
+        session_scopes,
+    )?
+    .spawn()
+}
+
+fn launch_command(
+    argv: &[OsString],
+    environment: &[(OsString, OsString)],
+    session_scopes: bool,
+) -> io::Result<Command> {
     let Some(program) = argv.first() else {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty argv"));
     };
-    Command::new(program)
-        .args(&argv[1..])
-        .envs(environment.iter().cloned())
-        .spawn()
+    let mut command = if session_scopes {
+        let mut command = Command::new("systemd-run");
+        command.args([
+            "--user",
+            "--scope",
+            "--collect",
+            "--quiet",
+            "--no-ask-password",
+            "--expand-environment=no",
+            "--slice=app.slice",
+            "--property=PartOf=realm-session.target",
+            "--property=BindsTo=realm-session.target",
+            "--",
+        ]);
+        command.args(argv);
+        command
+    } else {
+        let mut command = Command::new(program);
+        command.args(&argv[1..]);
+        command
+    };
+    command.envs(environment.iter().cloned());
+    Ok(command)
 }
 
 fn spawn_owned(child: io::Result<Child>, owner: &ChildOwner) -> io::Result<()> {
@@ -669,6 +725,54 @@ mod tests {
             assert!(Instant::now() < deadline, "worker did not report spawn");
             std::thread::yield_now();
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn session_scope_preserves_literal_argv_environment_and_failure_without_fallback() {
+        let argv = vec!["application".into(), "$HOME literal argument".into()];
+        let environment = vec![("REALM_GENERATION".into(), "generation-a".into())];
+        let command = super::launch_command(&argv, &environment, true).unwrap();
+        assert_eq!(command.get_program(), "systemd-run");
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "--user",
+                "--scope",
+                "--collect",
+                "--quiet",
+                "--no-ask-password",
+                "--expand-environment=no",
+                "--slice=app.slice",
+                "--property=PartOf=realm-session.target",
+                "--property=BindsTo=realm-session.target",
+                "--",
+                "application",
+                "$HOME literal argument"
+            ]
+        );
+        assert!(command
+            .get_envs()
+            .any(|(key, value)| key == "REALM_GENERATION"
+                && value == Some(std::ffi::OsStr::new("generation-a"))));
+        assert!(command.get_current_dir().is_none(), "inherit caller cwd");
+        let root = fixture_dir("scope-no-fallback");
+        let wrapper = root.join("systemd-run");
+        fs::write(
+            &wrapper,
+            "#!/bin/sh\nprintf 'scope refused\\n' >&2\nexit 41\n",
+        )
+        .unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut command = super::launch_command(&argv, &environment, true).unwrap();
+        command.env("PATH", &root);
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(41));
+        assert_eq!(output.stderr, b"scope refused\n");
         fs::remove_dir_all(root).unwrap();
     }
 

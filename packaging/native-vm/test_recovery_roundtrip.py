@@ -6,6 +6,17 @@ import unittest
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_apps_must_be_in_distinct_session_owned_scopes(self):
+        apps = {str(pid): {'scope': 'run-' + str(pid) + '.scope', 'part_of': ['realm-session.target'],
+                          'binds_to': ['realm-session.target'], 'start_time': pid * 10}
+                for pid in (20, 21, 22)}
+        self.probe.validate_app_scopes(apps)
+        for field, value in (('scope', 'realm-wm.service'), ('part_of', []), ('binds_to', [])):
+            broken = copy.deepcopy(apps)
+            broken['20'][field] = value
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                self.probe.validate_app_scopes(broken)
+
     def test_harness_runs_bounded_recovery_between_windows_and_portals(self):
         source = Path(__file__).with_name('run-native-session-vm.sh').read_text()
         windows = source.index('timeout 300 python3 "$script_dir/window_roundtrip.py"')
@@ -19,13 +30,14 @@ class RecoveryTests(unittest.TestCase):
         self.before = {'session': '3', 'login': {'owner_pid': 8, 'start_time': 80},
                        'processes': {'river': [10, 100], 'realm-wm': [11, 110], 'realm-bar': [12, 120]},
                        'bar': {'ActiveState': 'active', 'ActiveEnterTimestampMonotonic': '42', 'NRestarts': '0'},
+                       'apps': {'20': {'start_time': 200}},
                        'durable': {'bindings': [{'win_id': 1, 'backend_id': 'a'}]}}
         self.after = copy.deepcopy(self.before)
         self.after['processes']['realm-wm'] = [13, 130]
 
     def test_only_wm_identity_changes(self):
         self.probe.validate_recovery(self.before, self.after)
-        for field in ('session', 'login', 'river', 'realm-bar', 'realm-wm', 'bar', 'durable'):
+        for field in ('session', 'login', 'river', 'realm-bar', 'realm-wm', 'bar', 'durable', 'apps'):
             changed = copy.deepcopy(self.after)
             if field in ('river', 'realm-bar'): changed['processes'][field] = [90, 900]
             elif field == 'realm-wm': changed['processes'][field] = [11, 110]

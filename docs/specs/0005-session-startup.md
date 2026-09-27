@@ -351,13 +351,33 @@ and bounded diagnostics; success closes all three fixture terminals normally.
 
 **Supervision policy, stated so the unit can be written from it:**
 
+**Accepted crash ownership correction (2026-09-27).** Automatic WM restarts
+use `RestartMode=direct` (systemd 254+, within the supported distribution
+floor), so a transient failure does not invoke the abort dependency. Terminal
+restart-prevented failures and exhausted start limits still invoke abort.
+Ordinary launched applications, including fixed-consumer helpers and direct
+argv/browser launches, run in transient user `app.slice` scopes with
+`PartOf=realm-session.target` and `BindsTo=realm-session.target`. They remain
+outside the WM service cgroup; its ordinary control-group kill policy remains.
+Stopping the session stops these scopes. Scope creation must precede application
+exec, preserve argv literally (environment expansion disabled), inherited cwd
+and child-only theme selectors, and must never fall back to an unscoped launch.
+The existing asynchronous launch response admits the helper, not application
+readiness; scope/exec failure remains nonzero with a diagnostic in the journal.
+The fixed-consumer helper retains its existing generation lease and argv logic.
+Native recovery records three distinct application scopes and their target
+dependencies before and after the crash. Native relogin deliberately leaves a
+terminal and its shell open at Quit and rejects surviving PID/start-time pairs
+after the next login, as well as requiring an initially empty next-login ledger.
+
 | Property | Value | Reason |
 |---|---|---|
 | `Restart=` | `always` | Quit is expressed through river's `exit_session`, not through the daemon exiting (see below), so a clean exit on its own is not a normal path and must not leave river unmanaged. |
+| `RestartMode=` | `direct` | Skip transient failed-state notifications during automatic restart; reserve abort for terminal failure. |
 | `RestartSec=` | `1s` | Every second here is a second the user cannot move a window. |
 | `RestartPreventExitStatus=` | `69 78` | `69` = river answered `unavailable`; `78` = protocol version mismatch against the pinned river. Restarting cannot help with either, and looping hides the message. |
 | `StartLimitIntervalSec=` / `StartLimitBurst=` | `30` / `5` | Five failures in thirty seconds is a real bug. It must surface as a dead unit, not a hot laptop. |
-| `OnFailure=` | `realm-session-abort.service` | Fires when the unit enters `failed`, which with `Restart=always` means *after* the start limit is hit — exactly once, at the right moment. That unit runs `realm-session --abort`, which reads `$XDG_RUNTIME_DIR/realm/session.pid` and signals the entry to tear down (requirement 2). |
+| `OnFailure=` | `realm-session-abort.service` | With `RestartMode=direct`, fires for terminal failure (restart-prevented exit or exhausted start limit), not an ordinary auto-restart. That unit runs `realm-session --abort`, which reads `$XDG_RUNTIME_DIR/realm/session.pid` and signals the entry to tear down (requirement 2). |
 | `TimeoutStopSec=` | `10s` | Bounded, so teardown cannot hang on it. |
 | `Slice=` | `session.slice` | The window manager is essential to the session; under memory pressure it must not be the first thing killed. |
 
@@ -471,7 +491,7 @@ and Home Manager copies to represent the same graph.
 | Unit | `[Unit]` | `[Service]` | `[Install]` |
 |---|---|---|---|
 | `realm-session.target` | `BindsTo=graphical-session.target`, `Before=graphical-session.target`, `Wants=graphical-session-pre.target`, `After=graphical-session-pre.target` | — | **none** |
-| `realm-wm.service` | `PartOf=realm-session.target graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=realm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=realm-session.target` |
+| `realm-wm.service` | `PartOf=realm-session.target graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=realm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartMode=direct`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=realm-session.target` |
 | `realm-bar.service` | `PartOf=realm-session.target graphical-session.target`, `After=realm-wm.service`, `Wants=realm-wm.service`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5` | `Type=exec`, `Restart=on-failure`, `RestartSec=1`, `TimeoutStopSec=5`, `Slice=app.slice` | `WantedBy=realm-session.target` |
 
 The reasoning behind each relationship, because these are easy to copy wrongly:

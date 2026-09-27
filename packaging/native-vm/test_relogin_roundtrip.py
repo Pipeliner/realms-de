@@ -31,6 +31,15 @@ class ReloginTests(unittest.TestCase):
         self.after['processes']['river'] = [11, 201]
         self.probe.validate_transition(self.before, self.after, 'B')
 
+    def test_snapshot_checks_old_application_identities_as_well_as_daemons(self):
+        previous = copy.deepcopy(self.before)
+        previous['applications'] = {'foot': [30, 300], 'zsh': [31, 310]}
+        body = self.probe.SNAPSHOT.split('old = ', 1)[1].split('print(json.dumps', 1)[0]
+        namespace = {'previous': previous}
+        exec('old = ' + body, namespace)
+        self.assertIn([30, 300], namespace['old'])
+        self.assertIn([31, 310], namespace['old'])
+
     def test_stale_owner_session_process_or_selection_fails(self):
         for mutation in ('session', 'owner', 'process', 'generation', 'survivor', 'old_session', 'missing'):
             value = copy.deepcopy(self.after)

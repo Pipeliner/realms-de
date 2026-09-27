@@ -34,6 +34,34 @@ def validate_recovery(before, after):
         assert before['processes'][name] == after['processes'][name], after
     assert before['bar']['ActiveState'] == 'active' and after['bar'] == before['bar'], after
     assert after['durable'] == before['durable'], after
+    assert after['apps'] == before['apps'], after
+
+
+def validate_app_scopes(apps):
+    assert len(apps) == 3, apps
+    assert len({value['scope'] for value in apps.values()}) == 3, apps
+    for value in apps.values():
+        assert value['scope'].endswith('.scope'), value
+        assert 'realm-session.target' in value['part_of'], value
+        assert 'realm-session.target' in value['binds_to'], value
+
+
+APP_SCOPES = r'''
+import json, pathlib, subprocess
+pids = subprocess.check_output(['pgrep', '-u', 'alice', '-x', 'foot'], text=True).split()
+apps = {}
+for pid in pids:
+    fields = pathlib.Path('/proc', pid, 'stat').read_text().rsplit(')', 1)[1].split()
+    assert fields[0] not in ('Z', 'X'), fields
+    cgroup = pathlib.Path('/proc', pid, 'cgroup').read_text().strip()
+    assert cgroup.startswith('0::') and '/app.slice/' in cgroup, cgroup
+    scope = cgroup.rsplit('/', 1)[1]
+    raw = subprocess.check_output(['systemctl', '--user', 'show', scope, '-p', 'PartOf', '-p', 'BindsTo'], text=True)
+    props = dict(line.split('=', 1) for line in raw.splitlines())
+    apps[pid] = {'start_time': int(fields[19]), 'scope': scope,
+                 'part_of': props['PartOf'].split(), 'binds_to': props['BindsTo'].split()}
+print(json.dumps(apps))
+'''
 
 
 def validate_state_recovery(before, after):
@@ -83,6 +111,8 @@ def main():
         assert int(value['bar']['ActiveEnterTimestampMonotonic']) > 0, value['bar']
         assert value['bar']['NRestarts'].isdigit(), value['bar']
         value['durable'] = json.loads(guest('cat ' + runtime + '/realm/ledger.json'))
+        value['apps'] = json.loads(guest(user + ' python3 -', APP_SCOPES))
+        validate_app_scopes(value['apps'])
         return value
 
     def wait(check, label, deadline=None):
@@ -176,6 +206,7 @@ def main():
         for remaining in (2, 1, 0):
             key('meta_l-q')
             wait(lambda: match(lambda value: count(value) == remaining), 'close recovery fixture')
+        wait(lambda: guest('! pgrep -u alice -x foot'), 'closed application processes')
         result['passed'] = True
     finally:
         print(json.dumps(result, indent=2), flush=True)
