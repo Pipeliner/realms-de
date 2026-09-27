@@ -1709,7 +1709,7 @@ EOF
           "gtk3-toolkit",
           [gtk3_css],
           "gtk3-widget-factory",
-          "Page 1",
+          "togglebutton",
           r"(css|theme).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(css|theme)",
           screenshot="realm-gtk3-toolkit",
       )
@@ -1750,7 +1750,7 @@ EOF
           "gtk3-launcher",
           [gtk3_css],
           "gtk3-widget-factory",
-          "Page 1",
+          "togglebutton",
           r"(css|theme).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(css|theme)",
           screenshot="realm-gtk3-launcher",
           launcher=True,

@@ -118,15 +118,20 @@ window title from visible text. It must require exactly two managed windows
 observed protocol title,
 and independent OCR of its visible label before screenshot, file-open trace,
 diagnostic, and clean-exit checks. On the pinned GTK3 widget factory the
-observed River title is `gtk3-widget-factory`, while its visible stack-switcher
-label is `Page 1`; both direct and launcher probes must use these distinct
-expectations. A title mismatch must not be excused by OCR, or vice versa.
+observed River title is `gtk3-widget-factory`. Both direct and launcher probes
+must independently recognize the visible `togglebutton` widget label, not a
+copy of the protocol title or a terminal command. CI run 36354366061 showed
+that OCR repeatedly read the narrow `Page 1` tab as `Pagel` or `Pace 1l`,
+while reading the actual `togglebutton` control consistently. Changing that
+single GTK3 visual anchor must not loosen the exact focused-title and two-window
+checks, screenshot, selected CSS file-open proof, strict diagnostics, or clean
+exit. A title mismatch must not be excused by OCR, or vice versa.
 For the pinned GTK4 widget factory, the protocol title is `GTK Widget Factory`
 and visible stack-switcher text is `Page 1`; Qt6ct uses `Qt6 Configuration Tool`
 for both. These title expectations are grounded in the packaged upstream
 sources: [GTK3 title propagation](https://github.com/GNOME/gtk/blob/3.24.52/gtk/gtkwindow.c#L4199),
 [GTK3 Wayland fallback](https://github.com/GNOME/gtk/blob/3.24.52/gdk/wayland/gdkwindow-wayland.c#L484),
-[GTK3 stack-switcher label](https://github.com/GNOME/gtk/blob/3.24.52/demos/widget-factory/widget-factory.ui#L1796),
+[GTK3 togglebutton widget](https://github.com/GNOME/gtk/blob/3.24.52/demos/widget-factory/widget-factory.ui#L908),
 [GTK4 UI and stack switcher](https://github.com/GNOME/gtk/blob/4.22.4/demos/widget-factory/widget-factory.ui#L428),
 and [Qt6ct UI title](https://www.opencode.net/trialuser/qt6ct/-/raw/0.11/src/qt6ct/mainwindow.ui).
 

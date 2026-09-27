@@ -93,14 +93,32 @@ class ToolkitFocusTests(unittest.TestCase):
             for call in calls
         }
         self.assertEqual(observed, {
-            "gtk3-toolkit": ("gtk3-widget-factory", "Page 1"),
+            "gtk3-toolkit": ("gtk3-widget-factory", "togglebutton"),
             "gtk4-toolkit": ("GTK Widget Factory", "Page 1"),
             "qt6-toolkit": ("Qt6 Configuration Tool", "Qt6 Configuration Tool"),
-            "gtk3-launcher": ("gtk3-widget-factory", "Page 1"),
+            "gtk3-launcher": ("gtk3-widget-factory", "togglebutton"),
             "gtk4-launcher": ("GTK Widget Factory", "Page 1"),
             "qt6-launcher": ("Qt6 Configuration Tool", "Qt6 Configuration Tool"),
             "qt6-user-override": ("Qt6 Configuration Tool", "Qt6 Configuration Tool"),
         })
+
+    def test_gtk3_visual_anchor_is_in_widget_ocr_not_terminal_only(self):
+        calls = toolkit_calls()
+        gtk3_visual = [
+            call.args[4].value for call in calls
+            if call.args[1].value in ("gtk3-toolkit", "gtk3-launcher")
+        ]
+        # CI run 36354366061: the narrow tab was read as Pagel/Pace 1l,
+        # while this GTK3 control label was recognized repeatedly.
+        widget_ocr = "gtk3-widget-factory\nPagel\nPage2\ntogglebutton\ncheckbutton"
+        terminal_only = (
+            "foot\nalice@machine\n"
+            "strace -f -qq -e trace=openat gtk3-widget-factory"
+        )
+        self.assertEqual(len(gtk3_visual), 2)
+        for visual in gtk3_visual:
+            self.assertIn(visual, widget_ocr)
+            self.assertNotIn(visual, terminal_only)
 
     def test_focus_requires_exact_protocol_title_and_two_managed_windows(self):
         start = SOURCE.index("      def toolkit_focus_matches(")
