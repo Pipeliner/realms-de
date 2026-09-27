@@ -118,7 +118,7 @@ fn no_session_report_is_ordered_bounded_and_keeps_independent_warnings() {
     assert_eq!(checks[22]["status"], "skip");
     assert_eq!(
         checks[22]["summary"],
-        "swayidle/swaylock selected; automatic enablement awaits SPEC 0032 acceptance; runtime readiness is not probed"
+        "swayidle/swaylock selected; runtime readiness is not probed"
     );
     assert_eq!(checks[29]["id"], "fonts/glyphs");
     assert_eq!(checks[29]["status"], "warn");

@@ -89,7 +89,7 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    # SPEC 0032: upstream authentication, but no idle wantedBy until VM proof.
+    # SPEC 0032: upstream authentication and fresh-login idle activation.
     security.pam.services.swaylock = { };
     environment.systemPackages = [
       cfg.package
@@ -115,6 +115,7 @@ in
     systemd.user.services.realm-wm.wantedBy = [ "realm-session.target" ];
     systemd.user.services.realm-wm.path = [ cfg.package ] ++ support.reusedTools pkgs;
     systemd.user.services.realm-bar.wantedBy = [ "realm-session.target" ];
+    systemd.user.services.realm-idle.wantedBy = [ "realm-session.target" ];
 
     environment.etc."realm/palette.toml".source = cfg.paletteFile;
 

@@ -1102,7 +1102,7 @@ fn apply_deferred_checks(
         checks,
         Check::skipped(
             "units/idle-lock",
-            "swayidle/swaylock selected; automatic enablement awaits SPEC 0032 acceptance; runtime readiness is not probed",
+            "swayidle/swaylock selected; runtime readiness is not probed",
         ),
     );
     if !portal_roundtrip {

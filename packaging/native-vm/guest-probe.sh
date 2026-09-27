@@ -81,16 +81,33 @@ install_guest() {
     grep -Fxq 'Exec=/usr/bin/realm-session' /usr/share/wayland-sessions/realm.desktop
     grep -Fxq 'TryExec=/usr/bin/realm-session' /usr/share/wayland-sessions/realm.desktop
 
-    # SPEC 0032 package staging is deliberately not automatic idle enablement.
+    # SPEC 0032 requires packaged fresh-login idle activation.
     for helper in realm-idle realm-backlight swayidle swaylock brightnessctl; do
         test -x "/usr/bin/$helper" || fail "missing idle/lock helper: $helper"
     done
     test -f /etc/pam.d/swaylock
     test -f /usr/lib/systemd/user/realm-idle.service
     grep -Fxq 'ExecStart=/usr/bin/swaylock -f -C /dev/null' /usr/lib/systemd/user/realm-lock.service
-    test ! -e /usr/lib/systemd/user/realm-session.target.wants/realm-idle.service
-    test ! -e /etc/systemd/user/realm-session.target.wants/realm-idle.service
+    test "$(readlink /usr/lib/systemd/user/realm-session.target.wants/realm-idle.service)" = ../realm-idle.service
     swaylock --version
+
+    # Disposable CI guest only. SSH remains key-only; use the distro PAM stack.
+    printf '%s\n' 'alice:realmtest' | chpasswd
+    {
+        swaylock --version
+        case "$target" in
+            ubuntu-24.04-x86_64)
+                dpkg-query -W swaylock swayidle brightnessctl libpam0g libpam-modules
+                dpkg-query -S /usr/bin/swaylock /etc/pam.d/swaylock
+                ;;
+            fedora-44-x86_64)
+                rpm -q swaylock swayidle brightnessctl pam
+                rpm -qf /usr/bin/swaylock /etc/pam.d/swaylock
+                ;;
+        esac
+        # Preserve the small distro PAM configuration, including include targets.
+        find -L /etc/pam.d -maxdepth 1 -type f -print -exec head -c 16384 {} \;
+    } > /var/tmp/realm-native-lock-packages-pam.txt
 
     install -d -m 0755 /etc/sddm.conf.d
     printf '%s\n' \
@@ -257,10 +274,18 @@ probe_guest() {
     test "$(session_property "$session" Type)" = wayland
     test "$(session_property "$session" Remote)" = no
 
-    for unit in realm-session.target realm-wm.service realm-bar.service; do
+    for unit in realm-session.target realm-wm.service realm-bar.service realm-idle.service; do
         wait_user_unit "$unit" 30
         user_command systemctl --user is-active "$unit" >> "$evidence/units.txt"
     done
+
+    # Observe automatic login activation before controlling the long fixture.
+    # Timing acceptance is separate; this does not certify the 300/600 timers.
+    user_command systemctl --user show realm-idle.service \
+        -p ActiveState -p MainPID -p ActiveEnterTimestampMonotonic \
+        > "$evidence/idle-login.txt"
+    user_command systemctl --user stop realm-idle.service
+    test "$(user_command systemctl --user show realm-idle.service -p ActiveState --value)" = inactive
 
     river_pid=$(one_user_pid river)
     wm_pid=$(one_user_pid realm-wm)
@@ -294,6 +319,7 @@ probe_guest() {
 
     cp /var/tmp/realm-native-packages.txt "$evidence/packages.txt"
     cp /var/tmp/realm-native-portal-runtime.txt "$evidence/portal-package-runtime.txt"
+    cp /var/tmp/realm-native-lock-packages-pam.txt "$evidence/lock-packages-pam.txt"
     cp /var/tmp/realm-native-session-owner.txt "$evidence/session-entry-owner.txt"
     if [[ "$target" == fedora-44-x86_64 ]]; then
         cp /var/tmp/realm-native-activation-owner.txt \

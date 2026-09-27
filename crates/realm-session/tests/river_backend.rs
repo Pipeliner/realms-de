@@ -4,12 +4,14 @@ use std::os::unix::net::UnixStream;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use std::sync::mpsc;
+
 use realm_core::layout::{Placement, Rect};
 use realm_core::WinId;
 use realm_session::backend::{
-    BackendBindingState, BackendEvent, BackendNextKeyEdge, BackendPolicyEvent,
-    BackendPolicyResponse, BackendReady, BackendSubmission, BackendTicket, BackendWindowId,
-    RiverBackend, WmBackend,
+    BackendBindingId, BackendBindingSpec, BackendBindingState, BackendEvent, BackendModifier,
+    BackendNextKeyEdge, BackendPolicyEvent, BackendPolicyResponse, BackendReady, BackendSubmission,
+    BackendTicket, BackendWindowId, RiverBackend, WmBackend,
 };
 
 const REQUIRED_GLOBALS: [(&str, u32); 5] = [
@@ -683,4 +685,372 @@ fn later_standalone_render_reuses_projection_without_second_completion() {
             .count(),
         2
     );
+}
+
+#[derive(Debug)]
+struct LockFixtureObserved {
+    bindings: [u32; 2],
+    xkb_seat: u32,
+    lock_requests: Vec<(u32, u16, Vec<u8>)>,
+    locked_requests: Vec<(u32, u16, Vec<u8>)>,
+    unlock_requests: Vec<(u32, u16, Vec<u8>)>,
+}
+
+#[derive(Clone, Copy)]
+enum PreLockInput {
+    SameTurnPress,
+    PriorTurnRelease,
+    PriorTurnStop,
+}
+
+fn read_manage_response(peer: &mut UnixStream, window_manager: u32) -> Vec<(u32, u16, Vec<u8>)> {
+    let mut requests = Vec::new();
+    loop {
+        let request @ (sender, opcode, _) = read_request(peer);
+        let finished = sender == window_manager && opcode == 2;
+        requests.push(request);
+        if finished {
+            return requests;
+        }
+    }
+}
+
+fn finish_render(peer: &mut UnixStream, window_manager: u32) {
+    peer.write_all(&frame(window_manager, 3, &[])).unwrap();
+    loop {
+        let (sender, opcode, _) = read_request(peer);
+        if sender == window_manager && opcode == 4 {
+            return;
+        }
+    }
+}
+
+fn serve_lock_fixture(
+    mut peer: UnixStream,
+    pre_lock_input: PreLockInput,
+    continue_lock: mpsc::Receiver<()>,
+) -> LockFixtureObserved {
+    let mut registry = None;
+    let mut xkb_bindings = None;
+    let mut layer_shell = None;
+    let window_manager = loop {
+        let (sender, opcode, body) = read_request(&mut peer);
+        if sender == 1 && opcode == 1 {
+            registry = Some(u32::from_ne_bytes(body[..4].try_into().unwrap()));
+        } else if sender == 1 && opcode == 0 {
+            let callback = u32::from_ne_bytes(body[..4].try_into().unwrap());
+            if registry.is_some() {
+                let registry_id = registry.unwrap();
+                for (index, (interface, version)) in REQUIRED_GLOBALS.iter().enumerate() {
+                    peer.write_all(&registry_global(
+                        registry_id,
+                        u32::try_from(index + 1).unwrap(),
+                        interface,
+                        *version,
+                    ))
+                    .unwrap();
+                }
+                registry = None;
+            }
+            peer.write_all(&callback_done(callback)).unwrap();
+        } else if sender == 2 && opcode == 0 {
+            let (interface, offset) = parse_wire_string(&body, 4);
+            let object = u32::from_ne_bytes(body[offset + 4..offset + 8].try_into().unwrap());
+            if interface == "river_xkb_bindings_v1" {
+                xkb_bindings = Some(object);
+            }
+            if interface == "river_layer_shell_v1" {
+                layer_shell = Some(object);
+            }
+            if interface == "river_window_manager_v1" {
+                break object;
+            }
+        }
+    };
+
+    let output = 0xff00_0000_u32;
+    let seat = 0xff00_0001_u32;
+    peer.write_all(&frame(window_manager, 7, &output.to_ne_bytes()))
+        .unwrap();
+    let mut position = Vec::from(0_i32.to_ne_bytes());
+    position.extend_from_slice(&0_i32.to_ne_bytes());
+    peer.write_all(&frame(output, 2, &position)).unwrap();
+    let mut dimensions = Vec::from(1920_i32.to_ne_bytes());
+    dimensions.extend_from_slice(&1080_i32.to_ne_bytes());
+    peer.write_all(&frame(output, 3, &dimensions)).unwrap();
+    peer.write_all(&frame(window_manager, 8, &seat.to_ne_bytes()))
+        .unwrap();
+    peer.write_all(&frame(window_manager, 2, &[])).unwrap();
+
+    let initial_requests = read_manage_response(&mut peer, window_manager);
+    let xkb_bindings = xkb_bindings.unwrap();
+    let bindings: Vec<_> = initial_requests
+        .iter()
+        .filter(|(sender, opcode, body)| {
+            *sender == xkb_bindings && *opcode == 1 && body.len() == 16
+        })
+        .map(|(_, _, body)| u32::from_ne_bytes(body[4..8].try_into().unwrap()))
+        .collect();
+    let bindings: [u32; 2] = bindings
+        .try_into()
+        .unwrap_or_else(|bindings| panic!("two binding constructors absent: {bindings:?}"));
+    let xkb_seat = initial_requests
+        .iter()
+        .find(|(sender, opcode, body)| *sender == xkb_bindings && *opcode == 2 && body.len() == 8)
+        .map(|(_, _, body)| u32::from_ne_bytes(body[..4].try_into().unwrap()))
+        .unwrap();
+    let layer_shell = layer_shell.unwrap();
+    let layer_seat = initial_requests
+        .iter()
+        .find(|(sender, opcode, body)| *sender == layer_shell && *opcode == 2 && body.len() == 8)
+        .map(|(_, _, body)| u32::from_ne_bytes(body[..4].try_into().unwrap()))
+        .unwrap();
+    finish_render(&mut peer, window_manager);
+
+    if !matches!(pre_lock_input, PreLockInput::SameTurnPress) {
+        peer.write_all(&frame(bindings[0], 0, &[])).unwrap();
+        peer.write_all(&frame(window_manager, 2, &[])).unwrap();
+        let _ = read_manage_response(&mut peer, window_manager);
+        finish_render(&mut peer, window_manager);
+        let opcode = match pre_lock_input {
+            PreLockInput::PriorTurnRelease => 1,
+            PreLockInput::PriorTurnStop => 2,
+            PreLockInput::SameTurnPress => unreachable!(),
+        };
+        peer.write_all(&frame(bindings[0], opcode, &[])).unwrap();
+    } else {
+        peer.write_all(&frame(bindings[0], 0, &[])).unwrap();
+    }
+    peer.write_all(&frame(layer_seat, 0, &[])).unwrap();
+    peer.write_all(&frame(window_manager, 4, &[])).unwrap();
+    continue_lock.recv().unwrap();
+    peer.write_all(&frame(window_manager, 2, &[])).unwrap();
+    let lock_requests = read_manage_response(&mut peer, window_manager);
+    finish_render(&mut peer, window_manager);
+
+    peer.write_all(&frame(bindings[0], 0, &[])).unwrap();
+    peer.write_all(&frame(bindings[0], 1, &[])).unwrap();
+    peer.write_all(&frame(bindings[0], 2, &[])).unwrap();
+    peer.write_all(&frame(xkb_seat, 0, &[])).unwrap();
+    let mut modifiers = Vec::from(0_u32.to_ne_bytes());
+    modifiers.extend_from_slice(&64_u32.to_ne_bytes());
+    peer.write_all(&frame(xkb_seat, 1, &modifiers)).unwrap();
+    peer.write_all(&frame(layer_seat, 1, &[])).unwrap();
+    peer.write_all(&frame(window_manager, 2, &[])).unwrap();
+    let locked_requests = read_manage_response(&mut peer, window_manager);
+    finish_render(&mut peer, window_manager);
+
+    peer.write_all(&frame(window_manager, 5, &[])).unwrap();
+    peer.write_all(&frame(window_manager, 2, &[])).unwrap();
+    let unlock_requests = read_manage_response(&mut peer, window_manager);
+    finish_render(&mut peer, window_manager);
+
+    LockFixtureObserved {
+        bindings,
+        xkb_seat,
+        lock_requests,
+        locked_requests,
+        unlock_requests,
+    }
+}
+
+fn next_policy_turn(backend: &mut RiverBackend) -> realm_session::backend::BackendPolicyTurn {
+    for _ in 0..256 {
+        if let Some(BackendEvent::PolicyTurn(turn)) = backend
+            .service(
+                BackendReady {
+                    readable: true,
+                    terminal: false,
+                    writable: true,
+                },
+                Instant::now(),
+            )
+            .unwrap()
+        {
+            return turn;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    panic!("backend did not expose a policy turn");
+}
+
+fn respond_and_complete(
+    backend: &mut RiverBackend,
+    turn: realm_session::backend::BackendPolicyTurn,
+    ticket: u64,
+    bindings: &[BackendBindingId],
+) {
+    backend
+        .respond_policy_turn(
+            turn.id,
+            BackendTicket::new(ticket).unwrap(),
+            BackendPolicyResponse {
+                projection: None,
+                closes: Vec::new(),
+                bindings: BackendBindingState {
+                    enabled: bindings.to_vec(),
+                    watched_modifiers: vec![BackendModifier::Super],
+                    next_key_edge: BackendNextKeyEdge::Ensure,
+                },
+            },
+        )
+        .unwrap();
+    for _ in 0..256 {
+        if matches!(
+            backend
+                .service(
+                    BackendReady {
+                        readable: true,
+                        terminal: false,
+                        writable: true,
+                    },
+                    Instant::now(),
+                )
+                .unwrap(),
+            Some(BackendEvent::OperationCompleted { .. })
+        ) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    panic!("backend response did not complete");
+}
+
+fn drive_until_binding_input_suspended(backend: &mut RiverBackend) {
+    for _ in 0..256 {
+        let event = backend
+            .service(
+                BackendReady {
+                    readable: true,
+                    terminal: false,
+                    writable: true,
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        assert!(
+            !matches!(event, Some(BackendEvent::PolicyTurn(_))),
+            "lock policy boundary arrived before the fixture sent manage_start"
+        );
+        if backend.binding_input_suspended() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    panic!("backend did not expose its private lock gate");
+}
+
+#[test]
+fn session_lock_disables_and_suppresses_realm_bindings_until_unlock() {
+    let binding_a = BackendBindingId::new(7).unwrap();
+    let binding_b = BackendBindingId::new(8).unwrap();
+    for pre_lock_input in [
+        PreLockInput::SameTurnPress,
+        PreLockInput::PriorTurnRelease,
+        PreLockInput::PriorTurnStop,
+    ] {
+        let (client, server) = UnixStream::pair().unwrap();
+        let (continue_lock_tx, continue_lock_rx) = mpsc::sync_channel(0);
+        let fixture =
+            thread::spawn(move || serve_lock_fixture(server, pre_lock_input, continue_lock_rx));
+        let mut backend = RiverBackend::from_socket(client).unwrap();
+        backend.connect().unwrap();
+        backend
+            .configure_bindings(vec![
+                BackendBindingSpec {
+                    id: binding_a,
+                    keysym: "Return".to_owned(),
+                    modifiers: vec![BackendModifier::Super],
+                },
+                BackendBindingSpec {
+                    id: binding_b,
+                    keysym: "d".to_owned(),
+                    modifiers: vec![BackendModifier::Super],
+                },
+            ])
+            .unwrap();
+
+        let initial = next_policy_turn(&mut backend);
+        assert_eq!(
+            initial.events,
+            vec![BackendPolicyEvent::InitialReplayComplete]
+        );
+        respond_and_complete(&mut backend, initial, 40, &[binding_a]);
+
+        if !matches!(pre_lock_input, PreLockInput::SameTurnPress) {
+            let press = next_policy_turn(&mut backend);
+            assert_eq!(
+                press.events,
+                vec![BackendPolicyEvent::BindingPressed(binding_a)]
+            );
+            respond_and_complete(&mut backend, press, 41, &[binding_a]);
+        }
+
+        drive_until_binding_input_suspended(&mut backend);
+        continue_lock_tx.send(()).unwrap();
+        let lock = next_policy_turn(&mut backend);
+        assert_eq!(
+            lock.events,
+            vec![
+                BackendPolicyEvent::ExclusiveFocusChanged(true),
+                BackendPolicyEvent::BindingRepeatStopped(binding_a),
+            ]
+        );
+        assert!(backend.binding_input_suspended());
+        respond_and_complete(&mut backend, lock, 42, &[binding_b]);
+
+        let locked = next_policy_turn(&mut backend);
+        assert_eq!(
+            locked.events,
+            vec![BackendPolicyEvent::ExclusiveFocusChanged(false)],
+            "locked input escaped or authoritative fact was lost"
+        );
+        respond_and_complete(&mut backend, locked, 43, &[binding_b]);
+
+        let unlocked = next_policy_turn(&mut backend);
+        assert!(
+            !backend.binding_input_suspended(),
+            "unlock gate outlived its policy boundary"
+        );
+        assert!(
+            unlocked.events.is_empty(),
+            "unlock invented policy: {unlocked:?}"
+        );
+        respond_and_complete(&mut backend, unlocked, 44, &[binding_b]);
+
+        let observed = fixture.join().unwrap();
+        assert!(observed
+            .lock_requests
+            .iter()
+            .any(|(sender, opcode, _)| *sender == observed.bindings[0] && *opcode == 3));
+        assert!(observed.lock_requests.iter().any(|(sender, opcode, body)| {
+            *sender == observed.xkb_seat && *opcode == 3 && body == &0_u32.to_ne_bytes()
+        }));
+        for requests in [&observed.lock_requests, &observed.locked_requests] {
+            assert!(requests
+                .iter()
+                .any(|(sender, opcode, _)| { *sender == observed.xkb_seat && *opcode == 2 }));
+            assert!(!requests
+                .iter()
+                .any(|(sender, opcode, _)| observed.bindings.contains(sender) && *opcode == 2));
+        }
+        assert!(observed
+            .unlock_requests
+            .iter()
+            .any(|(sender, opcode, _)| *sender == observed.bindings[1] && *opcode == 2));
+        assert!(!observed
+            .unlock_requests
+            .iter()
+            .any(|(sender, opcode, _)| *sender == observed.bindings[0] && *opcode == 2));
+        assert!(observed
+            .unlock_requests
+            .iter()
+            .any(|(sender, opcode, body)| {
+                *sender == observed.xkb_seat && *opcode == 3 && body == &64_u32.to_ne_bytes()
+            }));
+        assert!(observed
+            .unlock_requests
+            .iter()
+            .any(|(sender, opcode, _)| *sender == observed.xkb_seat && *opcode == 1));
+    }
 }

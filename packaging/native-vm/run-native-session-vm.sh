@@ -359,6 +359,13 @@ run_native_session_vm() (
         15
     printf '%s\n' "$target" > "$evidence_dir/target.txt"
 
+    # Reuse this VM's SSH transport and QEMU input for manual and real idle proof.
+    timeout 240 python3 "$script_dir/lock_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+
+    timeout 900 python3 "$script_dir/lock_roundtrip.py" --idle \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+
     timeout 240 python3 "$script_dir/consumer_roundtrip.py" \
         "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
     timeout 300 python3 "$script_dir/window_roundtrip.py" \
