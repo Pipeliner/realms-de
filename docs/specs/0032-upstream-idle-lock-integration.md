@@ -153,9 +153,14 @@ Request `org.freedesktop.login1.Manager.Suspend(false)` from a detached system
 service. Do not inject a signal or directly start systemd-suspend.service.
 Within sixty seconds QEMU must report the guest suspended; wake it through the
 monitor's `system_wakeup` command and require the guest to respond again within
-sixty seconds. These inner polling budgets
-assume responsive test-driver monitor and guest I/O; they do not interrupt a
-blocked driver socket read. The canonical Nix CI job SHALL explicitly set
+sixty seconds. The suspend slice sets ten-second host socket inactivity
+deadlines on both guest-shell and monitor transports, independently of the
+driver's guest-side command timeout. On transport timeout it marks the guest
+channel unusable, retains bounded host console/QMP evidence, and skips further
+guest cleanup and journal calls rather than hanging again. Original socket
+timeouts are restored at the slice boundary. This is a host-observation fix,
+not evidence that the guest resumed or a relaxation of the lock assertions.
+The canonical Nix CI job SHALL explicitly set
 `timeout-minutes: 60` as the outer execution cap, covering build and VM work.
 A root-flake policy regression SHALL reject its absence or another value even
 when other jobs have sixty-minute limits. A new locker readiness timestamp

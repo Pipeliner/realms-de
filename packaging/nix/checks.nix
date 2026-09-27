@@ -999,6 +999,14 @@ EOF
 
       # Actual logind sleep, not an injected PrepareForSleep/Lock signal. The
       # monitor remains reachable while the guest shell is suspended.
+      def arm_suspend_socket_timeouts(machine, seconds):
+          previous = []
+          for transport in (machine.shell, machine.monitor):
+              if transport is not None:
+                  previous.append((transport, transport.gettimeout()))
+                  transport.settimeout(seconds)
+          return previous
+
       def suspend_host_diagnostics():
           evidence = {
               "qemu_returncode": machine.process.poll() if machine.process else None,
@@ -1049,6 +1057,7 @@ EOF
                   if "sleep" in row[0].split(":") and row[3] == "delay"
                   and row[4] == alice_uid and row[5] == int(pid)]
 
+      suspend_socket_timeouts = arm_suspend_socket_timeouts(machine, 10)
       try:
           assert lock_systemctl("show", "--property=ActiveState", "--value") == "inactive"
           machine.succeed("echo 1 > /sys/power/pm_debug_messages")
@@ -1140,6 +1149,10 @@ EOF
           suspend_results["inhibitors_after"] = own_sleep_inhibitors(suspend_idle_pid)
           assert suspend_results["inhibitors_after"], "swayidle did not reacquire its delay inhibitor"
           write_artifact("suspend-kernel-journal.jsonl", kernel_sleep)
+      except TimeoutError as transport_error:
+          suspend_results["transport_unusable"] = True
+          suspend_results["transport_error"] = str(transport_error)
+          raise
       finally:
           # Recovery and logging cannot depend on the guest already being awake.
           suspend_results["host_diagnostics"] = suspend_host_diagnostics()
@@ -1149,6 +1162,8 @@ EOF
               machine.log("suspend recovery monitor: " + recovery_status)
               if "suspended" in recovery_status:
                   machine.send_monitor_command("system_wakeup")
+              if suspend_results.get("transport_unusable"):
+                  raise RuntimeError("guest cleanup skipped after host transport timeout")
               cleanup_status, cleanup_output = machine.execute(
                   as_alice("timeout", "8", "systemctl", "--user", "stop", idle_unit),
                   timeout=DIAGNOSTIC_TIMEOUT,
@@ -1165,9 +1180,13 @@ EOF
               machine.log("suspend diagnostics (last 200 entries):\n" + diagnostics)
               write_artifact("suspend-journal.jsonl", diagnostics)
           except Exception as diagnostic_error:
+              if isinstance(diagnostic_error, TimeoutError):
+                  suspend_results["transport_unusable"] = True
               machine.log(f"suspend diagnostic collection failed: {diagnostic_error}")
           machine.log("suspend final results: " + json.dumps(suspend_results, sort_keys=True))
           write_artifact("suspend-roundtrip.json", json.dumps(suspend_results, indent=2) + "\n")
+          for transport, previous_timeout in suspend_socket_timeouts:
+              transport.settimeout(previous_timeout)
       assert suspend_results.get("idle_stop_status") == 0, suspend_results
 
       # Also proves the default terminal binding is restored after unlock.

@@ -6,6 +6,9 @@ import json
 import os
 from pathlib import Path
 import shlex
+import socket
+import time
+from types import SimpleNamespace
 import textwrap
 from queue import Queue
 
@@ -22,6 +25,48 @@ source = textwrap.dedent(
     source[source.index("      import datetime"):source.rfind("    '';" )]
 )
 tree = ast.parse(source)
+suspend_try = next(node for node in tree.body if isinstance(node, ast.Try)
+                   and any(isinstance(handler.type, ast.Name) and handler.type.id == 'TimeoutError'
+                           for handler in node.handlers))
+guest_calls = []
+artifacts = {}
+cleanup_namespace = {
+    'machine': SimpleNamespace(log=lambda value: None,
+                               send_monitor_command=lambda command: 'running',
+                               execute=lambda *args, **kwargs: guest_calls.append(args) or (0, '')),
+    'suspend_results': {'transport_unusable': True},
+    'suspend_host_diagnostics': lambda: {'console_tail': ['last resume callback']},
+    'suspend_socket_timeouts': [], 'json': json, 'idle_unit': 'realm-idle.service',
+    'as_alice': lambda *args: shlex.join(args), 'DIAGNOSTIC_TIMEOUT': dt.timedelta(seconds=10),
+    'write_artifact': lambda name, value: artifacts.update({name: value}),
+}
+exec(compile(ast.Module(body=suspend_try.finalbody, type_ignores=[]), '<suspend-cleanup>', 'exec'), cleanup_namespace)
+assert not guest_calls, 'timed-out guest transport reused during failure cleanup'
+assert 'last resume callback' in artifacts['suspend-roundtrip.json']
+deadline_function = next((node for node in tree.body if isinstance(node, ast.FunctionDef)
+                          and node.name == 'arm_suspend_socket_timeouts'), None)
+assert deadline_function is not None, 'suspend host transport has no independent socket deadline'
+deadline_namespace = {}
+exec(compile(ast.Module(body=[deadline_function], type_ignores=[]), '<suspend-deadlines>', 'exec'), deadline_namespace)
+for channel in ('shell', 'monitor'):
+    reader, writer = socket.socketpair()
+    try:
+        reader.settimeout(None)
+        machine = SimpleNamespace(shell=reader if channel == 'shell' else None,
+                                  monitor=reader if channel == 'monitor' else None)
+        previous = deadline_namespace['arm_suspend_socket_timeouts'](machine, 0.03)
+        started = time.monotonic()
+        try:
+            reader.recv(1)
+            raise AssertionError('unresponsive peer unexpectedly returned')
+        except TimeoutError:
+            assert time.monotonic() - started < 1
+        for transport, timeout in previous:
+            transport.settimeout(timeout)
+        assert reader.gettimeout() is None
+    finally:
+        reader.close()
+        writer.close()
 # Execute the real acceptance assertions with good and deliberately bad
 # observations. Removing a guard, or weakening its comparison, must fail here.
 assertions = [node for node in ast.walk(tree) if isinstance(node, ast.Assert)]
