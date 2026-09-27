@@ -27,8 +27,10 @@ At login, resolve one complete prepared selection before starting themed Realm
 clients and use it for that session. If no selection exists, prepare the shipped
 default with the same validation. A corrupt selection is diagnosed, not silently
 replaced by guessed data. Later apply operations must not mutate the selected
-session assets or environment. Two overlapping sessions keep independent theme
-selections. Persist only the lifetime information actually needed by this model.
+session assets or environment. MVP permits one active Realm session per user
+(owner confirmed 2026-09-27). Reject a competing same-UID Realm login without
+disturbing the existing session. Sessions belonging to different users keep
+independent theme selections. Persist only the lifetime information needed.
 
 The session must not reclaim configuration still in use. For MVP, leaving old
 published theme data intact is acceptable; automatic generation GC and bounded
@@ -82,11 +84,20 @@ work waits for that result. Repairing a real current-bar usability defect does n
 
 ## Verification obligations before implementation is declared complete
 
+### Overlap scope resolved
+
+The owner confirmed one session on 2026-09-27 in response to the explicit
+one-Realm-session-per-user recommendation. This preserves SPEC 0005's single
+active same-UID claim. Same-user concurrent Realm sessions are not an MVP
+requirement. The login handoff must survive window-manager restart without
+reselecting the latest prepared theme; a second login must not overwrite the
+active selection or its activation environment. Different users remain isolated.
+
 | ID | Required evidence |
 | --- | --- |
 | V1 | Login with A; apply B; both an existing app and a newly launched app in that session still use A; next login uses B. |
 | V2 | Failed render/publication does not disturb active A or replace the last complete next-login selection. |
-| V3 | Concurrent sessions and a single-instance app demonstrate the documented scope; another desktop's files/environment are not overwritten. |
+| V3 | A competing same-user login is rejected without affecting the active selection; different-user sessions and a single-instance app demonstrate the documented scope; another desktop's files/environment are not overwritten. |
 | V4 | Actual packaged foot, Yazi, btop, shell, GTK/Qt and launcher consume the session configuration; no placeholders counted as coverage. |
 | V5 | Logout/restart leaves no Realm-owned orphan client; legacy theme data is not deleted while possibly in use. |
 | V6 | Waybar comparison covers B1 behavior, measurements and inspected real screenshots; failures remain visible. |
