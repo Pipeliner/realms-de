@@ -14,6 +14,14 @@ def workflow(name):
 
 
 class LaunchPolicy(unittest.TestCase):
+    def test_successful_vm_upload_includes_lock_roundtrip_evidence(self):
+        steps = workflow('distro.yml')['jobs']['nix']['steps']
+        upload = next(s for s in steps if s.get('name') == 'Upload live Realm VM evidence')
+        paths = upload['with']['path'].splitlines()
+        for name in ('realm-locked-0.png', 'realm-locked-1.png',
+                     'lock-roundtrip.json', 'lock-journal.txt'):
+            self.assertIn('${{ runner.temp }}/realm-session-boots/' + name, paths)
+
     def test_branch_push_cannot_duplicate_pr_workflows(self):
         for name in ('ci.yml', 'distro.yml', 'palette.yml'):
             with self.subTest(workflow=name):
