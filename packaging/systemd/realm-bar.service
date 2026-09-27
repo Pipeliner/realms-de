@@ -15,8 +15,8 @@
 [Unit]
 Description=realm bar
 Documentation=https://github.com/pipeliner/realms-de/blob/main/docs/ARCHITECTURE.md
-PartOf=graphical-session.target
-After=graphical-session.target realm-wm.service
+PartOf=realm-session.target graphical-session.target
+After=realm-wm.service
 # Wants, not Requires: the bar reconnects to the control socket on its own, so
 # a daemon that is slow or briefly down — including a window manager restarting
 # under river — must not keep the bar from running.

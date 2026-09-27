@@ -119,6 +119,20 @@ place those exact three CI-produced files in the source change; the ordinary
 freshness and linkage checks remain authoritative before merge. An uploaded
 candidate alone is not package-build, install, or runtime evidence.
 
+Ordinary CI source-kit verification and Realm package builds SHALL automatically
+prepare a validated source binding from their checked-out HEAD before consuming
+the retained archive. This includes pull-request merge commits. Preparation
+uses the same CI-only producer and unchanged-lockfile restriction, then copies
+only the three validated binding files into the job checkout. The vendor
+closure remains unchanged. Preparation failure blocks the consumer. Each
+consumer retains those three binding files as a CI artifact for provenance.
+No follow-up repository commit or manual workflow dispatch is required for
+ordinary source, documentation, policy, or workflow edits. The freshness check
+continues to compare the entire retained input scope; it is not weakened.
+Container jobs SHALL explicitly register their GitHub workspace as a trusted
+Git directory before source preparation, so host/container UID differences do
+not prevent the same immutable-commit checks from running.
+
 The Realm-workspace source-replacement configuration is a separately retained
 build input: native recipes SHALL stage it at the unpacked source root before
 Cargo runs. The linkage fixture SHALL verify that configuration, the retained
@@ -150,10 +164,12 @@ allowed packaging-metadata directories as well as at kit top level.
 The installed native-package build guide SHALL come from tracked outer
 packaging metadata, not from the identity-bound archive's historical
 `docs/INSTALL.md`. The emitted Debian and RPM packages SHALL document
-`build-native-source-kits.sh` and SHALL NOT retain the superseded checkout
+the CI-only package build and verification workflow, without local source-kit
+producer commands or packaging-toolchain installation instructions, and SHALL
+NOT retain the superseded checkout
 `ln -s packaging/debian` or moving `git archive ... HEAD` workflows. Updating
 package guidance SHALL NOT mutate or regenerate the canonical source authority.
-Its clean-host prerequisite commands SHALL include the direct native recipe
+The CI clean-host prerequisite commands SHALL include the direct native recipe
 requirements: Debian `pkg-config` and Fedora `make`. Because the package-native
 test phase exercises SPEC 0004's raster/text-cache tests, both package recipes
 and their CI prerequisite installs SHALL also supply a real DejaVu fallback
@@ -193,7 +209,9 @@ elevates that fixture, it SHALL first stage a complete Rust toolchain in a
 directory readable, traversable, and executable by the elevated process, and
 preflight-execute that staged Cargo and rustc. Staging may copy the real
 toolchain solely to make it accessible; it SHALL NOT replace either executable
-with a shim.
+with a shim. The CI step that invokes the network-isolated native fixture SHALL
+have a bounded job-step timeout and SHALL fail closed when the fixture exceeds
+it; an indefinitely hung isolation check is not verification evidence.
 
 The Debian recipe's production resolver SHALL continue to select its complete
 versioned Cargo/rustc pair below `/usr/lib/rust-1.[89][0-9]/bin`.  The native

@@ -50,6 +50,8 @@ jobs:
           # not Realm-rendered consumers. Their compressed bytes can contain
           # accidental hex-looking sequences and are covered by their own
           # provenance and checksum gates.
+          # The River source manifest similarly records archive digests and a
+          # commit-fragment URL; neither is a rendered theme consumer.
           #
           # configs/templates/ is deliberately NOT here. Those land in M1 and are
           # rendered *from* palette.toml, so they hold placeholders, not colours
@@ -62,6 +64,7 @@ jobs:
             'docs/*'
             '.github/*'
             '.claude/*'
+            'packaging/river/sources.toml'
             'packaging/tool-sources/bundles/*'
             'README.md'
           )

@@ -2,8 +2,11 @@
 
 - **Status:** Draft — the NixOS session-discovery contract, startup step 3,
   XWayland display discovery and publication, and current-incarnation
-  doctor-health handoff are accepted; open questions below remain unresolved
-  (`needs-human`)
+  doctor-health handoff are accepted; §4's systemd startup ordering and dual
+  teardown anchors, host-policy/lock-before-suspend boundary, and 5-minute
+  dim/10-minute lock defaults are accepted; SPEC 0029 separately accepts the
+  bounded native x86_64 graphical-login proof. Open questions below remain
+  unresolved where noted (`needs-human`)
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
   [ADR 0013](../adr/0013-river-window-management-backend.md),
@@ -80,7 +83,8 @@ the session through NixOS display-manager session data, and assert both the
 `realm.desktop` identity and its rewritten `Exec` target. A test that uses no
 display manager may test package contents directly, but must not claim to test
 NixOS session discovery.
-- Choosing the lock screen and the idle defaults — see **Open questions**.
+- The 5-minute dim and 10-minute lock/blank defaults are accepted. Remaining
+  locker implementation details are tracked separately in **Open questions**.
 
 ## Behaviour
 
@@ -217,6 +221,18 @@ next thing D-Bus spawns is broken while the thing you tested by hand is fine.
 That asymmetry is precisely why this bug survives manual testing.
 
 `DISPLAY` is handled separately; see §3.
+
+#### Step 4a — Start portal activation without blocking startup
+
+After both environment imports, and before any other session client starts, a
+reachable systemd user manager receives
+`systemctl --user start --no-block xdg-desktop-portal.service`. This starts the
+cold portal activation while River and Realm continue toward readiness; the
+entry must not wait for the portal on the compositor/window-manager critical
+path. Failure to enqueue the service is non-fatal and is logged; the bounded
+`doctor` portal checks remain the authority for the resulting user-visible
+failure. A no-systemd session retains ordinary D-Bus activation and its already
+degraded supervision contract.
 
 #### Step 5 — Mirror the cursor into gsettings
 
@@ -401,24 +417,34 @@ is guaranteed installed on any of the three targets. It connects to
 
 ### 4. systemd user units
 
+**Accepted slice (2026-09-13):** the acyclic startup order, shipped `.wants`
+edges, and dual Realm/graphical teardown anchors in this section are Accepted
+independently of the remaining M3 draft. This slice requires the package units
+and Home Manager copies to represent the same graph.
+
 ```
                 graphical-session-pre.target
-                            │
-   realm-session.target ─────┤  BindsTo= + Before= graphical-session.target
-                            ▼
-                  graphical-session.target
-                     │            │            │
-        realm-wm.service   realm-bar.service   xdg-desktop-portal.service
-        (the window manager)   (Wants=daemon)    (upstream; PartOf= the target)
-                     │
-             realm-idle.service  ← blocked on OQ-1
+                            │                  realm-wm.service
+                            │                         │
+                            │                         ▼
+                            │                  realm-bar.service
+                            │                         │
+                            └────────────┬────────────┘
+                                         ▼
+                              realm-session.target
+                                         │  BindsTo= + Before=
+                                         ▼
+                             graphical-session.target
+                                │                  │
+                     xdg-desktop-portal     realm-idle.service
+                       (upstream)           (blocked on OQ-1)
 ```
 
 | Unit | `[Unit]` | `[Service]` | `[Install]` |
 |---|---|---|---|
 | `realm-session.target` | `BindsTo=graphical-session.target`, `Before=graphical-session.target`, `Wants=graphical-session-pre.target`, `After=graphical-session-pre.target` | — | **none** |
-| `realm-wm.service` | `PartOf=realm-session.target graphical-session.target`, `After=graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=realm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=realm-session.target` |
-| `realm-bar.service` | `PartOf=realm-session.target graphical-session.target`, `After=graphical-session.target realm-wm.service`, `Wants=realm-wm.service`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5` | `Type=exec`, `Restart=on-failure`, `RestartSec=1`, `TimeoutStopSec=5`, `Slice=app.slice` | `WantedBy=realm-session.target` |
+| `realm-wm.service` | `PartOf=realm-session.target graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=realm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=realm-session.target` |
+| `realm-bar.service` | `PartOf=realm-session.target graphical-session.target`, `After=realm-wm.service`, `Wants=realm-wm.service`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5` | `Type=exec`, `Restart=on-failure`, `RestartSec=1`, `TimeoutStopSec=5`, `Slice=app.slice` | `WantedBy=realm-session.target` |
 
 The reasoning behind each relationship, because these are easy to copy wrongly:
 
@@ -427,10 +453,15 @@ The reasoning behind each relationship, because these are easy to copy wrongly:
   `graphical-session.target` up, and anything else on the system that keys off
   `graphical-session.target` — a notification daemon, an idle daemon, the
   upstream portal unit — works under realm without knowing what realm is. The
-  `Before=` is what makes `After=graphical-session.target` on the client units a
-  real ordering barrier rather than a coincidence of an empty target activating
-  quickly. This is systemd's documented shape for a session unit
-  (`systemd.special(7)`).
+  target's default dependencies order every unit in its shipped `.wants`
+  directory before `realm-session.target`; `Before=graphical-session.target`
+  therefore gives the acyclic startup order `realm-wm.service` →
+  `realm-bar.service` → `realm-session.target` →
+  `graphical-session.target`. The client units must not declare
+  `After=graphical-session.target`: that reverse edge creates an ordering cycle,
+  causes systemd to delete their start jobs, and leaves the display-manager
+  session without a compositor or bar. This is systemd's documented target-unit
+  default-dependency shape (`systemd.special(7)`).
 - **`PartOf=`, never `BindsTo=`, on session helpers.** Helpers name both
   `realm-session.target` and `graphical-session.target`: the first makes an
   explicit Realm-target stop propagate, while the second retains graphical
@@ -463,6 +494,11 @@ The reasoning behind each relationship, because these are easy to copy wrongly:
   did-not-start, which the entry and `doctor` must both check for explicitly.
 
 ### 5. Portals
+
+**Accepted slice (2026-09-13):** the backend-routing, package-dependency,
+functional A13a VM-fixture, and A15 hardware-boundary requirements in this
+section are Accepted independently of this specification's remaining open
+questions.
 
 **Backend selection.** `xdg-desktop-portal` (≥ 1.18, which all three targets
 ship) reads, in order: `$XDG_CONFIG_HOME/xdg-desktop-portal/realm-portals.conf`,
@@ -500,10 +536,12 @@ nothing in Firefox", with no error anywhere.
 
 **`xdg-desktop-portal-wlr` requires the compositor to serve
 `wlr-screencopy-unstable-v1`** and, for output selection, a chooser
-(`slurp` for the default `simple` chooser). *Whether river 0.4.8 still exports
-`wlr-screencopy-unstable-v1`, and whether xdpw functions when window management
-lives outside the compositor, is unverified.* This is **OQ-2** and it is the
-reason A15 is a hardware row.
+(`slurp` for the default `simple` chooser), plus a live per-user PipeWire
+service. Merely installing the PipeWire client library linked by xdpw does not
+start that service. The NixOS module enables it explicitly. The VM guard may
+select xdpw's `none` chooser only in its node configuration so one emulated
+output is selected without synthetic pointer input; the shipped chooser policy
+remains unchanged.
 
 **Verification, not assumption.** A portal that answers on D-Bus is not proof
 that it works.
@@ -516,16 +554,43 @@ that it works.
   ```
   It must answer immediately. A pause of about twenty-five seconds *is* the
   D-Bus activation timeout and *is* the diagnosis.
-- Round trip, on demand and in the VM test — `realmctl doctor --portal-roundtrip`:
+- Round trip, on demand — `realmctl doctor --portal-roundtrip`:
   issue `org.freedesktop.portal.FileChooser.OpenFile` (signature `ssa{sv}` →
-  object path), assert a handle within two seconds, then close it via
-  `org.freedesktop.portal.Request.Close`. This opens a real dialog, which is why
-  it is not the default. *The exact `busctl call` spelling is derived from the
-  interface signature and should be confirmed once in the VM test rather than
-  trusted from here.*
-- ScreenCast: `doctor` asserts the `org.freedesktop.portal.ScreenCast` interface
-  is present and that the configured impl is one that implements it. Whether a
-  frame actually arrives is a hardware test with a human at the keyboard.
+  object path), assert the returned handle within two seconds, then close it
+  via `org.freedesktop.portal.Request.Close`. This opens a real dialog, which is
+  why it is not the default. *The exact `busctl call` spelling is derived from
+  the interface signature and should be confirmed once in the VM test rather
+  than trusted from here.*
+- The installed VM fixture subscribes to `Request.Response` on the
+  token-derived path before issuing `OpenFile`. After the exact request handle
+  returns within two seconds, the helper atomically publishes that handle and
+  elapsed time in a VM-only readiness marker while retaining the same D-Bus
+  connection. The driver then requires the chooser to be both a managed River
+  window and visibly rendered, activates its explicit `_Cancel` action through
+  the real `Alt+C` GTK mnemonic, and requires the
+  exact request path to emit user-cancel response code 1 within the existing
+  finite VM state/UI deadlines. A missing, success, or catch-all failure
+  response does not satisfy the fixture. This is an A13a VM-fixture refinement,
+  not an additional `realmctl doctor` obligation: A13 and the on-demand command
+  retain their separate `Request.Close` probe.
+- Settings: the installed VM calls `org.freedesktop.portal.Settings.ReadAll`
+  and requires its typed result rather than treating interface introspection as
+  a reply. This is an A13a fixture obligation, not a new `realmctl doctor`
+  check id; SPEC 0006's fixed 32-check surface remains unchanged.
+- ScreenCast: `doctor` still asserts the interface and configured implementation.
+  The stronger installed-VM guard completes `CreateSession`, `SelectSources`,
+  and `Start`, obtains the restricted remote from `OpenPipeWireRemote`, and
+  consumes a nonempty video buffer from the returned PipeWire node. This proves
+  one emulated River output can reach one portal client through xdpw and
+  PipeWire. The VM evidence upload retains the resulting
+  `portal-roundtrip.json`, including the positive node id, mapped buffer byte
+  count, frame dimensions, and buffer digest, so the frame assertion remains
+  inspectable after the runner exits. Before starting the expensive VM, an
+  independently buildable check executes the same packaged helper in
+  import-only mode and requires its pinned Gio, GStreamer, and GstApp
+  namespaces to load; source presence is not sufficient. It does **not** prove
+  a real browser exposes the chooser or that a physical machine captures a
+  useful stream; A15 remains hardware-only.
 
 ### 6. Non-systemd and non-D-Bus paths
 
@@ -677,7 +742,7 @@ gate (ADR 0011's guard).
 | `portal/answers` | `org.freedesktop.portal.Desktop` responds without a pause | The 25 s hang | VM |
 | `portal/config` | A `realm-portals.conf` is found and names a backend per interface | Behaviour that changes with what is installed | **CI** (file) / VM (effect) |
 | `portal/filechooser` | `--portal-roundtrip`: a handle within 2 s | "Open File does nothing" | VM |
-| `portal/screencast` | The interface exists and the configured impl implements it | Screen share silently produces nothing | VM; the real capture is **HARDWARE** |
+| `portal/screencast` | The interface/configured implementation checks pass and the installed VM consumes a nonempty buffer from the restricted PipeWire node returned by a complete ScreenCast request sequence | Screen share silently produces nothing | VM; the browser picker and physical-machine capture remain **HARDWARE** |
 | `session/socket` | `$XDG_RUNTIME_DIR/realm/ctl.sock` answers `Hello` | — | VM |
 | `session/protocol-version` | Matches `realm_core::ipc::PROTOCOL_VERSION` | Bar and session disagree | **CI** |
 | `session/degraded` | Reports each `DEGRADED` code in this incarnation from the bounded handoff above, never by scanning historical logs | A degraded session pretending to be healthy | **CI** (degraded paths) |
@@ -706,7 +771,7 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | # | Given / When / Then | Where | Test |
 |---|---|---|---|
 | A1 | Given a stub compositor that creates `$XDG_RUNTIME_DIR/wayland-9` after 3 s and a pre-existing `wayland-0`, when the entry runs, then it discovers `wayland-9` (not `wayland-0`, not a guess), proceeds only after discovery, and completes within the deadline | CI | |
-| A2 | Given the session entry source, when the ordering test runs, then the identity exports precede the compositor start, and the two imports precede every client start, every `gsettings` call and every other D-Bus touch | CI | |
+| A2 | Given the session entry source, when the ordering test runs, then the identity exports precede the compositor start, the two imports precede every client start, every `gsettings` call and every other D-Bus touch, and portal warm-up is enqueued with `--no-block` after those imports but before the session target | CI | `packaging/session/test-portal-warmup.sh` |
 | A3 | Given the entry's import-variable list and `doctor`'s list, when the consistency test runs, then they name the same variables; a separate assertion keeps both client units' intentionally narrower `ConditionEnvironment=WAYLAND_DISPLAY` guard | CI | |
 | A4 | Given a container with no reachable `systemd --user` and no `dbus-update-activation-environment`, when the entry runs against a stub compositor, then it logs exactly one `DEGRADED NO-SYSTEMD-USER` line and one `DEGRADED NO-DBUS-ACTIVATION` line, starts the clients directly under the bounded respawn loop, and does not hang | CI | |
 | A5 | Given a booted session, when `systemctl --user show-environment` is read and a VM-only D-Bus-activated probe reports its own inherited environment, then every imported variable is present in both with values equal to the compositor's `/proc/<pid>/environ`; `doctor` itself continues to label D-Bus activation values unobservable and uses the portal proxy | VM | |
@@ -718,12 +783,18 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A11 | Given a stale window manager already holding river's window-management global, when `realm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed; it names the holding process only if an independent observation identifies it, otherwise it states that the holder identity is unavailable | VM | |
 | A12 | Given a running session, when `realm-bar` is killed, then it is restarted, and `realm-session.target` and `realm-wm.service` both stay `active` throughout | VM | |
 | A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the effective configuration and installed `.portal` metadata name the required backends without claiming the running portal disclosed its selected backend identity | VM | |
+| A13a | Given the installed graphical VM with its test-only noninteractive ScreenCast chooser and per-user PipeWire service, when the pre-VM packaged-helper import check loads Gio, GStreamer, and GstApp and one persistent portal client subscribes on the exact token-derived FileChooser request path before `OpenFile`, publishes a VM-only readiness marker only after that exact handle returns within 2 s, and keeps waiting while the driver observes the actual managed and rendered chooser and activates its explicit `_Cancel` action through the real `Alt+C` GTK mnemonic, then the exact request emits user-cancel response code 1 within the finite VM state/UI deadlines; the same client reads `Settings.ReadAll`, completes the ScreenCast request/session sequence, and opens the restricted PipeWire remote; a missing, success, or catch-all FileChooser response is rejected, the Settings reply has its specified map type, one nonempty video buffer is consumed from the returned node, and the uploaded VM evidence retains the FileChooser response plus the node id, mapped byte count, dimensions, and digest in `portal-roundtrip.json`; this does not replace A13's separate `realmctl doctor --portal-roundtrip` Close probe and does not satisfy A15 | VM | `packaging/nix/test_portal_vm_helper.py` — `import-only`, `filechooser-rendered-cancel-response`; `packaging/nix/test-root-flake-ci.sh` — `portal-helper-imports`, `portal-evidence-upload` |
 | A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
 | A16 | Given a real laptop, when the lid is closed, then the session locks within the configured delay and the screen is blank on reopen until authentication | **HARDWARE** *(blocked on OQ-1)* | |
 | A17 | Given an installed NixOS VM session running the pinned XWayland-enabled River, when a purpose-built session-bus service is activated and acquires its configured bus name, then the non-empty `DISPLAY` inherited by `realm-wm`, the systemd user manager and that D-Bus-activated service is identical; the service invokes the pinned xmessage package's public `bin/xmessage` wrapper and the child executable resolves to that same package's exact `bin/.xmessage-wrapped` payload selected by locked nixpkgs' X file-search wrapper hook; the X server's root tree identifies exactly one window with that child's unique test title and its X attributes report `Map State: IsViewable` before Realm reports one additional managed X11 window; and the test reaps the client. This proves discovery, both publication paths and XWayland window management, attributes a pre-map failure separately from a River/Realm observation failure, but does not claim Xresources or scaling behaviour. | VM | |
 
 **Split: 17 criteria — 4 CI, 11 VM, 2 HARDWARE.**
+
+SPEC 0029 adds native-package Ubuntu 24.04 and Fedora 44 graphical-login VM
+evidence without changing these criteria or treating virtio devices as the
+hardware rows. Its doctor subset reuses this specification's required checks;
+its test-only SDDM choice does not select a Realm display-manager dependency.
 
 ## Budgets
 
@@ -795,8 +866,9 @@ register yet. They are recorded here as findings for a human to add.
 
 ## Open questions
 
-- **OQ-1 — the lock screen and the idle defaults. `needs-human`, and this one
-  matters most.** Carried forward from ADR 0011, sharpened by ADR 0013.
+- **OQ-1 — resolved for MVP.** Dim after 5 minutes and lock/blank after 10
+  minutes; host lid policy remains authoritative and lock-before-suspend is
+  required. Remaining locker implementation details stay below.
 
   *Locker.* river 0.4 implements `ext-session-lock-v1` and reports
   `session_locked`/`session_unlocked` to the window manager, so realm can disable

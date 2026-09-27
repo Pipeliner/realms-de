@@ -36,6 +36,12 @@ def archive_failures(archive: Path) -> list[str]:
         for member in contents.getmembers():
             if RETIRED in os.fsencode(member.name).lower():
                 failures.append(f"retired namespace in archive path: {member.name}")
+            if (member.issym() or member.islnk()) and RETIRED in os.fsencode(
+                member.linkname
+            ).lower():
+                failures.append(
+                    f"retired namespace in archive link target: {member.name}"
+                )
             if not member.isfile():
                 continue
             source = contents.extractfile(member)
@@ -54,11 +60,15 @@ def main() -> int:
         path = Path(os.fsdecode(raw_path))
         if RETIRED in raw_path.lower():
             failures.append(f"retired namespace in path: {path}")
-        data = content(path).lower()
-        if RETIRED in data:
-            failures.append(f"retired namespace in content: {path}")
-        if SPACED_CLI in data:
-            failures.append(f"invalid spaced CLI in content: {path}")
+        opaque_workspace_archive = (
+            path == WORKSPACE_ARCHIVE and path.is_file() and not path.is_symlink()
+        )
+        if not opaque_workspace_archive:
+            data = content(path).lower()
+            if RETIRED in data:
+                failures.append(f"retired namespace in content: {path}")
+            if SPACED_CLI in data:
+                failures.append(f"invalid spaced CLI in content: {path}")
 
     if WORKSPACE_ARCHIVE in [Path(os.fsdecode(path)) for path in tracked_paths()]:
         failures.extend(archive_failures(WORKSPACE_ARCHIVE))

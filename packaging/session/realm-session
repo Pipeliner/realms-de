@@ -491,6 +491,15 @@ import_session_environment() {
 	log "session environment published: systemd=${have_systemd_user} dbus=${have_dbus_update} vars=${imported_vars[*]}"
 }
 
+# Start cold portal activation after both environment imports, without putting
+# portal readiness on the compositor/window-manager startup path. Doctor owns
+# the bounded functional verdict if this request fails or the service is slow.
+warm_portal() {
+	((have_systemd_user)) || return 0
+	systemctl --user start --no-block xdg-desktop-portal.service ||
+		log "could not enqueue xdg-desktop-portal.service; portal checks may fail"
+}
+
 # Step 5. Mirror the cursor into gsettings — after step 4, never before.
 # gsettings writes through dconf, which is D-Bus-activated: running it earlier
 # activates ca.desktop.dconf with an empty activation environment and poisons it
@@ -847,6 +856,7 @@ main() {
 	wait_for_display
 	discover_x_display
 	import_session_environment
+	warm_portal
 	apply_cursor_settings
 	publish_degraded_handoff
 	trap cleanup EXIT INT TERM HUP

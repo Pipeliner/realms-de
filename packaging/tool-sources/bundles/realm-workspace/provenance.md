@@ -7,12 +7,12 @@ package recipe.
 ## Bound source
 
 - Repository: `https://github.com/pipeliner/realms-de`
-- Commit: `06f406198dd9dcdb7b5cec5b1e696e88a27d52a4`
-- Commit timestamp: `2026-09-13T10:12:09Z` (`1789294329`)
+- Commit: `2227a67c7c3654b1e49d33842a4ddb5081841bdc`
+- Commit timestamp: `2026-09-14T11:08:55Z` (`1789384135`)
 - Workspace version: `0.1.0`
 - Canonical archive: `source.tar.gz`
 - Canonical archive SHA-256:
-  `748394c75121af6773b3dba8255bb11114aa6fb745d852f75c1ab77db443f5cc`
+  `f987d8d2cf03b1fbd278f39e6ea25d692f8d1e02932ef1ee133a48e045e8f726`
 
 The archive was generated directly from the exact bound Git commit with
 `git archive --format=tar.gz --prefix=realm-workspace/ <commit> .
@@ -24,22 +24,14 @@ input. The resulting archive is retained as the canonical source input.
 
 ## Dependency closure
 
-The dependency archive is retained unchanged from the controlled intake at
-`0cfb3a408f06dce5f397c8ebbd589aefd4ea1293`. Comparing that commit's lockfile with
-the new source shows only two added dependency edges on the workspace's
-`realm-session` package: `realm-theme` and the already-retained `tempfile`.
-No registry package identity, version, checksum or registry dependency changed.
-The copied lockfile matches the new source archive. The retained vendor and
-license hashes are unchanged and the bundle checks revalidate their closure.
-
-That original Cargo 1.97.1 vendoring used an otherwise empty, intake-local
-`CARGO_HOME` and its source archive's `Cargo.lock`:
+Cargo 1.97.1 vendoring used an otherwise empty, intake-local `CARGO_HOME` and
+the archive root's retained `Cargo.lock`:
 
 ```sh
 CARGO_HOME=<intake>/cargo-home cargo vendor --locked --versioned-dirs <intake>/vendor
 ```
 
-The resulting 176 registry crates were archived as `vendor.tar.zst` by one
+The resulting 221 registry crates were archived as `vendor.tar.zst` by one
 sorted tar stream with epoch mtime, numeric uid/gid zero, and Zstandard level
 3 compression:
 

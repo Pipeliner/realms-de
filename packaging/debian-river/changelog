@@ -1,0 +1,5 @@
+realm-river (0.4.8-1) unstable; urgency=medium
+
+  * Build the pinned Realm River closure for Ubuntu 24.04 amd64.
+
+ -- realm contributors <vadim.evard@gmail.com>  Sun, 13 Sep 2026 05:30:00 +0000
