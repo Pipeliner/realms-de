@@ -39,6 +39,19 @@ as part of switching launch semantics. A later cleanup change needs its own
 ownership proof. This exception concerns theme data, not the separate required
 bounded Cargo/build-cache cleanup system.
 
+### Login-selection implementation boundary
+
+Reuse the generation store's complete validation and process-identity leases.
+A lookup by the already-selected generation ID SHALL validate and lease that
+generation without consulting or changing the next-login `current` pointer.
+Missing or corrupt selected data fails rather than falling back to `current`.
+A login helper may explicitly retain its existing lease for the graphical
+entry process after successful handoff. This consumes the helper's selection
+and closes its descriptors without removing the lease. Normal drop still
+releases an unhanded-off lease. Existing live-process identity checks protect
+the retained generation until the graphical entry exits; existing stale-lease
+reconciliation remains usable. No new lifecycle manager is required.
+
 ## T2 — Consumer activation
 
 Configure foot, fuzzel, Yazi, btop, zsh/Starship, GTK and Qt using their supported
