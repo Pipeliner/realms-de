@@ -32,7 +32,11 @@ class NativeEvidence(unittest.TestCase):
             self.assertIn("REALM_NATIVE_EVIDENCE_DIR=" + str(root / "evidence"), result.stdout.splitlines())
             upload = self.step("Retain native fixture diagnostics")["with"]["path"]
             upload = upload.replace("${{ steps.native-temp.outputs.path }}", str(root))
-            self.assertEqual(upload.splitlines(), [str(root / "evidence/*.out"), str(root / "evidence/*.log")])
+            # Exact allowlist coverage belongs to test-launch-ci-policy.py;
+            # exercise the actual runner-path substitution for every entry.
+            self.assertTrue(upload.splitlines())
+            for path in upload.splitlines():
+                self.assertEqual(Path(path).parent, root / "evidence")
 
     def test_namespace_probe_creates_appends_and_reports_failure(self):
         step = self.step("Probe native evidence from build namespace")

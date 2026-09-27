@@ -169,8 +169,12 @@ class RebindWorkflowContract(unittest.TestCase):
         self.assertIn(evidence, probe["run"])
         upload = next(s for s in steps if s.get("name") == "Retain native fixture diagnostics")
         self.assertEqual(upload["if"], "always()")
-        self.assertEqual(set(upload["with"]["path"].splitlines()),
-                         {evidence + "/*.out", evidence + "/*.log"})
+        # The launch-policy test owns the exact artifact allowlist. This test
+        # verifies its relationship to the namespace's evidence root.
+        paths = upload["with"]["path"].splitlines()
+        self.assertTrue(paths)
+        for path in paths:
+            self.assertEqual(path.rsplit("/", 1)[0], evidence)
 
     def test_preparation_validates_before_staging_and_retains_provenance(self):
         text = (ROOT / ".github/actions/prepare-realm-source/action.yml").read_text()
