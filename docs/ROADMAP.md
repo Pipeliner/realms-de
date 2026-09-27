@@ -149,9 +149,11 @@ on a machine that is not the author's.
 - `realmctl doctor`: checks the environment handshake, the portal backend, the
   cursor theme, the font stack and the socket, and says what is wrong in plain
   words before the user has to file a bug.
-- Idle and lock handling — **blocked on an open
-  [`needs-human`](../README.md#needs-a-human) question**: which lock screen
-  ships. A laptop that does not lock on lid-close is not daily-drivable.
+- Idle and lock handling using packaged swayidle and swaylock, as accepted in
+  SPEC 0032: manual locking, dim after 5 minutes and lock/blank after 10 minutes.
+  Installed-session verification remains required; the locker choice is resolved.
+  Suspend/resume and lock-before-host-policy-suspend verification are post-MVP
+  (#256), not launch gates (owner direction, 2026-09-27).
 - Install documentation for all three distributions.
 
 **Exit criterion.** A fresh NixOS, Ubuntu and Fedora box each log into realm and
