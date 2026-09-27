@@ -105,6 +105,8 @@ class RebindWorkflowContract(unittest.TestCase):
     def test_preparation_validates_before_staging_and_retains_provenance(self):
         text = (ROOT / ".github/actions/prepare-realm-source/action.yml").read_text()
         self.assertIn("source_commit=$(git rev-parse HEAD)", text)
+        self.assertLess(text.index('git config --global --add safe.directory "$GITHUB_WORKSPACE"'),
+                        text.index("source_commit=$(git rev-parse HEAD)"))
         self.assertLess(text.index("ci_rebind_realm_workspace.py"),
                         text.index("check-bundle-linkage.py"))
         self.assertLess(text.index("check-bundle-linkage.py"), text.index('cp "$candidate/$file"'))
