@@ -432,11 +432,11 @@ EOF
                   machine.log(f"{label} unavailable: {error}")
 
       machine.wait_for_unit("multi-user.target", timeout=STARTUP_TIMEOUT)
-      # Dormant package/PAM proof only; password/suspend verification follows.
+      # Installed package/PAM and fresh-login activation proof.
       machine.succeed("test -x ${realm}/bin/realm-idle -a -x ${realm}/bin/realm-backlight")
       machine.succeed("test -f /etc/pam.d/swaylock")
       machine.succeed("grep -F 'ExecStart=${pkgs.swaylock}/bin/swaylock -f' ${realm}/lib/systemd/user/realm-lock.service")
-      machine.succeed("test ! -e ${realm}/lib/systemd/user/realm-session.target.wants/realm-idle.service")
+      machine.succeed("test -e ${realm}/lib/systemd/user/realm-session.target.wants/realm-idle.service")
 
       # Task 3's descriptor admission needs a positive proof that is impossible
       # on the host test filesystem. The Nix store itself is group-writable in
@@ -488,6 +488,7 @@ EOF
       # deleting the assertion.
       machine.succeed("test -e /etc/systemd/user/realm-session.target.wants/realm-wm.service")
       machine.succeed("test -e /etc/systemd/user/realm-session.target.wants/realm-bar.service")
+      machine.succeed("test -e /etc/systemd/user/realm-session.target.wants/realm-idle.service")
 
       # The restart policy the supervision design depends on (SPEC 0005 §2).
       machine.succeed(
@@ -534,6 +535,16 @@ EOF
           machine.wait_for_unit(
               "realm-bar.service", user="alice", timeout=STARTUP_TIMEOUT
           )
+          machine.wait_for_unit(
+              "realm-idle.service", user="alice", timeout=STARTUP_TIMEOUT
+          )
+          idle_login = machine.succeed(as_alice(
+              "systemctl", "--user", "show", "realm-idle.service",
+              "-p", "ActiveState", "-p", "MainPID", "-p", "ActiveEnterTimestampMonotonic"
+          ))
+          write_artifact("idle-login.txt", idle_login)
+          # Keep the long acceptance journey controlled after proving startup.
+          machine.succeed(as_alice("systemctl", "--user", "stop", "realm-idle.service"))
       except Exception:
           log_startup_diagnostics()
           raise
@@ -805,8 +816,8 @@ EOF
           f"--config={generation_root}/foot/foot.ini"
       )
 
-      # SPEC 0032: real installed locker/PAM, not a command stub. Keep the
-      # automatic idle activation dormant pending the mandatory timing checks.
+      # SPEC 0032: real installed locker/PAM; idle was stopped after login proof
+      # and is restarted below for the unchanged 300/600-second timing checks.
       lock_results = []
       lock_unit = "realm-lock.service"
       def lock_systemctl(*args):

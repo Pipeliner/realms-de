@@ -83,7 +83,25 @@ idle timing and restore. Host-policy suspend evidence is post-MVP. #78 retains
 the launch evidence. Source
 helpers may land dormant before package enablement; do not count that as #79 done.
 
-### Package staging before enablement
+### Fresh-login activation (accepted implementation contract, 2026-09-27)
+
+After the parent-reviewed manual PAM, binding suppression, readiness and real
+300/600-second idle CI proof passes, packages SHALL start `realm-idle.service`
+with `realm-session.target` on a fresh login. Debian, RPM and Nix ship the
+relative wants link `../realm-idle.service`; the RPM owns that link and the
+NixOS module declares the same wantedBy relationship. The idle unit declares
+its install target; the locker remains on-demand with no wants link.
+Preparation may occur on an isolated unpublished branch, but integration and
+publication of enablement require that evidence review. Suspend is not a gate.
+
+Installed native and NixOS VM probes SHALL require the shipped link and observe
+the idle service active after graphical login without manually starting it.
+They then stop idle before the long controlled acceptance journey; existing
+manual locking and unchanged real 300/600-second timing checks remain required.
+Stopping in the disposable fixture is not production policy. Existing session
+target ownership and stop semantics remain unchanged.
+
+### Historical package staging before enablement
 
 All targets install realm-idle, realm-backlight and the two service units.
 Native packages depend on swayidle, swaylock >= 1.7 and brightnessctl; Nix binds

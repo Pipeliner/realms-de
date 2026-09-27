@@ -44,10 +44,30 @@ class IdlePackaging(unittest.TestCase):
         for name in ('realm-idle.service', 'realm-lock.service'):
             self.assertIn(f'%{{_userunitdir}}/{name}\n', files)
 
-    def test_staged_idle_cannot_be_automatically_enabled(self):
-        unit = (ROOT / 'packaging/systemd/realm-idle.service').read_text()
-        self.assertNotIn('[Install]', unit)
-        self.assertNotIn('WantedBy=', unit)
+    def test_fresh_login_starts_idle_but_not_locker(self):
+        unit = configparser.ConfigParser(interpolation=None)
+        unit.read(ROOT / 'packaging/systemd/realm-idle.service')
+        self.assertEqual(unit.get('Install', 'WantedBy'), 'realm-session.target')
+        self.assertNotIn('[Install]', (ROOT / 'packaging/systemd/realm-lock.service').read_text())
+        for name in ('packaging/debian/rules', 'packaging/fedora/realm.spec', 'packaging/nix/package.nix'):
+            source = (ROOT / name).read_text()
+            with self.subTest(recipe=name):
+                self.assertIn('ln -s', source)
+                self.assertIn('../realm-idle.service', source)
+                self.assertIn('realm-session.target.wants/realm-idle.service', source)
+        rpm_files = (ROOT / 'packaging/fedora/realm.spec').read_text().split('%files', 1)[1]
+        self.assertIn('%{_userunitdir}/realm-session.target.wants/realm-idle.service', rpm_files)
+        self.assertIn('systemd.user.services.realm-idle.wantedBy = [ "realm-session.target" ];',
+                      (ROOT / 'packaging/nix/nixos-module.nix').read_text())
+
+    def test_installed_probes_observe_automatic_start_before_stopping_for_controlled_tests(self):
+        native = (ROOT / 'packaging/native-vm/guest-probe.sh').read_text()
+        self.assertIn('realm-bar.service realm-idle.service; do', native)
+        self.assertIn('user_command systemctl --user stop realm-idle.service', native)
+        nix = (ROOT / 'packaging/nix/checks.nix').read_text()
+        self.assertIn('"realm-idle.service", user="alice", timeout=STARTUP_TIMEOUT', nix)
+        self.assertIn('"stop", "realm-idle.service"', nix)
+        self.assertNotIn('test ! -e ${realm}/lib/systemd/user/realm-session.target.wants/realm-idle.service', nix)
 
 
 if __name__ == '__main__':

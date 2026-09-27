@@ -54,15 +54,14 @@ install_guest() {
     grep -Fxq 'Exec=/usr/bin/realm-session' /usr/share/wayland-sessions/realm.desktop
     grep -Fxq 'TryExec=/usr/bin/realm-session' /usr/share/wayland-sessions/realm.desktop
 
-    # SPEC 0032 package staging is deliberately not automatic idle enablement.
+    # SPEC 0032 requires packaged fresh-login idle activation.
     for helper in realm-idle realm-backlight swayidle swaylock brightnessctl; do
         test -x "/usr/bin/$helper" || fail "missing idle/lock helper: $helper"
     done
     test -f /etc/pam.d/swaylock
     test -f /usr/lib/systemd/user/realm-idle.service
     grep -Fxq 'ExecStart=/usr/bin/swaylock -f -C /dev/null' /usr/lib/systemd/user/realm-lock.service
-    test ! -e /usr/lib/systemd/user/realm-session.target.wants/realm-idle.service
-    test ! -e /etc/systemd/user/realm-session.target.wants/realm-idle.service
+    test "$(readlink /usr/lib/systemd/user/realm-session.target.wants/realm-idle.service)" = ../realm-idle.service
     swaylock --version
 
     # Disposable CI guest only. SSH remains key-only; use the distro PAM stack.
@@ -157,10 +156,18 @@ probe_guest() {
     test "$(session_property "$session" Type)" = wayland
     test "$(session_property "$session" Remote)" = no
 
-    for unit in realm-session.target realm-wm.service realm-bar.service; do
+    for unit in realm-session.target realm-wm.service realm-bar.service realm-idle.service; do
         wait_user_unit "$unit" 30
         user_command systemctl --user is-active "$unit" >> "$evidence/units.txt"
     done
+
+    # Observe automatic login activation before controlling the long fixture.
+    # Timing acceptance is separate; this does not certify the 300/600 timers.
+    user_command systemctl --user show realm-idle.service \
+        -p ActiveState -p MainPID -p ActiveEnterTimestampMonotonic \
+        > "$evidence/idle-login.txt"
+    user_command systemctl --user stop realm-idle.service
+    test "$(user_command systemctl --user show realm-idle.service -p ActiveState --value)" = inactive
 
     river_pid=$(one_user_pid river)
     wm_pid=$(one_user_pid realm-wm)

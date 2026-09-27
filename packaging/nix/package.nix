@@ -95,6 +95,8 @@ assert lib.assertMsg (lib.versionAtLeast pkgs.swaylock.version "1.7")
       $out/lib/systemd/user/realm-session.target.wants/realm-wm.service
     ln -s ../realm-bar.service \
       $out/lib/systemd/user/realm-session.target.wants/realm-bar.service
+    ln -s ../realm-idle.service \
+      $out/lib/systemd/user/realm-session.target.wants/realm-idle.service
 
     # The portal backend policy. On NixOS the module's xdg.portal.config says
     # the same thing; this copy is what makes the package correct on

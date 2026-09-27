@@ -155,6 +155,13 @@ Suspend/resume support and verification are deferred until after MVP. Manual
 locking and idle dim after 5 minutes / lock-blank after 10 minutes remain planned
 MVP requirements; this scope change does not certify the trial builds above.
 
+Fresh-login idle activation is prepared on an unpublished branch: package links
+start the installed idle service with the session. Publication still requires
+reviewed PAM, binding-suppression and real timing evidence. The retained NixOS
+fixture checks 300/600-second timing; equivalent native Ubuntu/Fedora timing
+evidence remains missing. This preparation does not change the dated trial's
+verified capabilities.
+
 ### Download a CI-built package
 
 Verified **2026-09-27** against the exact run/revision in the status table above.
