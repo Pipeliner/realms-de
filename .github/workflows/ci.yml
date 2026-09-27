@@ -47,6 +47,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 packaging/session/test-browser.py
       - run: python3 packaging/session/test-idle.py
+      - run: python3 packaging/session/test-idle-packaging.py
 
   dependency-policy:
     name: dependency policy

@@ -58,3 +58,17 @@ Nix wrappers resolve their own executable paths. Actual VM/hardware evidence
 must prove lock readiness, password unlock, duplicate starts, binding suppression,
 idle timing, restore and host-policy suspend. #78 retains the evidence. Source
 helpers may land dormant before package enablement; do not count that as #79 done.
+
+### Package staging before enablement
+
+All targets install realm-idle, realm-backlight and the two service units.
+Native packages depend on swayidle, swaylock >= 1.7 and brightnessctl; Nix binds
+their store paths and rejects an older swaylock. NixOS configures the swaylock
+PAM service whenever Realm is enabled. Native targets use the distro swaylock
+PAM file, verified after installation. No Realm PAM implementation is introduced.
+
+During dormant staging realm-idle.service has no Install/WantedBy section or
+shipped wants link, preventing Debian helper auto-enablement. Existing WM/bar
+enablement stays unchanged. Nix and native VM checks verify the installed
+helpers, resolved locker executable, units and PAM file, and absence of an idle
+wants link. These package checks do not claim password or suspend correctness.

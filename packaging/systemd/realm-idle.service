@@ -14,5 +14,4 @@ RestartSec=2
 Slice=app.slice
 TimeoutStopSec=5
 
-[Install]
-WantedBy=realm-session.target
+# No install target while staged: package helpers must not auto-enable this.
