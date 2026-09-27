@@ -18,3 +18,7 @@ ADRs in [`docs/adr/`](../adr/), and executable checks.
 
 No document in this directory installs tooling, enables hooks, starts a
 service, or changes CI.
+
+* [`2026-09-27-reuse-first-mvp.md`](2026-09-27-reuse-first-mvp.md)
+  reassesses reusable desktop components and the contracts that prevent simpler
+  integration; recommendations do not supersede accepted architecture.
