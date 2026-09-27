@@ -354,6 +354,15 @@ Transparent Cargo instrumentation SHALL record effective `CFLAGS`, `CPPFLAGS`,
 without changing them. CI run 36324975517 completed both builds but lost the
 comparison report and did not record all flags; this proves a mismatch, not its
 cause. Do not retain binary artifacts or weaken byte equality to diagnose it.
+On a remaining mismatch after equivalent build flags, retain bounded textual
+ELF headers, section tables and notes for each compared file, plus embedded
+strings containing either build root. Missing diagnostic tools or malformed
+ELF input must be reported without replacing the original mismatch outcome.
+Include textual section-content hashes and selected rustc/C compiler/linker
+versions. The Cargo invocation recorder also retains only the allowlisted
+SOURCE_DATE_EPOCH and VERGEN git SHA/commit-date/build-date values actually
+passed to each build; no arbitrary environment dump is permitted.
+The byte offset alone is not evidence of a particular ELF field or root cause.
 
 Debian-versus-RPM
 installed-byte equality is not this comparison: their C flags and packaging

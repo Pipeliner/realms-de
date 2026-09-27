@@ -48,7 +48,9 @@ run_wrapper() {
 complete_log=$tmp/complete.log
 CFLAGS='-O2' CPPFLAGS='-Dfixture' CXXFLAGS='-O1' LDFLAGS='-Wl,fixture' \
     RUSTFLAGS='--cfg fixture' CARGO_ENCODED_RUSTFLAGS='encoded-fixture' \
+    SOURCE_DATE_EPOCH=123 VERGEN_GIT_SHA=fixture-sha VERGEN_GIT_COMMIT_DATE=2000-01-01 VERGEN_BUILD_DATE=2000-01-02 \
     run_wrapper 'realmctl realm-wm realm-bar' "$tmp/complete-target" "$complete_log" --workspace
+grep -F -x 'cargo-metadata|source-date-epoch=123|git-sha=fixture-sha|git-commit-date=2000-01-01|build-date=2000-01-02' "$complete_log"
 grep -F -x 'cargo-flags|cflags=-O2|cppflags=-Dfixture|cxxflags=-O1|ldflags=-Wl,fixture|rustflags=--cfg fixture|encoded-rustflags=encoded-fixture' \
     "$complete_log" >/dev/null
 rm -rf "$tmp/complete-target"

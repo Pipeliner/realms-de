@@ -34,12 +34,44 @@ else
     exit 1
 fi
 different=0
+diagnose_binary() {
+    printf 'elf-diagnostics:%s:%s\n' "$1" "$name"
+    if command -v readelf >/dev/null 2>&1; then
+        readelf --wide --file-header --section-headers --notes "$2" 2>&1 | head -n 160
+        for section in .text .rodata .data .debug_info .debug_str; do
+            printf 'section-content-sha256:%s\n' "$section"
+            readelf --hex-dump="$section" "$2" 2>&1 | sha256sum
+        done
+    else
+        printf 'readelf unavailable\n'
+    fi
+    printf 'embedded-build-paths:%s:%s\n' "$1" "$name"
+    if command -v strings >/dev/null 2>&1; then
+        strings -a "$2" | awk -v first="$first" -v second="$second" \
+            'index($0, first) || index($0, second) { print substr($0, 1, 512); if (++n == 20) exit }'
+    else
+        printf 'strings unavailable\n'
+    fi
+}
+for tool in rustc cc ld readelf; do
+    printf 'diagnostic-tool-version:%s\n' "$tool" >> "$evidence"
+    if command -v "$tool" >/dev/null 2>&1; then
+        "$tool" --version 2>&1 | head -n 5 >> "$evidence"
+    else
+        printf 'unavailable\n' >> "$evidence"
+    fi
+done
 for name in yazi ya; do
     first_binary=$first/debian/yazi-target/release/$name
     second_binary=$second/debian/yazi-target/release/$name
     sha256sum "$first_binary" "$second_binary" >> "$evidence"
     if ! cmp "$first_binary" "$second_binary" >> "$evidence" 2>&1; then
-        printf 'result=different:%s\n' "$name" >> "$evidence"
+        {
+            diagnose_binary first "$first_binary"
+            diagnose_binary second "$second_binary"
+            sha256sum "$first_binary" "$second_binary"
+            printf 'result=different:%s\n' "$name"
+        } >> "$evidence" 2>&1
         different=1
     fi
 done

@@ -9,6 +9,9 @@ printf 'cargo-flags|cflags=%s|cppflags=%s|cxxflags=%s|ldflags=%s|rustflags=%s|en
     "${CFLAGS:-}" "${CPPFLAGS:-}" "${CXXFLAGS:-}" "${LDFLAGS:-}" \
     "${RUSTFLAGS:-}" "${CARGO_ENCODED_RUSTFLAGS:-}" >>"$REALM_SENTINEL_LOG"
 starship_metadata=false
+printf 'cargo-metadata|source-date-epoch=%s|git-sha=%s|git-commit-date=%s|build-date=%s\n' \
+    "${SOURCE_DATE_EPOCH:-}" "${VERGEN_GIT_SHA:-}" "${VERGEN_GIT_COMMIT_DATE:-}" \
+    "${VERGEN_BUILD_DATE:-}" >>"$REALM_SENTINEL_LOG"
 if [ "$#" -eq 1 ] && [ "$1" = -V ] \
     && [ "$PWD" = "${REALM_EXPECTED_STARSHIP_SOURCE:-}" ] \
     && [ "${CARGO_HOME:-}" = "${REALM_EXPECTED_STARSHIP_CARGO_HOME:-}" ]; then
