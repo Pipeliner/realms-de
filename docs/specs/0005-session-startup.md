@@ -675,6 +675,11 @@ bounds output-selection input retries to 60 seconds after chooser startup.
 The Nix driver records its pointer inventory and selected device and captures
 the chooser after pointer movement, so a remaining input failure is distinguishable
 from the portal client's request deadline.
+The ordinary successful-build artifact explicitly includes both
+`realm-portal-output-chooser-pointer.png` and
+`realm-browser-output-chooser-pointer.png`. A failed ordinary Nix derivation
+currently retains textual diagnostics in the job log, but does not publish its
+VM screenshot output; screenshot recovery from failed builds is not claimed.
 This proves browser-delivered capture from one emulated
 output, not remote conferencing, audio sharing or physical-machine capture.
 

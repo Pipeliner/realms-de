@@ -48,6 +48,12 @@ if ! grep -F -q -e "\${{ runner.temp }}/realm-session-boots/portal-roundtrip.jso
     fail 'live VM evidence upload must retain portal-roundtrip.json'
 fi
 
+for pointer in realm-portal-output-chooser-pointer.png realm-browser-output-chooser-pointer.png; do
+    if ! grep -F -q -e "\${{ runner.temp }}/realm-session-boots/$pointer" "$workflow"; then
+        fail "live VM evidence upload must retain $pointer"
+    fi
+done
+
 if ! grep -F -q -e 'machine.send_key("alt-c")' "$checks"; then
     fail 'portal VM must activate the explicit GTK Cancel response'
 fi

@@ -487,8 +487,10 @@ jobs:
             ${{ runner.temp }}/realm-session-boots/control-quit.json
             ${{ runner.temp }}/realm-session-boots/portal-roundtrip.json
             ${{ runner.temp }}/realm-session-boots/realm-portal-output-chooser.png
+            ${{ runner.temp }}/realm-session-boots/realm-portal-output-chooser-pointer.png
             ${{ runner.temp }}/realm-session-boots/realm-browser-permission.png
             ${{ runner.temp }}/realm-session-boots/realm-browser-output-chooser.png
+            ${{ runner.temp }}/realm-session-boots/realm-browser-output-chooser-pointer.png
             ${{ runner.temp }}/realm-session-boots/realm-browser-capture-stopped.png
             ${{ runner.temp }}/realm-session-boots/browser-screencast/realm-browser-screencast/
 
