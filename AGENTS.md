@@ -15,6 +15,15 @@ the same change whenever a contract changes.
 
 ## Repository operations
 
+- Keep `README.md` synchronized with current verified project state. When
+  delivery, install commands, downloadable artifacts, known limitations or
+  human decisions change, update the README in the same change/iteration.
+  Verify artifact availability and exact CI evidence before recommending a
+  build; record its revision, verification date and expiration. Distinguish
+  passing jobs from overall workflow success and trial builds from the MVP.
+  Refresh or withdraw expired/broken trial links; never leave historical
+  snapshots presented as current. Keep the README truth fixtures in sync.
+
 - Track time spent on each specific task from 2026-09-27 onward in
   `docs/task-time.csv`. Record UTC start/end, issue or task ID, actor, activity
   category and outcome at task switches and handoff. Separate active work from
