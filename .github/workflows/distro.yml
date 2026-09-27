@@ -498,10 +498,11 @@ jobs:
           set -euo pipefail
           test -e /dev/kvm || { echo '::error::Waybar comparison requires KVM'; exit 1; }
           system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
-          nix build --print-build-logs ".#legacyPackages.$system.waybar-comparison-vm" \
-            --out-link result-waybar-comparison
           mkdir -p "$RUNNER_TEMP/waybar-comparison"
-          cp -RL result-waybar-comparison/. "$RUNNER_TEMP/waybar-comparison/"
+          nix build --print-build-logs ".#legacyPackages.$system.waybar-comparison-vm.driver" \
+            --out-link result-waybar-comparison-driver
+          result-waybar-comparison-driver/bin/nixos-test-driver \
+            --no-interactive --output_directory "$RUNNER_TEMP/waybar-comparison"
 
       - name: Upload Waybar comparison evidence
         if: always() && github.event_name == 'workflow_dispatch' && inputs.waybar_comparison

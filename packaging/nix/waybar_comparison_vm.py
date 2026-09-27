@@ -63,6 +63,67 @@ def cpu_delta(before, after, ticks_per_second):
     }
 
 
+def stop_candidate_units(machine, units):
+    records = []
+    failed = False
+    for unit in reversed(units):
+        active_status, active_output = machine.execute(
+            "systemctl --user --machine=alice@ is-active --quiet " + unit + ".service",
+            timeout=dt.timedelta(seconds=15))
+        if active_status in (3, 4):
+            records.append({"unit": unit, "state": "already inactive or collected",
+                            "status": active_status})
+            continue
+        if active_status != 0:
+            failed = True
+            records.append({"unit": unit, "state": "query failed", "status": active_status,
+                            "output": active_output})
+            continue
+        stopped, output = machine.execute(
+            "systemctl --user --machine=alice@ stop " + unit + ".service",
+            timeout=dt.timedelta(seconds=15))
+        failed |= stopped != 0
+        records.append({"unit": unit, "state": "stop requested", "status": stopped,
+                        "output": output})
+    return {"stop_status": 1 if failed else 0, "units": records}
+
+
+def help_toggled(before, after):
+    return after["state"]["whichkey"] is not before["state"]["whichkey"]
+
+
+def focused_window_id(observation):
+    active = [cell for cell in observation["ledger"] if cell["active"]]
+    if len(active) != 1:
+        raise AssertionError("expected one active orbit")
+    focused = [window["id"] for window in active[0]["windows"] if window["focused"]]
+    if len(focused) != 1:
+        raise AssertionError("expected one focused window")
+    return focused[0]
+
+
+def focus_changed(before, after):
+    return (focused_window_id(before) != focused_window_id(after)
+            and before["state"]["focused_title"] != after["state"]["focused_title"])
+
+
+def observed_idle_span(timestamps_ns):
+    assert len(timestamps_ns) >= 2
+    return {
+        "elapsed_seconds": (timestamps_ns[-1] - timestamps_ns[0]) / 1e9,
+        "interval_seconds": [(right - left) / 1e9
+                             for left, right in zip(timestamps_ns, timestamps_ns[1:])],
+    }
+
+
+def wait_fullscreen(window_wait, wanted):
+    def matches(value):
+        active = [cell for cell in value["ledger"] if cell["active"]]
+        return len(active) == 1 and (active[0]["fullscreen"] is not None) is wanted
+
+    return window_wait(matches, "fullscreen enabled" if wanted else "fullscreen disabled")
+
+
 def exercise(machine, as_alice, window_wait, exercise_controls, fixture, waybar, python,
              source, wayland_display):
     """Run the baseline and hybrid in one VM; all actions use actual keyboard input."""
@@ -112,7 +173,9 @@ def exercise(machine, as_alice, window_wait, exercise_controls, fixture, waybar,
             expected.update(("waybar", "adapter"))
         for measured in samples:
             assert expected <= measured["processes"].keys(), (variant, measured)
-        return {"settle_seconds": 10, "sample_seconds": 30, "cadence_seconds": 1,
+        return {"settle_seconds": 10, "requested_minimum_sleep_span_seconds": 30,
+                "requested_sleep_between_samples_seconds": 1,
+                "observed_timing": observed_idle_span([s["host_monotonic_ns"] for s in samples]),
                 "samples": samples,
                 "delta": cpu_delta(start["processes"], end["processes"], start["clock_ticks_per_second"])}
 
@@ -129,9 +192,11 @@ def exercise(machine, as_alice, window_wait, exercise_controls, fixture, waybar,
             ended = time.monotonic_ns()
             assert ended <= deadline, (label, trial, "launch-to-visible probe exceeded 30s")
             trials.append({"trial": trial + 1, "start_monotonic_ns": started,
-                           "screenshot_monotonic_ns": ended, "upper_bound_seconds": (ended-started)/1e9,
-                           "expected_ocr_text": expected, "screenshot": frame,
-                           "process_pid": pid})
+                           "screenshot_monotonic_ns": ended,
+                           "probe_observed_launch_to_screenshot_seconds": (ended-started)/1e9,
+                           "ocr_token": expected, "candidate_region_verified": False,
+                           "screenshot": frame, "process_pid": pid,
+                           "interpretation": "Whole-frame OCR can match retained realm-bar or terminal text; inspect screenshot for candidate visibility."})
         return trials
 
     def transition_snapshot(name):
@@ -167,13 +232,14 @@ def exercise(machine, as_alice, window_wait, exercise_controls, fixture, waybar,
         assert shown <= deadline, (name, "screenshot exceeded deadline")
         return {"key_dispatch_host_monotonic_ns": dispatched,
                 "socket_observation_host_monotonic_ns": observed,
-                "first_matching_ocr_screenshot_host_monotonic_ns": shown,
+                "ocr_screenshot_host_monotonic_ns": shown,
                 "screenshot": frame, "ocr_text": ocr_text,
                 "state": observation, "adapter": trace_entry,
-                "probe_upper_bound_seconds": (shown - dispatched) / 1e9,
+                "probe_observed_dispatch_to_screenshot_seconds": (shown - dispatched) / 1e9,
+                "candidate_region_verified": False,
                 "adapter_receive_to_flush_seconds":
                     (trace_entry["flushed_monotonic_ns"] - trace_entry["received_monotonic_ns"]) / 1e9,
-                "precision_caveat": "OCR cadence and screenshot capture are included; this is not input-to-present latency."}
+                "precision_caveat": "Whole-frame OCR may match retained bar or terminal; screenshot cadence is included; this is not input-to-present latency."}
 
     try:
         record = json.loads(user(python, guest_probe, "--record", runtime))
@@ -204,7 +270,7 @@ def exercise(machine, as_alice, window_wait, exercise_controls, fixture, waybar,
             window_wait(lambda value: sum(len(cell["windows"]) for cell in value["ledger"]) == number,
                         "comparison terminal " + letter)
             machine.send_chars("printf '\\033]0;Realm window " + letter + "\\007'; "
-                               "printf 'Realm window " + letter + "\\n'; exec sleep infinity\n")
+                               "printf 'Realm window " + letter + "\\n'\n")
             window_wait(lambda value: value["state"]["focused_title"] == "Realm window " + letter,
                         "comparison title " + letter)
 
@@ -271,11 +337,15 @@ def exercise(machine, as_alice, window_wait, exercise_controls, fixture, waybar,
             lambda value: value["state"]["mode"] == "nav", "comparison navigation mode")
         hybrid["nav_mode_screenshot"] = capture("hybrid-nav-mode")
         machine.send_key("meta_l-f")
-        hybrid["fullscreen"] = transition_snapshot("hybrid-fullscreen")
+        fullscreen_state = wait_fullscreen(window_wait, True)
+        hybrid["fullscreen"] = {"state": fullscreen_state,
+                                "screenshot": capture("hybrid-fullscreen")}
         active = [cell for cell in hybrid["fullscreen"]["state"]["ledger"] if cell["active"]]
         assert len(active) == 1 and active[0]["fullscreen"] is not None, active
         machine.send_key("meta_l-f")
-        hybrid["unfullscreen"] = transition_snapshot("hybrid-unfullscreen")
+        unfullscreen_state = wait_fullscreen(window_wait, False)
+        hybrid["unfullscreen"] = {"state": unfullscreen_state,
+                                  "screenshot": capture("hybrid-unfullscreen")}
         active = [cell for cell in hybrid["unfullscreen"]["state"]["ledger"] if cell["active"]]
         assert len(active) == 1 and active[0]["fullscreen"] is None, active
         prior_title = hybrid["after_controls"]["state"]["state"]["focused_title"]
@@ -322,15 +392,8 @@ def exercise(machine, as_alice, window_wait, exercise_controls, fixture, waybar,
         result["failures"].append(str(error))
         raise
     finally:
-        status, output = (0, "")
-        for unit in reversed(candidate_units):
-            stopped, message = machine.execute("systemctl --user --machine=alice@ stop " + unit + ".service",
-                                               timeout=dt.timedelta(seconds=15))
-            status = max(status, stopped)
-            output += unit + ": " + message + "\n"
-        result["cleanup"] = {"stop_status": status, "stop_output": output,
-                             "units": candidate_units}
-        if status != 0:
+        result["cleanup"] = stop_candidate_units(machine, candidate_units)
+        if result["cleanup"]["stop_status"] != 0:
             result["passed"] = False
             result["failures"].append("candidate stop failed")
         try:
@@ -341,13 +404,25 @@ def exercise(machine, as_alice, window_wait, exercise_controls, fixture, waybar,
             if result["cleanup"]["candidate_remaining"] or result["cleanup"]["adapter_remaining"]:
                 result["passed"] = False
                 result["failures"].append("candidate or adapter survived stop")
+            before_help = window_wait(lambda value: True, "baseline help before candidate cleanup")
             machine.send_key("meta_l-w")
-            window_wait(lambda value: isinstance(value["state"]["whichkey"], bool),
-                        "baseline help responds after candidate stop")
+            after_help = window_wait(lambda value: help_toggled(before_help, value),
+                                     "baseline help toggles after candidate stop")
+            assert focused_window_id(before_help) == focused_window_id(after_help), \
+                "baseline help stole keyboard focus"
+            machine.send_key("meta_l-w")
+            window_wait(lambda value: value["state"]["whichkey"] is before_help["state"]["whichkey"],
+                        "baseline help restored after candidate stop")
+            before_focus = window_wait(lambda value: True, "baseline focus before candidate cleanup")
             machine.send_key("meta_l-j")
-            window_wait(lambda value: bool(value["state"]["focused_title"]),
-                        "baseline focus responds after candidate stop")
-            result["cleanup"]["baseline_help_focus"] = True
+            after_focus = window_wait(lambda value: focus_changed(before_focus, value),
+                                      "baseline focus changes after candidate stop")
+            result["cleanup"]["baseline_help_focus"] = {
+                "help_before": before_help["state"]["whichkey"],
+                "help_after": after_help["state"]["whichkey"],
+                "focus_before": focused_window_id(before_focus),
+                "focus_after": focused_window_id(after_focus),
+            }
         except Exception as error:
             result["passed"] = False
             result["failures"].append("baseline recovery: " + str(error))

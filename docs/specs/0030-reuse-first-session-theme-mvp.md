@@ -192,6 +192,16 @@ criteria for the alternative. Select it only with functional evidence and a
 recorded comparison; otherwise retain the existing bar. New custom metric/render
 work waits for that result. Repairing a real current-bar usability defect does not.
 
+The CI-only comparison keeps its three titled terminal shells interactive for
+later title probes. Its transient Waybar units may already be collected when
+cleanup runs; cleanup succeeds only when Waybar and its adapter are gone and a
+real which-key toggle and focused-window change still work through the baseline.
+Retain structured evidence and screenshots from a failed VM run as well as a
+passing run. A full-frame OCR match that the existing bar or a terminal can
+supply is only an observation of screenshot timing, not proof of Waybar's first
+matching frame. Report the actual elapsed idle sample span and cadence, and
+observe the ledger's fullscreen state before recording fullscreen screenshots.
+
 ## Verification obligations before implementation is declared complete
 
 ### Native consumer acceptance (Ubuntu/Fedora)
