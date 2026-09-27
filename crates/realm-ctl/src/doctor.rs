@@ -1163,26 +1163,43 @@ fn apply_deferred_checks(
     }
     set(checks, theme_outputs_check(config_root.as_deref(), palette));
     let palette_for_probe = palette_result.ok().map(|(palette, _)| palette);
-    let (sender, receiver) = mpsc::sync_channel(1);
+    apply_font_tool_checks_with(
+        checks,
+        deadline,
+        move || palette_for_probe.as_ref().map(font_checks),
+        move || {
+            tool_floor_check([
+                ("yazi", command_until(deadline, "yazi", &["--version"])),
+                ("btop", command_until(deadline, "btop", &["--version"])),
+                (
+                    "starship",
+                    command_until(deadline, "starship", &["--version"]),
+                ),
+            ])
+        },
+    );
+}
+
+fn apply_font_tool_checks_with(
+    checks: &mut [Check],
+    deadline: Instant,
+    font_probe: impl FnOnce() -> Option<(Check, Check)> + Send + 'static,
+    tool_probe: impl FnOnce() -> Check + Send + 'static,
+) {
+    let (font_sender, fonts) = mpsc::sync_channel(1);
+    let (tool_sender, tools) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
-        let fonts = palette_for_probe.as_ref().map(font_checks);
-        let tools = tool_floor_check([
-            ("yazi", command_until(deadline, "yazi", &["--version"])),
-            ("btop", command_until(deadline, "btop", &["--version"])),
-            (
-                "starship",
-                command_until(deadline, "starship", &["--version"]),
-            ),
-        ]);
-        let _ = sender.send((fonts, tools));
+        let _ = font_sender.send(font_probe());
     });
-    match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-        Ok((Some((glyphs, attribution)), tools)) => {
+    std::thread::spawn(move || {
+        let _ = tool_sender.send(tool_probe());
+    });
+    match fonts.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(Some((glyphs, attribution))) => {
             set(checks, glyphs);
             set(checks, attribution);
-            set(checks, tools);
         }
-        Ok((None, tools)) => {
+        Ok(None) => {
             set(
                 checks,
                 Check::skipped("fonts/glyphs", "palette was unavailable"),
@@ -1191,7 +1208,6 @@ fn apply_deferred_checks(
                 checks,
                 Check::skipped("fonts/attribution", "palette was unavailable"),
             );
-            set(checks, tools);
         }
         Err(_) => {
             set(
@@ -1206,16 +1222,22 @@ fn apply_deferred_checks(
                     "font probe exceeded deadline",
                 ),
             );
-            set(
-                checks,
+        }
+    }
+    // Even when fonts exhaust the shared deadline, receive a tool finding
+    // already queued; never give the second observation another time budget.
+    set(
+        checks,
+        tools
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap_or_else(|_| {
                 Check::new(
                     "tools/floors",
                     Status::Warn,
                     "tool probes exceeded deadline",
-                ),
-            );
-        }
-    }
+                )
+            }),
+    );
 }
 
 #[derive(Debug)]
@@ -2352,6 +2374,33 @@ SESSION_ENV_VARS=(
     }
 
     #[test]
+    fn completed_font_findings_survive_a_blocked_tool_probe() {
+        let (release, blocked) = mpsc::channel();
+        let mut checks = blank_checks();
+        let started = Instant::now();
+        apply_font_tool_checks_with(
+            &mut checks,
+            started + Duration::from_millis(40),
+            || {
+                Some((
+                    Check::new("fonts/glyphs", Status::Warn, "observed missing glyphs"),
+                    Check::new("fonts/attribution", Status::Ok, "observed font chain"),
+                ))
+            },
+            move || {
+                blocked.recv().unwrap();
+                Check::new("tools/floors", Status::Skip, "late tools")
+            },
+        );
+        release.send(()).unwrap();
+        assert_eq!(checks[29].summary, "observed missing glyphs");
+        assert_eq!(checks[30].summary, "observed font chain");
+        assert_eq!(checks[30].status, Status::Ok);
+        assert_eq!(checks[31].summary, "tool probes exceeded deadline");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
     fn portal_result_is_not_blocked_by_a_hung_systemd_probe() {
         let started = Instant::now();
         let receivers = begin_bus_observation_with(
@@ -2371,6 +2420,49 @@ SESSION_ENV_VARS=(
         assert!(observed.systemd.is_err());
         assert_eq!(observed.portal.unwrap().filechooser_version, 7);
         assert!(started.elapsed() < Duration::from_millis(150));
+    }
+
+    #[test]
+    fn completed_tool_findings_survive_a_blocked_font_probe() {
+        let (release, blocked) = mpsc::channel();
+        let mut checks = blank_checks();
+        let started = Instant::now();
+        apply_font_tool_checks_with(
+            &mut checks,
+            started + Duration::from_millis(40),
+            move || {
+                blocked.recv().unwrap();
+                None
+            },
+            || Check::new("tools/floors", Status::Skip, "observed versions"),
+        );
+        release.send(()).unwrap();
+        assert_eq!(checks[29].summary, "font probe exceeded deadline");
+        assert_eq!(checks[30].summary, "font probe exceeded deadline");
+        assert_eq!(checks[31].summary, "observed versions");
+        assert_eq!(checks[31].status, Status::Skip);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn palette_unavailable_skips_survive_a_blocked_tool_probe() {
+        let (release, blocked) = mpsc::channel();
+        let mut checks = blank_checks();
+        apply_font_tool_checks_with(
+            &mut checks,
+            Instant::now() + Duration::from_millis(40),
+            || None,
+            move || {
+                blocked.recv().unwrap();
+                Check::new("tools/floors", Status::Skip, "late tools")
+            },
+        );
+        release.send(()).unwrap();
+        for check in &checks[29..31] {
+            assert_eq!(check.status, Status::Skip);
+            assert_eq!(check.summary, "palette was unavailable");
+        }
+        assert_eq!(checks[31].summary, "tool probes exceeded deadline");
     }
 
     #[test]

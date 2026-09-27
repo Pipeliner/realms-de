@@ -311,6 +311,11 @@ affect the exit code. `skip` means the check could not be run and says why.
 Every probe has one, and the largest is 2 s. A diagnostic that hangs *is* the
 bug it is diagnosing: the 25-second portal hang would otherwise be reproduced
 faithfully inside `doctor`. No blocking read is issued without a timeout.
+Font and executable observations SHALL publish independently under the same
+aggregate deadline. A completed font coverage/attribution result (including
+palette-unavailable skips) survives a hung tool probe, and completed tool
+findings survive a hung font scan. Only the unfinished observation receives a
+timeout warning; check IDs, ordering and JSON shape remain unchanged.
 
 #### The checks
 
