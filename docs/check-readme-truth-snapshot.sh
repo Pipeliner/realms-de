@@ -38,6 +38,7 @@ markdown_tick=$(printf '\140')
 intro_section=$(sed -n '1,/^---$/p' "$readme")
 rules_section=$(sed -n '/^## What makes it different$/,/^## The one idea$/p' "$readme")
 status_section=$(sed -n '/^## Status$/,/^## Try it$/p' "$readme")
+try_section=$(sed -n '/^## Try it$/,/^## Needs a human$/p' "$readme")
 map_section=$(sed -n '/^## Repo map$/,/^## Docs$/p' "$readme")
 
 require_section "$intro_section" 'keyboard-first, gapless-tiling, Rust-first Wayland desktop environment' \
@@ -182,8 +183,24 @@ require_section "$status_section" 'Implemented and verified in the installed Nix
     'README must name installed NixOS VM verification for realm-bar'
 require_section "$status_section" 'the exact Fedora RPM verified in an empty installroot' \
     'README status must name the Fedora RPM installroot evidence'
-require_section "$status_section" 'Debian installation, Fedora graphical login, physical hardware, and functional portal verification remain pending' \
+require_section "$status_section" 'Ubuntu 24.04 and Fedora native-package graphical VM jobs passed' \
+    'README status must name the native graphical VM evidence'
+require_section "$status_section" 'https://github.com/Pipeliner/realms-de/actions/runs/36327811527' \
+    'README status must link the verified native VM run'
+require_section "$status_section" '29e69684d1ff1d45629d7cdcc0b3d8b8ae6996dc' \
+    'README status must bind native VM evidence to its tested merge revision'
+require_section "$status_section" 'the overall run failed' \
+    'README must distinguish passing native jobs from the failed overall run'
+require_section "$status_section" 'Physical hardware and full MVP acceptance remain pending' \
     'README status must retain the unverified delivery boundary'
+require_section "$try_section" '2026-12-26' \
+    'README trial must disclose artifact expiry'
+require_section "$try_section" 'desktop and display manager installed' \
+    'README trial must preserve the existing desktop'
+for artifact in 10935181555 10935057867; do
+    require_section "$try_section" "https://github.com/Pipeliner/realms-de/actions/runs/36327811527/artifacts/$artifact" \
+        'README trial must link its verified package artifact'
+done
 for stale_claim in \
     'There is no desktop environment here yet' \
     'live compositor verification pending' \
@@ -229,7 +246,7 @@ require_section "$map_section" 'root Nix reference-build entry point' \
 
 needs_section=$(sed -n '/^## Needs a human$/,/^## Repo map$/p' "$readme")
 [ -n "$needs_section" ] || fail 'README needs-human section is required'
-require_section "$needs_section" '2026-08-30T06:18:36Z' \
+require_section "$needs_section" '2026-09-27' \
     'README needs-human snapshot timestamp differs from the accepted snapshot'
 
 expected_count=0
@@ -246,19 +263,7 @@ while IFS='|' read -r issue title; do
     printf '%s\n' "$row" | awk -F '|' 'NF == 4 && $3 ~ /[^[:space:]]/ { ok = 1 } END { exit(ok ? 0 : 1) }' \
         || fail 'needs-human snapshot blocker is empty'
 done <<'EOF'
-168|Reconcile generation GC with transferred lifecycle leases and M1/M2 launch sequencing
-166|Specify JSON schemas for realmctl theme lint and diff
-135|Complete exact M1 activation assets and supported-consumer probes
-134|Decide supported M1 package sources and catalog migration for Yazi and Starship
-133|Specify truthful desktop-entry and D-Bus activation for themed Qt launches
-132|Reconcile activation launch lifecycle with session teardown and restart
-35|Does the 𓂃 prompt sigil survive on the target distros' default fonts, or does `~` become the default?
-30|Template: starship prompt for thoth, with the 𓂃 sigil and its ASCII fallback
 25|Template: GTK 3, GTK 4 and libadwaita stylesheets
-24|Extend the "no colour outside palette.toml" CI guard to templates and generated outputs
-23|Add `realmctl theme apply`, `lint` and `diff`
-17|Configure branch protection on the default branch with the CI checks as required
-16|Enable Dependabot alerts and version updates, and create the labels its config references
 EOF
 
 if printf '%s\n' "$needs_section" \

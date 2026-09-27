@@ -51,7 +51,7 @@
 - **Snappy is a number.** There are no animations, and there is a published
   frame budget for every path that can feel slow: key press to new geometry
   under 4 ms, state change to bar redraw under 8 ms, cold session start under
-  900 ms. Budgets are gates in CI, not aspirations.
+  900 ms. These are design targets, not a claim of measured laptop performance.
   [ADR 0009](docs/adr/0009-no-animation-budget.md) ·
   [ARCHITECTURE §4](docs/ARCHITECTURE.md#4-what-robust-and-snappy-mean-here)
 
@@ -69,7 +69,8 @@
   pre-alpha baseline. Its two required pinned-image lanes are a Cargo smoke and
   a retained-source RPM build; the latter installs its exact output into an
   empty Fedora 44 root through normal DNF dependency resolution and probes the
-  installed Realm CLI, palette and River. This is not graphical-session,
+  installed Realm CLI, palette and River. The dated [trial build](#try-it)
+  also passed native graphical VM login checks. This does not prove full
   portal, hardware, or SELinux acceptance.
   [ADR 0015](docs/adr/0015-fedora-44-pre-alpha-baseline.md)
 
@@ -124,14 +125,14 @@ What exists, honestly:
 
 | | |
 |---|---|
-| `realm-core` | **Implemented and tested.** Ledger, layout projection, OKLab palette derivation and lint, keymap, glyph inventory and IPC types. [`cargo test`](#try-it) is the current executable evidence. |
+| `realm-core` | **Implemented and tested.** Ledger, layout projection, OKLab palette derivation and lint, keymap, glyph inventory and IPC types. [CI](https://github.com/Pipeliner/realms-de/actions/workflows/ci.yml) runs the source tests. |
 | Architecture, MVP cut line, failure register | **Written.** [ARCHITECTURE](docs/ARCHITECTURE.md) · [MVP](docs/MVP.md) · [PITFALLS](docs/PITFALLS.md) |
 | Specs and ADRs | **In progress.** [`docs/specs/`](docs/specs/) · [`docs/adr/`](docs/adr/) |
 | `realm-theme` and `realmctl theme` | **Implemented and tested pre-alpha surface.** The library renders and validates sealed generations; `realmctl theme apply`, `theme lint`, and `theme diff` expose it. |
 | `realm-session` | **Daemon and real River adapter verified in the installed NixOS QEMU VM.** The display-manager session reaches live River 0.4.8; the packaged `realm-wm` manages three ordinary Wayland windows, serves control state, and completes exact Quit shutdown. Contract and real-socket fixtures also pass. |
 | `realm-bar` | **Implemented and verified in the installed NixOS QEMU VM.** The packaged layer-shell bar consumes live session state; the captures show its orbit state, which-key strip, and grimoire reached through a real keybinding. |
-| `realm-hecate`, `realm-odin`, `realm-compositor` | **Planned, post-MVP.** The MVP uses themed external clients and River. |
-| Package/session/portal assets | **Tracked pre-alpha contract; installed NixOS reference path verified in a VM and the exact Fedora RPM verified in an empty installroot.** The NixOS session entry, wrapper, systemd units and module produce the captured desktop; the Fedora check resolves the RPM transaction and runs its installed CLI/palette and River probes. Debian installation, Fedora graphical login, physical hardware, and functional portal verification remain pending. |
+| `realm-hecate`, `realm-odin`, `realm-compositor` | **Deferred or shelved, not MVP prerequisites.** The MVP reuses Fuzzel, existing applications and River. |
+| Package/session/portal assets | **Tracked pre-alpha contract; installed NixOS reference path verified in a VM and the exact Fedora RPM verified in an empty installroot.** Ubuntu 24.04 and Fedora native-package graphical VM jobs passed for merge `29e69684d1ff1d45629d7cdcc0b3d8b8ae6996dc` in [run 36327811527](https://github.com/Pipeliner/realms-de/actions/runs/36327811527), checked 2026-09-27; the overall run failed (Fedora contract guard and Nix X11 activation check). Physical hardware and full MVP acceptance remain pending. These artifacts do not include every newer theme/locking fix. |
 | Images | **Two real VM screenshots, plus design assets.** The PNGs above are unchanged compositor-framebuffer captures; the hand-drawn SVGs and design handoff's HTML prototypes remain diagrams and concepts. |
 
 Crates join the Cargo workspace only when they gain a real implementation, so a
@@ -143,51 +144,99 @@ is in [docs/ROADMAP.md](docs/ROADMAP.md). **M3 is the MVP.**
 
 ## Try it
 
-You should not treat realm as log-in ready on physical hardware yet. The
-installed NixOS package has completed an automated display-manager login and
-graphical River session in the reference QEMU VM. Fedora CI also installs the
-exact built RPM into an empty root and probes the installed Realm CLI, palette,
-and River. Those checks do not prove Debian installation, Fedora graphical
-login, portals, final application theming, or hardware support.
-`cargo test` exercises the implemented pre-alpha libraries and real local
-socket fixtures; the packaged graphical proof is the NixOS VM check.
+**A runnable pre-alpha trial is available, not a finished MVP.** Keep your current
+desktop and display manager installed; try a VM or a secondary machine first.
+Laptop suspend/locking, the complete portal journey and final application theming
+are not certified by these builds. In particular, this Ubuntu build's Fuzzel
+configuration may prevent the launcher opening; its compatibility fix is newer.
+Do not rely on this trial for locking or suspend protection.
 
-```console
-$ git clone https://github.com/Pipeliner/realms-de
-$ cd realms-de
-$ cargo test
+### Download a CI-built package
+
+Verified **2026-09-27** against the exact run/revision in the status table above.
+Sign in to GitHub to download the ZIP, then extract it into an empty directory.
+These are retained CI artifacts, not release assets; they currently expire
+**2026-12-26** and may be removed sooner. If unavailable, check the
+[Actions page](https://github.com/Pipeliner/realms-de/actions/workflows/distro.yml)
+for a newer explicitly verified trial; do not assume any green build is equivalent.
+
+| Laptop system | Download | Contents |
+| --- | --- | --- |
+| Ubuntu **24.04**, **x86-64/amd64** | [Ubuntu trial ZIP](https://github.com/Pipeliner/realms-de/actions/runs/36327811527/artifacts/10935181555) | `realm_0.1.0_amd64.deb` and `realm-river_0.4.8-1_amd64.deb` |
+| Fedora **44**, **x86-64** | [Fedora trial ZIP](https://github.com/Pipeliner/realms-de/actions/runs/36327811527/artifacts/10935057867) | `realm-0.1.0-1.fc44.x86_64.rpm` |
+
+Check your system with `cat /etc/os-release` and `uname -m`. Do not install these
+on another distro/version or ARM laptop. NixOS configuration is documented in
+[INSTALL](docs/INSTALL.md#nixos-and-nix); no downloadable NixOS laptop image is
+being offered here. All project package builds happen in CI, not on your laptop.
+
+From the directory containing the extracted packages, run **only** the command
+for your distro. Review the package manager's proposed transaction before agreeing:
+
+```sh
+# Ubuntu 24.04: install both packages together, resolving distro dependencies.
+sudo apt install ./realm-river_0.4.8-1_amd64.deb ./realm_0.1.0_amd64.deb
+
+# Fedora 44: use normal distro dependency resolution for River and other tools.
+sudo dnf install ./realm-0.1.0-1.fc44.x86_64.rpm
 ```
 
-The first release anyone can log into is **M3**, whose cut line is written down
-in [docs/MVP.md](docs/MVP.md): log in, tile windows across six orbits, see and
-discover the keys, launch things, files, monitor, shell, one coherent theme
-across GTK/Qt/TUIs, working portals, packages for NixOS, Ubuntu and Fedora, and
-a `realmctl doctor` that says what is wrong before you file a bug.
+### Start and explore
+
+Save your work, log out, and choose **realm** in your existing login screen's
+session selector. Do not replace your working desktop or enable automatic login.
+If Realm is absent, return to your normal session and report the display manager
+and package version instead of replacing its configuration blindly.
+
+- **Super+Enter:** terminal; run `realmctl doctor` for diagnostic output.
+- **Super+Shift+/:** full key help (`Super+?` on the tested US layout).
+- **Super+j/k:** focus; **Super+h/l:** swap; **Super+1–6:** orbits.
+- **Super+b:** configured default browser (install/set a default browser first).
+- **Super+q:** close the focused application, not the whole session.
+
+For problems, retain `realmctl doctor` output and
+`journalctl --user -b -u realm-wm.service -u realm-bar.service`, remove personal
+information, and [file an issue](https://github.com/Pipeliner/realms-de/issues/new/choose)
+with your distro, GPU, artifact name and the tested revision.
+
+### Return to your normal desktop / remove the trial
+
+To end the trial session, switch to a text console with Ctrl+Alt+F3,
+log in, inspect `loginctl list-sessions`, and terminate **only** the Realm
+graphical session with `loginctl terminate-session SESSION_ID` (replace the
+placeholder; do not terminate your recovery console). Return to the login
+screen and select your previous desktop.
+
+Once back in your normal desktop, remove only the trial packages:
+
+```sh
+# Ubuntu
+sudo apt remove realm realm-river
+# Fedora
+sudo dnf remove realm
+```
+
+Review removal proposals; cancel if they would remove your normal desktop.
+Do not run automatic dependency cleanup as part of recovery. Your user
+configuration is retained. See [INSTALL](docs/INSTALL.md) for packaging details;
+the dated trial evidence above is newer than its conservative main-branch status.
+
+The **M3 MVP** still requires the complete [acceptance journey and real week of
+daily use](https://github.com/Pipeliner/realms-de/issues/78), not merely a runnable
+package or a successful VM login.
 
 ---
 
 ## Needs a human
 
-Standing order S3: judgement the repository cannot supply is surfaced here, on
-the front page, rather than buried in an issue. This is a snapshot of the open
-[**`needs-human`**](https://github.com/Pipeliner/realms-de/labels/needs-human)
-label at **2026-08-30T06:18:36Z**; follow the label for the live state.
+Standing order S3: decisions requiring human judgment stay visible here.
+Checked **2026-09-27**: the current open
+[`needs-human` label](https://github.com/Pipeliner/realms-de/labels/needs-human)
+contains the following issue. Follow the label for live state.
 
 | Issue | What it blocks |
 |---|---|
-| [#168 — Reconcile generation GC with transferred lifecycle leases and M1/M2 launch sequencing](https://github.com/Pipeliner/realms-de/issues/168) | An accepted lifecycle-lease/GC contract and truthful M1/M2 launch sequencing. |
-| [#166 — Specify JSON schemas for realmctl theme lint and diff](https://github.com/Pipeliner/realms-de/issues/166) | The public `theme lint` and `theme diff` JSON contracts. |
-| [#135 — Complete exact M1 activation assets and supported-consumer probes](https://github.com/Pipeliner/realms-de/issues/135) | Exact M1 consumer assets and supported-consumer black-box probes. |
-| [#134 — Decide supported M1 package sources and catalog migration for Yazi and Starship](https://github.com/Pipeliner/realms-de/issues/134) | The supported Yazi/Starship package-source and catalog-migration policy. |
-| [#133 — Specify truthful desktop-entry and D-Bus activation for themed Qt launches](https://github.com/Pipeliner/realms-de/issues/133) | A truthful desktop-entry and D-Bus activation contract for themed Qt launches. |
-| [#132 — Reconcile activation launch lifecycle with session teardown and restart](https://github.com/Pipeliner/realms-de/issues/132) | The activation lifecycle, teardown and restart contract. |
-| [#35 — Does the 𓂃 prompt sigil survive on the target distros' default fonts, or does `~` become the default?](https://github.com/Pipeliner/realms-de/issues/35) | A verified default for the Egyptian prompt sigil on target installations. |
-| [#30 — Template: starship prompt for thoth, with the 𓂃 sigil and its ASCII fallback](https://github.com/Pipeliner/realms-de/issues/30) | The Starship prompt’s default-glyph decision. |
-| [#25 — Template: GTK 3, GTK 4 and libadwaita stylesheets](https://github.com/Pipeliner/realms-de/issues/25) | An accepted GTK configuration-location contract. |
-| [#24 — Extend the "no colour outside palette.toml" CI guard to templates and generated outputs](https://github.com/Pipeliner/realms-de/issues/24) | A palette-literal guard for templates and generated outputs. |
-| [#23 — Add `realmctl theme apply`, `lint` and `diff`](https://github.com/Pipeliner/realms-de/issues/23) | The complete `realmctl theme` interface. |
-| [#17 — Configure branch protection on the default branch with the CI checks as required](https://github.com/Pipeliner/realms-de/issues/17) | Enforced required CI checks and branch protection. |
-| [#16 — Enable Dependabot alerts and version updates, and create the labels its config references](https://github.com/Pipeliner/realms-de/issues/16) | Dependabot activation and the labels it requires. |
+| [#25 — Template: GTK 3, GTK 4 and libadwaita stylesheets](https://github.com/Pipeliner/realms-de/issues/25) | Completion of the GTK styling acceptance tracked in this issue. |
 
 ---
 
