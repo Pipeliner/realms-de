@@ -220,6 +220,12 @@ logs are uploaded, not extracted package trees or source bundles. Each case
 announces its start in the live job log. Missing logs after a forced runner loss
 remain missing evidence, not a passing fixture. The timeout stays bounded;
 retaining diagnostics does not waive it or prove why the build exceeded it.
+The combined Debian/RPM cold-build fixture receives a 120-minute step budget
+inside a 135-minute job budget. This covers two real release builds and their
+tests; the earlier 15-minute cap expired while compiling the first workspace
+(CI run 36317915230), before either package driver could finish. This budget is
+an execution limit, not acceptance evidence: both drivers must still complete
+all assertions, and a timeout remains a failure.
 The evidence directory SHALL be under the fixture's dedicated `/tmp` parent,
 outside its disposable scratch child, rather than beneath runner-owned home
 directories. Before invoking native package drivers, CI SHALL prove file creation and append

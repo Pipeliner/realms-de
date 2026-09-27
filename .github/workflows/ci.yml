@@ -147,7 +147,7 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: docs
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 135
     env:
       # realm-core is the contract every other crate is written against, so an
       # undocumented public item is a broken contract, not a nit.
@@ -227,7 +227,7 @@ jobs:
             exit 1
           fi
       - name: Check network-isolated native package paths
-        timeout-minutes: 15
+        timeout-minutes: 120
         run: |
           sudo env \
             REALM_NATIVE_TMPDIR="${{ steps.native-temp.outputs.path }}" \
