@@ -462,6 +462,15 @@ with a two-second termination deadline and a one-second forced-kill grace; the
 driver command is also capped by the shared remaining time. An unresponsive X
 server cannot extend the observation wait without bound. A live child pid alone
 is not evidence that an X11 window mapped.
+CI run 36339786482 mapped the non-override-redirect X11 child while Realm's
+managed-window count stayed zero. The synthetic Nix VM SHALL enable the
+existing client protocol trace for `realm-wm` only and retain a bounded excerpt
+of its window-management protocol journal on A17 failure: at most 200 matching
+entries and 65536 output characters, with a five-second command timeout and
+one-second kill grace. Trace collection failure remains diagnostic and must
+not replace the original assertion failure. Installed production units SHALL
+not enable this trace. The managed-window assertion and shared sixty-second
+activation/mapping/observation deadline remain unchanged.
 
 `doctor` must not shell out to `xlsclients` or `xdpyinfo` to check this: neither
 is guaranteed installed on any of the three targets. It connects to

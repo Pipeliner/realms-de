@@ -293,6 +293,8 @@ EOF
           initialPassword = "realmtest";
         };
         services.dbus.packages = [ xwaylandProbeService ];
+        # Synthetic CI guest only: locate the mapped-X11/Realm boundary.
+        systemd.user.services.realm-wm.environment.WAYLAND_DEBUG = "client";
         environment.systemPackages = [
           vmControlHelper
           portalVmHelper
@@ -421,7 +423,23 @@ EOF
               }
           return json.loads(output)
 
+      def log_x11_protocol_diagnostics():
+          try:
+              status, output = machine.execute(
+                  "timeout --kill-after=1 5 sh -c " + shlex.quote(
+                      "journalctl -b --no-pager -o cat -n 200 "
+                      "_SYSTEMD_USER_UNIT=realm-wm.service "
+                      "--grep='river_window_manager_v1|river_window_v1|protocol|error' "
+                      "| tail -c 65536"
+                  ),
+                  timeout=DIAGNOSTIC_TIMEOUT,
+              )
+              machine.log(f"X11 Realm protocol journal (exit {status}):\n{output[-65536:]}")
+          except Exception as error:
+              machine.log(f"X11 Realm protocol journal unavailable: {str(error)[-512:]}")
+
       def log_x11_diagnostics(observation, child_pid):
+          log_x11_protocol_diagnostics()
           tree = observation["tree"]
           machine.log(f"X11 root tree (exit {tree['status']}):\n{tree['output']}")
           for stats in observation["stats"]:
