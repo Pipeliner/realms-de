@@ -47,7 +47,7 @@ CHECK_IDS = [
     "fonts/attribution",
     "tools/floors",
 ]
-SKIP_IDS = {"units/idle-lock", "portal/filechooser"}
+SKIP_IDS = {"units/idle-lock", "portal/filechooser", "tools/floors"}
 ALLOWED_WARN_IDS = {
     "session/degraded",
     "wm/capabilities",
@@ -56,7 +56,6 @@ ALLOWED_WARN_IDS = {
     "theme/outputs",
     "fonts/glyphs",
     "fonts/attribution",
-    "tools/floors",
 }
 REQUIRED_OK_IDS = {
     "session/socket",
@@ -227,22 +226,24 @@ def validate_doctor(report: object) -> None:
         raise ValueError(f"unexpected doctor warnings: {unexpected_warnings}")
     tools = by_id["tools/floors"]
     tools_summary = tools.get("summary")
-    btop = None
+    versions = None
     if isinstance(tools_summary, str):
         match = re.fullmatch(
-            r"yazi: not found, btop: (.*), starship: not found; "
-            r"install the missing or unparseable tools",
+            r"yazi: (.*?), btop: (.*?), starship: (.*?); numeric floors unresolved",
             tools_summary,
             flags=re.DOTALL,
         )
         if match is not None:
-            btop = match.group(1)
+            versions = match.groups()
     if (
-        tools.get("status") != "warn"
-        or btop is None
-        or not any(character.isdigit() for character in btop)
-        or "not found" in btop
-        or "unparseable" in btop
+        tools.get("status") != "skip"
+        or versions is None
+        or any(
+            not any(character.isdigit() for character in version)
+            or "not found" in version
+            or "unparseable" in version
+            for version in versions
+        )
     ):
         raise ValueError(
             "doctor native tool evidence does not match the accepted package boundary"

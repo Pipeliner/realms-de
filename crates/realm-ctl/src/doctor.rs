@@ -983,7 +983,11 @@ fn x11_socket_path(display: &str) -> Option<PathBuf> {
     Some(Path::new("/tmp/.X11-unix").join(format!("X{number}")))
 }
 
-fn command_until(deadline: Instant, program: &str, args: &[&str]) -> Result<String, String> {
+fn command_until(
+    deadline: Instant,
+    program: impl AsRef<std::ffi::OsStr>,
+    args: &[&str],
+) -> Result<String, String> {
     if Instant::now() >= deadline {
         return Err("deadline exceeded".to_owned());
     }
@@ -1066,6 +1070,14 @@ fn command_until(deadline: Instant, program: &str, args: &[&str]) -> Result<Stri
             .filter(|line| !line.is_empty())
             .unwrap_or("command failed")
             .to_owned())
+    }
+}
+
+fn tool_program_for_executable(executable: &Path, name: &str) -> PathBuf {
+    if executable == Path::new("/usr/bin/realmctl") {
+        Path::new("/usr/lib/realm/bin").join(name)
+    } else {
+        PathBuf::from(name)
     }
 }
 
@@ -1163,17 +1175,20 @@ fn apply_deferred_checks(
     }
     set(checks, theme_outputs_check(config_root.as_deref(), palette));
     let palette_for_probe = palette_result.ok().map(|(palette, _)| palette);
+    let executable = std::env::current_exe().unwrap_or_default();
+    let yazi = tool_program_for_executable(&executable, "yazi");
+    let starship = tool_program_for_executable(&executable, "starship");
     apply_font_tool_checks_with(
         checks,
         deadline,
         move || palette_for_probe.as_ref().map(font_checks),
         move || {
             tool_floor_check([
-                ("yazi", command_until(deadline, "yazi", &["--version"])),
+                ("yazi", command_until(deadline, &yazi, &["--version"])),
                 ("btop", command_until(deadline, "btop", &["--version"])),
                 (
                     "starship",
-                    command_until(deadline, "starship", &["--version"]),
+                    command_until(deadline, &starship, &["--version"]),
                 ),
             ])
         },
@@ -2280,6 +2295,22 @@ SESSION_ENV_VARS=(
         assert_eq!(missing.status, Status::Warn);
         assert!(missing.summary.contains("btop: not found"));
         assert!(missing.summary.contains("starship: unparseable"));
+    }
+
+    #[test]
+    fn native_tool_probe_uses_private_install_paths_without_mutating_path() {
+        assert_eq!(
+            tool_program_for_executable(Path::new("/usr/bin/realmctl"), "yazi"),
+            PathBuf::from("/usr/lib/realm/bin/yazi")
+        );
+        assert_eq!(
+            tool_program_for_executable(Path::new("/usr/bin/realmctl"), "starship"),
+            PathBuf::from("/usr/lib/realm/bin/starship")
+        );
+        assert_eq!(
+            tool_program_for_executable(Path::new("/nix/store/realm/bin/realmctl"), "yazi"),
+            PathBuf::from("yazi")
+        );
     }
 
     #[test]

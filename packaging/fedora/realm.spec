@@ -74,6 +74,7 @@ Requires:       river >= 0.4.0
 # environment cannot be updated and portals hang; without systemd the user
 # units never start.
 Requires:       dbus-common
+Requires:       dbus-tools
 Requires:       systemd
 Requires:       /usr/bin/flock
 Requires:       swayidle

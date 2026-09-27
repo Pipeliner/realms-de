@@ -6,6 +6,11 @@ script_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd)
 # shellcheck source=packaging/native-vm/guest-probe.sh
 source "$script_dir/guest-probe.sh"
 
+# Fedora must declare the exact owner of the activation helper needed by the
+# production login; a fixture-side install must not hide an omitted dependency.
+grep -Eq '^Requires:[[:space:]]+dbus-tools([[:space:]]|$)' \
+    "$script_dir/../fedora/realm.spec"
+
 attempts=0
 user_command() {
     attempts=$((attempts + 1))
