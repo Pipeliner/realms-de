@@ -28,6 +28,15 @@ was possible. It never treats an API failure as an empty successful snapshot.
 Interval and maximum-duration settings must be positive decimal integers;
 invalid settings fail before querying, rather than disabling timeouts or polling
 without delay.
+Recent completed main runs must not hide older nonterminal runs. In addition
+to the recent snapshot, query main runs by each supported nonterminal status
+(`queued`, `in_progress`, `pending`, `waiting`, `requested`) with pagination,
+deduplicating run IDs. Bound API requests and pagination by the remaining
+monitor budget; an incomplete/error response cannot prove quiescence. A watch
+returns zero only after a successful snapshot with no relevant nonterminal
+ci/distro/palette runs. If its budget expires while runs remain nonterminal,
+return 124; query failures remain nonzero. This is read-only observation, never
+cancellation or workflow mutation.
 
 Pause routine Dependabot version PR creation until MVP acceptance. Continue
 inspecting the complete incoming PR queue; defer routine upgrades with a visible
