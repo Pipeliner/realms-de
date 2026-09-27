@@ -283,6 +283,19 @@ access alone is insufficient: capabilities in a child user namespace do not
 grant access through host-owned private ancestor directories. A failed probe
 SHALL report ancestor permissions and stop before the expensive package work.
 
+All fixture support files executed or read inside that namespace SHALL likewise
+be regular copies beneath the accessible fixture scratch directory before
+either package driver starts. In particular, command sentinels SHALL NOT
+symlink back into runner-owned checkout ancestors, and the same-recipe Yazi
+helper SHALL execute from the staged support copy. Each denying command keeps
+its command basename so metadata classification is unchanged. A namespace
+preflight SHALL read/parse every staged helper, execute every denying command
+and require its expected denial log/status, and execute the supplied Cargo and
+rustc version checks. An inaccessible support path SHALL stop before package
+work, never silently fall through to a real network/VCS executable. A lightweight
+regression SHALL remove access to the source ancestor after staging and still
+execute the staged sentinels and helper without producing packages.
+
 The Debian recipe's production resolver SHALL continue to select its complete
 versioned Cargo/rustc pair below `/usr/lib/rust-1.[89][0-9]/bin`.  The native
 offline fixture MAY set an explicit resolver-root input that contains the same

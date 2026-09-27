@@ -6,7 +6,6 @@ root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 # shellcheck source=packaging/tool-sources/native-version-check.sh
 . "$root/packaging/tool-sources/native-version-check.sh"
 kit_builder=$root/packaging/tool-sources/build-native-source-kits.sh
-cargo_wrapper=$root/packaging/tool-sources/native-cargo-wrapper.sh
 native_tmp=${REALM_NATIVE_TMPDIR:-${TMPDIR:-/tmp}}
 failures=0
 
@@ -88,8 +87,6 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 evidence=${REALM_NATIVE_EVIDENCE_DIR:-$tmp}
 mkdir -p "$evidence"
-printf 'native fixture: preparing retained source kits\n'
-"$kit_builder" "$tmp/production"
 
 run_isolated() {
     if [ "${REALM_NATIVE_NETWORK_ISOLATED:-0}" = 1 ]; then
@@ -119,11 +116,43 @@ make_sentinels() {
     directory=$1
     mkdir -p "$directory"
     for command in git curl wget ssh scp; do
-        ln -s "$root/packaging/tool-sources/native-command-sentinel.sh" \
+        cp "$native_support/native-command-sentinel.sh" \
             "$directory/$command"
+        chmod +x "$directory/$command"
     done
-    cp "$cargo_wrapper" "$directory/cargo"
+    cp "$native_support/native-cargo-wrapper.sh" "$directory/cargo"
     chmod +x "$directory/cargo"
+}
+
+stage_native_support() {
+    native_support=$tmp/support
+    mkdir -p "$native_support"
+    for support_file in native-command-sentinel.sh native-cargo-wrapper.sh check-yazi-reproducibility.sh; do
+        cp "$root/packaging/tool-sources/$support_file" "$native_support/$support_file"
+        chmod +x "$native_support/$support_file"
+    done
+}
+
+preflight_native_support() {
+    make_sentinels "$native_support/sentinels"
+    # These positional parameters belong to the isolated child shell.
+    # shellcheck disable=SC2016
+    run_isolated sh -eu -c '
+        cd "$1"
+        for helper in native-command-sentinel.sh native-cargo-wrapper.sh check-yazi-reproducibility.sh; do
+            test -r "$helper" && test -x "$helper"
+            sh -n "$helper"
+        done
+        for command in git curl wget ssh scp; do
+            status=0
+            REALM_SENTINEL_LOG="$1/preflight.log" "$1/sentinels/$command" --realm-fixture-probe || status=$?
+            test "$status" = 97
+            grep -F "forbidden|command=$command|" "$1/preflight.log" >/dev/null
+        done
+        sh -n "$1/sentinels/cargo"
+        "$2" --version >/dev/null
+        "$3" --version >/dev/null
+    ' native-support-preflight "$native_support" "$real_cargo" "$real_rustc"
 }
 
 make_rustc_selector() {
@@ -166,7 +195,7 @@ run_debian() {
     make_versioned_toolchain_root "$versioned_root" "$sentinels/cargo" "$real_rustc"
     mkdir -p "$fixture_state/outer-cargo-home"
     if [ "$#" -eq 4 ]; then
-        set -- sh "$root/packaging/tool-sources/check-yazi-reproducibility.sh" "$3" "$kit" "$4"
+        set -- sh "$native_support/check-yazi-reproducibility.sh" "$3" "$kit" "$4"
     else
         set -- make -C "$kit" -f debian/rules binary
     fi
@@ -524,6 +553,12 @@ rejects_injected_fetch() {
         fail "$name continued to Cargo after the injected fetch failed"
     fi
 }
+
+stage_native_support
+printf 'native fixture: checking support paths inside the network namespace\n'
+preflight_native_support
+printf 'native fixture: preparing retained source kits\n'
+"$kit_builder" "$tmp/production"
 
 make_debian_kit "$tmp/debian-invalid"
 printf 'different retained bytes\n' >> \
