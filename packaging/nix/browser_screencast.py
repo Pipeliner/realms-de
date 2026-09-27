@@ -61,12 +61,23 @@ def serve(page, output, port):
                     result = validate_result(output, json.loads(data))
                     publish_text(output / "result.json", json.dumps(result, indent=2) + "\n")
                 elif self.path == "/error":
-                    publish_text(output / "error.json", data.decode())
+                    if not (output / "error.json").exists():
+                        publish_text(output / "error.json", data.decode())
                 else:
                     self.send_error(404)
                     return
             except (ValueError, KeyError, TypeError) as error:
-                publish_text(output / "error.json", json.dumps({"error": str(error)}))
+                diagnostic = {"error": str(error)}
+                if self.path == "/result":
+                    # Preserve bounded rejected metadata before the page's
+                    # generic HTTP error arrives; never publish it as success.
+                    rejected = data[:8192].decode(errors="replace")
+                    try:
+                        diagnostic["rejected"] = json.loads(rejected)
+                    except ValueError:
+                        diagnostic["rejected_text"] = rejected
+                if not (output / "error.json").exists():
+                    publish_text(output / "error.json", json.dumps(diagnostic))
                 self.send_error(400, str(error))
                 return
             self.send_response(204)

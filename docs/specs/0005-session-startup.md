@@ -743,6 +743,13 @@ chooser remain enabled. The page must deliver two nonempty PNG frames with
 positive dimensions from its returned video stream, prove advancing video
 time, and explicitly stop its tracks. The VM retains the frame bytes and
 digests, result metadata, chooser/capture screenshots and browser version.
+Callback arrival alone is not proof of advancing media time. The page must
+ignore non-finite or non-advancing callback timestamps while waiting within
+the original shared 30-second frame-delivery deadline; it must never replace
+media time with wall time. Timeout still stops every track and fails. Retain
+up to 32 callback observations and rejected frame metadata for diagnosis, and
+preserve the first collector error when the page subsequently reports an HTTP
+failure. This does not waive the collector's two-frame advancing-time gate.
 Failures and timeouts are evidence, not skipped success. A local standard-library
 HTTP collector and the existing VM keyboard/mouse driver are sufficient; fake
 media sources, permission bypasses and a new browser automation stack are not

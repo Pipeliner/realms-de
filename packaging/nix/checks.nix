@@ -62,7 +62,7 @@ assert !waybarComparison || waybarFixture != null;
           ${src + "/packaging/debian/test-toolchain-path.sh"}
         bash ${src + "/packaging/session/test-runtime-dir-mode.sh"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_portal_vm_helper.py"}
-        ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_browser_screencast.py"}
+        REALM_NODE=${pkgs.nodejs}/bin/node ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_browser_screencast.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_window_controls.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_toolkit_focus.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_relogin.py"}

@@ -2,6 +2,7 @@
 import base64
 import importlib.util
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -17,6 +18,14 @@ PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_page_waits_for_advancing_callbacks_and_stops_on_timeout(self):
+        completed = subprocess.run([
+            os.environ.get("REALM_NODE", "node"),
+            str(HERE / "test_browser_frames.js"),
+            str(HERE / "browser_screencast.html"),
+        ], capture_output=True, text=True, timeout=5)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
     def test_page_uses_browser_default_colors(self):
         page = (HERE / "browser_screencast.html").read_text()
         self.assertNotRegex(page, r"#[0-9a-fA-F]{6}")
@@ -110,6 +119,15 @@ class EvidenceTests(unittest.TestCase):
                 self.assertEqual(response.status, 204)
             self.assertTrue(json.loads((self.output / "result.json").read_text())["stopped"])
             self.assertEqual((self.output / "frame-1.png").read_bytes(), PNG)
+            invalid = self.result()
+            invalid["frames"][1]["mediaTime"] = 1
+            with self.assertRaises(urllib.error.HTTPError):
+                urllib.request.urlopen(origin + "/result", data=json.dumps(invalid).encode())
+            with urllib.request.urlopen(origin + "/error", data=b'{"error":"collector /result: 400"}'):
+                pass
+            error = json.loads((self.output / "error.json").read_text())
+            self.assertEqual(error["error"], "video time must advance")
+            self.assertEqual(error["rejected"]["frames"], invalid["frames"])
         finally:
             process.terminate()
             process.communicate(timeout=5)
