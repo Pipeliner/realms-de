@@ -442,7 +442,7 @@ fn lint_json_input_failure_has_no_result_object() {
 }
 
 #[test]
-fn apply_reports_selected_future_generation_without_reload_or_session() {
+fn apply_reports_next_graphical_login_without_reload_or_session() {
     let temp = tempfile::tempdir().expect("temporary config root");
 
     let out = realmctl_at(temp.path(), ["theme", "apply"]);
@@ -450,7 +450,7 @@ fn apply_reports_selected_future_generation_without_reload_or_session() {
     assert!(out.status.success(), "{}", stderr(&out));
     let report = stdout(&out);
     assert!(report.starts_with("generation "));
-    assert!(report.contains(" selected for future launches"));
+    assert!(report.contains(" prepared for next graphical login"));
     assert!(!report.contains("reloaded"));
 }
 
@@ -493,6 +493,7 @@ fn diff_after_palette_edit_is_sorted_and_does_not_mutate_generation_tree() {
             "byte-different gtk-3.0/realm.css",
             "byte-different gtk-4.0/realm.css",
             "byte-different qt6ct/colors/realm.conf",
+            "byte-different realm/palette.toml",
             "byte-different starship.toml",
             "byte-different yazi/theme.toml",
         ],

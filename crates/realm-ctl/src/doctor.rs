@@ -322,7 +322,8 @@ pub(crate) fn run(
 
 fn collect(env: &impl Env, palette: Option<&Path>, portal_roundtrip: bool) -> DoctorReport {
     let started = Instant::now();
-    let deadline = started + Duration::from_secs(3);
+    // Reserve startup/reporting time within the command's three-second budget.
+    let deadline = started + Duration::from_millis(2500);
     let bus_deadline = started + Duration::from_secs(2);
     let bus_receiver = session_bus_present(env).then(|| begin_bus_observation(portal_roundtrip));
     let session_receiver = begin_session_observation();

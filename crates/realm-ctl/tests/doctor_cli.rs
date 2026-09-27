@@ -4,6 +4,36 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 #[test]
+fn hung_tool_leaves_time_to_emit_report_within_command_budget() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let tool = temp.path().join("yazi");
+    fs::write(&tool, "#!/bin/sh\nexec /bin/sleep 10\n").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+    let started = Instant::now();
+    let output = Command::new(env!("CARGO_BIN_EXE_realmctl"))
+        // A missing palette deliberately skips the costly font scan, isolating
+        // the real external-tool deadline and final report emission.
+        .args(["doctor", "--json", "--palette"])
+        .arg(temp.path().join("missing-palette.toml"))
+        .env("PATH", temp.path())
+        .env("XDG_RUNTIME_DIR", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path())
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .output()
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(3));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let checks = report["checks"].as_array().unwrap();
+    let tools = checks
+        .iter()
+        .find(|check| check["id"] == "tools/floors")
+        .unwrap();
+    assert_eq!(tools["status"], "warn");
+}
+
+#[test]
 fn no_session_report_is_ordered_bounded_and_keeps_independent_warnings() {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();

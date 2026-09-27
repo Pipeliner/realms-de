@@ -1,4 +1,6 @@
 task,actor,category,start_utc,end_utc,outcome
+#117-cli-login-scope,codex,verification,2026-09-27T12:49:37Z,2026-09-27T12:50:04Z,63 CLI tests passed after next-login wording and palette-snapshot diff updates; earlier implementation time overlapped bar and doctor investigation and is unallocated
+#72-doctor-deadline,codex,verification,2026-09-27T12:51:24Z,2026-09-27T12:52:16Z,Hung-tool regression passed at2.5s and failed at3.01s after restoring olddeadline; final64 CLI tests pass; earlier implementation interval unmeasured
 #117-bar-snapshot,codex-review-login-integration,implementation,2026-09-27T12:41:35Z,2026-09-27T12:49:51Z,Agent elapsed implementation and local verification; theme245 pass5 ignored plus bar22 and session155 pass; explicitapply recovery regression passes; no local packaging
 #117-bar-snapshot,codex-review-login-primitives,review,2026-09-27T12:48:24Z,2026-09-27T12:48:38Z,No correctness blockers; explicitapply recovery test added afterward; stronger lease GC evidence remains in primitive tests
 #72-doctor-deadline,codex-review-login-primitives,review,2026-09-27T12:46:19Z,2026-09-27T12:46:30Z,Budget reserve fixes identified accounting error; font results still coupled to slow tool results; runtime verification pending

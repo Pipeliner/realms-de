@@ -276,18 +276,18 @@ fn report_apply_outcome(outcome: GenerationPublicationOutcome) -> ApplyReport {
     match outcome {
         GenerationPublicationOutcome::Committed(generation) => ApplyReport {
             exit: ExitCode::SUCCESS,
-            stdout: format!("generation {} selected for future launches\n", generation.as_str()),
+            stdout: format!("generation {} prepared for next graphical login\n", generation.as_str()),
             stderr: String::new(),
         },
         GenerationPublicationOutcome::CommittedWithCleanupPending { generation, cause } => {
             ApplyReport {
                 exit: ExitCode::SUCCESS,
                 stdout: format!(
-                    "generation {} selected for future launches\n",
+                    "generation {} prepared for next graphical login\n",
                     generation.as_str()
                 ),
                 stderr: format!(
-                    "warning: generation {} is durably selected for future launches; committed cleanup is pending: {}\n",
+                    "warning: generation {} is durably prepared for next graphical login; committed cleanup is pending: {}\n",
                     generation.as_str(),
                     escaped_cause(&cause),
                 ),
@@ -476,11 +476,11 @@ mod tests {
         assert_eq!(report.exit, ExitCode::SUCCESS);
         assert_eq!(
             report.stdout,
-            "generation 0123456789abcdef0123456789abcdef selected for future launches\n"
+            "generation 0123456789abcdef0123456789abcdef prepared for next graphical login\n"
         );
         assert_eq!(
             report.stderr,
-            "warning: generation 0123456789abcdef0123456789abcdef is durably selected for future launches; committed cleanup is pending: \"cleanup \\\"later\\\"\\nretry\"\n"
+            "warning: generation 0123456789abcdef0123456789abcdef is durably prepared for next graphical login; committed cleanup is pending: \"cleanup \\\"later\\\"\\nretry\"\n"
         );
     }
 
