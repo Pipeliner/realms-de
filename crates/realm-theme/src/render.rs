@@ -304,6 +304,45 @@ mod tests {
     }
 
     #[test]
+    fn fuzzel_rendered_colors_use_supported_1_9_2_vocabulary() {
+        let p = shipped();
+        let template = templates()
+            .into_iter()
+            .find(|template| template.id == "fuzzel")
+            .unwrap();
+        let output = render(&p, template.id, template.source).unwrap();
+        // Ubuntu Noble's installed Fuzzel 1.9.2 rejects unknown keys, rather
+        // than ignoring newer optional color controls. Validate rendered INI.
+        let supported = [
+            "background",
+            "text",
+            "match",
+            "selection",
+            "selection-text",
+            "selection-match",
+            "border",
+        ];
+        let mut section = "";
+        let mut keys = Vec::new();
+        for line in output.lines().map(str::trim) {
+            if line.starts_with('[') {
+                section = line;
+            } else if section == "[colors]" && !line.is_empty() && !line.starts_with('#') {
+                let (key, value) = line.split_once('=').expect("INI assignment");
+                assert!(
+                    supported.contains(&key),
+                    "Fuzzel 1.9.2 rejects [colors].{key}"
+                );
+                assert_eq!(value.len(), 8, "RGBA color: {line}");
+                assert!(value.bytes().all(|byte| byte.is_ascii_hexdigit()), "{line}");
+                keys.push(key);
+            }
+        }
+        assert_eq!(keys, supported);
+        assert!(output.contains(&format!("prompt={}\n", p.glyphs.prompt_sigil)));
+    }
+
+    #[test]
     fn starship_prompt_is_complete_and_ascii_safe_by_default() {
         let p = shipped();
         let d = p.derived();

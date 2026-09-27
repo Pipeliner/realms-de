@@ -48,6 +48,15 @@ another desktop's defaults. A session-local config overlay may be used where a
 tool cannot import a theme. Do not claim GTK/Qt coverage without real packaged
 consumer evidence, including supported runtime/plugin versions.
 
+The shared Fuzzel template must parse on Ubuntu 24.04's supported Fuzzel 1.9.2
+as well as newer Fedora/Nix versions. Use the common configuration vocabulary:
+`[colors]` contains background, text, match, selection, selection-text,
+selection-match and border; omit newer prompt, placeholder, input and counter
+color keys. The supported `[main]` prompt string remains configured. Source
+rendering tests enforce this compatibility floor; native launcher roundtrips
+prove actual installed parsing and usable launch, including after unlocking.
+Reference: [Ubuntu's Fuzzel 1.9.2 manual](https://manpages.ubuntu.com/manpages/noble/man5/fuzzel.ini.5.html).
+
 Applications launched from the session inherit its selected configuration;
 standard desktop launchers and D-Bus activation are allowed. Already-running
 single-instance applications or services outside that session may retain their
