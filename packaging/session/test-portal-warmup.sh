@@ -45,6 +45,8 @@ PORTAL_ORDER="$tmp/order" bash -c '
     log() { :; }
     set_identity() { record identity; }
     ensure_session_bus() { record bus; }
+    claim_login() { record claim; }
+    prepare_login_theme() { record theme; }
     detect_session_services() { record detect; }
     start_compositor() { record compositor; compositor_pid=999999; }
     wait_for_display() { record display; }
@@ -61,6 +63,8 @@ PORTAL_ORDER="$tmp/order" bash -c '
 
 expected='identity
 bus
+claim
+theme
 detect
 compositor
 display

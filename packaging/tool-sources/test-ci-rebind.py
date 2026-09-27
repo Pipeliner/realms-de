@@ -26,6 +26,59 @@ def load_producer():
 
 
 class RebindTransformContract(unittest.TestCase):
+    def test_workspace_edge_refresh_preserves_external_records_and_identities(self):
+        producer = load_producer()
+        old = b'''version = 4
+
+[[package]]
+name = "realm-test"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "serde"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+'''
+        changed = old.replace(b' "serde",', b' "serde",\n "realm-other",')
+        producer.require_workspace_edge_refresh(old, changed)
+        for invalid in (
+            changed.replace(b'version = "1.0.0"', b'version = "1.0.1"'),
+            changed.replace(b'checksum = "a', b'checksum = "b'),
+            changed.replace(b'name = "realm-test"', b'name = "realm-renamed"'),
+            changed.replace(b'version = "0.1.0"', b'version = "0.2.0"'),
+            changed.replace(b'version = 4', b'version = 3'),
+            changed + b'unknown = "field"\n',
+            changed + changed[changed.index(b'[[package]]'):],
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                producer.require_workspace_edge_refresh(old, invalid)
+
+    def test_workspace_refresh_still_refuses_local_production(self):
+        producer = load_producer()
+        output = ROOT / ".ci-refresh-test-output"
+        with mock.patch.dict(os.environ, {}, clear=True), self.assertRaisesRegex(
+            RuntimeError, "only in CI"
+        ):
+            producer.produce("a" * 40, output, ROOT, refresh_workspace_lock=True)
+        self.assertFalse(output.exists())
+
+    def test_retained_payload_digest_is_required(self):
+        producer = load_producer()
+        import hashlib
+        payload = b"retained payload"
+        digest = hashlib.sha256(payload).hexdigest()
+        manifest = f'vendor_archive_sha256 = "{digest}"\n'
+        producer.require_payload_digest(manifest, "vendor_archive", payload)
+        for invalid in (b"changed", b""):
+            with self.assertRaises(ValueError):
+                producer.require_payload_digest(manifest, "vendor_archive", invalid)
+        with self.assertRaises(ValueError):
+            producer.require_payload_digest(manifest + manifest, "vendor_archive", payload)
+
     def test_requires_an_exact_full_commit_id(self):
         producer = load_producer()
         commit = "a" * 40

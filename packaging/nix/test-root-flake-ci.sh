@@ -110,6 +110,14 @@ mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
 expect_fail missing-portal-evidence-upload "$fixture_root" \
     'live VM evidence upload must retain portal-roundtrip.json'
 
+for pointer in realm-portal-output-chooser-pointer.png realm-browser-output-chooser-pointer.png; do
+    fixture_root=$(make_fixture "missing-$pointer")
+    sed "/$pointer/d" "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+    mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+    expect_fail "missing-$pointer" "$fixture_root" \
+        "live VM evidence upload must retain $pointer"
+done
+
 fixture_root=$(make_fixture portal-window-delete-instead-of-cancel)
 sed 's/machine.send_key("alt-c")/machine.send_key("esc")/' \
     "$fixture_root/packaging/nix/checks.nix" >"$fixture_root/checks.nix"

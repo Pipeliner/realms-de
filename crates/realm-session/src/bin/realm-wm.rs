@@ -7,6 +7,15 @@ use realm_session::session::SessionEventError;
 
 fn main() {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if let [flag, owner] = args.as_slice() {
+        if flag == "--prepare-session-theme" {
+            if let Err(error) = prepare_login_theme(owner) {
+                eprintln!("realm-wm: {error}");
+                std::process::exit(1);
+            }
+            return;
+        }
+    }
     if !args.is_empty() {
         let consumer = match FixedConsumer::parse_args(&args) {
             Ok(consumer) => consumer,
@@ -25,6 +34,17 @@ fn main() {
         eprintln!("realm-wm: {error}");
         std::process::exit(exit_status(&error));
     }
+}
+
+fn prepare_login_theme(owner: &std::ffi::OsStr) -> Result<(), String> {
+    let owner = owner
+        .to_str()
+        .ok_or("login owner PID is not UTF-8")?
+        .parse::<u32>()
+        .map_err(|_| "login owner PID must be a positive integer")?;
+    let root = realm_session::consumer::config_root_from_env()?;
+    let runtime = realm_control::production_runtime_dir().map_err(|error| error.to_string())?;
+    realm_session::login_theme::prepare(&root, runtime.path(), owner)
 }
 
 fn exit_status(error: &RuntimeError) -> i32 {

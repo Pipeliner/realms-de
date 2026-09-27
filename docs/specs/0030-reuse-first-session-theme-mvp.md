@@ -39,6 +39,61 @@ as part of switching launch semantics. A later cleanup change needs its own
 ownership proof. This exception concerns theme data, not the separate required
 bounded Cargo/build-cache cleanup system.
 
+### Login-selection implementation boundary
+
+Reuse the generation store's complete validation and process-identity leases.
+A lookup by the already-selected generation ID SHALL validate and lease that
+generation without consulting or changing the next-login `current` pointer.
+Missing or corrupt selected data fails rather than falling back to `current`.
+A login helper may explicitly retain its existing lease for the graphical
+entry process after successful handoff. This consumes the helper's selection
+and closes its descriptors without removing the lease. Normal drop still
+releases an unhanded-off lease. Existing live-process identity checks protect
+the retained generation until the graphical entry exits; existing stale-lease
+reconciliation remains usable. No new lifecycle manager is required.
+
+The graphical entry publishes `realm/session-theme.json` under its existing
+per-user runtime directory before starting the compositor. The record contains
+the absolute configuration root, immutable generation ID, graphical-entry PID,
+Linux process start time and boot ID. Publication is atomic; a live existing
+owner cannot be replaced. A new login may replace a well-formed dead-owner
+record after taking the exclusive login claim. Malformed records fail with a
+diagnostic. Consumers validate the owner identity and selected generation; a
+missing or stale record is an error, never a request to select `current`.
+The helper retains the owner's process lease only after successful publication.
+WM restarts read this record instead of bootstrapping a new selection.
+The record is private runtime state, not global toolkit activation environment.
+The entry invokes the private `realm-wm --prepare-session-theme PID` command
+with its own PID; failure aborts before compositor startup. The existing
+explicit no-WM diagnostic mode remains available when the WM is absent.
+The graphical entry takes a nonblocking exclusive `flock` on
+`$XDG_RUNTIME_DIR/realm-session.lock` before compositor/PID/environment changes.
+The entry owns the descriptor directly, preserving its signal/teardown identity;
+compositor and direct-client subprocesses close their inherited copy before
+exec. Contention exits 73 without running session cleanup. The lock file is not
+unlinked on exit; entry exit releases the claim after teardown. Native packages
+declare the flock executable dependency and the Nix wrapper supplies it.
+
+The published generation includes its validated source palette bytes as the
+manifest-listed `realm/palette.toml` output. The bar reads this immutable output
+through the same live-login selection as other clients, including after a bar
+restart; it does not reread user, system or compiled fallback palettes. Shared
+login-record loading belongs in the theme library rather than making the bar
+depend on the WM/session implementation. A previously prepared generation
+without this required output is incomplete for this contract: diagnose it and
+require an explicit `realmctl theme apply` before login, rather than borrowing
+mutable palette bytes or silently changing the selection. This repository has
+no supported pre-MVP user migration obligation.
+Explicit apply publishes a new complete generation even when palette/template
+inputs match an older snapshot-less generation; immutable old data is never
+overwritten to retrofit the snapshot. Existing random generation IDs already
+permit this; no new identity mechanism is needed.
+
+Verification covers login A, source edits and apply B, bar restart still using
+A, and next login using B. Missing/corrupt selected palette data must fail
+without falling back. Publication/diff tests include the palette snapshot in
+the complete output set.
+
 ## T2 — Consumer activation
 
 Configure foot, fuzzel, Yazi, btop, zsh/Starship, GTK and Qt using their supported
@@ -47,6 +102,15 @@ existing templates and adapters. Preserve existing user files and avoid changing
 another desktop's defaults. A session-local config overlay may be used where a
 tool cannot import a theme. Do not claim GTK/Qt coverage without real packaged
 consumer evidence, including supported runtime/plugin versions.
+
+The shared Fuzzel template must parse on Ubuntu 24.04's supported Fuzzel 1.9.2
+as well as newer Fedora/Nix versions. Use the common configuration vocabulary:
+`[colors]` contains background, text, match, selection, selection-text,
+selection-match and border; omit newer prompt, placeholder, input and counter
+color keys. The supported `[main]` prompt string remains configured. Source
+rendering tests enforce this compatibility floor; native launcher roundtrips
+prove actual installed parsing and usable launch, including after unlocking.
+Reference: [Ubuntu's Fuzzel 1.9.2 manual](https://manpages.ubuntu.com/manpages/noble/man5/fuzzel.ini.5.html).
 
 Applications launched from the session inherit its selected configuration;
 standard desktop launchers and D-Bus activation are allowed. Already-running
@@ -60,6 +124,57 @@ selection in SPEC 0027 is unchanged.
 Session shutdown uses ordinary service/scope lifecycle management. Required
 environment discovery, portal startup ordering and client isolation remain;
 UWSM is an optional implementation evaluation, not a new prerequisite.
+
+### Reused consumer integration boundary
+
+Reuse the terminal/toolkit assets and probes from PRs #240/#241, but select the
+login record rather than `current`. The terminal executes zsh with the generated
+profile, Starship configuration and Yazi configuration/keymap. Its btop adapter
+passes the separate supported config and themes-directory arguments; the
+published btop config is read-only so ordinary writeback cannot alter the
+session snapshot. No additional garbage-collection policy is introduced.
+
+Foot configuration selection probes the generated modern and legacy section
+variants with `--check-config` under one shared one-second deadline. It never
+falls back to a mutable user configuration after both variants fail.
+Ubuntu 24.04's Foot 1.16.2 requires cursor colors as `color=` under `[cursor]`;
+its `[colors]` section does not accept `cursor=`. Keep the legacy generated
+variant compatible with that installed parser while the modern variant retains
+its supported `[colors-dark]` form. Both cursor colors remain palette-derived.
+Reference: [Ubuntu's Foot 1.16.2 manual](https://manpages.ubuntu.com/manpages/noble/man5/foot.ini.5.html).
+Hung-command fixtures must actually remain blocked with their restricted PATH
+on native and Nix test hosts. Use a shell-builtin self-stop, not a host-specific
+`/bin/sleep` path, and retain stderr when the expected timeout is absent.
+The standalone shell-behaviour check invokes the fixture through its declared
+shell interpreter, including with a writable fixture descriptor still open;
+Linux executable-file exclusion must not obscure the self-stop assertion.
+Real consumer tests continue executing the fixture directly through production
+launch/probe code.
+
+One generation-derived child environment supplies REALM_GENERATION, ZDOTDIR,
+STARSHIP_CONFIG, YAZI_CONFIG_HOME, GTK_THEME and the Qt platform selector. GTK
+uses the generated named-theme aliases; Qt uses the generated qt6ct profile.
+Generation search roots precede existing XDG_DATA_DIRS/XDG_CONFIG_DIRS, or their
+standard defaults if absent. XDG_CONFIG_HOME remains unchanged, preserving the
+precedence of a user's explicit qt6ct configuration. A nonempty explicitly
+inherited QT_QPA_PLATFORMTHEME remains authoritative; otherwise use qt6ct.
+
+Apply this environment to both fixed consumers and direct argv launches from
+the session worker (including the existing browser dispatcher). Construct the
+worker's environment once from the login selection at daemon startup; WM
+restart still reloads that same selection. Do not mutate the daemon process
+environment or import these overrides into shared systemd/D-Bus activation
+state. Newly execed applications inherit it; reused processes and shared
+activation services retain the documented boundary above.
+
+Source tests must capture real child argv/environment for terminal, launcher
+and worker launches, preserve caller environment and user files, and exercise
+apply B followed by fresh children still selecting login A. CI reuses the real
+Foot/Yazi/btop/zsh/Starship/GTK3/GTK4/Qt6 probes, extended to launcher descendants.
+The stopping-child fixture SHALL observe the kernel's child-stop notification
+after argv capture before inspecting files or sending continuation. Merely
+creating or writing a PID file is not readiness: it can expose empty bytes,
+precede complete argv capture, and race a continuation against the later stop.
 
 ## B1 — Waybar comparison, not automatic replacement
 
@@ -82,7 +197,63 @@ criteria for the alternative. Select it only with functional evidence and a
 recorded comparison; otherwise retain the existing bar. New custom metric/render
 work waits for that result. Repairing a real current-bar usability defect does not.
 
+The CI-only comparison keeps its three titled terminal shells interactive for
+later title probes. Its transient Waybar units may already be collected when
+cleanup runs; cleanup succeeds only when Waybar and its adapter are gone and a
+real which-key toggle and focused-window change still work through the baseline.
+Retain structured evidence and screenshots from a failed VM run as well as a
+passing run. A full-frame OCR match that the existing bar or a terminal can
+supply is only an observation of screenshot timing, not proof of Waybar's first
+matching frame. Report the actual elapsed idle sample span and cadence, and
+observe the ledger's fullscreen state before recording fullscreen screenshots.
+
 ## Verification obligations before implementation is declared complete
+
+### Native consumer acceptance (Ubuntu/Fedora)
+
+The installed graphical-session CI journey opens Foot through the real default
+binding, observes its managed window and actual Zsh child, and records their
+selected-generation environment and Foot arguments.
+The process probe identifies exactly one Realm-launched terminal by its exact
+selected-login `--config=` argument, not by the `foot` process name alone:
+distribution-owned Foot servers may share that name. Zero or multiple matching
+terminals fail, and terminal closure requires the selected terminal and its
+shell to exit without requiring an unrelated distribution server to stop.
+The native fixture records the installed Foot version and independently checks
+the generated modern-then-legacy configuration variants with that binary's
+`--check-config`; the launched arguments must match the supported selection.
+Neither variant parsing successfully is a failure, not a fallback waiver.
+After applying generation B, the login record and retained terminal/shell remain
+on A. Keyboard input to that
+shell must execute a fixture script and open the installed private Yazi on a
+fixture directory; Yazi must inherit A's configuration, not B.
+The fixture observes the actual Yazi process before reading the shell/tool proof
+files written sequentially before Yazi executes; an earlier marker alone is not
+a completion barrier. Record executable identities, shell execution evidence,
+compositor state and complete framebuffers;
+quit Yazi and the terminal and verify clean process/window closure. Missing
+private Yazi/Starship is a failure, not a skipped acceptance. This CI slice
+depends on SPEC 0024's native tool delivery (#236); it does not add distro tool
+substitutes, enable live theme changes, or claim GTK/Qt, portal/browser or
+next-login/relogin acceptance.
+
+The separate native relogin slice requests normal session quit and observes the
+fixture's existing SDDM automatic relogin, without restarting the display manager
+or manually removing login state. It requires the prior graphical logind session,
+entry owner, River, WM and bar process identities to end, a distinct graphical
+session and new live identities, and the prepared B selection in the new login
+record. Open a real terminal through its binding and verify its Foot/Zsh children
+consume B and form a managed window; close it normally. Retain before/after
+identity, selection, state and framebuffer evidence. A timeout or stale A owner
+fails rather than repairing the session in the fixture.
+
+The NixOS fixture uses Ly, whose initial automatic login does not repeat after
+logout. Its equivalent next-login probe gives only the test user a known fixture
+password and selects Ly's password input field. After normal quit, observe the
+visible greeter before submitting that password through real keyboard input.
+Reuse the native identity/selection assertions and verify real Foot/Zsh consume
+B. Do not restart the display manager, bypass PAM, remove stale runtime records,
+or change production authentication policy to make this test pass.
 
 ### Overlap scope resolved
 

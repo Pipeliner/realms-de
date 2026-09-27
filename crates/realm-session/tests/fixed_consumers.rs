@@ -9,16 +9,35 @@ use realm_theme::generation::GenerationStore;
 
 struct RunningStub {
     child: Child,
-    pid_path: PathBuf,
     args_path: PathBuf,
+}
+
+impl Drop for RunningStub {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
 }
 
 impl RunningStub {
     fn wait_until_stopped(&mut self) -> u32 {
+        use rustix::process::{waitid, Pid, WaitId, WaitIdOptions};
+
+        let pid = Pid::from_raw(i32::try_from(self.child.id()).unwrap()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Ok(raw) = fs::read_to_string(&self.pid_path) {
-                return raw.trim().parse().unwrap();
+            // Leave exit reaping to Child, including on the panic/drop path.
+            // The stop occurs only after the shell finishes capturing argv.
+            if let Some(status) = waitid(
+                WaitId::Pid(pid),
+                WaitIdOptions::STOPPED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+            )
+            .unwrap()
+            {
+                assert!(status.stopped(), "unexpected child status: {status:?}");
+                return self.child.id();
             }
             if let Some(status) = self.child.try_wait().unwrap() {
                 panic!("fixed consumer exited before exec fixture stopped: {status}");
@@ -42,29 +61,24 @@ fn install_stopping_stub(directory: &Path, name: &str) {
     let path = directory.join(name);
     fs::write(
         &path,
-        "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$REALM_TEST_PID\"\nprintf '%s\\n' \"$@\" > \"$REALM_TEST_ARGS\"\nkill -STOP \"$$\"\n",
+        "#!/bin/sh\nif [ \"$1\" = --check-config ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > \"$REALM_TEST_ARGS\"\nkill -STOP \"$$\"\n",
     )
     .unwrap();
     fs::set_permissions(path, PermissionsExt::from_mode(0o700)).unwrap();
 }
 
-fn spawn_consumer(root: &Path, stub_dir: &Path, kind: &str) -> RunningStub {
-    let pid_path = root.join(format!("{kind}.pid"));
+fn spawn_consumer(root: &Path, runtime: &Path, stub_dir: &Path, kind: &str) -> RunningStub {
     let args_path = root.join(format!("{kind}.args"));
     let child = Command::new(env!("CARGO_BIN_EXE_realm-wm"))
         .args(["--fixed-consumer", kind])
         .env("XDG_CONFIG_HOME", root)
+        .env("XDG_RUNTIME_DIR", runtime)
         .env_remove("HOME")
         .env("PATH", stub_dir)
-        .env("REALM_TEST_PID", &pid_path)
         .env("REALM_TEST_ARGS", &args_path)
         .spawn()
         .unwrap();
-    RunningStub {
-        child,
-        pid_path,
-        args_path,
-    }
+    RunningStub { child, args_path }
 }
 
 fn lease_names(root: &Path) -> Vec<String> {
@@ -77,18 +91,48 @@ fn lease_names(root: &Path) -> Vec<String> {
 }
 
 #[test]
+fn stopping_fixture_uses_child_stop_not_pid_file_publication() {
+    let root = tempfile::tempdir().unwrap();
+    let pid_path = root.path().join("child.pid");
+    let args_path = root.path().join("child.args");
+    // Reproduce the CI publication window deterministically: the file exists
+    // but never contains a PID. Kernel stop readiness needs no PID side channel.
+    fs::write(&pid_path, "").unwrap();
+    let child = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "printf 'captured\\n' > \"$1\"; kill -STOP \"$$\"",
+            "fixture",
+        ])
+        .arg(&args_path)
+        .spawn()
+        .unwrap();
+    let mut running = RunningStub { child, args_path };
+    let pid = running.wait_until_stopped();
+    assert_eq!(pid, running.child.id());
+    assert_eq!(
+        fs::read_to_string(&running.args_path).unwrap(),
+        "captured\n"
+    );
+    assert!(running.resume_and_wait(pid).success());
+}
+
+#[test]
 fn fixed_consumers_exec_exact_generation_argv_and_hold_the_ordinary_process_lease() {
     let root = tempfile::tempdir().unwrap();
     let stubs = tempfile::tempdir().unwrap();
+    let runtime = tempfile::tempdir().unwrap();
+    fs::set_permissions(runtime.path(), PermissionsExt::from_mode(0o700)).unwrap();
     install_stopping_stub(stubs.path(), "foot");
     install_stopping_stub(stubs.path(), "fuzzel");
     realm_theme::apply(root.path()).unwrap();
+    realm_session::login_theme::prepare(root.path(), runtime.path(), std::process::id()).unwrap();
+    let generation = realm_session::login_theme::load(runtime.path())
+        .unwrap()
+        .as_str()
+        .to_owned();
 
     for kind in ["terminal", "launcher"] {
-        let generation = fs::read_to_string(root.path().join("realm/generated/current"))
-            .unwrap()
-            .trim()
-            .to_owned();
         let generation_path = root
             .path()
             .join("realm/generated/generations")
@@ -97,9 +141,11 @@ fn fixed_consumers_exec_exact_generation_argv_and_hold_the_ordinary_process_leas
             vec![
                 format!(
                     "--config={}",
-                    generation_path.join("foot/foot.ini").display()
+                    generation_path.join("foot/foot-modern.ini").display()
                 ),
+                "--log-level=error".to_owned(),
                 "--override=key-bindings.spawn-terminal=none".to_owned(),
+                "zsh".to_owned(),
             ]
         } else {
             vec![format!(
@@ -107,7 +153,7 @@ fn fixed_consumers_exec_exact_generation_argv_and_hold_the_ordinary_process_leas
                 generation_path.join("fuzzel/fuzzel.ini").display()
             )]
         };
-        let mut running = spawn_consumer(root.path(), stubs.path(), kind);
+        let mut running = spawn_consumer(root.path(), runtime.path(), stubs.path(), kind);
         let pid = running.wait_until_stopped();
         assert_eq!(pid, running.child.id(), "exec changed the consumer pid");
         assert_eq!(
@@ -118,12 +164,16 @@ fn fixed_consumers_exec_exact_generation_argv_and_hold_the_ordinary_process_leas
             expected_args.iter().map(String::as_str).collect::<Vec<_>>()
         );
         let leases = lease_names(root.path());
-        assert_eq!(leases.len(), 1, "consumer did not retain exactly one lease");
-        assert!(
-            fs::read_to_string(root.path().join("realm/generated/leases").join(&leases[0]))
-                .unwrap()
-                .contains(&format!("pid {pid}\n"))
+        assert_eq!(
+            leases.len(),
+            2,
+            "login owner and consumer must each retain one lease"
         );
+        assert!(leases.iter().any(|lease| fs::read_to_string(
+            root.path().join("realm/generated/leases").join(lease)
+        )
+        .unwrap()
+        .contains(&format!("pid {pid}\n"))));
 
         let next = realm_theme::apply(root.path()).unwrap().as_str().to_owned();
         assert_ne!(next, generation, "the fixture did not switch current");
@@ -137,7 +187,11 @@ fn fixed_consumers_exec_exact_generation_argv_and_hold_the_ordinary_process_leas
         assert!(running.resume_and_wait(pid).success());
         let store = GenerationStore::open(&root.path().join("realm/generated")).unwrap();
         assert_eq!(store.garbage_collect().unwrap().reclaimed_leases, 1);
-        assert!(lease_names(root.path()).is_empty());
+        assert_eq!(
+            lease_names(root.path()).len(),
+            1,
+            "login lease must survive consumer exit"
+        );
     }
 }
 
@@ -165,16 +219,20 @@ fn fixed_consumer_mode_accepts_only_one_known_consumer_argument() {
 fn fixed_consumer_exec_failure_releases_its_process_lease() {
     let root = tempfile::tempdir().unwrap();
     realm_theme::apply(root.path()).unwrap();
+    let runtime = tempfile::tempdir().unwrap();
+    fs::set_permissions(runtime.path(), PermissionsExt::from_mode(0o700)).unwrap();
+    realm_session::login_theme::prepare(root.path(), runtime.path(), std::process::id()).unwrap();
     let empty_path = tempfile::tempdir().unwrap();
 
     let status = Command::new(env!("CARGO_BIN_EXE_realm-wm"))
         .args(["--fixed-consumer", "terminal"])
         .env("XDG_CONFIG_HOME", root.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
         .env_remove("HOME")
         .env("PATH", empty_path.path())
         .status()
         .unwrap();
 
     assert!(!status.success());
-    assert!(lease_names(root.path()).is_empty());
+    assert_eq!(lease_names(root.path()).len(), 1);
 }

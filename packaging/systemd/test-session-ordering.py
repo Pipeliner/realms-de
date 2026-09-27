@@ -132,6 +132,16 @@ def validate_home_manager(source: str) -> None:
 
 
 class SessionOrderingTests(unittest.TestCase):
+    def test_restart_skips_transient_abort_but_retains_terminal_failure_policy(self):
+        unit = directives(UNIT_ROOT / 'realm-wm.service')
+        self.assertEqual(unit['Service'].get('RestartMode'), ['direct'])
+        self.assertEqual(unit['Service']['Restart'], ['always'])
+        self.assertEqual(unit['Service']['RestartPreventExitStatus'], ['69', '78'])
+        self.assertEqual(unit['Unit']['StartLimitBurst'], ['5'])
+        self.assertEqual(unit['Unit']['OnFailure'], ['realm-session-abort.service'])
+        source = (ROOT / 'packaging/nix/home-manager-module.nix').read_text()
+        self.assertIn('RestartMode = "direct";', source)
+
     def test_installed_unit_graph_is_acyclic_and_orders_session_services(self):
         edges = ordering_edges()
         found = cycle(edges)

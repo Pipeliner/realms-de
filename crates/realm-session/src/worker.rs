@@ -1,5 +1,6 @@
 //! Bounded filesystem and process worker for the session daemon.
 
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
@@ -47,6 +48,8 @@ enum WorkerMessage {
 struct ChildOwner {
     sender: SyncSender<Child>,
     count: Arc<AtomicUsize>,
+    environment: Vec<(OsString, OsString)>,
+    session_scopes: bool,
 }
 
 /// One terminal result returned by the worker.
@@ -127,6 +130,22 @@ pub struct Worker {
 impl Worker {
     /// Start the sole filesystem/process worker for one daemon incarnation.
     pub fn start(snapshot_path: PathBuf) -> io::Result<Self> {
+        Self::start_with_environment(snapshot_path, Vec::new())
+    }
+
+    /// Start with child-only selectors captured from this login's generation.
+    pub(crate) fn start_with_environment(
+        snapshot_path: PathBuf,
+        environment: Vec<(OsString, OsString)>,
+    ) -> io::Result<Self> {
+        Self::start_with_launch_policy(snapshot_path, environment, false)
+    }
+
+    pub(crate) fn start_with_launch_policy(
+        snapshot_path: PathBuf,
+        environment: Vec<(OsString, OsString)>,
+        session_scopes: bool,
+    ) -> io::Result<Self> {
         let event_fd = Arc::new(eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK)?);
         let (message_tx, message_rx) = mpsc::sync_channel(MAX_WORKER_JOBS + 2);
         let (snapshot_tx, snapshot_rx) = mpsc::sync_channel(1);
@@ -143,6 +162,8 @@ impl Worker {
         let child_owner = ChildOwner {
             sender: child_tx,
             count: Arc::clone(&owned_children),
+            environment,
+            session_scopes,
         };
         std::thread::Builder::new()
             .name("realm-worker".to_owned())
@@ -383,13 +404,23 @@ fn worker_main(
                 WorkerResult::SnapshotRead(read_snapshot_bounded(&snapshot_path))
             }
             WorkerMessage::Process(ProcessJob::Spawn(argv)) => WorkerResult::Process {
-                result: spawn_owned(spawn_argv(argv), &child_owner),
+                result: spawn_owned(
+                    spawn_argv(argv, &child_owner.environment, child_owner.session_scopes),
+                    &child_owner,
+                ),
             },
             WorkerMessage::Process(ProcessJob::FixedConsumer(consumer)) => WorkerResult::Process {
                 result: spawn_owned(
-                    Command::new(&daemon_executable)
-                        .args(["--fixed-consumer", consumer.as_str()])
-                        .spawn(),
+                    launch_command(
+                        &[
+                            daemon_executable.as_os_str().to_owned(),
+                            "--fixed-consumer".into(),
+                            consumer.as_str().into(),
+                        ],
+                        &[],
+                        child_owner.session_scopes,
+                    )
+                    .and_then(|mut command| command.spawn()),
                     &child_owner,
                 ),
             },
@@ -419,11 +450,50 @@ fn worker_main(
     }
 }
 
-fn spawn_argv(argv: Vec<String>) -> io::Result<Child> {
+fn spawn_argv(
+    argv: Vec<String>,
+    environment: &[(OsString, OsString)],
+    session_scopes: bool,
+) -> io::Result<Child> {
+    launch_command(
+        &argv.into_iter().map(OsString::from).collect::<Vec<_>>(),
+        environment,
+        session_scopes,
+    )?
+    .spawn()
+}
+
+fn launch_command(
+    argv: &[OsString],
+    environment: &[(OsString, OsString)],
+    session_scopes: bool,
+) -> io::Result<Command> {
     let Some(program) = argv.first() else {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty argv"));
     };
-    Command::new(program).args(&argv[1..]).spawn()
+    let mut command = if session_scopes {
+        let mut command = Command::new("systemd-run");
+        command.args([
+            "--user",
+            "--scope",
+            "--collect",
+            "--quiet",
+            "--no-ask-password",
+            "--expand-environment=no",
+            "--slice=app.slice",
+            "--property=PartOf=realm-session.target",
+            "--property=BindsTo=realm-session.target",
+            "--",
+        ]);
+        command.args(argv);
+        command
+    } else {
+        let mut command = Command::new(program);
+        command.args(&argv[1..]);
+        command
+    };
+    command.envs(environment.iter().cloned());
+    Ok(command)
 }
 
 fn spawn_owned(child: io::Result<Child>, owner: &ChildOwner) -> io::Result<()> {
@@ -659,6 +729,54 @@ mod tests {
     }
 
     #[test]
+    fn session_scope_preserves_literal_argv_environment_and_failure_without_fallback() {
+        let argv = vec!["application".into(), "$HOME literal argument".into()];
+        let environment = vec![("REALM_GENERATION".into(), "generation-a".into())];
+        let command = super::launch_command(&argv, &environment, true).unwrap();
+        assert_eq!(command.get_program(), "systemd-run");
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "--user",
+                "--scope",
+                "--collect",
+                "--quiet",
+                "--no-ask-password",
+                "--expand-environment=no",
+                "--slice=app.slice",
+                "--property=PartOf=realm-session.target",
+                "--property=BindsTo=realm-session.target",
+                "--",
+                "application",
+                "$HOME literal argument"
+            ]
+        );
+        assert!(command
+            .get_envs()
+            .any(|(key, value)| key == "REALM_GENERATION"
+                && value == Some(std::ffi::OsStr::new("generation-a"))));
+        assert!(command.get_current_dir().is_none(), "inherit caller cwd");
+        let root = fixture_dir("scope-no-fallback");
+        let wrapper = root.join("systemd-run");
+        fs::write(
+            &wrapper,
+            "#!/bin/sh\nprintf 'scope refused\\n' >&2\nexit 41\n",
+        )
+        .unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut command = super::launch_command(&argv, &environment, true).unwrap();
+        command.env("PATH", &root);
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(41));
+        assert_eq!(output.stderr, b"scope refused\n");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn failed_spawn_releases_its_owned_child_capacity() {
         let root = fixture_dir("failed-spawn-capacity");
         let mut worker = Worker::start(root.join("ledger.json")).unwrap();
@@ -686,6 +804,65 @@ mod tests {
         }
         let all = worker.reserve_process_jobs(MAX_WORKER_JOBS).unwrap();
         worker.cancel(all);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_child_keeps_captured_login_environment_after_apply_without_mutating_parent() {
+        let root = fixture_dir("login-child-environment");
+        let runtime = root.join("runtime");
+        fs::create_dir(&runtime).unwrap();
+        crate::login_theme::prepare(&root, &runtime, std::process::id()).unwrap();
+        let selection = crate::login_theme::load(&runtime).unwrap();
+        let parent_environment: std::collections::BTreeMap<_, _> = std::env::vars_os().collect();
+        let environment = crate::consumer::session_environment(&selection).unwrap();
+        let expected_data = environment
+            .iter()
+            .find(|(key, _)| key == "XDG_DATA_DIRS")
+            .unwrap()
+            .1
+            .clone();
+        let mut worker =
+            Worker::start_with_environment(root.join("ledger.json"), environment).unwrap();
+        let next = realm_theme::apply(&root).unwrap();
+        assert_ne!(next.as_str(), selection.as_str());
+        let output = root.join("child.env");
+        let reservation = worker.reserve_process_jobs(1).unwrap();
+        worker.commit(reservation, vec![ProcessJob::Spawn(vec![
+            "sh".into(), "-c".into(),
+            "printf '%s\\n' \"$REALM_GENERATION\" \"$GTK_THEME\" \"$XDG_DATA_DIRS\" > \"$1\"".into(),
+            "child".into(), output.to_str().unwrap().into(),
+        ])]).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(WorkerResult::Process { result }) = worker.try_result().unwrap() {
+                result.unwrap();
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        while worker
+            .owned_children
+            .load(std::sync::atomic::Ordering::Acquire)
+            != 0
+        {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let actual = fs::read_to_string(output).unwrap();
+        assert_eq!(
+            actual.lines().collect::<Vec<_>>(),
+            vec![
+                selection.path().to_str().unwrap(),
+                "realm",
+                expected_data.to_str().unwrap()
+            ]
+        );
+        assert!(
+            std::env::vars_os().collect::<std::collections::BTreeMap<_, _>>() == parent_environment,
+            "constructing or applying child selectors changed the parent environment"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

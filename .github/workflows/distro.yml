@@ -15,6 +15,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      waybar_comparison:
+        description: Run the one-off CI-only Waybar comparison VM
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: distro-${{ github.workflow }}-${{ github.ref }}
@@ -75,6 +81,7 @@ jobs:
             libxcb-xfixes0-dev \
             libxcb1-dev \
             ninja-build \
+            patch \
             patchelf \
             pkg-config \
             python3 \
@@ -184,6 +191,7 @@ jobs:
             rustc-1.89 \
             debhelper \
             fonts-dejavu-core \
+            patch \
             pkg-config \
             python3 \
             zstd
@@ -205,7 +213,7 @@ jobs:
     container: registry.fedoraproject.org/fedora:44@sha256:df52038ff64ee61affa188d78beb85cf6eecfe4e9f6042238269ccdc8e944392
     steps:
       - name: Install RPM build prerequisites
-        run: dnf -y install --setopt=install_weak_deps=False git rpm-build rust cargo systemd-rpm-macros make python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts
+        run: dnf -y install --setopt=install_weak_deps=False git rpm-build rust cargo systemd-rpm-macros make patch python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/prepare-realm-source
       - name: Build retained-only RPM Source0
@@ -273,6 +281,9 @@ jobs:
           python3 packaging/native-vm/test_check_inputs.py
           python3 packaging/native-vm/test_check_workflow.py
           python3 packaging/native-vm/test_control_get_state.py
+          python3 packaging/native-vm/test_lock_roundtrip.py
+          python3 packaging/native-vm/test_consumer_roundtrip.py
+          python3 packaging/native-vm/test_portal_roundtrip.py
           packaging/native-vm/test_run_native_session_vm.sh
           packaging/native-vm/test_guest_probe.sh
       - name: Install KVM harness prerequisites
@@ -446,7 +457,8 @@ jobs:
               ".#checks.$system.shellcheck" \
               ".#checks.$system.package" \
               ".#checks.$system.packaged-binaries" \
-              ".#checks.$system.realm-sdd-git-runtime"
+              ".#checks.$system.realm-sdd-git-runtime" \
+              ".#checks.$system.xwayland-window-observation"
           fi
 
       - name: Upload live Realm VM evidence
@@ -458,6 +470,15 @@ jobs:
           path: |
             ${{ runner.temp }}/realm-session-boots/realm-tiled-desktop.png
             ${{ runner.temp }}/realm-session-boots/realm-grimoire.png
+            ${{ runner.temp }}/realm-session-boots/realm-terminal-prompt.png
+            ${{ runner.temp }}/realm-session-boots/realm-gtk*-*.png
+            ${{ runner.temp }}/realm-session-boots/realm-qt6-*.png
+            ${{ runner.temp }}/realm-session-boots/control-gtk*-state.json
+            ${{ runner.temp }}/realm-session-boots/control-qt6-*-state.json
+            ${{ runner.temp }}/realm-session-boots/consumer-versions.json
+            ${{ runner.temp }}/realm-session-boots/*-launcher-environment.json
+            ${{ runner.temp }}/realm-session-boots/*-openat.log
+            ${{ runner.temp }}/realm-session-boots/*-stderr.log
             ${{ runner.temp }}/realm-session-boots/capture-provenance.json
             ${{ runner.temp }}/realm-session-boots/realmctl-doctor.json
             ${{ runner.temp }}/realm-session-boots/control-get-state.json
@@ -465,3 +486,30 @@ jobs:
             ${{ runner.temp }}/realm-session-boots/control-grimoire-state.json
             ${{ runner.temp }}/realm-session-boots/control-quit.json
             ${{ runner.temp }}/realm-session-boots/portal-roundtrip.json
+            ${{ runner.temp }}/realm-session-boots/realm-portal-output-chooser.png
+            ${{ runner.temp }}/realm-session-boots/realm-portal-output-chooser-pointer.png
+            ${{ runner.temp }}/realm-session-boots/realm-browser-permission.png
+            ${{ runner.temp }}/realm-session-boots/realm-browser-output-chooser.png
+            ${{ runner.temp }}/realm-session-boots/realm-browser-output-chooser-pointer.png
+            ${{ runner.temp }}/realm-session-boots/realm-browser-capture-stopped.png
+            ${{ runner.temp }}/realm-session-boots/browser-screencast/realm-browser-screencast/
+
+      - name: Run explicit Waybar comparison VM
+        if: github.event_name == 'workflow_dispatch' && inputs.waybar_comparison
+        run: |
+          set -euo pipefail
+          test -e /dev/kvm || { echo '::error::Waybar comparison requires KVM'; exit 1; }
+          system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+          mkdir -p "$RUNNER_TEMP/waybar-comparison"
+          nix build --print-build-logs ".#legacyPackages.$system.waybar-comparison-vm.driver" \
+            --out-link result-waybar-comparison-driver
+          result-waybar-comparison-driver/bin/nixos-test-driver \
+            --no-interactive --output_directory "$RUNNER_TEMP/waybar-comparison"
+
+      - name: Upload Waybar comparison evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.waybar_comparison
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: realm-waybar-comparison-${{ github.sha }}
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/waybar-comparison/waybar-comparison/

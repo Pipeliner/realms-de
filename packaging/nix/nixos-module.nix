@@ -158,9 +158,9 @@ in
     # left to the default it offers no sources and reports no error.
     #
     # The installed-desktop VM exercises xdpw through a real restricted
-    # PipeWire frame. Browser picker behaviour and physical-machine capture
-    # remain hardware acceptance (SPEC 0005 A15), so docs/INSTALL.md keeps that
-    # boundary explicit. slurp is xdpw's default interactive output chooser.
+    # PipeWire frame and real Firefox getDisplayMedia with interactive output
+    # selection. Physical-machine capture remains hardware acceptance
+    # (SPEC 0005 A15). slurp is xdpw's default interactive output chooser.
     xdg.portal = {
       enable = true;
       extraPortals = [ pkgs.xdg-desktop-portal-gtk ];

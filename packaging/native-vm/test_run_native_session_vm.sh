@@ -303,6 +303,8 @@ failure_start=$SECONDS
 fixture_status=$?
 set -e
 test "$fixture_status" = 124 || fail "failure-path fixture returned $fixture_status"
+test "$(<"$ssh_count")" = 4 \
+    || fail 'failure cleanup must collect evidence in one bounded SSH operation'
 ((SECONDS - failure_start < 4)) \
     || fail 'remote command or cleanup exceeded its outer deadline'
 test -s "$fixture_evidence/framebuffer.ppm" \

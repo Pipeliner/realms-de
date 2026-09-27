@@ -4,6 +4,42 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 #[test]
+fn hung_tool_leaves_time_to_emit_report_within_command_budget() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let tool = temp.path().join("yazi");
+    fs::write(&tool, "#!/bin/sh\nkill -STOP \"$$\"\n").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+    let started = Instant::now();
+    let output = Command::new(env!("CARGO_BIN_EXE_realmctl"))
+        // A missing palette deliberately skips the costly font scan, isolating
+        // the real external-tool deadline and final report emission.
+        .args(["doctor", "--json", "--palette"])
+        .arg(temp.path().join("missing-palette.toml"))
+        .env("PATH", temp.path())
+        .env("XDG_RUNTIME_DIR", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path())
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .output()
+        .unwrap();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_secs(2) && elapsed < Duration::from_secs(3),
+        "hung probe returned after {elapsed:?}: stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let checks = report["checks"].as_array().unwrap();
+    let tools = checks
+        .iter()
+        .find(|check| check["id"] == "tools/floors")
+        .unwrap();
+    assert_eq!(tools["status"], "warn");
+}
+
+#[test]
 fn no_session_report_is_ordered_bounded_and_keeps_independent_warnings() {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -78,6 +114,12 @@ fn no_session_report_is_ordered_bounded_and_keeps_independent_warnings() {
     assert_eq!(checks[10]["status"], "skip");
     assert_eq!(checks[24]["id"], "portal/config");
     assert_eq!(checks[24]["status"], "ok");
+    assert_eq!(checks[22]["id"], "units/idle-lock");
+    assert_eq!(checks[22]["status"], "skip");
+    assert_eq!(
+        checks[22]["summary"],
+        "swayidle/swaylock selected; automatic enablement awaits SPEC 0032 acceptance; runtime readiness is not probed"
+    );
     assert_eq!(checks[29]["id"], "fonts/glyphs");
     assert_eq!(checks[29]["status"], "warn");
     assert!(checks[29]["summary"]

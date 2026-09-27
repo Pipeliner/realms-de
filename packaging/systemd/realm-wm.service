@@ -26,7 +26,7 @@ ConditionEnvironment=WAYLAND_DISPLAY
 # not a hot laptop.
 StartLimitIntervalSec=30
 StartLimitBurst=5
-# Fires when the unit enters `failed`, which with Restart=always means after the
+# Fires when the unit enters `failed`, which with RestartMode=direct means after the
 # start limit is hit — exactly once, at the right moment. The abort unit signals
 # the session entry, which owns the single teardown path.
 OnFailure=realm-session-abort.service
@@ -43,6 +43,7 @@ ExecStart=/usr/bin/realm-wm
 # through this process exiting, so a clean exit on its own is not a normal path
 # and must never leave river unmanaged.
 Restart=always
+RestartMode=direct
 # Every second here is a second the user cannot move a window.
 RestartSec=1
 # 69: river answered `unavailable` — another window-management client already

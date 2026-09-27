@@ -110,6 +110,7 @@ in
         # (another window manager holds the global), 78 = protocol mismatch;
         # restarting cannot help with either and looping buries the message.
         Restart = "always";
+        RestartMode = "direct";
         RestartSec = 1;
         RestartPreventExitStatus = "69 78";
         Slice = "session.slice";

@@ -135,7 +135,8 @@ impl ThemeSnapshot {
         let templates = templates_preimage(&self.templates)?;
         let renderer = renderer_preimage(&self.renderer_options)?;
         let derived = palette.derived();
-        let mut outputs = Vec::with_capacity(self.templates.len());
+        let mut outputs = Vec::with_capacity(self.templates.len() + 1);
+        outputs.push(("realm/palette.toml".into(), self.palette.clone()));
         for template in self.templates {
             let target = normalized_generation_target(&template.target)?;
             let rendered = render_derived(&derived, template.id, template.source)?;
@@ -1416,6 +1417,11 @@ mod tests {
         let store = GenerationStore::open(&root.path().join("realm/generated")).unwrap();
         let selected = store.select_current().unwrap();
         assert_eq!(selected.as_str(), generation.as_str());
+        assert_eq!(
+            selected.read_output("realm/palette.toml").unwrap(),
+            SHIPPED_PALETTE.as_bytes(),
+            "the published palette snapshot must be the validated source bytes"
+        );
         let templates = templates();
         assert!(!templates.is_empty());
         for template in templates {
@@ -1538,6 +1544,40 @@ mod tests {
                 .any(|window| window == b"b07aff"),
             "the selected generation did not use the existing user palette"
         );
+        selected.release().unwrap();
+    }
+
+    #[test]
+    fn built_in_apply_publishes_btop_config_read_only() {
+        let root = tempfile::tempdir().unwrap();
+        let outcome = apply(root.path()).unwrap();
+        let GenerationPublicationOutcome::Committed(generation) = outcome else {
+            panic!("built-in apply did not commit cleanly: {outcome:?}");
+        };
+        let config = root
+            .path()
+            .join("realm/generated/generations")
+            .join(generation.as_str())
+            .join("btop/btop.conf");
+        let expected = std::fs::read(&config).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
+            0o400
+        );
+        if rustix::process::geteuid().as_raw() != 0 {
+            assert!(
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&config)
+                    .is_err(),
+                "the selected btop config accepted an ordinary write-open"
+            );
+        }
+
+        let store = GenerationStore::open(&root.path().join("realm/generated")).unwrap();
+        let selected = store.select_current().unwrap();
+        assert_eq!(selected.read_output("btop/btop.conf").unwrap(), expected);
         selected.release().unwrap();
     }
 
@@ -1683,9 +1723,10 @@ mod tests {
 
         assert_eq!(
             changes,
-            vec![ThemeOutputChange::ByteDifferent(PathBuf::from(
-                "violet.conf"
-            ))]
+            vec![
+                ThemeOutputChange::ByteDifferent(PathBuf::from("realm/palette.toml")),
+                ThemeOutputChange::ByteDifferent(PathBuf::from("violet.conf")),
+            ]
         );
         assert_eq!(
             inventory(root.path()),

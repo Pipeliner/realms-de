@@ -39,6 +39,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 -m pip install 'PyYAML==6.0.2'
       - run: python3 scripts/test-launch-ci-policy.py
+      - run: python3 scripts/test-ci-monitor.py
 
   browser-dispatch:
     name: browser dispatch
@@ -48,6 +49,7 @@ jobs:
       - run: python3 packaging/session/test-browser.py
       - run: python3 packaging/session/test-idle.py
       - run: python3 packaging/session/test-idle-packaging.py
+      - run: python3 packaging/session/test-login-claim.py
 
   dependency-policy:
     name: dependency policy
@@ -161,7 +163,7 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: docs
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 135
     env:
       # realm-core is the contract every other crate is written against, so an
       # undocumented public item is a broken contract, not a nit.
@@ -179,7 +181,7 @@ jobs:
       - name: Install native package build drivers
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends debhelper rpm zstd fonts-dejavu-core
+          sudo apt-get install -y --no-install-recommends debhelper rpm zstd fonts-dejavu-core patch
       - uses: ./.github/actions/prepare-realm-source
       - name: Check README truth snapshot
         run: |
@@ -198,7 +200,15 @@ jobs:
           ./packaging/tool-sources/test-bundle-linkage.sh
           ./packaging/tool-sources/test-no-live-fetch.sh
           ./packaging/tool-sources/test-native-source-kits.sh
+          python3 packaging/tool-sources/test-native-evidence.py
           ./packaging/tool-sources/test-native-cargo-wrapper.sh
+          ./packaging/tool-sources/test-native-command-sentinel.sh
+          sh packaging/tool-sources/test-native-version-check.sh
+          python3 packaging/tool-sources/test-yazi-reproducibility.py
+          python3 packaging/tool-sources/test-native-fixture-routing.py
+          python3 packaging/tool-sources/test-stage-tool-bundle.py
+          python3 packaging/tool-sources/test-tool-runtime-receipt.py
+          python3 packaging/fedora/test-source-modes.py
       - name: Prepare lifecycle-capable native package temporary directory
         id: native-temp
         run: |
@@ -241,7 +251,7 @@ jobs:
             exit 1
           fi
       - name: Check network-isolated native package paths
-        timeout-minutes: 15
+        timeout-minutes: 120
         run: |
           sudo env \
             REALM_NATIVE_TMPDIR="${{ steps.native-temp.outputs.path }}" \
@@ -259,6 +269,7 @@ jobs:
           path: |
             ${{ steps.native-temp.outputs.path }}/evidence/*.out
             ${{ steps.native-temp.outputs.path }}/evidence/*.log
+            ${{ steps.native-temp.outputs.path }}/evidence/yazi-reproducibility.txt
       - run: cargo doc --workspace --no-deps
 
   msrv:

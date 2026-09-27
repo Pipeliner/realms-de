@@ -968,6 +968,16 @@ impl GenerationStore {
         self.select_current_with_checkpoint(std::process::id(), || {})
     }
 
+    /// Validate and lease the immutable selection already chosen for this login.
+    /// This deliberately does not consult the next-login current pointer.
+    pub fn select_generation(
+        &self,
+        generation: &GenerationId,
+    ) -> std::result::Result<GenerationSelection, String> {
+        let _lock = self.lock_shared()?;
+        self.select_generation_locked(generation.clone(), std::process::id(), || {})
+    }
+
     /// Resolve current and lease it to an already-created, not-yet-executing target.
     pub fn select_current_for_process(
         &self,
@@ -992,6 +1002,18 @@ impl GenerationStore {
                 .ok_or_else(|| "current generation is absent".to_owned()),
             _ => Err("pointer transaction requires exclusive recovery".into()),
         }?;
+        self.select_generation_locked(generation, pid, lease_synced)
+    }
+
+    fn select_generation_locked<H>(
+        &self,
+        generation: GenerationId,
+        pid: u32,
+        lease_synced: H,
+    ) -> std::result::Result<GenerationSelection, String>
+    where
+        H: FnOnce(),
+    {
         let (generation_root, manifest) =
             self.open_validated_generation_with_manifest(&generation)?;
         let path = std::fs::read_link(format!("/proc/self/fd/{}", generation_root.fd.as_raw_fd()))
@@ -2034,6 +2056,13 @@ impl Drop for SelectionCleanupFileLock {
 }
 
 impl GenerationSelection {
+    /// Close this helper's selection while preserving its recorded process lease.
+    /// Call only after handing the selection to that process successfully.
+    /// Existing process-identity reconciliation reclaims it after the owner exits.
+    pub fn retain_process_lease(mut self) {
+        self.released = true;
+    }
+
     /// Return the immutable generation identity selected for this launch.
     pub fn as_str(&self) -> &str {
         self.generation.as_str()
@@ -3176,11 +3205,21 @@ fn write_synced_file<F: PublicationFilesystem>(
     bytes: &[u8],
     filesystem: &mut F,
 ) -> std::result::Result<(), String> {
+    write_synced_file_with_mode(parent, name, bytes, Mode::RUSR | Mode::WUSR, filesystem)
+}
+
+fn write_synced_file_with_mode<F: PublicationFilesystem>(
+    parent: &OwnedFd,
+    name: &str,
+    bytes: &[u8],
+    mode: Mode,
+    filesystem: &mut F,
+) -> std::result::Result<(), String> {
     let fd = openat(
         parent,
         name,
         OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::RUSR | Mode::WUSR,
+        mode,
     )
     .map_err(|error| error.to_string())?;
     let mut file = std::fs::File::from(fd);
@@ -3218,7 +3257,12 @@ fn write_output<F: PublicationFilesystem>(
         .map_err(|error| error.to_string())?;
     }
     let name = final_name.to_str().ok_or("output filename must be UTF-8")?;
-    write_synced_file(&parent, name, bytes, filesystem)?;
+    let mode = if path == Path::new("btop/btop.conf") {
+        Mode::RUSR
+    } else {
+        Mode::RUSR | Mode::WUSR
+    };
+    write_synced_file_with_mode(&parent, name, bytes, mode, filesystem)?;
     filesystem.sync(parent.as_fd())
 }
 
@@ -4122,6 +4166,92 @@ mod tests {
             ParsedLeaseRecord::parse(&std::fs::read(path).unwrap()),
             Ok(ParsedLeaseRecord::Lifecycle(_))
         ));
+    }
+
+    #[test]
+    fn login_selection_can_reopen_a_after_b_is_prepared() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let old = store.select_current().unwrap();
+        let id = GenerationId::parse(old.as_str()).unwrap();
+        old.retain_process_lease();
+        let candidate = "00000000000000000000000000000002";
+        publish_at(
+            &store,
+            candidate,
+            || Ok(publication(candidate, "new")),
+            |_| Ok(()),
+        )
+        .unwrap();
+        let selected = store.select_generation(&id).unwrap();
+        assert_eq!(selected.read_output("theme.ini").unwrap(), b"old");
+        assert_eq!(store.select_current().unwrap().as_str(), candidate);
+        assert!(store
+            .select_generation(&GenerationId::parse("00000000000000000000000000000003").unwrap())
+            .is_err());
+        drop(selected);
+        assert_eq!(lease_names(root.path()).len(), 1);
+        for next in [
+            "00000000000000000000000000000003",
+            "00000000000000000000000000000004",
+            "00000000000000000000000000000005",
+        ] {
+            publish_at(&store, next, || Ok(publication(next, "later")), |_| Ok(())).unwrap();
+        }
+        store.garbage_collect().unwrap();
+        assert!(root.path().join("generations").join(id.as_str()).exists());
+        std::fs::write(root.path().join("current"), b"invalid-next-login-pointer\n").unwrap();
+        assert_eq!(
+            store
+                .select_generation(&id)
+                .unwrap()
+                .read_output("theme.ini")
+                .unwrap(),
+            b"old"
+        );
+    }
+
+    #[test]
+    fn corrupt_login_selection_does_not_fall_back_to_prepared_current() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let id = GenerationId::parse("00000000000000000000000000000001").unwrap();
+        let candidate = "00000000000000000000000000000002";
+        publish_at(
+            &store,
+            candidate,
+            || Ok(publication(candidate, "new")),
+            |_| Ok(()),
+        )
+        .unwrap();
+        std::fs::write(
+            root.path()
+                .join("generations")
+                .join(id.as_str())
+                .join("theme.ini"),
+            b"corrupt",
+        )
+        .unwrap();
+        assert!(store.select_generation(&id).is_err());
+        assert!(lease_names(root.path()).is_empty());
+        assert_eq!(store.select_current().unwrap().as_str(), candidate);
+    }
+
+    #[test]
+    fn retained_login_lease_is_reconciled_after_its_owner_exits() {
+        let root = tempfile::tempdir().unwrap();
+        let store = seeded_store(root.path());
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let selected = store.select_current_for_process(child.id()).unwrap();
+        selected.retain_process_lease();
+        let live = store.garbage_collect();
+        let live_leases = lease_names(root.path());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(live.unwrap().reclaimed_leases, 0);
+        assert_eq!(live_leases.len(), 1);
+        assert_eq!(store.garbage_collect().unwrap().reclaimed_leases, 1);
+        assert!(lease_names(root.path()).is_empty());
     }
 
     #[test]

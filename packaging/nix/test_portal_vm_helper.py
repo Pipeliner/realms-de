@@ -1,6 +1,11 @@
 import json
+import os
 import tempfile
 import unittest
+import re
+import textwrap
+import time
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -10,12 +15,105 @@ from portal_vm_helper import (
     PortalClient,
     frame_evidence,
     main,
+    run,
     request_path,
     single_stream_node,
 )
 
 
 class PortalVmHelperContract(unittest.TestCase):
+    def picker(self, mice, results=None):
+        source = Path(__file__).with_name('checks.nix').read_text()
+        body = source.split('      def select_portal_output(screenshot):', 1)[1].split('      def log_portal_diagnostics():', 1)[0]
+        function = textwrap.dedent('      def select_portal_output(screenshot):' + body)
+        machine = mock.Mock()
+        machine.send_monitor_command.return_value = (
+            'Mouse #2: QEMU PS/2 Mouse\n'
+            'Mouse #4: QEMU HID Tablet (absolute)\n'
+            '* Mouse #6: vmmouse (absolute)\n'
+        )
+        results = results or {}
+        def qmp_send(command, arguments=None):
+            if command == 'query-mice':
+                return {'return': mice}
+            return results.get(command, {'return': {}})
+        machine.qmp_client.send.side_effect = qmp_send
+        machine.execute.side_effect = [(0, ''), (1, '')]
+        namespace = {'machine': machine, 're': re, 'time': time,
+                     'STATE_TIMEOUT': timedelta(seconds=1), 'DIAGNOSTIC_TIMEOUT': 1}
+        exec(compile(function, 'checks.nix:select_portal_output', 'exec'), namespace)
+        return namespace['select_portal_output'], machine
+
+    def test_actual_picker_rejects_active_relative_mouse_before_input(self):
+        mice = [{'index': 2, 'name': 'QEMU PS/2 Mouse', 'current': True, 'absolute': False}]
+        picker, machine = self.picker(mice)
+        with self.assertRaisesRegex(AssertionError, 'active absolute'):
+            picker('fixture')
+        self.assertEqual(machine.qmp_client.send.call_args_list, [mock.call('query-mice')])
+
+    def test_actual_picker_sends_absolute_midpoint_then_real_click(self):
+        mice = [
+            {'index': 2, 'name': 'QEMU PS/2 Mouse', 'current': False, 'absolute': False},
+            {'index': 4, 'name': 'QEMU HID Tablet', 'current': False, 'absolute': True},
+            {'index': 6, 'name': 'vmmouse', 'current': True, 'absolute': True},
+        ]
+        picker, machine = self.picker(mice)
+        picker('fixture')
+        self.assertEqual(machine.qmp_client.send.call_args_list, [
+            mock.call('query-mice'),
+            mock.call('input-send-event', {'events': [
+                {'type': 'abs', 'data': {'axis': 'x', 'value': 16384}},
+                {'type': 'abs', 'data': {'axis': 'y', 'value': 16384}},
+            ]}),
+            mock.call('input-send-event', {'events': [
+                {'type': 'btn', 'data': {'button': 'left', 'down': True}},
+            ]}),
+            mock.call('input-send-event', {'events': [
+                {'type': 'btn', 'data': {'button': 'left', 'down': False}},
+            ]}),
+        ])
+        self.assertTrue(any('vmmouse' in str(call) for call in machine.log.call_args_list))
+        machine.screenshot.assert_any_call('fixture-pointer')
+
+    def test_actual_picker_rejects_missing_active_mouse(self):
+        picker, machine = self.picker([
+            {'index': 4, 'name': 'QEMU HID Tablet', 'current': False, 'absolute': True},
+        ])
+        with self.assertRaisesRegex(AssertionError, 'active absolute'):
+            picker('fixture')
+        self.assertEqual(machine.qmp_client.send.call_args_list, [mock.call('query-mice')])
+
+    def test_actual_picker_rejects_qmp_input_error(self):
+        picker, machine = self.picker(
+            [{'index': 6, 'name': 'vmmouse', 'current': True, 'absolute': True}],
+            {'input-send-event': {'error': {'class': 'GenericError', 'desc': 'input denied'}}},
+        )
+        with self.assertRaisesRegex(AssertionError, 'input denied'):
+            picker('fixture')
+        self.assertEqual(machine.screenshot.call_args_list, [mock.call('fixture')])
+
+    def test_interactive_selection_and_start_allow_chooser_longer_than_ten_seconds(self):
+        class Selected(Exception):
+            pass
+
+        def request(_interface, method, *_args, timeout_ms=10_000):
+            if method == "CreateSession":
+                return "/request", {"session_handle": "/org/freedesktop/portal/desktop/session/test"}
+            if method == interactive_method:
+                if timeout_ms < 30_000:
+                    raise TimeoutError("healthy interactive selection took 30 seconds")
+                self.assertLessEqual(timeout_ms, 120_000)
+                raise Selected()
+            return "/request", {}
+
+        portal = mock.Mock()
+        portal.begin_request.side_effect = request
+        portal.call.return_value = ({},)
+        for interactive_method in ("SelectSources", "Start"):
+            with self.subTest(method=interactive_method), mock.patch("portal_vm_helper.load_namespaces", return_value=(mock.Mock(), mock.Mock(), mock.Mock(), mock.Mock())), mock.patch("portal_vm_helper.PortalClient", return_value=portal), mock.patch.dict(os.environ, REALM_PORTAL_FILECHOOSER_READY="/tmp/test-ready"):
+                with self.assertRaises(Selected):
+                    run()
+
     def test_vm_background_launcher_detaches_driver_fds_and_retains_evidence(self):
         source = Path(__file__).with_name("checks.nix").read_text(encoding="utf-8")
         launcher = source.split("portal_command = shlex.join", 1)[1].split(

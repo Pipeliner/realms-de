@@ -5,6 +5,7 @@
 
 pub mod backend;
 pub mod consumer;
+pub use realm_theme::login_theme;
 pub mod modules;
 pub mod persistence;
 pub mod runtime;

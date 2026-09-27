@@ -2,8 +2,8 @@
 #
 # `shellcheck` and `package` build on any Linux builder; `session-boots` is a
 # NixOS VM test and needs /dev/kvm. CI (.github/workflows/distro.yml) falls back
-# to `nix flake check --no-build` plus the two buildable checks when KVM is
-# absent, so those two must stay independently buildable.
+# to `nix flake check --no-build` plus selected buildable checks when KVM is
+# absent, so those checks must stay independently buildable.
 {
   pkgs,
   lib,
@@ -12,9 +12,24 @@
   desktopAdmissionVmTest,
   nixosModule,
   sourceRevision,
+  support,
   vmControlHelper,
   portalVmHelper,
+  waybarComparison ? false,
+  waybarFixture ? null,
 }:
+let
+  xwaylandWindowObservation = pkgs.writers.writePython3Bin
+    "realm-xwayland-window-observation"
+    { }
+    (builtins.readFile ./xwayland_window_observation.py);
+  realmYazi = lib.findFirst (
+    package: lib.getName package == "yazi"
+  ) null (support.reusedTools pkgs);
+in
+assert realmYazi != null;
+assert realmYazi.version == "25.4.8";
+assert !waybarComparison || waybarFixture != null;
 {
   # The session wrapper is the file most likely to break a login, and the only
   # shell in the repo. Keep it clean.
@@ -44,6 +59,11 @@
           ${src + "/packaging/debian/test-toolchain-path.sh"}
         bash ${src + "/packaging/session/test-runtime-dir-mode.sh"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_portal_vm_helper.py"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_browser_screencast.py"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_window_controls.py"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_relogin.py"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/native-vm/test_relogin_roundtrip.py"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/native-vm/test_window_roundtrip.py"}
         bash ${src + "/packaging/session/test-portal-warmup.sh"}
         touch $out
       '';
@@ -108,6 +128,20 @@
     test -d ${pkgs.adwaita-icon-theme}/share/icons/Adwaita/cursors
     touch $out
   '';
+
+  xwayland-window-observation = pkgs.runCommand
+    "realm-xwayland-window-observation-tests"
+    {
+      nativeBuildInputs = [
+        pkgs.coreutils
+        pkgs.python3
+      ];
+    }
+    ''
+      PYTHONDONTWRITEBYTECODE=1 ${pkgs.python3}/bin/python3 \
+        ${src + "/packaging/nix/test_xwayland_window_observation.py"}
+      touch $out
+    '';
 
   # The local agent-SDD validator reads Git objects at runtime.  Its package
   # wrapper must supply Git without adding it to the desktop session wrapper.
@@ -177,7 +211,7 @@ EOF
   # `pkgs.testers.nixosTest`, not the old top-level `nixosTest` alias, which
   # nixpkgs now refuses.
   session-boots = pkgs.testers.nixosTest {
-    name = "realm-session-boots";
+    name = if waybarComparison then "realm-waybar-comparison" else "realm-session-boots";
     enableOCR = true;
 
     nodes.machine =
@@ -205,9 +239,12 @@ EOF
               if reply is not RequestNameReply.PRIMARY_OWNER:
                   raise SystemExit("D-Bus probe did not acquire its configured name")
 
+              title = "Realm X11 Probe A17-" + str(os.getpid())
               child = await asyncio.create_subprocess_exec(
                   "${pkgs.xmessage}"
                   "/bin/xmessage",
+                  "-title",
+                  title,
                   "-center",
                   "Realm X11 Probe",
               )
@@ -215,7 +252,8 @@ EOF
               marker.write_text(
                   "display=" + display + "\n"
                   "service_pid=" + str(os.getpid()) + "\n"
-                  "child_pid=" + str(child.pid) + "\n",
+                  "child_pid=" + str(child.pid) + "\n"
+                  "title=" + title + "\n",
                   encoding="utf-8",
               )
               await child.wait()
@@ -238,14 +276,13 @@ EOF
         imports = [ nixosModule ];
         programs.realm.enable = true;
         services.displayManager.ly.enable = true;
+        services.displayManager.ly.settings.default_input = "password";
         services.displayManager.defaultSession = "realm";
         services.displayManager.autoLogin = {
           enable = true;
           user = "alice";
         };
-        # Only the VM bypasses the interactive output chooser. The installed
-        # module keeps xdpw's normal chooser for users and hardware acceptance.
-        xdg.portal.wlr.settings.screencast.chooser_type = "none";
+        # Use the installed interactive slurp chooser, including for Firefox.
         virtualisation.memorySize = 2048;
         virtualisation.resolution = {
           x = 1920;
@@ -253,12 +290,21 @@ EOF
         };
         users.users.alice = {
           isNormalUser = true;
+          initialPassword = "realmtest";
         };
         services.dbus.packages = [ xwaylandProbeService ];
         environment.systemPackages = [
           vmControlHelper
           portalVmHelper
           pkgs.foot
+          pkgs.zsh
+          pkgs.starship
+          realmYazi
+          pkgs.btop
+          pkgs.gtk3.dev
+          pkgs.gtk4.dev
+          pkgs.qt6Packages.qt6ct
+          pkgs.strace
           pkgs.firefox
           (pkgs.makeDesktopItem {
             name = "realm-browser-test";
@@ -266,7 +312,7 @@ EOF
             exec = "${pkgs.firefox}/bin/firefox --no-remote about:blank";
             mimeTypes = [ "text/html" "x-scheme-handler/http" "x-scheme-handler/https" ];
           })
-        ];
+        ] ++ lib.optionals waybarComparison [ pkgs.waybar pkgs.python3 pkgs.wlr-randr pkgs.fontconfig ];
         environment.etc."xdg/mimeapps.list".text = ''
           [Default Applications]
           text/html=realm-browser-test.desktop
@@ -284,10 +330,18 @@ EOF
       ''
       import datetime as dt
       import hashlib
+      import importlib
       import json
+      import re
       import shlex
+      import sys
+      import time
       from pathlib import Path
       from test_driver.errors import RequestedAssertionFailed
+      sys.path.insert(0, "${src + "/packaging/native-vm"}")
+      window_probe = importlib.import_module("window_roundtrip")
+      WINDOW_SNAPSHOT = window_probe.SNAPSHOT
+      exercise_controls = window_probe.exercise_controls
 
       STARTUP_TIMEOUT = dt.timedelta(seconds=120)
       STATE_TIMEOUT = dt.timedelta(seconds=60)
@@ -309,7 +363,7 @@ EOF
           output = machine.succeed(as_alice("realm-vm-control", *argv))
           return output, json.loads(output)
 
-      def wait_for_state(predicate, description):
+      def wait_for_state(predicate, description, timeout=STATE_TIMEOUT):
           observed_raw = None
           observed = None
 
@@ -330,8 +384,88 @@ EOF
                   machine.log(f"last state while waiting for {description}: {observed!r}")
               return False
 
-          retry(matches, timeout=STATE_TIMEOUT)
+          retry(matches, timeout=timeout)
           return observed_raw, observed
+
+      def remaining_timeout(deadline, description):
+          remaining = deadline - time.monotonic()
+          assert remaining > 0, f"{description} exhausted the shared X11 deadline"
+          return dt.timedelta(seconds=remaining)
+
+      def x11_observation(display, title, timeout=DIAGNOSTIC_TIMEOUT):
+          status, output = machine.execute(
+              as_alice(
+                  "${xwaylandWindowObservation}"
+                  "/bin/realm-xwayland-window-observation",
+                  "--timeout-bin",
+                  "${pkgs.coreutils}/bin/timeout",
+                  "--xwininfo-bin",
+                  "${pkgs.xwininfo}/bin/xwininfo",
+                  "--display",
+                  display,
+                  "--title",
+                  title,
+                  "--command-timeout",
+                  "2s",
+              ),
+              timeout=timeout,
+          )
+          if status != 0:
+              return {
+                  "observer_status": status,
+                  "observer_output": output,
+                  "tree": {"status": None, "output": ""},
+                  "window_ids": [],
+                  "stats": [],
+                  "viewable": False,
+              }
+          return json.loads(output)
+
+      def log_x11_diagnostics(observation, child_pid):
+          tree = observation["tree"]
+          machine.log(f"X11 root tree (exit {tree['status']}):\n{tree['output']}")
+          for stats in observation["stats"]:
+              machine.log(
+                  f"X11 window {stats['window_id']} stats "
+                  f"(exit {stats['status']}):\n{stats['output']}"
+              )
+          if "observer_status" in observation:
+              machine.log(
+                  f"X11 observer (exit {observation['observer_status']}):\n"
+                  f"{observation['observer_output']}"
+              )
+          stderr_status, stderr = machine.execute(
+              "journalctl -b --no-pager -o cat "
+              f"_PID={shlex.quote(child_pid)}",
+              timeout=DIAGNOSTIC_TIMEOUT,
+          )
+          machine.log(
+              f"X11 child journal/stderr (exit {stderr_status}):\n{stderr}"
+          )
+
+      def wait_for_x11_mapping(display, title, child_pid, deadline):
+          last_observation = None
+
+          def mapped(_last_try):
+              nonlocal last_observation
+              last_observation = x11_observation(
+                  display,
+                  title,
+                  timeout=remaining_timeout(deadline, "X11 window mapping"),
+              )
+              return last_observation["viewable"]
+
+          try:
+              retry(
+                  mapped,
+                  timeout=remaining_timeout(deadline, "X11 window mapping"),
+              )
+          except Exception:
+              if last_observation is None:
+                  last_observation = x11_observation(display, title)
+              log_x11_diagnostics(last_observation, child_pid)
+              raise
+          return last_observation
 
       def wait_for_single_user_process(name):
           quoted = shlex.quote(name)
@@ -357,8 +491,143 @@ EOF
           assert f"generation {generation}\n" in lease, lease
           assert f"pid {pid}\n" in lease, lease
 
+      def process_environment(pid):
+          return dict(
+              line.split("=", 1)
+              for line in machine.succeed(
+                  f"tr '\\0' '\\n' < /proc/{pid}/environ"
+              ).splitlines()
+              if "=" in line
+          )
+
       def write_artifact(name, content):
           (Path(machine.out_dir) / name).write_text(content, encoding="utf-8")
+
+      def wait_for_managed_window_count(expected, description):
+          return wait_for_state(
+              lambda response: sum(
+                  cell["windows"] for cell in response["data"]["orbits"]
+              ) == expected,
+              description,
+          )
+
+      def exercise_toolkit(
+          command,
+          name,
+          required_paths,
+          expected_text,
+          diagnostic_pattern,
+          screenshot=None,
+          launcher=False,
+      ):
+          trace = f"/tmp/realm-{name}.trace"
+          stderr = f"/tmp/realm-{name}.stderr"
+          done = f"/tmp/realm-{name}.done"
+          machine.succeed(
+              f"rm -f {shlex.quote(trace)} {shlex.quote(stderr)} "
+              f"{shlex.quote(done)}"
+          )
+          run_script = (
+              "${pkgs.strace}/bin/strace -f -qq -e trace=openat "
+              f"-o {shlex.quote(trace)} {command} 2> {shlex.quote(stderr)}; "
+              "realm_probe_status=$?; printf '%s\\n' \"$realm_probe_status\" "
+              f"> {shlex.quote(done)}"
+          )
+          if launcher:
+              script = f"/tmp/realm-{name}-launch"
+              environment_file = f"/tmp/realm-{name}.environment"
+              desktop = f"/home/alice/.local/share/applications/realm-{name}.desktop"
+              title = f"Realm Probe {name}"
+              script_text = (
+                  "#!/bin/sh\n"
+                  + f"${pkgs.coreutils}/bin/env > {shlex.quote(environment_file)}\n"
+                  + run_script + "\n"
+              )
+              desktop_text = (
+                  "[Desktop Entry]\nType=Application\n"
+                  + f"Name={title}\nExec={script}\n"
+              )
+              machine.succeed(
+                  "install -d -o alice -g users -m 0755 "
+                  "/home/alice/.local/share/applications && "
+                  + "printf %s " + shlex.quote(script_text)
+                  + " > " + shlex.quote(script)
+                  + " && chmod 0755 " + shlex.quote(script)
+                  + " && printf %s " + shlex.quote(desktop_text)
+                  + " > " + shlex.quote(desktop)
+                  + " && chown alice:users " + shlex.quote(desktop)
+              )
+              machine.send_key("meta_l-d")
+              launcher_pid = wait_for_single_user_process("fuzzel")
+              launcher_environment = process_environment(launcher_pid)
+              assert launcher_environment["REALM_GENERATION"] == generation_root
+              machine.send_chars(title)
+              machine.wait_for_text(title, timeout=OCR_TIMEOUT)
+              machine.send_key("ret")
+              machine.wait_until_succeeds(
+                  f"test -s {shlex.quote(environment_file)}", timeout=STATE_TIMEOUT
+              )
+              child_environment = dict(
+                  line.split("=", 1)
+                  for line in machine.succeed(
+                      f"cat {shlex.quote(environment_file)}"
+                  ).splitlines()
+                  if "=" in line
+              )
+              for key in (
+                  "REALM_GENERATION", "ZDOTDIR", "STARSHIP_CONFIG",
+                  "YAZI_CONFIG_HOME", "GTK_THEME", "QT_QPA_PLATFORMTHEME",
+                  "XDG_DATA_DIRS", "XDG_CONFIG_DIRS",
+              ):
+                  assert child_environment[key] == zsh_environment[key], (
+                      key, child_environment, zsh_environment
+                  )
+              write_artifact(f"{name}-environment.json",
+                             json.dumps(child_environment, indent=2))
+          else:
+              machine.send_chars(run_script + "\n")
+          managed_raw, _managed = wait_for_state(
+              lambda response: (
+                  sum(
+                      cell["windows"] for cell in response["data"]["orbits"]
+                  ) == 2
+                  and response["data"]["focused_title"] == expected_text
+              ),
+              f"focused {name} application window",
+          )
+          machine.wait_for_text(expected_text, timeout=OCR_TIMEOUT)
+          if screenshot is not None:
+              write_artifact(f"control-{name}-state.json", managed_raw)
+              machine.screenshot(screenshot)
+              screenshot_path = Path(machine.out_dir) / f"{screenshot}.png"
+              assert screenshot_path.stat().st_size > 0, screenshot_path
+          machine.send_key("meta_l-q")
+          wait_for_managed_window_count(1, f"{name} application close")
+          machine.wait_until_succeeds(
+              f"test -s {shlex.quote(done)}", timeout=STATE_TIMEOUT
+          )
+          assert machine.succeed(f"cat {shlex.quote(done)}").strip() == "0"
+          machine.fail(
+              f"grep -E -i -q {shlex.quote(diagnostic_pattern)} "
+              f"{shlex.quote(stderr)}"
+          )
+          matched_trace = []
+          for required_path in required_paths:
+              quoted_match = shlex.quote(f'"{required_path}"')
+              machine.succeed(
+                  f"grep -F {quoted_match} {shlex.quote(trace)} "
+                  "| grep -E -q '= [0-9]+$'"
+              )
+              matched_trace.append(
+                  machine.succeed(
+                      f"grep -F {quoted_match} {shlex.quote(trace)}"
+                  )
+              )
+          write_artifact(f"{name}-openat.log", "".join(matched_trace))
+          write_artifact(
+              f"{name}-stderr.log",
+              machine.succeed(f"cat {shlex.quote(stderr)}"),
+          )
 
       def log_startup_diagnostics():
           commands = [
@@ -391,6 +660,48 @@ EOF
                   machine.log(f"{label} (exit {status}):\n{output}")
               except Exception as error:
                   machine.log(f"{label} unavailable: {error}")
+
+      def select_portal_output(screenshot):
+          machine.wait_until_succeeds("pgrep -u alice -x slurp", timeout=STATE_TIMEOUT)
+          machine.screenshot(screenshot)
+          qmp = machine.qmp_client
+          assert qmp is not None, "portal pointer QMP connection is unavailable"
+
+          def pointer_command(command, arguments=None):
+              try:
+                  result = qmp.send(command, arguments) if arguments is not None else qmp.send(command)
+              except Exception as error:
+                  machine.log(f"portal pointer QMP {command} {arguments!r} raised: {error}")
+                  raise
+              machine.log(f"portal pointer QMP {command} {arguments!r} result: {result!r}")
+              assert isinstance(result, dict) and "return" in result, (
+                  f"portal pointer QMP {command} failed: {result!r}"
+              )
+              return result["return"]
+
+          mice = pointer_command("query-mice")
+          machine.log(f"portal pointer inventory: {mice!r}")
+          assert isinstance(mice, list), f"portal pointer inventory is malformed: {mice!r}"
+          active = [mouse for mouse in mice if isinstance(mouse, dict) and mouse.get("current") is True]
+          assert len(active) == 1 and active[0].get("absolute") is True, (
+              f"portal requires one active absolute pointer: {mice!r}"
+          )
+          machine.log(f"portal pointer selected: {active[0]!r}; target QMP absolute x=16384 y=16384")
+          pointer_command("input-send-event", {"events": [
+              {"type": "abs", "data": {"axis": "x", "value": 16384}},
+              {"type": "abs", "data": {"axis": "y", "value": 16384}},
+          ]})
+          machine.screenshot(screenshot + "-pointer")
+          deadline = time.monotonic() + STATE_TIMEOUT.total_seconds()
+          while machine.execute("pgrep -u alice -x slurp", timeout=DIAGNOSTIC_TIMEOUT)[0] == 0:
+              assert time.monotonic() < deadline, "portal output selection timed out"
+              pointer_command("input-send-event", {"events": [
+                  {"type": "btn", "data": {"button": "left", "down": True}},
+              ]})
+              pointer_command("input-send-event", {"events": [
+                  {"type": "btn", "data": {"button": "left", "down": False}},
+              ]})
+              time.sleep(0.5)
 
       def log_portal_diagnostics():
           commands = [
@@ -544,6 +855,10 @@ EOF
       assert '${realm}/bin' in daemon_path, daemon_path
       assert '${pkgs.foot}/bin' in daemon_path, daemon_path
       assert '${pkgs.fuzzel}/bin' in daemon_path, daemon_path
+      assert '${pkgs.zsh}/bin' in daemon_path, daemon_path
+      assert '${pkgs.starship}/bin' in daemon_path, daemon_path
+      assert '${realmYazi}/bin' in daemon_path, daemon_path
+      assert '${pkgs.btop}/bin' in daemon_path, daemon_path
 
       # Check the user-manager publication against the installed daemon that
       # inherited it. A client started without this value cannot map a surface.
@@ -626,6 +941,7 @@ EOF
       baseline_windows = sum(
           cell["windows"] for cell in baseline["data"]["orbits"]
       )
+      x11_deadline = time.monotonic() + STATE_TIMEOUT.total_seconds()
       machine.succeed(
           as_alice(
               "env",
@@ -639,7 +955,10 @@ EOF
           )
       )
       marker = "/run/user/1000/realm-xwayland-probe"
-      machine.wait_until_succeeds(f"test -s {marker}", timeout=STATE_TIMEOUT)
+      machine.wait_until_succeeds(
+          f"test -s {marker}",
+          timeout=remaining_timeout(x11_deadline, "D-Bus activation marker"),
+      )
       activated_display = machine.succeed(
           f"sed -n 's/^display=//p' {marker}"
       ).strip()
@@ -649,6 +968,9 @@ EOF
       x11_pid = machine.succeed(
           f"sed -n 's/^child_pid=//p' {marker}"
       ).strip()
+      x11_title = machine.succeed(
+          f"sed -n 's/^title=//p' {marker}"
+      ).strip()
       assert activated_display == imported_display, (
           activated_display,
           imported_display,
@@ -656,12 +978,29 @@ EOF
       x11_exe = machine.succeed(f"readlink /proc/{x11_pid}/exe").strip()
       expected_x11_exe = "${pkgs.xmessage}/bin/.xmessage-wrapped"
       assert x11_exe == expected_x11_exe, (x11_exe, expected_x11_exe)
-      wait_for_state(
-          lambda response: sum(
-              cell["windows"] for cell in response["data"]["orbits"]
-          ) == baseline_windows + 1,
-          "D-Bus-activated X11 window",
+      assert x11_title == f"Realm X11 Probe A17-{service_pid}", x11_title
+      x11_mapping = wait_for_x11_mapping(
+          activated_display,
+          x11_title,
+          x11_pid,
+          x11_deadline,
       )
+      try:
+          wait_for_state(
+              lambda response: sum(
+                  cell["windows"] for cell in response["data"]["orbits"]
+              ) == baseline_windows + 1,
+              "D-Bus-activated X11 window",
+              timeout=remaining_timeout(x11_deadline, "Realm X11 observation"),
+          )
+      except Exception:
+          x11_observation_after_projection = x11_observation(
+              activated_display,
+              x11_title,
+          )
+          log_x11_diagnostics(x11_observation_after_projection, x11_pid)
+          machine.log(f"X11 mapping-boundary observation:\n{x11_mapping!r}")
+          raise
       machine.wait_for_text("Realm X11 Probe", timeout=OCR_TIMEOUT)
       machine.succeed(f"kill -TERM {x11_pid}")
       machine.wait_until_succeeds(
@@ -740,6 +1079,7 @@ EOF
               "portal file chooser close after explicit Cancel",
           )
 
+          select_portal_output("realm-portal-output-chooser")
           machine.wait_until_succeeds(
               f"test -s {portal_status_path}", timeout=OCR_TIMEOUT
           )
@@ -778,18 +1118,35 @@ EOF
       )
       write_artifact("control-modules-state.json", modules_raw)
 
+      machine.succeed(
+          "${pkgs.util-linux}/bin/setsid --wait ${realmYazi}/bin/yazi --version "
+          "</dev/null >/tmp/realm-yazi-version 2>&1"
+      )
+      assert machine.succeed("cat /tmp/realm-yazi-version").startswith("Yazi 25.4.8")
+      write_artifact("consumer-versions.json", json.dumps({
+          "foot": "${pkgs.foot.version}",
+          "zsh": "${pkgs.zsh.version}",
+          "starship": "${pkgs.starship.version}",
+          "yazi": "${realmYazi.version}",
+          "btop": "${pkgs.btop.version}",
+          "gtk3": "${pkgs.gtk3.version}",
+          "gtk4": "${pkgs.gtk4.version}",
+          "qt6ct": "${pkgs.qt6Packages.qt6ct.version}",
+      }, indent=2))
+
       # Exercise the installed fixed-consumer route through River's real
       # default bindings. A PATH grep alone cannot prove that Session emits the
       # typed effect, the worker starts the executor, or the executor selects N.
-      generation = machine.succeed(
-          "cat /home/alice/.config/realm/generated/current"
-      ).strip()
+      login_record = json.loads(machine.succeed(
+          "cat /run/user/1000/realm/session-theme.json"
+      ))
+      generation = login_record["generation"]
       generation_root = (
           f"/home/alice/.config/realm/generated/generations/{generation}"
       )
       machine.succeed(
           "sudo -u alice ${pkgs.foot}/bin/foot --check-config "
-          f"--config={generation_root}/foot/foot.ini"
+          f"--config={generation_root}/foot/foot-modern.ini"
       )
 
       machine.send_key("meta_l-ret")
@@ -806,11 +1163,230 @@ EOF
           "${pkgs.foot}/bin/foot",
           [
               "foot",
-              f"--config={generation_root}/foot/foot.ini",
+              f"--config={generation_root}/foot/foot-modern.ini",
+              "--log-level=error",
               "--override=key-bindings.spawn-terminal=none",
+              "zsh",
           ],
           generation,
       )
+      zsh_pid = wait_for_single_user_process("zsh")
+      zsh_environment = process_environment(zsh_pid)
+      assert (
+          zsh_environment["REALM_GENERATION"] == generation_root
+      ), zsh_environment
+      assert (
+          zsh_environment["ZDOTDIR"] == f"{generation_root}/zsh"
+      ), zsh_environment
+      assert (
+          zsh_environment["STARSHIP_CONFIG"]
+          == f"{generation_root}/starship.toml"
+      ), zsh_environment
+      assert (
+          zsh_environment["YAZI_CONFIG_HOME"]
+          == f"{generation_root}/yazi"
+      ), zsh_environment
+      assert zsh_environment["GTK_THEME"] == "realm", zsh_environment
+      assert (
+          zsh_environment["XDG_DATA_DIRS"].split(":", 1)[0]
+          == f"{generation_root}/share"
+      ), zsh_environment
+      assert (
+          zsh_environment["QT_QPA_PLATFORMTHEME"] == "qt6ct"
+      ), zsh_environment
+      assert (
+          zsh_environment["XDG_CONFIG_DIRS"].split(":", 1)[0]
+          == generation_root
+      ), zsh_environment
+
+      prompt = machine.succeed(
+          "cd /home/alice && "
+          + shlex.join([
+              "sudo",
+              "-u",
+              "alice",
+              "env",
+              "HOME=/home/alice",
+              "TERM=foot",
+              f"STARSHIP_CONFIG={generation_root}/starship.toml",
+              "STARSHIP_SHELL=zsh",
+              "${pkgs.zsh}/bin/zsh",
+              "-dfc",
+              "prompt=\"$(${pkgs.starship}/bin/starship prompt "
+              + "--status 0 --cmd-duration 0 --keymap viins)\"; "
+              + "print -Pnr -- \"$prompt\"",
+          ])
+      )
+      plain_prompt = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", prompt)
+      assert plain_prompt == "alice@machine :: ~ ~% ", repr(plain_prompt)
+
+      # OCR is useful for user-visible proof but cannot reliably join adjacent
+      # differently coloured prompt spans. Keep the unmodified prompt in the
+      # framebuffer, then prove the real shell is accepting and executing input
+      # with a marker that does not occur contiguously in the command itself.
+      machine.wait_for_text("alice@machine", timeout=OCR_TIMEOUT)
+      terminal_screen = machine.get_screen_text().lower()
+      assert "deprecated" not in terminal_screen, terminal_screen
+      machine.screenshot("realm-terminal-prompt")
+      machine.send_chars("printf 'REALM-%s-READY\\n' SHELL\n")
+      machine.wait_for_text("REALM-SHELL-READY", timeout=OCR_TIMEOUT)
+
+      gtk3_css = f"{generation_root}/share/themes/realm/gtk-3.0/gtk.css"
+      gtk4_css = f"{generation_root}/share/themes/realm/gtk-4.0/gtk.css"
+      qt6ct_config = f"{generation_root}/qt6ct/qt6ct.conf"
+      qt6ct_colours = f"{generation_root}/qt6ct/colors/realm.conf"
+      machine.succeed(
+          f"cmp --silent {shlex.quote(gtk3_css)} "
+          f"{shlex.quote(generation_root + '/gtk-3.0/realm.css')}"
+      )
+      machine.succeed(
+          f"cmp --silent {shlex.quote(gtk4_css)} "
+          f"{shlex.quote(generation_root + '/gtk-4.0/realm.css')}"
+      )
+      machine.succeed("test ! -e /home/alice/.config/qt6ct/qt6ct.conf")
+
+      exercise_toolkit(
+          "${pkgs.gtk3.dev}/bin/gtk3-widget-factory",
+          "gtk3-toolkit",
+          [gtk3_css],
+          "Widget Factory",
+          r"(css|theme).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(css|theme)",
+          screenshot="realm-gtk3-toolkit",
+      )
+      exercise_toolkit(
+          "${pkgs.gtk4.dev}/bin/gtk4-widget-factory",
+          "gtk4-toolkit",
+          [gtk4_css],
+          "Widget Factory",
+          r"(css|theme).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(css|theme)",
+          screenshot="realm-gtk4-toolkit",
+      )
+      exercise_toolkit(
+          "${pkgs.qt6Packages.qt6ct}/bin/qt6ct",
+          "qt6-toolkit",
+          [qt6ct_config, qt6ct_colours],
+          "Qt6 Configuration Tool",
+          r"(qt6ct|palette|colou?r.scheme|config).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(qt6ct|palette|colou?r.scheme|config)",
+          screenshot="realm-qt6-toolkit",
+      )
+
+      # Apply B changes the next login only. Fresh launcher descendants still
+      # inherit A and must actually open A's toolkit files.
+      machine.succeed(as_alice(
+          "XDG_CONFIG_HOME=/home/alice/.config", "realmctl", "theme", "apply"
+      ))
+      next_generation = machine.succeed(
+          "cat /home/alice/.config/realm/generated/current"
+      ).strip()
+      assert next_generation != generation, (next_generation, generation)
+      assert json.loads(machine.succeed(
+          "cat /run/user/1000/realm/session-theme.json"
+      ))["generation"] == generation
+
+      exercise_toolkit(
+          "${pkgs.gtk3.dev}/bin/gtk3-widget-factory",
+          "gtk3-launcher",
+          [gtk3_css],
+          "Widget Factory",
+          r"(css|theme).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(css|theme)",
+          screenshot="realm-gtk3-launcher",
+          launcher=True,
+      )
+      exercise_toolkit(
+          "${pkgs.gtk4.dev}/bin/gtk4-widget-factory",
+          "gtk4-launcher",
+          [gtk4_css],
+          "Widget Factory",
+          r"(css|theme).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(css|theme)",
+          screenshot="realm-gtk4-launcher",
+          launcher=True,
+      )
+      exercise_toolkit(
+          "${pkgs.qt6Packages.qt6ct}/bin/qt6ct",
+          "qt6-launcher",
+          [qt6ct_config, qt6ct_colours],
+          "Qt6 Configuration Tool",
+          r"(qt6ct|palette|colou?r.scheme|config).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(qt6ct|palette|colou?r.scheme|config)",
+          screenshot="realm-qt6-launcher",
+          launcher=True,
+      )
+
+      machine.succeed(
+          "install -d -o alice -g users -m 0700 /home/alice/.config/qt6ct && "
+          "printf '%s\\n' '[Appearance]' 'custom_palette=false' "
+          "> /home/alice/.config/qt6ct/qt6ct.conf && "
+          "chown alice:users /home/alice/.config/qt6ct/qt6ct.conf && "
+          "chmod 0600 /home/alice/.config/qt6ct/qt6ct.conf"
+      )
+      user_qt6ct_digest = machine.succeed(
+          "sha256sum /home/alice/.config/qt6ct/qt6ct.conf"
+      ).split()[0]
+      exercise_toolkit(
+          "${pkgs.qt6Packages.qt6ct}/bin/qt6ct",
+          "qt6-user-override",
+          ["/home/alice/.config/qt6ct/qt6ct.conf"],
+          "Qt6 Configuration Tool",
+          r"(qt6ct|palette|colou?r.scheme|config).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(qt6ct|palette|colou?r.scheme|config)",
+      )
+      assert machine.succeed(
+          "sha256sum /home/alice/.config/qt6ct/qt6ct.conf"
+      ).split()[0] == user_qt6ct_digest
+
+      machine.succeed(
+          "install -d -o alice -g users -m 0755 /tmp/realm-yazi-proof && "
+          "install -o alice -g users -m 0644 /dev/null "
+          "/tmp/realm-yazi-proof/realm-yazi-visible"
+      )
+      btop_config = f"{generation_root}/btop/btop.conf"
+      btop_config_digest = machine.succeed(
+          f"sha256sum {shlex.quote(btop_config)}"
+      ).split()[0]
+      machine.succeed(
+          f"sudo -u alice test ! -w {shlex.quote(btop_config)}"
+      )
+      machine.send_chars("cd /tmp/realm-yazi-proof && yazi\n")
+      yazi_pid = wait_for_single_user_process("yazi")
+      yazi_environment = process_environment(yazi_pid)
+      assert (
+          yazi_environment["REALM_GENERATION"] == generation_root
+      ), yazi_environment
+      assert (
+          yazi_environment["YAZI_CONFIG_HOME"]
+          == f"{generation_root}/yazi"
+      ), yazi_environment
+      machine.wait_for_text("realm-yazi-visible", timeout=OCR_TIMEOUT)
+
+      machine.send_key("ctrl-p")
+      btop_pid = wait_for_single_user_process("btop")
+      btop_args = machine.succeed(
+          f"tr '\\0' '\\n' < /proc/{btop_pid}/cmdline"
+      ).splitlines()
+      assert btop_args == [
+          "btop",
+          "--config",
+          f"{generation_root}/btop/btop.conf",
+          "--themes-dir",
+          f"{generation_root}/btop/themes",
+      ], btop_args
+      machine.wait_for_text("CPU", timeout=OCR_TIMEOUT)
+      machine.fail(
+          as_alice("sh", "-c", f"printf x >> {shlex.quote(btop_config)}")
+      )
+      assert machine.succeed(
+          f"sha256sum {shlex.quote(btop_config)}"
+      ).split()[0] == btop_config_digest
+      machine.send_key("q")
+      machine.wait_until_succeeds(
+          f"test ! -d /proc/{btop_pid}", timeout=STATE_TIMEOUT
+      )
+      assert machine.succeed(
+          f"sha256sum {shlex.quote(btop_config)}"
+      ).split()[0] == btop_config_digest
+      machine.send_key("q")
+      machine.wait_until_succeeds(
+          f"test ! -d /proc/{yazi_pid}", timeout=STATE_TIMEOUT
+      )
+
       machine.succeed(f"kill -TERM {terminal_pid}")
       machine.wait_until_succeeds(
           f"test ! -d /proc/{terminal_pid}", timeout=STATE_TIMEOUT
@@ -821,6 +1397,7 @@ EOF
           ) == 0,
           "default-binding terminal close",
       )
+      machine.succeed(f"test -d {shlex.quote(generation_root)}")
 
       machine.succeed(
           "install -d -o alice -g users -m 0755 "
@@ -868,6 +1445,74 @@ EOF
       )
       write_artifact("control-browser-state.json", browser_raw)
       machine.screenshot("realm-browser")
+      # SPEC 0005 A13b: exercise real getDisplayMedia, Firefox permission,
+      # the installed portal picker, browser-delivered pixels and track stop.
+      browser_evidence = "/tmp/realm-browser-screencast"
+      collector = shlex.join([
+          "${pkgs.python3}/bin/python3",
+          "${src + /packaging/nix/browser_screencast.py}",
+          "--page", "${src + /packaging/nix/browser_screencast.html}",
+          "--output", browser_evidence,
+      ])
+      machine.succeed(
+          f"mkdir -p {browser_evidence}; "
+          f"{collector} < /dev/null > {browser_evidence}/server.log 2>&1 & "
+          f"echo $! > {browser_evidence}/server.pid"
+      )
+      browser_capture_passed = False
+      try:
+          machine.wait_until_succeeds(
+              f"test -s {browser_evidence}/ready", timeout=STATE_TIMEOUT
+          )
+          machine.send_key("ctrl-l")
+          machine.send_chars("http://127.0.0.1:8765/\n")
+          machine.wait_for_text("Realm browser capture ready", timeout=OCR_TIMEOUT)
+          machine.send_key("ret")
+          machine.wait_for_text("Use operating system settings", timeout=OCR_TIMEOUT)
+          machine.screenshot("realm-browser-permission")
+          machine.send_key("alt-a")
+          select_portal_output("realm-browser-output-chooser")
+          machine.wait_until_succeeds(
+              f"test -s {browser_evidence}/result.json || test -s {browser_evidence}/error.json",
+              timeout=STATE_TIMEOUT,
+          )
+          machine.succeed(f"test ! -e {browser_evidence}/error.json")
+          capture = json.loads(machine.succeed(f"cat {browser_evidence}/result.json"))
+          assert capture["stopped"] and capture["trackStates"] == ["ended"], capture
+          assert len(capture["frames"]) == 2, capture
+          machine.wait_for_text("Realm capture passed and stopped", timeout=OCR_TIMEOUT)
+          machine.screenshot("realm-browser-capture-stopped")
+          browser_capture_passed = True
+      except Exception:
+          for name in ("result.json", "error.json", "server.log"):
+              try:
+                  code, output = machine.execute(
+                      f"tail -c 16384 {browser_evidence}/{name}", timeout=DIAGNOSTIC_TIMEOUT
+                  )
+                  machine.log(f"browser capture {name} (exit {code}):\n{output}")
+              except Exception as error:
+                  machine.log(f"browser capture {name} unavailable: {error}")
+          log_portal_diagnostics()
+          raise
+      finally:
+          for command in (
+              f"kill $(cat {browser_evidence}/server.pid)",
+              f"${pkgs.firefox}/bin/firefox --version > {browser_evidence}/firefox-version.txt && test -s {browser_evidence}/firefox-version.txt",
+          ):
+              try:
+                  code, output = machine.execute(command, timeout=DIAGNOSTIC_TIMEOUT)
+                  if browser_capture_passed:
+                      assert code == 0, (command, code, output)
+              except Exception as error:
+                  machine.log(f"browser capture cleanup/version unavailable: {error}")
+                  if browser_capture_passed:
+                      raise
+          try:
+              machine.copy_from_machine(browser_evidence, "browser-screencast")
+          except Exception as error:
+              machine.log(f"browser capture evidence copy unavailable: {error}")
+              if browser_capture_passed:
+                  raise
       machine.send_key("meta_l-q")
       wait_for_state(
           lambda response: sum(
@@ -875,6 +1520,69 @@ EOF
           ) == 0,
           "browser window closes through the default binding",
       )
+
+      # Shared installed-window keyboard acceptance.
+      window_observations: list[dict[str, object]] = []
+      window_result: dict[str, object] = {"passed": False, "observations": window_observations}
+
+      def window_wait(predicate, description):
+          observed = None
+
+          def matches(last_try):
+              nonlocal observed
+              raw = machine.succeed(as_alice(
+                  "python3", "-c", WINDOW_SNAPSHOT, "/run/user/1000/realm/ctl.sock"
+              ), timeout=DIAGNOSTIC_TIMEOUT)
+              observed = json.loads(raw)
+              window_result["last_observation"] = observed
+              if predicate(observed):
+                  window_observations.append({"step": description, **observed})
+                  return True
+              if last_try:
+                  machine.log(f"window control {description}: {observed!r}")
+              return False
+
+          retry(matches, timeout=STATE_TIMEOUT)
+          return observed
+
+      def window_count(value):
+          return sum(len(orbit["windows"]) for orbit in value["ledger"])
+
+      def window_screenshot(name):
+          machine.screenshot(name)
+          assert (Path(machine.out_dir) / (name + ".png")).stat().st_size > 0
+
+      try:
+          window_wait(lambda value: window_count(value) == 0, "empty window fixture")
+          for number, letter in enumerate("ABC", 1):
+              machine.send_key("meta_l-ret")
+              window_wait(lambda value: window_count(value) == number, "open terminal " + letter)
+              # Execute only through the real terminal's interactive shell.
+              machine.send_chars(
+                  "printf '\\033]0;Realm window " + letter + "\\007'; "
+                  "printf '\\nRealm window " + letter + "\\nKeyboard acceptance fixture\\n'; "
+                  "exec sleep infinity\n"
+              )
+              window_wait(lambda value: value["state"]["focused_title"] == "Realm window " + letter,
+                          "title terminal " + letter)
+          exercise_controls(window_wait, machine.send_key, window_screenshot)
+          for remaining in (2, 1, 0):
+              machine.send_key("meta_l-q")
+              window_wait(lambda value: window_count(value) == remaining, "close terminal " + str(remaining))
+          window_result["passed"] = True
+      finally:
+          machine.log(json.dumps(window_result))
+          write_artifact("window-roundtrip.json", json.dumps(window_result, indent=2))
+
+      ${lib.optionalString waybarComparison ''
+      sys.path.insert(0, "${src + "/packaging/nix"}")
+      waybar_probe = importlib.import_module("waybar_comparison_vm")
+      waybar_probe.exercise(
+          machine, as_alice, window_wait, exercise_controls,
+          "${waybarFixture}", "${pkgs.waybar}/bin/waybar",
+          "${pkgs.python3}/bin/python3", "${src}", imported_wayland,
+      )
+      ''}
 
       for number in range(1, 4):
           command = (
@@ -930,6 +1638,12 @@ EOF
       # these exact compositor framebuffer captures.
       captures = []
       for filename, state_file in [
+          ("realm-gtk3-toolkit.png", "control-gtk3-toolkit-state.json"),
+          ("realm-gtk4-toolkit.png", "control-gtk4-toolkit-state.json"),
+          ("realm-qt6-toolkit.png", "control-qt6-toolkit-state.json"),
+          ("realm-gtk3-launcher.png", "control-gtk3-launcher-state.json"),
+          ("realm-gtk4-launcher.png", "control-gtk4-launcher-state.json"),
+          ("realm-qt6-launcher.png", "control-qt6-launcher-state.json"),
           ("realm-tiled-desktop.png", "control-tiled-state.json"),
           ("realm-grimoire.png", "control-grimoire-state.json"),
       ]:
@@ -965,15 +1679,76 @@ EOF
           json.dumps(provenance, indent=2, sort_keys=True) + "\n",
       )
 
-      # Quit is deliberately last. The helper only exits zero for the exact
-      # Response::Ok frame, so this output proves the requester's response
-      # drained before realm-wm asked River to end the session.
-      quit_raw, quit_response = control("quit")
-      assert quit_response == {"reply": "ok"}, quit_response
-      write_artifact("control-quit.json", quit_raw)
-      machine.wait_until_succeeds(
-          f"test ! -d /proc/{river_pid}", timeout=EXIT_TIMEOUT
-      )
+      # Normal Ly logout/relogin, never a display-manager restart.
+      relogin_probe = importlib.import_module("relogin_roundtrip")
+      consumer_probe = importlib.import_module("consumer_roundtrip")
+      relogin_result: dict[str, object] = {"passed": False}
+
+      def relogin_snapshot(previous):
+          return json.loads(machine.succeed(shlex.join([
+              "python3", "-c", relogin_probe.SNAPSHOT,
+              "/run/user/1000", json.dumps(previous),
+          ]), timeout=DIAGNOSTIC_TIMEOUT))
+
+      before_login = relogin_snapshot({})
+      assert before_login["login"]["generation"] == generation, before_login
+      assert next_generation != generation
+      relogin_result["before"] = before_login
+      try:
+          # Retain the original exact response-drain and River-exit assertions.
+          quit_raw, quit_response = control("quit")
+          assert quit_response == {"reply": "ok"}, quit_response
+          write_artifact("control-quit.json", quit_raw)
+          machine.wait_until_succeeds(
+              f"test ! -d /proc/{river_pid}", timeout=EXIT_TIMEOUT
+          )
+          # Ly 1.4.1 clears automatic-login mode after its first logout.
+          machine.wait_for_text("logged out", timeout=OCR_TIMEOUT)
+          machine.wait_for_text("password", timeout=OCR_TIMEOUT)
+          machine.screenshot("relogin-greeter")
+          machine.send_chars("realmtest\n")
+
+          def transitioned(last_try):
+              try:
+                  after = relogin_snapshot(before_login)
+                  relogin_probe.validate_transition(before_login, after, next_generation)
+              except (RequestedAssertionFailed, AssertionError, ValueError) as error:
+                  relogin_result["last_wait_error"] = str(error)
+                  if last_try:
+                      machine.log(f"relogin transition failed: {error}")
+                  return False
+              relogin_result["after"] = after
+              return True
+
+          retry(transitioned, timeout=STARTUP_TIMEOUT)
+          wait_for_managed_window_count(0, "fresh B session")
+          machine.send_key("meta_l-ret")
+          wait_for_managed_window_count(1, "B terminal managed")
+          next_root = f"/home/alice/.config/realm/generated/generations/{next_generation}"
+          consumers = {}
+          for name, executable in (("foot", "${pkgs.foot}/bin/foot"),
+                                   ("zsh", "${pkgs.zsh}/bin/zsh")):
+              wait_for_single_user_process(name)
+              process = json.loads(machine.succeed(shlex.join([
+                  "python3", "-c", consumer_probe.PROCESS, name,
+              ]), timeout=DIAGNOSTIC_TIMEOUT))
+              canonical_executable = machine.succeed(shlex.join([
+                  "readlink", "-f", executable,
+              ]), timeout=DIAGNOSTIC_TIMEOUT).strip()
+              consumer_probe.assert_consumer(process, next_root, canonical_executable)
+              consumers[name] = process
+          assert consumers["zsh"]["parent_pid"] == consumers["foot"]["pid"], consumers
+          relogin_result["consumers"] = consumers
+          machine.screenshot("relogin-terminal-b")
+          machine.send_key("meta_l-q")
+          wait_for_managed_window_count(0, "B terminal closed")
+          machine.wait_until_succeeds(
+              "! pgrep -u alice -x foot && ! pgrep -u alice -x zsh", timeout=EXIT_TIMEOUT
+          )
+          relogin_result["passed"] = True
+      finally:
+          machine.log(json.dumps(relogin_result))
+          write_artifact("relogin-roundtrip.json", json.dumps(relogin_result, indent=2))
     '';
   };
 }

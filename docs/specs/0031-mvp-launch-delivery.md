@@ -19,6 +19,16 @@ run; this is not a promise to verify every intermediate main commit. Batch docs
 and queue bookkeeping into one push rather than repeatedly invalidating evidence.
 No package builds, installation or archives run locally.
 
+The read-only `scripts/ci-monitor` queries main-branch workflow runs at the API
+boundary, before any result limit, so recent PR traffic cannot hide main.
+It reports the required ci/distro/palette workflows. Query or response errors
+fail `--once`; `--watch` retries only within its configured wall-clock budget,
+including failed queries and sleeps, then fails if no successful final query
+was possible. It never treats an API failure as an empty successful snapshot.
+Interval and maximum-duration settings must be positive decimal integers;
+invalid settings fail before querying, rather than disabling timeouts or polling
+without delay.
+
 Pause routine Dependabot version PR creation until MVP acceptance. Continue
 inspecting the complete incoming PR queue; defer routine upgrades with a visible
 post-MVP disposition, and admit only a documented launch/CI-blocking exception.
@@ -61,6 +71,30 @@ Run the same journey on all supported distros; retain hardware-only limitations
 explicitly rather than claiming VM suspend proves laptop behavior. Begin #78's
 real week of daily use as soon as the journey is usable; cosmetic work continues
 in parallel. A week cannot be fabricated or replaced by a green CI run.
+
+### Native window controls and key discovery (accepted refinement, 2026-09-27)
+
+Step 3's installed Ubuntu/Fedora VM probe opens three real terminals through
+the default terminal binding, then uses their interactive shells to give them
+distinct titles and visible labels. All focus, swap, orbit, layout and help
+actions use real QEMU keyboard input. Protocol-v2 Hello/GetState/ShowLedger are
+read-only observations, never action injection. The probe requires exact
+window identities/order and focused titles for forward/back focus, neighbour
+swap and restoration, empty-orbit switch and return, and mono/triptych changes.
+Which-key must hide/show/dismiss and full key help must open/dismiss through
+their shipped bindings. Preserve the initial which-key setting and close the
+three fixture windows through the normal close binding afterward.
+
+Every transition has a finite readiness deadline; absent state or unchanged
+incorrect focus/order fails rather than passing on command dispatch. Retain
+structured observations and complete framebuffer screenshots of the meaningful
+states, plus bounded failure diagnostics.
+The Nix companion probe must retain these observations with explicit collection
+types compatible with the test driver's enabled static type checking; its
+heterogeneous result object must not obscure the appendable observation list.
+This proves the installed keyboard path and compositor-backed state; screenshots remain CI visual evidence, not
+an assertion that a local unit fixture rendered the UI. No new control command,
+window-management feature or browser-automation dependency is introduced.
 
 ## Doctor cut line and reconciliation
 

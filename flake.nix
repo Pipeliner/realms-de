@@ -98,6 +98,28 @@
         default = realm;
       });
 
+      # Comparison work is explicit: it is outside packages and checks, so
+      # ordinary flake checks and production package builds do not run it.
+      legacyPackages = forAllSystems (pkgs: {
+        waybar-comparison-fixture = import ./packaging/nix/waybar-comparison.nix {
+          inherit pkgs;
+          src = self;
+        };
+        waybar-comparison-vm = (import ./packaging/nix/checks.nix {
+          inherit pkgs lib nixosModule sourceRevision support;
+          src = self;
+          realm = realmPackage pkgs;
+          desktopAdmissionVmTest = desktopAdmissionVmTest pkgs;
+          vmControlHelper = vmControlHelper pkgs;
+          portalVmHelper = portalVmHelper pkgs;
+          waybarComparison = true;
+          waybarFixture = import ./packaging/nix/waybar-comparison.nix {
+            inherit pkgs;
+            src = self;
+          };
+        }).session-boots;
+      });
+
       apps = forAllSystems (pkgs: rec {
         realm-session = {
           type = "app";
@@ -163,14 +185,14 @@
 
       # `checks.session-boots` is a NixOS VM test and needs a KVM-capable
       # builder; `shellcheck`, `package`, `packaged-binaries`, and
-      # `realm-sdd-git-runtime` build
+      # `realm-sdd-git-runtime`, and `xwayland-window-observation` build
       # anywhere. CI (distro.yml) falls back to `nix flake check --no-build`
-      # plus those four when /dev/kvm is absent, so keep them independently
+      # plus those five when /dev/kvm is absent, so keep them independently
       # buildable.
       checks = forAllSystems (
         pkgs:
         import ./packaging/nix/checks.nix {
-          inherit pkgs lib nixosModule sourceRevision;
+          inherit pkgs lib nixosModule sourceRevision support;
           src = self;
           realm = realmPackage pkgs;
           desktopAdmissionVmTest = desktopAdmissionVmTest pkgs;
