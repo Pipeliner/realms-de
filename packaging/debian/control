@@ -26,6 +26,7 @@ Build-Depends: debhelper-compat (= 13),
                cargo-1.89 | cargo (>= 1.89),
                rustc-1.89 | rustc (>= 1.89),
                fonts-dejavu-core,
+               patch,
                pkg-config,
                python3,
                zstd
@@ -73,11 +74,6 @@ Recommends: fonts-ibm-plex,
             gsettings-desktop-schemas,
             xwayland,
             slurp
-# Neither yazi nor starship is in the Ubuntu 24.04 archive (verified). charon
-# and thoth are therefore degraded, not broken, on a stock noble box:
-# docs/INSTALL.md says how to install them by hand.
-Suggests: yazi,
-          starship
 Description: keyboard-first, gapless-tiling Wayland desktop environment
  realm is a Wayland desktop built around one idea: an ordered ledger of windows
  is the only state that matters, and every layout is a pure projection of it.

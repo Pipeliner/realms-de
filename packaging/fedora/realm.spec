@@ -1,7 +1,8 @@
 # realm — Fedora 44 pre-alpha spec (ADR 0015 / SPEC 0009).
 #
-# PRE-ALPHA (0.1.0). The Cargo workspace builds realmctl, realm-wm and realm-bar.
-# This package also installs the session contract — the
+# PRE-ALPHA (0.1.0). The Cargo workspace builds realmctl, realm-wm and realm-bar;
+# retained tool bundles build private Yazi, ya and Starship executables. This
+# package also installs the session contract — the
 # wayland-session entry, the
 # session wrapper that performs the ADR 0011 systemd/D-Bus environment
 # handshake, the systemd user units and the palette. %install requires every
@@ -14,9 +15,9 @@
 #
 # Source0 is a packaging kit, not a second Realm workspace archive. It contains
 # this packaging metadata, the staging/linkage helpers, and the retained
-# packaging/tool-sources/bundles/realm-workspace authority. %%prep validates and
-# unpacks that canonical inner source.tar.gz; no checkout or archive-generation
-# command is part of this package path.
+# three selected bundle authorities. %%prep validates and unpacks each canonical
+# inner source.tar.gz; no checkout or archive-generation command is part of this
+# package path.
 #
 # Fedora 44's official repositories resolved river-0.4.8-1.fc44 during the
 # 2026-08-29 review. That dated package observation justifies the native
@@ -40,6 +41,18 @@ Source0:        %{name}-%{version}.tar.gz
 %global realm_source %{realm_stage}/source
 %global realm_cargo_home %{realm_stage}/.cargo
 %global realm_target_dir %{_builddir}/%{name}-%{version}/.cargo-target
+%global tool_stager %{_builddir}/%{name}-%{version}/packaging/tool-sources/stage-tool-bundle.py
+%global tool_runtime %{_builddir}/%{name}-%{version}/packaging/tool-sources/test-tool-runtime.py
+%global yazi_bundle %{_builddir}/%{name}-%{version}/packaging/tool-sources/bundles/yazi-25.4.8
+%global yazi_stage %{_builddir}/%{name}-%{version}/.yazi-25.4.8
+%global yazi_source %{yazi_stage}/source
+%global yazi_cargo_home %{yazi_stage}/.cargo
+%global yazi_target_dir %{_builddir}/%{name}-%{version}/.yazi-target
+%global starship_bundle %{_builddir}/%{name}-%{version}/packaging/tool-sources/bundles/starship-1.23.0
+%global starship_stage %{_builddir}/%{name}-%{version}/.starship-1.23.0
+%global starship_source %{starship_stage}/source
+%global starship_cargo_home %{starship_stage}/.cargo
+%global starship_target_dir %{_builddir}/%{name}-%{version}/.starship-target
 
 # realm's MSRV is 1.89 (Cargo.toml). The BuildRequires below is the mechanical
 # check: dnf refuses the build rather than failing halfway through cargo if the
@@ -50,6 +63,7 @@ BuildRequires:  dejavu-sans-fonts
 BuildRequires:  dejavu-sans-mono-fonts
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  make
+BuildRequires:  patch
 BuildRequires:  python3
 BuildRequires:  zstd
 
@@ -87,12 +101,6 @@ Recommends:     google-noto-sans-symbols2-fonts
 Recommends:     ibm-plex-mono-fonts
 Recommends:     gsettings-desktop-schemas
 Recommends:     xorg-x11-server-Xwayland
-# charon and thoth. Recommends rather than Requires: their absence degrades two
-# panes, it does not break the session, and their availability in Fedora was
-# not verifiable from the build container.
-Recommends:     yazi
-Recommends:     starship
-
 ExclusiveArch:  %{rust_arches}
 
 %description
@@ -116,15 +124,31 @@ Fedora remain unverified.
 %autosetup
 python3 packaging/tool-sources/check-native-source-kit.py rpm \
     %{_builddir}/%{name}-%{version}
-rm -rf %{realm_stage} %{realm_target_dir}
-mkdir -p %{realm_target_dir}
+rm -rf %{realm_stage} %{realm_target_dir} \
+    %{yazi_stage} %{yazi_target_dir} %{starship_stage} %{starship_target_dir}
+mkdir -p %{realm_target_dir} %{yazi_target_dir} %{starship_target_dir}
 python3 packaging/tool-sources/stage-realm-workspace.py \
     %{realm_bundle} %{realm_stage}
+python3 %{tool_stager} %{yazi_bundle} %{yazi_stage}
+python3 %{tool_stager} %{starship_bundle} %{starship_stage}
+sh packaging/fedora/normalize-source-modes.sh \
+    %{realm_stage} %{yazi_stage} %{starship_stage}
 
 %build
 cd %{realm_source}
 CARGO_HOME=%{realm_cargo_home} CARGO_TARGET_DIR=%{realm_target_dir} \
     cargo build --release --frozen --offline --locked --workspace
+cd %{yazi_source}
+CARGO_HOME=%{yazi_cargo_home} CARGO_TARGET_DIR=%{yazi_target_dir} \
+CFLAGS="$CFLAGS -std=gnu17" \
+SOURCE_DATE_EPOCH=1744112829 \
+VERGEN_GIT_SHA=99ea3b74c4260a724b43af812df0f68ef59395b7 \
+VERGEN_GIT_COMMIT_DATE=2025-04-08 VERGEN_BUILD_DATE=2025-04-08 \
+    cargo build --release --frozen --offline --locked \
+        --package yazi-fm --package yazi-cli
+cd %{starship_source}
+CARGO_HOME=%{starship_cargo_home} CARGO_TARGET_DIR=%{starship_target_dir} \
+    cargo build --release --frozen --offline --locked --bin starship
 
 %install
 cd %{realm_source}
@@ -156,6 +180,16 @@ for bin in realmctl realm-wm realm-bar; do
     install -Dpm0755 "%{realm_target_dir}/release/${bin}" "%{buildroot}%{_bindir}/${bin}"
     echo "%{_bindir}/${bin}" >>%{_builddir}/realm-binaries.list
 done
+echo "%dir %{_prefix}/lib/realm" >>%{_builddir}/realm-binaries.list
+echo "%dir %{_prefix}/lib/realm/bin" >>%{_builddir}/realm-binaries.list
+for bin in yazi ya; do
+    install -Dpm0755 "%{yazi_target_dir}/release/${bin}" \
+        "%{buildroot}%{_prefix}/lib/realm/bin/${bin}"
+    echo "%{_prefix}/lib/realm/bin/${bin}" >>%{_builddir}/realm-binaries.list
+done
+install -Dpm0755 "%{starship_target_dir}/release/starship" \
+    "%{buildroot}%{_prefix}/lib/realm/bin/starship"
+echo "%{_prefix}/lib/realm/bin/starship" >>%{_builddir}/realm-binaries.list
 
 %check
 # realm-core's tests include the palette lint, so a palette that fails its WCAG
@@ -168,6 +202,16 @@ cd %{realm_source}
 CARGO_HOME=%{realm_cargo_home} CARGO_TARGET_DIR=%{realm_target_dir} \
     cargo test --release --frozen --offline --locked --workspace \
         --exclude realm-agent-sdd
+./packaging/tool-sources/test-tool-configs.sh
+env -u CARGO_HOME -u CARGO_TARGET_DIR -u CARGO_INCREMENTAL \
+    -u CARGO_PROFILE_RELEASE_DEBUG -u RUSTC -u RUSTC_WRAPPER \
+    -u RUSTC_WORKSPACE_WRAPPER -u CARGO_BUILD_RUSTC \
+    -u CARGO_BUILD_RUSTC_WRAPPER -u CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER \
+    -u REALM_SENTINEL_LOG PATH="/usr/bin:/bin" \
+    python3 %{tool_runtime} \
+    %{realm_target_dir}/release/realmctl \
+    %{yazi_target_dir}/release/yazi %{yazi_target_dir}/release/ya \
+    %{starship_target_dir}/release/starship %{realm_source}
 
 # No %%systemd_user_post/%%systemd_user_preun. Those macros enable units named
 # in %%{_userunitdir} for *new* user sessions via presets, and realm's units must

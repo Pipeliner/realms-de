@@ -182,8 +182,12 @@ require_section "$status_section" 'Implemented and verified in the installed Nix
     'README must name installed NixOS VM verification for realm-bar'
 require_section "$status_section" 'the exact Fedora RPM verified in an empty installroot' \
     'README status must name the Fedora RPM installroot evidence'
-require_section "$status_section" 'Debian installation, Fedora graphical login, physical hardware, and functional portal verification remain pending' \
-    'README status must retain the unverified delivery boundary'
+require_section "$status_section" 'exact Ubuntu Realm and private River packages clean-install together in an empty amd64 Noble root' \
+    'README status must name the Ubuntu package-pair installroot evidence'
+require_section "$status_section" 'FileChooser cancel, Settings read, and nonempty ScreenCast buffer' \
+    'README status must name the bounded functional portal evidence'
+require_section "$status_section" 'Native Ubuntu and Fedora graphical login, browser picker and physical hardware remain pending' \
+    'README status must retain the native graphical and hardware boundary'
 for stale_claim in \
     'There is no desktop environment here yet' \
     'live compositor verification pending' \

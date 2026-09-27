@@ -93,6 +93,18 @@ pub fn templates() -> Vec<Template> {
             reload: gtk_restyle(),
         },
         Template {
+            id: "gtk4-profile",
+            source: ::core::include_str!("../../../configs/templates/gtk4.css"),
+            target: PathBuf::from("share/themes/realm/gtk-4.0/gtk.css"),
+            reload: Reload::None,
+        },
+        Template {
+            id: "gtk3-profile",
+            source: ::core::include_str!("../../../configs/templates/gtk3.css"),
+            target: PathBuf::from("share/themes/realm/gtk-3.0/gtk.css"),
+            reload: Reload::None,
+        },
+        Template {
             id: "foot",
             source: ::core::include_str!("../../../configs/templates/foot.ini"),
             target: PathBuf::from("foot/foot.ini"),
@@ -102,9 +114,39 @@ pub fn templates() -> Vec<Template> {
             },
         },
         Template {
+            id: "foot-modern",
+            source: ::core::include_str!("../../../configs/templates/foot-modern.ini"),
+            target: PathBuf::from("foot/foot-modern.ini"),
+            reload: Reload::None,
+        },
+        Template {
+            id: "zsh-profile",
+            source: ::core::include_str!("../../../configs/templates/zshrc"),
+            target: PathBuf::from("zsh/.zshrc"),
+            reload: Reload::None,
+        },
+        Template {
+            id: "yazi-config",
+            source: ::core::include_str!("../../../configs/templates/yazi.toml"),
+            target: PathBuf::from("yazi/yazi.toml"),
+            reload: Reload::None,
+        },
+        Template {
+            id: "yazi-keymap",
+            source: ::core::include_str!("../../../configs/templates/yazi-keymap.toml"),
+            target: PathBuf::from("yazi/keymap.toml"),
+            reload: Reload::None,
+        },
+        Template {
             id: "yazi",
             source: ::core::include_str!("../../../configs/templates/yazi-theme.toml"),
             target: PathBuf::from("yazi/theme.toml"),
+            reload: Reload::None,
+        },
+        Template {
+            id: "btop-config",
+            source: ::core::include_str!("../../../configs/templates/btop.conf"),
+            target: PathBuf::from("btop/btop.conf"),
             reload: Reload::None,
         },
         Template {
@@ -131,12 +173,201 @@ pub fn templates() -> Vec<Template> {
             target: PathBuf::from("qt6ct/colors/realm.conf"),
             reload: Reload::None,
         },
+        Template {
+            id: "qt6ct-config",
+            source: ::core::include_str!("../../../configs/templates/qt6ct.conf"),
+            target: PathBuf::from("qt6ct/qt6ct.conf"),
+            reload: Reload::None,
+        },
     ]
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+    use std::process::Command;
+
     use super::templates;
+
+    #[test]
+    fn foot_configs_are_byte_equivalent_except_for_the_supported_section_header() {
+        let mut catalogue = templates().into_iter();
+        let legacy = catalogue
+            .find(|template| template.id == "foot")
+            .expect("legacy Foot template");
+        let modern = catalogue
+            .find(|template| template.id == "foot-modern")
+            .expect("modern Foot template");
+
+        assert_eq!(legacy.target, PathBuf::from("foot/foot.ini"));
+        assert_eq!(modern.target, PathBuf::from("foot/foot-modern.ini"));
+        assert_eq!(
+            legacy.source.replacen("[colors]", "[colors-dark]", 1),
+            modern.source,
+            "Foot variants differed by more than the one supported section header",
+        );
+    }
+
+    #[test]
+    fn terminal_tool_profile_is_complete_and_generation_local() {
+        let actual = templates()
+            .into_iter()
+            .filter_map(|template| {
+                ["zsh-profile", "yazi-config", "yazi-keymap", "btop-config"]
+                    .contains(&template.id)
+                    .then(|| (template.id, template.target, template.source.to_owned()))
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    "zsh-profile",
+                    "zsh/.zshrc".into(),
+                    concat!(
+                        "eval \"$(starship init zsh)\"\n",
+                        "btop() {\n",
+                        "  command btop --config \"$REALM_GENERATION/btop/btop.conf\" \\\n",
+                        "    --themes-dir \"$REALM_GENERATION/btop/themes\" \"$@\"\n",
+                        "}\n",
+                    )
+                    .to_owned(),
+                ),
+                (
+                    "yazi-config",
+                    "yazi/yazi.toml".into(),
+                    "[manager]\nratio = [1, 4, 3]\nsort_by = \"alphabetical\"\nsort_sensitive = false\nsort_reverse = false\nsort_dir_first = true\nlinemode = \"size\"\nshow_hidden = false\nshow_symlink = true\nscrolloff = 5\n".to_owned(),
+                ),
+                (
+                    "yazi-keymap",
+                    "yazi/keymap.toml".into(),
+                    "[manager]\nprepend_keymap = [\n  { on = \"<C-p>\", run = \"shell 'btop --config \\\"$REALM_GENERATION/btop/btop.conf\\\" --themes-dir \\\"$REALM_GENERATION/btop/themes\\\"' --block\", desc = \"Open Realm system monitor\" },\n]\n".to_owned(),
+                ),
+                (
+                    "btop-config",
+                    "btop/btop.conf".into(),
+                    "color_theme = \"realm\"\ntheme_background = False\ntruecolor = True\nforce_tty = False\nvim_keys = True\nrounded_corners = True\ngraph_symbol = \"braille\"\nshown_boxes = \"cpu mem net proc\"\n".to_owned(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn terminal_toolkit_profile_has_named_gtk_themes_and_qt6ct_default() {
+        let actual = templates()
+            .into_iter()
+            .filter_map(|template| {
+                ["gtk4-profile", "gtk3-profile", "qt6ct-config"]
+                    .contains(&template.id)
+                    .then(|| (template.id, template.target, template.source.to_owned()))
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    "gtk4-profile",
+                    "share/themes/realm/gtk-4.0/gtk.css".into(),
+                    ::core::include_str!("../../../configs/templates/gtk4.css").to_owned(),
+                ),
+                (
+                    "gtk3-profile",
+                    "share/themes/realm/gtk-3.0/gtk.css".into(),
+                    ::core::include_str!("../../../configs/templates/gtk3.css").to_owned(),
+                ),
+                (
+                    "qt6ct-config",
+                    "qt6ct/qt6ct.conf".into(),
+                    ::core::include_str!("../../../configs/templates/qt6ct.conf").to_owned(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn rendered_btop_launchers_pass_separate_pinned_cli_arguments() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        let argv_file = root.path().join("argv");
+        let generation = root.path().join("generation with spaces");
+
+        let btop = bin.join("btop");
+        fs::write(
+            &btop,
+            "#!/bin/sh\nprintf '%s\\n' btop \"$@\" > \"$REALM_BTOP_ARGV_OUT\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&btop, fs::Permissions::from_mode(0o700)).unwrap();
+        let starship = bin.join("starship");
+        fs::write(&starship, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&starship, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let expected = [
+            "btop".to_owned(),
+            "--config".to_owned(),
+            generation.join("btop/btop.conf").display().to_string(),
+            "--themes-dir".to_owned(),
+            generation.join("btop/themes").display().to_string(),
+        ];
+        let run = |script: &str, caller_args: &[&str]| {
+            if argv_file.exists() {
+                fs::remove_file(&argv_file).unwrap();
+            }
+            let status = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(script)
+                .env("PATH", &bin)
+                .env("REALM_GENERATION", &generation)
+                .env("REALM_BTOP_ARGV_OUT", &argv_file)
+                .status()
+                .unwrap();
+            assert!(status.success(), "btop launcher failed: {script}");
+            assert!(
+                argv_file.is_file(),
+                "btop launcher exited without invoking the argv stub: {script}"
+            );
+            let actual = fs::read_to_string(&argv_file)
+                .unwrap()
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let expected = expected
+                .iter()
+                .cloned()
+                .chain(caller_args.iter().map(|arg| (*arg).to_owned()))
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "unexpected argv from: {script}");
+        };
+
+        let zshrc = templates()
+            .into_iter()
+            .find(|template| template.id == "zsh-profile")
+            .unwrap();
+        let zshrc_path = root.path().join("zshrc");
+        fs::write(&zshrc_path, zshrc.source).unwrap();
+        let zsh_script = format!(". '{}'; btop 'caller argument'", zshrc_path.display());
+        run(&zsh_script, &["caller argument"]);
+
+        let keymap = templates()
+            .into_iter()
+            .find(|template| template.id == "yazi-keymap")
+            .unwrap();
+        let command = keymap
+            .source
+            .split_once("run = \"shell '")
+            .unwrap()
+            .1
+            .split_once("' --block\"")
+            .unwrap()
+            .0
+            .replace("\\\"", "\"");
+        run(&command, &[]);
+    }
 
     #[test]
     fn compiled_catalogue_embeds_the_declared_template_sources() {
@@ -156,12 +387,40 @@ mod tests {
                     ::core::include_str!("../../../configs/templates/gtk3.css")
                 ),
                 (
+                    "gtk4-profile",
+                    ::core::include_str!("../../../configs/templates/gtk4.css")
+                ),
+                (
+                    "gtk3-profile",
+                    ::core::include_str!("../../../configs/templates/gtk3.css")
+                ),
+                (
                     "foot",
                     ::core::include_str!("../../../configs/templates/foot.ini")
                 ),
                 (
+                    "foot-modern",
+                    ::core::include_str!("../../../configs/templates/foot-modern.ini")
+                ),
+                (
+                    "zsh-profile",
+                    ::core::include_str!("../../../configs/templates/zshrc")
+                ),
+                (
+                    "yazi-config",
+                    ::core::include_str!("../../../configs/templates/yazi.toml")
+                ),
+                (
+                    "yazi-keymap",
+                    ::core::include_str!("../../../configs/templates/yazi-keymap.toml")
+                ),
+                (
                     "yazi",
                     ::core::include_str!("../../../configs/templates/yazi-theme.toml")
+                ),
+                (
+                    "btop-config",
+                    ::core::include_str!("../../../configs/templates/btop.conf")
                 ),
                 (
                     "btop",
@@ -178,6 +437,10 @@ mod tests {
                 (
                     "qt6ct",
                     ::core::include_str!("../../../configs/templates/qt6ct-colors.conf")
+                ),
+                (
+                    "qt6ct-config",
+                    ::core::include_str!("../../../configs/templates/qt6ct.conf")
                 ),
             ],
         );

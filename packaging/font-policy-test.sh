@@ -88,10 +88,10 @@ require_line "$tmp_dir/canonical/.github/workflows/distro.yml" \
     "            fonts-dejavu-core \\" \
     'Ubuntu native-package CI does not install its test font explicitly'
 require_line "$tmp_dir/canonical/.github/workflows/distro.yml" \
-    '        run: dnf -y install --setopt=install_weak_deps=False git rpm-build rust cargo systemd-rpm-macros make python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts' \
+    '        run: dnf -y install --setopt=install_weak_deps=False git rpm-build rust cargo systemd-rpm-macros make patch python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts' \
     'Fedora native-package CI does not install its test fonts explicitly'
 require_line "$tmp_dir/canonical/.github/workflows/ci.yml" \
-    '          sudo apt-get install -y --no-install-recommends debhelper rpm zstd fonts-dejavu-core' \
+    '          sudo apt-get install -y --no-install-recommends debhelper rpm zstd fonts-dejavu-core patch' \
     'native package fixture CI does not install its test font explicitly'
 expect_pass "$tmp_dir/canonical"
 
