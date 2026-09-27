@@ -1,10 +1,19 @@
 """Source-only decisions for installed WM crash recovery."""
 import copy
 import importlib
+from pathlib import Path
 import unittest
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_harness_runs_bounded_recovery_between_windows_and_portals(self):
+        source = Path(__file__).with_name('run-native-session-vm.sh').read_text()
+        windows = source.index('timeout 300 python3 "$script_dir/window_roundtrip.py"')
+        recovery = source.index('timeout 300 python3 "$script_dir/recovery_roundtrip.py"')
+        portals = source.index('timeout 240 python3 "$script_dir/portal_roundtrip.py"')
+        self.assertLess(windows, recovery)
+        self.assertLess(recovery, portals)
+
     def setUp(self):
         self.probe = importlib.import_module('recovery_roundtrip')
         self.before = {'session': '3', 'login': {'owner_pid': 8, 'start_time': 80},
