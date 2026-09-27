@@ -29,7 +29,7 @@ if [ "$1" = --check-config ]; then
   printf '%s\n' "$2" >> "$TEST_ROOT/probes"
   if [ "$TEST_FOOT_MODE" = hung ]; then
     printf '%s\n' "$$" > "$TEST_ROOT/probe-pid"
-    exec /bin/sleep 30
+    kill -STOP "$$"
   fi
   case "$TEST_FOOT_MODE:$2" in
     invalid:*|legacy:*foot-modern.ini) exit 1 ;;
@@ -181,7 +181,12 @@ fn hung_foot_probe_is_reaped_without_launch_or_lease_leak() {
     let started = std::time::Instant::now();
     let output = login.run("terminal", "hung", None);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("shared one-second deadline"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("shared one-second deadline"),
+        "unexpected probe result: status={} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(started.elapsed() < std::time::Duration::from_secs(3));
     let pid = fs::read_to_string(login.root.path().join("probe-pid")).unwrap();
     assert!(!std::path::Path::new("/proc").join(pid.trim()).exists());
@@ -191,5 +196,44 @@ fn hung_foot_probe_is_reaped_without_launch_or_lease_leak() {
             .unwrap()
             .count(),
         1
+    );
+}
+
+#[test]
+fn hung_foot_fixture_self_stops_without_external_helpers() {
+    use rustix::process::{waitid, Pid, WaitId, WaitIdOptions};
+    use std::time::{Duration, Instant};
+
+    let login = Login::new();
+    let mut child = Command::new(login.tools.path().join("foot"))
+        .args(["--check-config", "fixture.ini"])
+        .env("PATH", login.tools.path())
+        .env("TEST_ROOT", login.root.path())
+        .env("TEST_FOOT_MODE", "hung")
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let stopped = loop {
+        if let Some(status) = waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::STOPPED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+        )
+        .unwrap()
+        {
+            break status.stopped();
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let _ = child.kill();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        stopped,
+        "hung fixture did not self-stop: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

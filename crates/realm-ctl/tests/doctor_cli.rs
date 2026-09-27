@@ -8,7 +8,7 @@ fn hung_tool_leaves_time_to_emit_report_within_command_budget() {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let tool = temp.path().join("yazi");
-    fs::write(&tool, "#!/bin/sh\nexec /bin/sleep 10\n").unwrap();
+    fs::write(&tool, "#!/bin/sh\nkill -STOP \"$$\"\n").unwrap();
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
     let started = Instant::now();
     let output = Command::new(env!("CARGO_BIN_EXE_realmctl"))
@@ -23,7 +23,13 @@ fn hung_tool_leaves_time_to_emit_report_within_command_budget() {
         .env_remove("DBUS_SESSION_BUS_ADDRESS")
         .output()
         .unwrap();
-    assert!(started.elapsed() < Duration::from_secs(3));
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_secs(2) && elapsed < Duration::from_secs(3),
+        "hung probe returned after {elapsed:?}: stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let checks = report["checks"].as_array().unwrap();
     let tools = checks

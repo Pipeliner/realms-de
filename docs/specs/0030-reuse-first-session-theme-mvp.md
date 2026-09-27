@@ -128,6 +128,9 @@ session snapshot. No additional garbage-collection policy is introduced.
 Foot configuration selection probes the generated modern and legacy section
 variants with `--check-config` under one shared one-second deadline. It never
 falls back to a mutable user configuration after both variants fail.
+Hung-command fixtures must actually remain blocked with their restricted PATH
+on native and Nix test hosts. Use a shell-builtin self-stop, not a host-specific
+`/bin/sleep` path, and retain stderr when the expected timeout is absent.
 
 One generation-derived child environment supplies REALM_GENERATION, ZDOTDIR,
 STARSHIP_CONFIG, YAZI_CONFIG_HOME, GTK_THEME and the Qt platform selector. GTK
