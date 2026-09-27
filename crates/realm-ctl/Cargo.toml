@@ -17,7 +17,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 wayland-client = { workspace = true }
 zbus = { workspace = true }
-fontdb = "=0.23.0"
+fontdb = "=0.24.0"
 ttf-parser = { workspace = true }
 
 [dev-dependencies]
