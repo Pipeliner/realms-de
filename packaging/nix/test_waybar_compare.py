@@ -3,8 +3,12 @@
 import io
 import json
 import socket
+import subprocess
+import sys
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 
 import waybar_compare
 
@@ -149,6 +153,35 @@ class ProtocolTests(unittest.TestCase):
     def test_oversize_frame_fails(self):
         _, _, errors = self.exchange([b" " * 65536 + b"\n"])
         self.assertEqual(len(errors), 1)
+
+    def test_cli_reports_malformed_stream_and_exits_nonzero(self):
+        # Catches silently successful exits after a broken subscribed stream.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sock"
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                listener.bind(str(path))
+                listener.listen(1)
+                listener.settimeout(2)
+                child = subprocess.Popen(
+                    [sys.executable, str(Path(waybar_compare.__file__)), "--socket", str(path)],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                try:
+                    peer, _ = listener.accept()
+                except socket.timeout:
+                    child.terminate()
+                    stdout, stderr = child.communicate(timeout=2)
+                    self.fail(f"adapter never connected: exit={child.returncode}, stdout={stdout!r}, stderr={stderr!r}")
+                peer.settimeout(2)
+                with peer, peer.makefile("rb") as reader:
+                    self.assertEqual(json.loads(reader.readline())["cmd"], "hello")
+                    peer.sendall(frame({"reply": "hello", "data": {"version": 2, "session": "test"}}))
+                    self.assertEqual(json.loads(reader.readline()), {"cmd": "subscribe"})
+                    peer.sendall(b"{bad json}\n")
+                stdout, stderr = child.communicate(timeout=2)
+        self.assertEqual(child.returncode, 1)
+        self.assertEqual(stdout, b"")
+        self.assertIn(b"waybar compare: malformed Realm frame", stderr)
 
 
 if __name__ == "__main__":

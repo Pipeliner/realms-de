@@ -98,6 +98,15 @@
         default = realm;
       });
 
+      # Comparison work is explicit: it is outside packages and checks, so
+      # ordinary flake checks and production package builds do not run it.
+      legacyPackages = forAllSystems (pkgs: {
+        waybar-comparison-fixture = import ./packaging/nix/waybar-comparison.nix {
+          inherit pkgs;
+          src = self;
+        };
+      });
+
       apps = forAllSystems (pkgs: rec {
         realm-session = {
           type = "app";

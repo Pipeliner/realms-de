@@ -137,7 +137,7 @@ def main(argv=None):
         return 1
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.connect(path)
+            connection.connect(str(path))
             run(connection, sys.stdout)
     except (OSError, ProtocolError) as error:
         print(f"waybar compare: {error}", file=sys.stderr)

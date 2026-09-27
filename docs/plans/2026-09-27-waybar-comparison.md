@@ -46,11 +46,11 @@ CI-only; local work is source tests. One pass plus one correction is the limit.
 ## Task 1: event-fed adapter and CI-only candidate
 
 Files: create `packaging/nix/waybar_compare.py` and
-`packaging/nix/test_waybar_compare.py`; modify `packaging/nix/checks.nix` only
-for a separate opt-in comparison test/configuration. Keep normal session-boots
-acceptance and production packages unchanged. Add the check output through the
-existing `flake.nix` check wiring only if required; never make its experiment
-failure mask ordinary acceptance evidence.
+`packaging/nix/test_waybar_compare.py`; expose their comparison fixture as an
+explicit opt-in `legacyPackages` output. Keep normal `checks`, `session-boots`
+acceptance, and production packages unchanged. The experiment's source tests
+run only when that fixture is explicitly built; never make its failure mask
+ordinary acceptance evidence.
 
 - [ ] Write failing source tests for `render_state(state: dict) -> dict`:
   all six numbered orbits with occupied/active/empty distinctions, layout,
