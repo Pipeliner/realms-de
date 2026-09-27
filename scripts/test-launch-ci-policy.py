@@ -65,8 +65,8 @@ class LaunchPolicy(unittest.TestCase):
         upload = uploads[0]
         self.assertEqual(upload['if'], 'always()')
         self.assertEqual(upload['with']['path'].splitlines(), [
-            '${{ runner.temp }}/realm-native-fixture-evidence/*.out',
-            '${{ runner.temp }}/realm-native-fixture-evidence/*.log',
+            '${{ steps.native-temp.outputs.path }}/evidence/*.out',
+            '${{ steps.native-temp.outputs.path }}/evidence/*.log',
         ])
 
 

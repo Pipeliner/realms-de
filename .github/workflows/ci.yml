@@ -210,12 +210,27 @@ jobs:
           sudo env PATH="$native_toolchain/bin:/usr/bin:/bin" \
             "$native_toolchain/bin/rustc" --version
           printf 'path=%s\n' "$native_toolchain" >> "$GITHUB_OUTPUT"
+      - name: Probe native evidence from build namespace
+        run: |
+          set -euo pipefail
+          evidence="${{ steps.native-temp.outputs.path }}/evidence"
+          sudo mkdir -p "$evidence"
+          if ! sudo unshare --user --map-root-user --net sh -eu -c '
+            probe=$(mktemp "$1/.write-probe.XXXXXX")
+            trap '\''rm -f "$probe"'\'' EXIT
+            printf "create\n" > "$probe"
+            printf "append\n" >> "$probe"
+            test "$(wc -l < "$probe")" -eq 2
+          ' sh "$evidence"; then
+            namei -l "$evidence"
+            exit 1
+          fi
       - name: Check network-isolated native package paths
         timeout-minutes: 15
         run: |
           sudo env \
             REALM_NATIVE_TMPDIR="${{ steps.native-temp.outputs.path }}" \
-            REALM_NATIVE_EVIDENCE_DIR="${{ runner.temp }}/realm-native-fixture-evidence" \
+            REALM_NATIVE_EVIDENCE_DIR="${{ steps.native-temp.outputs.path }}/evidence" \
             REALM_REAL_CARGO="${{ steps.native-rust.outputs.path }}/bin/cargo" \
             REALM_REAL_RUSTC="${{ steps.native-rust.outputs.path }}/bin/rustc" \
           ./packaging/tool-sources/test-native-builds.sh
@@ -227,8 +242,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
           path: |
-            ${{ runner.temp }}/realm-native-fixture-evidence/*.out
-            ${{ runner.temp }}/realm-native-fixture-evidence/*.log
+            ${{ steps.native-temp.outputs.path }}/evidence/*.out
+            ${{ steps.native-temp.outputs.path }}/evidence/*.log
       - run: cargo doc --workspace --no-deps
 
   msrv:

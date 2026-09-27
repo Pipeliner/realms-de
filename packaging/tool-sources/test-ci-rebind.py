@@ -102,6 +102,27 @@ Dependency statement remains byte-exact.
 
 
 class RebindWorkflowContract(unittest.TestCase):
+    def test_native_evidence_has_namespace_preflight_and_matching_upload(self):
+        import yaml
+
+        document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+        steps = document["jobs"]["docs"]["steps"]
+        fixture = next(s for s in steps if s.get("name") == "Check network-isolated native package paths")
+        evidence = '${{ steps.native-temp.outputs.path }}/evidence'
+        self.assertIn('REALM_NATIVE_EVIDENCE_DIR="' + evidence + '"', fixture["run"])
+        probe = next(s for s in steps if s.get("name") == "Probe native evidence from build namespace")
+        self.assertLess(steps.index(probe), steps.index(fixture))
+        self.assertIn("unshare --user --map-root-user --net", probe["run"])
+        self.assertIn(evidence, probe["run"])
+        upload = next(s for s in steps if s.get("name") == "Retain native fixture diagnostics")
+        self.assertEqual(upload["if"], "always()")
+        # The launch-policy test owns the exact artifact allowlist. This test
+        # verifies its relationship to the namespace's evidence root.
+        paths = upload["with"]["path"].splitlines()
+        self.assertTrue(paths)
+        for path in paths:
+            self.assertEqual(path.rsplit("/", 1)[0], evidence)
+
     def test_preparation_validates_before_staging_and_retains_provenance(self):
         text = (ROOT / ".github/actions/prepare-realm-source/action.yml").read_text()
         self.assertIn("source_commit=$(git rev-parse HEAD)", text)
