@@ -9,7 +9,7 @@ let
       "modules-left" = [ "custom/realm" ];
       "modules-right" = [ "clock" "cpu" "memory" "network" "battery" ];
       "custom/realm" = {
-        exec = "${pkgs.python3}/bin/python3 ${src + "/packaging/nix/waybar_compare.py"}";
+        exec = "${pkgs.python3}/bin/python3 ${src + "/packaging/nix/waybar_compare.py"} --trace /run/user/1000/waybar-comparison/adapter.jsonl";
         "return-type" = "json";
         format = "{text}";
         escape = true;
@@ -31,6 +31,7 @@ let
 in
 pkgs.runCommand "realm-waybar-comparison-fixture" { nativeBuildInputs = [ pkgs.python3 ]; } ''
   ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_waybar_compare.py"}
+  ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_waybar_comparison_vm.py"}
   mkdir -p "$out"
   cp ${config} "$out/config.json"
 ''

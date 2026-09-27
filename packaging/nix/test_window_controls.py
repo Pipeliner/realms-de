@@ -38,7 +38,11 @@ class WindowControlsTests(unittest.TestCase):
         start = source.index('      # Shared installed-window keyboard acceptance.')
         end = source.index('      for number in range(1, 4):', start)
         block = source[start:end]
-        compile('\n'.join(line[6:] for line in block.splitlines()), '<window-probe>', 'exec')
+        opt_in = block.index("      ${lib.optionalString waybarComparison ''")
+        opt_out = block.index("      ''}", opt_in) + len("      ''}")
+        self.assertIn('waybar_probe.exercise(', block[opt_in:opt_out])
+        ordinary_block = block[:opt_in] + block[opt_out:]
+        compile('\n'.join(line[6:] for line in ordinary_block.splitlines()), '<window-probe>', 'exec')
         self.assertIn('exercise_controls(window_wait, machine.send_key, window_screenshot)', block)
         self.assertIn('WINDOW_SNAPSHOT', block)
         self.assertIn('machine.send_key("meta_l-ret")', block)

@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import sys
+import time
 from pathlib import Path
 try:
     import tomllib
@@ -88,7 +89,7 @@ def read_frame(reader):
     return value
 
 
-def run(connection, output):
+def run(connection, output, trace=None):
     """Subscribe once, then flush only changed display values until Shutdown."""
     with connection.makefile("rb") as reader:
         connection.sendall(b'{"cmd":"hello","arg":{"version":2,"client":"realm-waybar-compare"}}\n')
@@ -102,6 +103,7 @@ def run(connection, output):
         initial = True
         while True:
             event = read_frame(reader)
+            received = time.monotonic_ns()
             if event.get("event") == "shutdown" and not initial:
                 return
             if event.get("event") != "state" or not isinstance(event.get("data"), dict):
@@ -114,6 +116,15 @@ def run(connection, output):
             if value != previous:
                 output.write(json.dumps(value, ensure_ascii=False) + "\n")
                 output.flush()
+                flushed = time.monotonic_ns()
+                if trace is not None:
+                    trace.write(json.dumps({
+                        "revision": event["data"].get("revision"),
+                        "text": value["text"],
+                        "received_monotonic_ns": received,
+                        "flushed_monotonic_ns": flushed,
+                    }, ensure_ascii=False) + "\n")
+                    trace.flush()
                 previous = value
 
 
@@ -121,6 +132,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", type=Path, default=None)
     parser.add_argument("--css", type=Path, default=None, metavar="SELECTED_PALETTE_TOML")
+    parser.add_argument("--trace", type=Path, default=None, metavar="OUTPUT_JSONL")
     args = parser.parse_args(argv)
     if args.css is not None:
         try:
@@ -138,7 +150,11 @@ def main(argv=None):
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.connect(str(path))
-            run(connection, sys.stdout)
+            if args.trace is None:
+                run(connection, sys.stdout)
+            else:
+                with args.trace.open("w", encoding="utf-8") as trace:
+                    run(connection, sys.stdout, trace=trace)
     except (OSError, ProtocolError) as error:
         print(f"waybar compare: {error}", file=sys.stderr)
         return 1

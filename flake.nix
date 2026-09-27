@@ -105,6 +105,19 @@
           inherit pkgs;
           src = self;
         };
+        waybar-comparison-vm = (import ./packaging/nix/checks.nix {
+          inherit pkgs lib nixosModule sourceRevision support;
+          src = self;
+          realm = realmPackage pkgs;
+          desktopAdmissionVmTest = desktopAdmissionVmTest pkgs;
+          vmControlHelper = vmControlHelper pkgs;
+          portalVmHelper = portalVmHelper pkgs;
+          waybarComparison = true;
+          waybarFixture = import ./packaging/nix/waybar-comparison.nix {
+            inherit pkgs;
+            src = self;
+          };
+        }).session-boots;
       });
 
       apps = forAllSystems (pkgs: rec {

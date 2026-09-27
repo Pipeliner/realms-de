@@ -15,6 +15,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      waybar_comparison:
+        description: Run the one-off CI-only Waybar comparison VM
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: distro-${{ github.workflow }}-${{ github.ref }}
@@ -485,3 +491,22 @@ jobs:
             ${{ runner.temp }}/realm-session-boots/realm-browser-output-chooser.png
             ${{ runner.temp }}/realm-session-boots/realm-browser-capture-stopped.png
             ${{ runner.temp }}/realm-session-boots/browser-screencast/realm-browser-screencast/
+
+      - name: Run explicit Waybar comparison VM
+        if: github.event_name == 'workflow_dispatch' && inputs.waybar_comparison
+        run: |
+          set -euo pipefail
+          test -e /dev/kvm || { echo '::error::Waybar comparison requires KVM'; exit 1; }
+          system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+          nix build --print-build-logs ".#legacyPackages.$system.waybar-comparison-vm" \
+            --out-link result-waybar-comparison
+          mkdir -p "$RUNNER_TEMP/waybar-comparison"
+          cp -RL result-waybar-comparison/. "$RUNNER_TEMP/waybar-comparison/"
+
+      - name: Upload Waybar comparison evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.waybar_comparison
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: realm-waybar-comparison-${{ github.sha }}
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/waybar-comparison/waybar-comparison/

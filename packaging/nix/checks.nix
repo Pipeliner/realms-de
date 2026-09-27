@@ -15,6 +15,8 @@
   support,
   vmControlHelper,
   portalVmHelper,
+  waybarComparison ? false,
+  waybarFixture ? null,
 }:
 let
   xwaylandWindowObservation = pkgs.writers.writePython3Bin
@@ -27,6 +29,7 @@ let
 in
 assert realmYazi != null;
 assert realmYazi.version == "25.4.8";
+assert !waybarComparison || waybarFixture != null;
 {
   # The session wrapper is the file most likely to break a login, and the only
   # shell in the repo. Keep it clean.
@@ -208,7 +211,7 @@ EOF
   # `pkgs.testers.nixosTest`, not the old top-level `nixosTest` alias, which
   # nixpkgs now refuses.
   session-boots = pkgs.testers.nixosTest {
-    name = "realm-session-boots";
+    name = if waybarComparison then "realm-waybar-comparison" else "realm-session-boots";
     enableOCR = true;
 
     nodes.machine =
@@ -309,7 +312,7 @@ EOF
             exec = "${pkgs.firefox}/bin/firefox --no-remote about:blank";
             mimeTypes = [ "text/html" "x-scheme-handler/http" "x-scheme-handler/https" ];
           })
-        ];
+        ] ++ lib.optionals waybarComparison [ pkgs.waybar pkgs.python3 pkgs.wlr-randr pkgs.fontconfig ];
         environment.etc."xdg/mimeapps.list".text = ''
           [Default Applications]
           text/html=realm-browser-test.desktop
@@ -1550,6 +1553,16 @@ EOF
       finally:
           machine.log(json.dumps(window_result))
           write_artifact("window-roundtrip.json", json.dumps(window_result, indent=2))
+
+      ${lib.optionalString waybarComparison ''
+      sys.path.insert(0, "${src + "/packaging/nix"}")
+      waybar_probe = importlib.import_module("waybar_comparison_vm")
+      waybar_probe.exercise(
+          machine, as_alice, window_wait, exercise_controls,
+          "${waybarFixture}", "${pkgs.waybar}/bin/waybar",
+          "${pkgs.python3}/bin/python3", "${src}", imported_wayland,
+      )
+      ''}
 
       for number in range(1, 4):
           command = (

@@ -71,16 +71,18 @@ class RenderTests(unittest.TestCase):
 
     def test_css_uses_selected_palette_values(self):
         # Catches a copied fixture palette or missing login-palette CSS mapping.
-        palette = {
-            "background": {"bar_top": "#102030"},
-            "text": {"normal": "#aabbcc", "bright": "#ddeeff"},
-            "accent": {"violet": "#123456", "starlight": "#654321"},
-            "typography": {"family": "Test Mono", "fallback": ["Test Mono", "Fallback"], "size_meta": 13.5},
-            "metrics": {"bar_height": 34},
-        }
+        palette_path = Path(__file__).resolve().parents[2] / "palette.toml"
+        palette = waybar_compare.tomllib.loads(palette_path.read_text(encoding="utf-8"))
         css = waybar_compare.render_css(palette)
-        for value in ("#102030", "#aabbcc", "#ddeeff", "#123456", "#654321", "Test Mono", "Fallback", "13.5px", "34px"):
+        for value in (palette["background"]["bar_top"], palette["text"]["normal"],
+                      palette["text"]["bright"], palette["accent"]["violet"],
+                      palette["accent"]["starlight"], *palette["typography"]["fallback"],
+                      str(palette["typography"]["size_meta"]) + "px",
+                      str(palette["metrics"]["bar_height"]) + "px"):
             self.assertIn(value, css)
+        palette["background"]["bar_top"] = palette["accent"]["gold"]
+        self.assertIn(palette["accent"]["gold"], waybar_compare.render_css(palette))
+        self.assertNotIn(palette["accent"]["gold"], css)
         self.assertNotIn("transition", css)
         self.assertNotIn("animation", css)
 
@@ -135,6 +137,38 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(json.loads(lines[0]), waybar_compare.render_state(first))
         self.assertIn("Browser", json.loads(lines[1])["text"])
         self.assertEqual(errors, [])
+
+    def test_trace_records_receive_and_flush_for_changed_state(self):
+        client, server = socket.socketpair()
+        output = FlushedOutput()
+        trace = io.StringIO()
+        errors = []
+
+        def adapter():
+            try:
+                waybar_compare.run(client, output, trace=trace)
+            except Exception as error:
+                errors.append(error)
+            finally:
+                client.close()
+
+        thread = threading.Thread(target=adapter, daemon=True)
+        thread.start()
+        server.settimeout(2)
+        with server, server.makefile("rb") as reader:
+            self.assertEqual(json.loads(reader.readline())["cmd"], "hello")
+            server.sendall(frame({"reply": "hello", "data": {"version": 2, "session": "test"}}))
+            self.assertEqual(json.loads(reader.readline())["cmd"], "subscribe")
+            server.sendall(frame({"event": "state", "data": state()}))
+            server.sendall(frame({"event": "shutdown"}))
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        records = [json.loads(line) for line in trace.getvalue().splitlines()]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["revision"], 1)
+        self.assertGreaterEqual(records[0]["flushed_monotonic_ns"], records[0]["received_monotonic_ns"])
+        self.assertEqual(records[0]["text"], json.loads(output.getvalue())["text"])
 
     def test_version_mismatch_fails_before_subscribe(self):
         requests, output, errors = self.exchange([], hello={
