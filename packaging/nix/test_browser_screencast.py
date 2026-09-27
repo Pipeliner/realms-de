@@ -17,6 +17,14 @@ PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_page_uses_browser_default_colors(self):
+        page = (HERE / "browser_screencast.html").read_text()
+        self.assertNotRegex(page, r"#[0-9a-fA-F]{6}")
+        self.assertNotIn("background:", page)
+        self.assertNotIn("color:", page)
+        self.assertNotIn("style.background", page)
+        self.assertIn('status.textContent = "Realm browser delivered frame "', page)
+
     def setUp(self):
         path = HERE / "browser_screencast.py"
         self.assertTrue(path.exists(), "browser evidence collector is missing")

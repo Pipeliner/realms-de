@@ -2,7 +2,7 @@
 <meta charset="utf-8">
 <title>Realm browser capture acceptance</title>
 <style>
-body { font: 32px sans-serif; background: #15334b; color: white; padding: 40px; }
+body { font: 32px sans-serif; padding: 40px; }
 button { font: inherit; padding: 20px; }
 video { width: 480px; max-height: 270px; }
 </style>
@@ -40,7 +40,6 @@ document.getElementById("share").onclick = async () => {
       const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
       await post(`/frame-${index}.png`, blob);
       frames.push({mediaTime: metadata.mediaTime, width: canvas.width, height: canvas.height});
-      document.body.style.background = "#793747";
       status.textContent = "Realm browser delivered frame " + (index + 1);
     }
     stream.getTracks().forEach(track => track.stop());

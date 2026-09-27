@@ -633,6 +633,11 @@ that it works.
   a real browser exposes the chooser or that a physical machine captures a
   useful stream; A15 remains hardware-only.
 
+The capture fixture uses browser-default colors, with changing status text as
+its visible progress marker; it does not introduce a second hard-coded palette
+or require an exception to the palette guard. Actual frame delivery and media
+timestamps remain the acceptance evidence, not a custom background color.
+
 The accepted A13b browser refinement serves a controlled loopback page to the
 installed Firefox started by the normal browser binding. A real user-input
 event invokes `getDisplayMedia`; Firefox permissions and the real portal output
