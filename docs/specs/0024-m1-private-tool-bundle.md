@@ -112,7 +112,19 @@ temporary storage, generates `source.tar.gz`, updates only the bound commit,
 commit timestamp, source digest, and provenance digest fields, and runs the
 normal bundle-linkage validator over the complete candidate bundle.
 
-Successful CI publishes an artifact containing exactly the candidate
+An explicit `refresh_workspace_lock` workflow-dispatch opt-in is the controlled
+refresh path for workspace dependency edges only. It SHALL require unchanged
+external package records, unchanged workspace package identities and all other
+workspace fields, and permit only workspace dependency-list changes. Unsupported
+lockfile syntax fails closed. The exact committed lockfile replaces the candidate
+lockfile in CI, updating its digest and recording the refresh in provenance.
+Vendor, Cargo configuration and license-report bytes and their bound hashes
+SHALL remain unchanged and verified. The full candidate passes normal linkage
+validation before upload. This mode additionally uploads `Cargo.lock`; it does
+not vendor, build or install anything, and remains CI-only. Ordinary automatic
+source preparation retains its strict byte-for-byte lockfile restriction.
+
+Successful ordinary rebinding publishes an artifact containing exactly the candidate
 `source.tar.gz`, `bundle.toml`, and `provenance.md`. The workflow has read-only
 repository permission and SHALL NOT commit or push the result. A maintainer may
 place those exact three CI-produced files in the source change; the ordinary

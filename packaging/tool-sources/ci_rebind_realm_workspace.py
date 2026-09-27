@@ -94,6 +94,49 @@ def require_same_lockfile(retained: bytes, committed: bytes) -> None:
         )
 
 
+def require_workspace_edge_refresh(retained: bytes, committed: bytes) -> None:
+    """Accept only dependency-list changes in existing workspace packages."""
+    def records(raw: bytes):
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError("unsupported lockfile encoding") from error
+        parts = text.split("[[package]]\n")
+        if not re.fullmatch(r'(?:#[^\n]*\n|\s)*version = [34]\n\s*', parts[0]):
+            raise ValueError("unsupported lockfile header")
+        packages = {}
+        for part in parts[1:]:
+            match = re.fullmatch(
+                r'name = "([^"\n]+)"\nversion = "([^"\n]+)"\n'
+                r'(?:source = "([^"\n]+)"\n)?'
+                r'(?:checksum = "[0-9a-f]{64}"\n)?'
+                r'(?:dependencies = \[\n(?: "[^"\n]+",\n)*\]\n)?\s*', part
+            )
+            if match is None:
+                raise ValueError("unsupported lockfile package syntax")
+            key = match.group(1, 2, 3)
+            if key in packages:
+                raise ValueError("duplicate lockfile package")
+            # External records remain byte-exact. Only local dependency lists
+            # are removed for comparison; identities and other fields remain.
+            packages[key] = part if key[2] else re.sub(
+                r'dependencies = \[\n(?: "[^"\n]+",\n)*\]\n', '', part
+            )
+        if not packages:
+            raise ValueError("lockfile has no packages")
+        return parts[0], packages
+
+    if records(retained) != records(committed):
+        raise ValueError("workspace refresh requires unchanged external records and package identities")
+
+
+def require_payload_digest(manifest: str, field: str, payload: bytes) -> None:
+    """Verify retained closure bytes against their unique manifest binding."""
+    expected = re.findall(rf'^{field}_sha256 = "([0-9a-f]{{64}})"$', manifest, re.MULTILINE)
+    if len(expected) != 1 or hashlib.sha256(payload).hexdigest() != expected[0]:
+        raise ValueError(f"retained {field} digest mismatch")
+
+
 def _git(
     repository: Path, *arguments: str, stdout: int | None = None
 ) -> subprocess.CompletedProcess:
@@ -121,7 +164,8 @@ def _require_ci_output(path: Path) -> Path:
 
 
 def produce(
-    commit_value: str, output_value: Path, repository_value: Path
+    commit_value: str, output_value: Path, repository_value: Path,
+    *, refresh_workspace_lock: bool = False,
 ) -> dict[str, str]:
     """Create and record one candidate bundle without changing the checkout."""
     commit = normalize_commit(commit_value)
@@ -144,9 +188,24 @@ def produce(
     committed_lock = _git(
         repository, "show", f"{commit}:Cargo.lock", stdout=subprocess.PIPE
     ).stdout
-    require_same_lockfile((bundle / "Cargo.lock").read_bytes(), committed_lock)
+    retained_lock = (bundle / "Cargo.lock").read_bytes()
+    if refresh_workspace_lock:
+        # The retained authority must itself come from this exact commit.
+        _git(repository, "diff", "--exit-code", commit, "--", str(BUNDLE_RELATIVE))
+        manifest_text = (bundle / "bundle.toml").read_text(encoding="utf-8")
+        for field, filename in (
+            ("lockfile", "Cargo.lock"), ("vendor_archive", "vendor.tar.zst"),
+            ("cargo_config", "config.toml"), ("license_report", "licenses.tsv"),
+            ("source", "source.tar.gz"), ("source_provenance", "provenance.md"),
+        ):
+            require_payload_digest(manifest_text, field, (bundle / filename).read_bytes())
+        require_workspace_edge_refresh(retained_lock, committed_lock)
+    else:
+        require_same_lockfile(retained_lock, committed_lock)
 
     shutil.copytree(bundle, output)
+    if refresh_workspace_lock:
+        (output / "Cargo.lock").write_bytes(committed_lock)
     archive = output / "source.tar.gz"
     _git(
         repository,
@@ -187,6 +246,19 @@ def produce(
     )
     provenance_sha256 = hashlib.sha256(provenance.read_bytes()).hexdigest()
 
+    if refresh_workspace_lock:
+        provenance.write_text(
+            provenance.read_text(encoding="utf-8")
+            + "\n## CI workspace dependency-edge refresh\n\n"
+            + f"Commit `{commit}` refreshed workspace dependency lists only. "
+            + "External package records and retained vendor, configuration and "
+            + "license-report bytes are unchanged and digest-verified.\n"
+            + f"- Prior lock SHA-256: `{hashlib.sha256(retained_lock).hexdigest()}`\n"
+            + f"- Refreshed lock SHA-256: `{hashlib.sha256(committed_lock).hexdigest()}`\n",
+            encoding="utf-8",
+        )
+        provenance_sha256 = hashlib.sha256(provenance.read_bytes()).hexdigest()
+
     manifest = output / "bundle.toml"
     manifest.write_text(
         update_manifest(
@@ -198,6 +270,18 @@ def produce(
         ),
         encoding="utf-8",
     )
+    if refresh_workspace_lock:
+        manifest.write_text(_replace_unique(
+            manifest.read_text(encoding="utf-8"),
+            r'^lockfile_sha256 = "[0-9a-f]{64}"$',
+            f'lockfile_sha256 = "{hashlib.sha256(committed_lock).hexdigest()}"',
+            "lockfile digest",
+        ), encoding="utf-8")
+        for field, filename in (
+            ("vendor_archive", "vendor.tar.zst"), ("cargo_config", "config.toml"),
+            ("license_report", "licenses.tsv"),
+        ):
+            require_payload_digest(manifest_text, field, (output / filename).read_bytes())
     return {
         "commit": commit,
         "commit_timestamp": timestamp,
@@ -211,10 +295,12 @@ def main() -> None:
     parser.add_argument("--commit", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--repo", required=True, type=Path)
+    parser.add_argument("--refresh-workspace-lock", action="store_true")
     arguments = parser.parse_args()
     print(
         json.dumps(
-            produce(arguments.commit, arguments.output, arguments.repo),
+            produce(arguments.commit, arguments.output, arguments.repo,
+                    refresh_workspace_lock=arguments.refresh_workspace_lock),
             sort_keys=True,
         )
     )
