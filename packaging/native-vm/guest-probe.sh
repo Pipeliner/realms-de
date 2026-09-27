@@ -43,6 +43,13 @@ install_guest() {
                 /var/tmp/realm-native-packages.txt
             rpm -qf /usr/share/wayland-sessions/realm.desktop \
                 > /var/tmp/realm-native-session-owner.txt
+            test -x /usr/bin/dbus-update-activation-environment || \
+                fail 'Fedora package omitted the D-Bus activation helper'
+            rpm -qf --queryformat '%{NAME}\n' \
+                /usr/bin/dbus-update-activation-environment \
+                > /var/tmp/realm-native-activation-owner.txt
+            grep -Fxq dbus-tools /var/tmp/realm-native-activation-owner.txt || \
+                fail 'unexpected Fedora D-Bus activation helper owner'
             ;;
         *)
             fail "unknown native VM target: $target"
@@ -288,6 +295,10 @@ probe_guest() {
     cp /var/tmp/realm-native-packages.txt "$evidence/packages.txt"
     cp /var/tmp/realm-native-portal-runtime.txt "$evidence/portal-package-runtime.txt"
     cp /var/tmp/realm-native-session-owner.txt "$evidence/session-entry-owner.txt"
+    if [[ "$target" == fedora-44-x86_64 ]]; then
+        cp /var/tmp/realm-native-activation-owner.txt \
+            "$evidence/dbus-activation-owner.txt"
+    fi
     cp /usr/share/wayland-sessions/realm.desktop "$evidence/realm.desktop"
     cp /etc/sddm.conf.d/realm-native-vm.conf "$evidence/sddm-autologin.conf"
     systemctl status display-manager.service --no-pager \

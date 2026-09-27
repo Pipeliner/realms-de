@@ -36,13 +36,12 @@ class NativeVmInputTests(unittest.TestCase):
             for check_id in self.module.CHECK_IDS
         ]
         by_id = {check["id"]: check for check in checks}
-        for check_id in {"units/idle-lock", "portal/filechooser"}:
+        for check_id in {"units/idle-lock", "portal/filechooser", "tools/floors"}:
             by_id[check_id]["status"] = "skip"
         by_id["tools/floors"].update(
-            status="warn",
             summary=(
-                "yazi: not found, btop: btop version: 1.3.0, "
-                "starship: not found; install the missing or unparseable tools"
+                "yazi: Yazi 25.4.8, btop: btop version: 1.3.0, "
+                "starship: starship 1.23.0; numeric floors unresolved"
             ),
         )
         return checks
@@ -210,12 +209,16 @@ exit 97
         with self.assertRaisesRegex(ValueError, "unknown status"):
             self.module.validate_doctor(report)
 
-    def test_doctor_accepts_only_the_declared_native_tool_warning(self):
+    def test_doctor_requires_observed_native_private_tools_without_accepted_floors(self):
         checks = self.native_doctor_checks()
         report = {"checks": checks}
         by_id = {check["id"]: check for check in checks}
 
-        by_id["tools/floors"]["status"] = "skip"
+        by_id["tools/floors"]["status"] = "warn"
+        by_id["tools/floors"]["summary"] = (
+            "yazi: not found, btop: btop version: 1.3.0, "
+            "starship: not found; install the missing or unparseable tools"
+        )
         with self.assertRaisesRegex(ValueError, "doctor skip set mismatch"):
             self.module.validate_doctor(report)
 
@@ -223,8 +226,8 @@ exit 97
         report = {"checks": checks}
         by_id = {check["id"]: check for check in checks}
         by_id["tools/floors"]["summary"] = (
-            "yazi: not found, btop: not found, starship: not found; "
-            "install the missing or unparseable tools"
+            "yazi: Yazi 25.4.8, btop: not found, starship: starship 1.23.0; "
+            "numeric floors unresolved"
         )
         with self.assertRaisesRegex(ValueError, "native tool evidence"):
             self.module.validate_doctor(report)
@@ -233,8 +236,8 @@ exit 97
         report = {"checks": checks}
         by_id = {check["id"]: check for check in checks}
         by_id["tools/floors"]["summary"] = (
-            "yazi: yazi 26.8.15, btop: btop version: 1.3.0, "
-            "starship: not found; install the missing or unparseable tools"
+            "yazi: Yazi 25.4.8, btop: btop version: 1.3.0, "
+            "starship: unparseable version; numeric floors unresolved"
         )
         with self.assertRaisesRegex(ValueError, "native tool evidence"):
             self.module.validate_doctor(report)

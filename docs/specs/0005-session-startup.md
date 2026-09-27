@@ -223,6 +223,12 @@ services inherit. A desktop that does only the first still has hanging portals.
 `dbus-update-activation-environment --systemd` also forwards to the systemd user
 manager, so on a healthy box the two calls overlap. That redundancy is
 deliberate: either binary can be absent, and the failure modes are different.
+The Fedora 44 native package therefore requires [`dbus-tools`](https://packages.fedoraproject.org/pkgs/dbus/dbus-tools/fedora-44.html),
+the published owner of `/usr/bin/dbus-update-activation-environment`;
+[`dbus-common`](https://packages.fedoraproject.org/pkgs/dbus/dbus-common/fedora-44.html)
+alone supplies bus configuration but not that executable. A fresh installed
+session must not report `NO-DBUS-ACTIVATION` because its package omitted the
+tool.
 On a box with no systemd user manager the call must be made **without**
 `--systemd`, or it fails trying to reach `org.freedesktop.systemd1` and masks
 whether the D-Bus half succeeded.

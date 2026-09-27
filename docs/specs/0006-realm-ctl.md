@@ -5,6 +5,12 @@
 > MVP requires actionable session/backend, executable, theme and portal checks.
 > Keep existing truthful bounded diagnostics and JSON compatibility; actual
 > application behavior is verified by the shared launch acceptance journey.
+> On native installed packages, the required Realm-owned Yazi and Starship
+> probes use their private `/usr/lib/realm/bin` executables even when doctor is
+> launched by a user unit whose PATH intentionally omits that directory. A
+> distro executable on PATH cannot hide a missing private tool. Nix keeps its
+> package-provided tool lookup. Observed versions remain an unresolved-floor
+> `skip`, not an invented compatibility `ok`; actual absence remains `warn`.
 
 > **MVP scope override (Accepted 2026-09-27):** [ADR 0023](../adr/0023-reuse-first-session-theme-mvp.md)
 > and [SPEC 0030](0030-reuse-first-session-theme-mvp.md) supersede conflicting

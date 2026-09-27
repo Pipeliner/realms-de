@@ -104,6 +104,9 @@ bounded results and remedies. File chooser/screenshare success is proved by
 the journey, not inferred from service presence. Existing cheap diagnostics and
 JSON compatibility remain; adding every historical failure-register row is not
 a launch gate. This supersedes that completeness requirement in SPEC 0006.
+Native installed-session doctor evidence must resolve Realm's private Yazi and
+Starship paths independently of the caller's PATH; the intentionally unimported
+private PATH is not evidence that the packaged executables are absent.
 
 Reconcile old issues once against actual source and named tests/CI evidence.
 Close only demonstrated acceptance, splitting partial issues into remaining
