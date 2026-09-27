@@ -53,7 +53,8 @@ def timed_roundtrip(start, observe, snapshot, key, password, suppressed, gone,
         key('esc')
         restored(False)
         result['launcher_binding_restored'] = True
-        assert len(observe()['events']) >= 2, 'missing activity restore no-op'
+        assert any(event > baseline + result['lock_elapsed_seconds']
+                   for event in observe()['events']), 'missing activity restore no-op'
         result['resume_backlight_noop'] = True
         screenshot('idle-unlocked')
     finally:
@@ -89,12 +90,15 @@ def timed_roundtrip(start, observe, snapshot, key, password, suppressed, gone,
 def run(guest, user, key, password, snapshot, suppressed, gone, screenshot, restored, evidence):
     identity = {}
     baseline = None
+    uid = guest('id -u alice').strip()
+    assert uid.isdigit(), uid
 
     def systemctl(arguments):
         return guest(user + ' timeout 30 systemctl --user ' + arguments).strip()
 
     def journal():
-        return guest('sudo journalctl -b -n 200 --no-pager -o json _SYSTEMD_USER_UNIT=realm-idle.service')
+        return guest('sudo journalctl -b -n 200 --no-pager -o json '
+                     f'SYSLOG_IDENTIFIER=realm-idle _UID={uid}')
 
     def start():
         nonlocal baseline
@@ -125,7 +129,7 @@ print(json.dumps({'argv': p.joinpath('cmdline').read_bytes().decode().rstrip('\\
     def observe():
         events = [int(entry['__MONOTONIC_TIMESTAMP']) / 1_000_000
                   for entry in map(json.loads, filter(None, journal().splitlines()))
-                  if 'backlight adjustment unavailable' in entry.get('MESSAGE', '')
+                  if entry.get('MESSAGE') == 'realm: backlight adjustment unavailable; idle locking remains enabled'
                   and int(entry['__MONOTONIC_TIMESTAMP']) / 1_000_000 >= baseline]
         return {'events': sorted(events), 'lock': snapshot(),
                 'lock_time': int(systemctl('show realm-lock.service -p ActiveEnterTimestampMonotonic --value')) / 1_000_000}

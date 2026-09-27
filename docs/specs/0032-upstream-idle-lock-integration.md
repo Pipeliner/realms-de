@@ -122,6 +122,17 @@ uniform frame before password input, reject a wrong password, suppress the
 launcher, accept the correct password and restore the launcher binding.
 Activity must produce the pending
 restore no-op. Stopping idle must leave its captured process identity gone.
+The native no-backlight journal probe SHALL select the current boot's
+`realm-idle` stdout by its stable journal identifier and the fixture user's
+actual UID (never an assumed numeric UID),
+then require event timestamps at or after the guest monotonic baseline.
+It SHALL NOT require `_SYSTEMD_USER_UNIT` on each short-lived helper log
+record: journald may retain the wrapper's no-op message without that field.
+Only the exact `realm-backlight` unavailable message counts as a callback;
+adjacent `brightnessctl` device-error output is diagnostic, not a second
+callback. Dim and restore must be distinct events, separated by the actual
+lock activation, not merely two log lines from one invocation. Keep the
+299–330/599–630-second bounds and wrong-password/restore checks unchanged.
 Retain bounded journal and partial structured results on failure. These VMs
 prove absence handling, not brightness restoration on physical backlights.
 Final journal collection and persistence are required evidence: either failure

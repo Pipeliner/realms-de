@@ -10,7 +10,7 @@ import json
 class IdleTests(unittest.TestCase):
     def fixture(self, dim=300, lock=600, wrong_unlock=False, correct_unlock=True,
                 resume=True, stop_error=False, missing_lock=False, restoration_fails=False,
-                journal_error=False, journal_write_error=False):
+                journal_error=False, journal_write_error=False, duplicate_dim=False):
         path = Path(__file__).with_name('idle_roundtrip.py')
         self.assertTrue(path.exists(), 'native real idle acceptance probe is missing')
         spec = importlib.util.spec_from_file_location('idle_roundtrip', path)
@@ -23,6 +23,8 @@ class IdleTests(unittest.TestCase):
             return locked if active else {'state': 'inactive', 'processes': {}}
         def observe():
             events = [dim] if state['now'] >= dim else []
+            if events and duplicate_dim:
+                events.append(dim + 0.001)
             if state['activity'] and resume:
                 events.append(state['now'])
             return {'events': events, 'lock_time': lock, 'lock': snapshot()}
@@ -88,6 +90,10 @@ class IdleTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'stop failed'):
             self.fixture(stop_error=True)
 
+    def test_two_lines_from_one_dim_callback_cannot_prove_activity_restore(self):
+        with self.assertRaisesRegex(AssertionError, 'missing activity restore no-op'):
+            self.fixture(resume=False, duplicate_dim=True)
+
     def test_cleanup_cannot_mask_original_failure(self):
         with self.assertRaises(AssertionError):
             self.fixture(dim=30, stop_error=True)
@@ -114,10 +120,32 @@ class IdleTests(unittest.TestCase):
                 return '22'
             if 'time.monotonic' in command:
                 return '100'
+            if command == 'id -u alice':
+                return '1001'
             if 'journalctl' in command:
-                return '\n'.join(json.dumps({'__MONOTONIC_TIMESTAMP': str(t * 1000000),
-                    'MESSAGE': 'realm: backlight adjustment unavailable; idle locking remains enabled'})
-                    for t in (90, 400))
+                self.assertIn(' -b ', command)
+                self.assertIn('_UID=1001', command)
+                entries = [
+                    {'__MONOTONIC_TIMESTAMP': str(t * 1000000),
+                     'MESSAGE': message,
+                     'SYSLOG_IDENTIFIER': 'realm-idle', '_UID': '1001',
+                     '_BOOT_ID': 'fixture-boot',
+                     **({'_SYSTEMD_USER_UNIT': 'realm-idle.service'} if child else {})}
+                    for t in (90, 400)
+                    for child, message in (
+                        (True, "Failed to read any devices of class 'backlight'."),
+                        (False, 'realm: backlight adjustment unavailable; idle locking remains enabled'),
+                    )
+                ]
+                entries.append({
+                    '__MONOTONIC_TIMESTAMP': '410000000',
+                    'MESSAGE': 'realm: backlight adjustment unavailable; unrelated diagnostic',
+                    'SYSLOG_IDENTIFIER': 'realm-idle', '_UID': '1001',
+                    '_BOOT_ID': 'fixture-boot',
+                })
+                if '_SYSTEMD_USER_UNIT=' in command:
+                    entries = [entry for entry in entries if '_SYSTEMD_USER_UNIT' in entry]
+                return '\n'.join(json.dumps(entry) for entry in entries)
             if '-p ActiveEnterTimestampMonotonic' in command:
                 return '700000000'
             if '-p ActiveState' in command:
@@ -149,6 +177,8 @@ class IdleTests(unittest.TestCase):
         self.assertEqual(identities, [{'22': {'start_time': 44}}])
         self.assertIn('USER timeout 30 systemctl --user start realm-idle.service', commands)
         self.assertIn('USER timeout 30 systemctl --user stop realm-idle.service', commands)
+        self.assertIn('id -u alice', commands)
+        self.assertIn('sudo journalctl -b -n 200 --no-pager -o json SYSLOG_IDENTIFIER=realm-idle _UID=1001', commands)
 
 
 if __name__ == '__main__':
