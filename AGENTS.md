@@ -15,6 +15,13 @@ the same change whenever a contract changes.
 
 ## Repository operations
 
+- Track time spent on each specific task from 2026-09-27 onward in
+  `docs/task-time.csv`. Record UTC start/end, issue or task ID, actor, activity
+  category and outcome at task switches and handoff. Separate active work from
+  CI/external waiting; do not count overlapping waits as active work or sum
+  parallel agent time as elapsed delivery time. Do not fabricate historical
+  durations. Follow `docs/task-time.md`; keep bookkeeping lightweight.
+
 - For the MVP launch, follow `docs/specs/0031-mvp-launch-delivery.md`: three
   bounded delivery lanes, one writer for shared launch plumbing, draft PRs for
   development and full CI before integration. Batch docs/queue updates; defer

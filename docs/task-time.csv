@@ -1,0 +1,2 @@
+task,actor,category,start_utc,end_utc,outcome
+mvp-assessment-2026-09-27,codex-root,assessment,2026-09-27T11:42:36Z,2026-09-27T11:44:36Z,120 seconds measured: audited 75 open issues and 11 PRs; documented all 48 MVP candidates and 27 deferrals; excludes initial untimed discovery and publication
