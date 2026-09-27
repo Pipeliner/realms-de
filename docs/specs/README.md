@@ -6,6 +6,10 @@ come from this directory before the code does.
 
 ## What belongs where
 
+**Current MVP scope:** [SPEC 0030](0030-reuse-first-session-theme-mvp.md)
+governs session-scoped theme selection and the Waybar comparison. Its authority
+section identifies the historical clauses it supersedes; implementation is pending.
+
 | Artefact | Answers | Lives in |
 |---|---|---|
 | **Spec** | *What must this component do?* | `docs/specs/NNNN-name.md` |

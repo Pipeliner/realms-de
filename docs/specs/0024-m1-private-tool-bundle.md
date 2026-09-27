@@ -213,6 +213,14 @@ with a shim. The CI step that invokes the network-isolated native fixture SHALL
 have a bounded job-step timeout and SHALL fail closed when the fixture exceeds
 it; an indefinitely hung isolation check is not verification evidence.
 
+Native fixture diagnostics SHALL survive its scratch-directory cleanup. CI
+supplies a separate evidence directory for each case's driver output and command
+sentinel log, and attempts upload even on failure or timeout. Only these text
+logs are uploaded, not extracted package trees or source bundles. Each case
+announces its start in the live job log. Missing logs after a forced runner loss
+remain missing evidence, not a passing fixture. The timeout stays bounded;
+retaining diagnostics does not waive it or prove why the build exceeded it.
+
 The Debian recipe's production resolver SHALL continue to select its complete
 versioned Cargo/rustc pair below `/usr/lib/rust-1.[89][0-9]/bin`.  The native
 offline fixture MAY set an explicit resolver-root input that contains the same

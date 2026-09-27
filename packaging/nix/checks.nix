@@ -26,6 +26,8 @@
           ${src + "/packaging/session/test-runtime-dir-mode.sh"} \
           ${src + "/packaging/session/test-portal-warmup.sh"}
         shellcheck --shell=sh \
+          ${src + "/packaging/session/realm-idle"} \
+          ${src + "/packaging/session/realm-backlight"} \
           ${src + "/packaging/session/realm-browser"} \
           ${src + "/packaging/check-font-policy.sh"} \
           ${src + "/packaging/font-policy-test.sh"} \
@@ -417,6 +419,11 @@ EOF
                   machine.log(f"{label} unavailable: {error}")
 
       machine.wait_for_unit("multi-user.target", timeout=STARTUP_TIMEOUT)
+      # Dormant package/PAM proof only; password/suspend verification follows.
+      machine.succeed("test -x ${realm}/bin/realm-idle -a -x ${realm}/bin/realm-backlight")
+      machine.succeed("test -f /etc/pam.d/swaylock")
+      machine.succeed("grep -F 'ExecStart=${pkgs.swaylock}/bin/swaylock -f' ${realm}/lib/systemd/user/realm-lock.service")
+      machine.succeed("test ! -e ${realm}/lib/systemd/user/realm-session.target.wants/realm-idle.service")
 
       # Task 3's descriptor admission needs a positive proof that is impossible
       # on the host test filesystem. The Nix store itself is group-writable in

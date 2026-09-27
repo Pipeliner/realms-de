@@ -24,6 +24,7 @@ while IFS=$'\t' read -r name filename url digest; do
     destination="$cache/archives/$filename"
     echo "acquire: $name $url"
     curl --fail --location --proto '=https' --tlsv1.2 \
+        --retry 3 --connect-timeout 20 --max-time 120 --retry-max-time 300 \
         --output "$destination.part" "$url"
     printf '%s  %s\n' "$digest" "$destination.part" | sha256sum --check --status -
     mv "$destination.part" "$destination"

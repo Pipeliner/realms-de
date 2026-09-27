@@ -1,5 +1,12 @@
 # SPEC 0013 — Truthful fresh desktop Exec launch
 
+> **MVP scope override (Accepted 2026-09-27):** [ADR 0023](../adr/0023-reuse-first-session-theme-mvp.md)
+> and [SPEC 0030](0030-reuse-first-session-theme-mvp.md) supersede conflicting
+> per-launch theme ownership and mandatory custom-renderer clauses below.
+> Themes are selected once at login; apply prepares the next login. Historical
+> generation/lease/fresh-Exec obligations are shelved, not new MVP gates.
+> Unrelated behavior remains in force; runtime migration is not yet verified.
+
 - **Status:** Accepted (2026-08-30) — implementation proceeds red-first through
   its fixtures
 - **Milestone:** M2

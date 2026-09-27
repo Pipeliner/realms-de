@@ -74,6 +74,9 @@ Requires:       river >= 0.4.0
 # units never start.
 Requires:       dbus-common
 Requires:       systemd
+Requires:       swayidle
+Requires:       swaylock >= 1.7
+Requires:       brightnessctl
 Requires:       /usr/bin/xdg-settings
 Requires:       /usr/bin/gtk-launch
 # A portal backend, or "Open File" silently does nothing in Firefox
@@ -153,6 +156,10 @@ CARGO_HOME=%{starship_cargo_home} CARGO_TARGET_DIR=%{starship_target_dir} \
 cd %{realm_source}
 install -Dpm0755 packaging/session/realm-session %{buildroot}%{_bindir}/realm-session
 install -Dpm0755 packaging/session/realm-browser %{buildroot}%{_bindir}/realm-browser
+install -Dpm0755 packaging/session/realm-idle %{buildroot}%{_bindir}/realm-idle
+install -Dpm0755 packaging/session/realm-backlight %{buildroot}%{_bindir}/realm-backlight
+install -Dpm0644 packaging/systemd/realm-idle.service %{buildroot}%{_userunitdir}/realm-idle.service
+install -Dpm0644 packaging/systemd/realm-lock.service %{buildroot}%{_userunitdir}/realm-lock.service
 install -Dpm0644 packaging/session/realm.desktop %{buildroot}%{_datadir}/wayland-sessions/realm.desktop
 install -Dpm0644 packaging/systemd/realm-session.target %{buildroot}%{_userunitdir}/realm-session.target
 install -Dpm0644 packaging/systemd/realm-wm.service %{buildroot}%{_userunitdir}/realm-wm.service
@@ -219,6 +226,10 @@ python3 %{tool_runtime} \
 # during %%install.
 %files -f %{_builddir}/realm-binaries.list
 %{_bindir}/realm-browser
+%{_bindir}/realm-idle
+%{_bindir}/realm-backlight
+%{_userunitdir}/realm-idle.service
+%{_userunitdir}/realm-lock.service
 %license .realm-workspace/source/LICENSE-MIT .realm-workspace/source/LICENSE-APACHE
 %doc packaging/package-docs/INSTALL.md .realm-workspace/source/docs/PITFALLS.md
 %{_datadir}/wayland-sessions/realm.desktop

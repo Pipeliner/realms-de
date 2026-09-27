@@ -1,0 +1,13 @@
+# Upstream readiness: swaylock -f forks only after the compositor locks.
+# Do not enable a wants link: the idle hook starts this service synchronously.
+[Unit]
+Description=Realm session lock
+PartOf=realm-session.target graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/swaylock -f -C /dev/null
+Restart=no
+Slice=app.slice
+TimeoutStopSec=5

@@ -1,5 +1,12 @@
 # realm — architecture
 
+> **Accepted correction, 2026-09-27:** [ADR 0023](adr/0023-reuse-first-session-theme-mvp.md)
+> and [SPEC 0030](specs/0030-reuse-first-session-theme-mvp.md) govern MVP theme
+> selection and bar choice. Themes bind at login, not each launch; Waybar is
+> evaluated rather than excluded. The custom compositor and native-client
+> replacements below are shelved options, not promised phases. Historical
+> implementation descriptions do not override this correction.
+
 > **Status: ratified 2026-08-28.** This document records the shape we are building
 > towards and *why*. It is meant to be argued with. Every decision here has an
 > ADR in [`docs/adr/`](adr/) with its alternatives and its reversal cost; a
@@ -86,7 +93,7 @@ counts.
 | Crate | Kind | Owns | Lands in |
 |---|---|---|---|
 | `realm-core` | lib | Ledger, layout projection, palette, keymap, portable IPC wire values/codec/version, glyph inventory; no path or socket operations | **M0 — done** |
-| `realm-theme` | lib | `palette.toml` → normalized outputs in one sealed immutable generation. Serial rendering, validation, future-launch pointer publication, and read-only generation diff; no pointer-switch reload | M1 |
+| `realm-theme` | lib | Palette validation and coherent outputs prepared for next login; session selection under SPEC 0030; reuse existing templates | M1 |
 | `realm-control` | Linux-only lib | Shared retained endpoint capabilities; later #41 client/server socket transport. Fails non-Linux compilation explicitly | M2 |
 | `realm-ctl` | bin (`realmctl`) | `realmctl theme/orbit/ledger/doctor/run`. The scriptable surface; uses `realm-control`, never `realm-session` | M1–M2 |
 | `realm-session` | bin (`realm-wm`) | Holds `RealmState`, drives a `WmBackend`, serves the control socket through `realm-control`, launches clients. Under river it *is* the window manager, hence the binary name | M2 |
@@ -112,7 +119,7 @@ Each row links to its ADR. "Reversal" is the honest cost of changing our mind.
 | [0003](adr/0003-session-daemon-owns-state.md) | A session daemon owns state; clients subscribe | Bar/launcher stay dumb; swapping the compositor changes one file | Low |
 | [0004](adr/0004-ndjson-control-socket.md) | Newline-delimited JSON over a unix socket | Scriptable with `socat`; partial frames can't be misread | Low |
 | [0005](adr/0005-palette-toml-single-source.md) | One `palette.toml` → generated themes | No colour is written down twice; contrast is derived, not filtered. Its mutable activation clauses are superseded by 0017 | Low |
-| [0017](adr/0017-immutable-theme-activation-generations.md) | Publish sealed immutable theme generations | Launches pin a validated digest-bound tree; pointer commits affect future launches only and never reload | Medium |
+| [0023](adr/0023-reuse-first-session-theme-mvp.md) | Session-scoped theme selection; reuse-first bar | Supersedes 0017/0018 MVP launch ownership and 0008 renderer mandate; migration pending | Medium |
 | [0006](adr/0006-oklab-contrast-not-filters.md) | Perceptual contrast derivation, gamut-capped | A `contrast()` filter costs a fullscreen pass and rotates hues | Low |
 | [0007](adr/0007-reuse-yazi-btop-starship.md) | Reuse yazi / btop / zsh+starship rather than rewrite | charon and horus are ~90% theme + keymap. Rewrites cost years and lose features | Low |
 | [0008](adr/0008-layer-shell-rendering-stack.md) | `smithay-client-toolkit` + `tiny-skia` + `cosmic-text` | Pure Rust, no GPU context for a 32px bar, real font fallback | Medium |
@@ -184,7 +191,7 @@ Neither word is allowed to stay an adjective. Both are tests.
 | Bar idle CPU | ~0% | The bar owns no timer and redraws only on a state change |
 | Sampler wakeups | 1 Hz, one thread, in `realm-session` | cpu, mem, gpu and net throughput are rates over counters with no kernel event behind them. One shared sampler off the input path is the single documented exception to the no-timers rule; the clock ticks to the next minute boundary, not every second |
 | Cold session start → usable | < 900 ms | No GPU context for the bar, no icon-cache scan, no thumbnailer |
-| `realmctl theme apply` | < 150 ms | Templates rendered serially, then one complete generation is validated, sealed, fsynced, and selected for future launches; no mutable-target shortcut or reload |
+| `realmctl theme apply` | < 150 ms target to measure | Validate/render complete next-login selection; no current-session retheming or per-launch selection (SPEC 0030) |
 
 **Robust — the failure modes we refuse to ship** (see
 [docs/PITFALLS.md](PITFALLS.md) for the full register):
@@ -193,9 +200,9 @@ Neither word is allowed to stay an adjective. Both are tests.
 - Tofu glyphs on a machine without Nerd Fonts — *closed by the glyph probe.*
 - Portals that hang because `WAYLAND_DISPLAY` never reached the D-Bus
   activation environment — *closed by the session contract (ADR 0011).*
-- A partial or mismatched theme becoming selectable — *closed by sealed
-  manifest validation and an atomic `current` commit.* Existing processes remain
-  pinned; the pointer switch changes future launches only.
+- A partial or mismatched theme becoming selectable — complete-set validation
+  and publication remain required. SPEC 0030 changes the selection boundary to
+  login; migration and its evidence are pending, not proved by this document.
 - A crashed bar taking the session with it — *clients are restartable units; the
   session daemon outlives them.*
 - An unreadable palette after a contrast tweak — *closed by `palette lint` in CI.*

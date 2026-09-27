@@ -89,6 +89,8 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # SPEC 0032: upstream authentication, but no idle wantedBy until VM proof.
+    security.pam.services.swaylock = { };
     environment.systemPackages = [
       cfg.package
       cfg.compositor

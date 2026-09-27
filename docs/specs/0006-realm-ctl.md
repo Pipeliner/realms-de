@@ -1,5 +1,18 @@
 # SPEC 0006 — realmctl
 
+> **Accepted launch cut line (2026-09-27):** [SPEC 0031](0031-mvp-launch-delivery.md)
+> supersedes the obligation to add a doctor check for every historical failure.
+> MVP requires actionable session/backend, executable, theme and portal checks.
+> Keep existing truthful bounded diagnostics and JSON compatibility; actual
+> application behavior is verified by the shared launch acceptance journey.
+
+> **MVP scope override (Accepted 2026-09-27):** [ADR 0023](../adr/0023-reuse-first-session-theme-mvp.md)
+> and [SPEC 0030](0030-reuse-first-session-theme-mvp.md) supersede conflicting
+> per-launch theme ownership and mandatory custom-renderer clauses below.
+> Themes are selected once at login; apply prepares the next login. Historical
+> generation/lease/fresh-Exec obligations are shelved, not new MVP gates.
+> Unrelated behavior remains in force; runtime migration is not yet verified.
+
 - **Status:** Accepted (2026-08-26; generation contract reconciled by #159;
   endpoint capability correction 2026-09-10; control-transport correction
   2026-09-11; doctor observability and owned-health corrections 2026-09-13) —

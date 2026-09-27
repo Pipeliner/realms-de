@@ -1,5 +1,10 @@
 # Interface contracts
 
+> **Accepted MVP override (2026-09-27):** [SPEC 0030](specs/0030-reuse-first-session-theme-mvp.md)
+> supersedes per-launch theme ownership/selection obligations in this document.
+> Theme apply prepares next-login configuration. Historical activation interfaces
+> remain code evidence, not required new APIs. Window/control interfaces remain.
+
 > **Status: Accepted for sections 1 and 4 (2026-09-11; MVP fail-closed
 > correction 2026-09-12); provisional elsewhere.** These are the seams named in
 > [ARCHITECTURE.md](ARCHITECTURE.md).

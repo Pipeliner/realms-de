@@ -129,6 +129,12 @@ All dependencies enabled in that libinput build are satisfied by Noble:
    empty cache, downloads every archive to its canonical manifest filename,
    and verifies its SHA-256 before it may be used. It extracts the selected Zig
    binary only after its checksum passes.
+   HTTPS archive transfers use curl's transient-error retry policy (including
+   HTTP 504), with at most three retries, a 20-second connection timeout,
+   a 120-second per-attempt timeout, and a 300-second retry-start window.
+   A final attempt can extend that window by at most 120 seconds. Exhaustion
+   fails acquisition; checksum failure remains fatal and never retries with
+   another URL or version. Partial downloads are never published as archives.
 2. Zig 0.16 `fetch` requires a project root and writes unpacked packages to its
    project-local `zig-pkg/` directory. Acquisition therefore creates one
    dedicated cache-local fetch root containing only a minimal `build.zig`, runs
