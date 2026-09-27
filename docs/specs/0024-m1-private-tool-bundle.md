@@ -119,6 +119,17 @@ place those exact three CI-produced files in the source change; the ordinary
 freshness and linkage checks remain authoritative before merge. An uploaded
 candidate alone is not package-build, install, or runtime evidence.
 
+Ordinary CI source-kit verification and Realm package builds SHALL automatically
+prepare a validated source binding from their checked-out HEAD before consuming
+the retained archive. This includes pull-request merge commits. Preparation
+uses the same CI-only producer and unchanged-lockfile restriction, then copies
+only the three validated binding files into the job checkout. The vendor
+closure remains unchanged. Preparation failure blocks the consumer. Each
+consumer retains those three binding files as a CI artifact for provenance.
+No follow-up repository commit or manual workflow dispatch is required for
+ordinary source, documentation, policy, or workflow edits. The freshness check
+continues to compare the entire retained input scope; it is not weakened.
+
 The Realm-workspace source-replacement configuration is a separately retained
 build input: native recipes SHALL stage it at the unpacked source root before
 Cargo runs. The linkage fixture SHALL verify that configuration, the retained
