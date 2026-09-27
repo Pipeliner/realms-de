@@ -590,10 +590,17 @@ start that service. The NixOS module enables it explicitly. The installed VM
 uses the production interactive output chooser, driven through real VM input;
 it does not bypass output selection with xdpw's `none` chooser.
 
-The VM pointer driver must parse a numeric relative mouse ID from QEMU's actual
-`info mice` reply before issuing selection/movement commands. Missing or
-malformed relative-device IDs fail explicitly with the retained reply; they
-must not bypass the interactive chooser or disable driver type checking.
+The VM pointer driver SHALL query QEMU's mouse inventory through the pinned
+test driver's QMP connection, require exactly one active absolute-capable
+pointer, and send 0–0x7fff absolute X/Y midpoint events followed by real
+left-button down/up events through QMP. Every QMP result must be checked; a
+missing or non-absolute active device, failed command, or unchanged chooser
+fails with the inventory, selected pointer, target coordinates, and command
+results in diagnostics. Retain a framebuffer after movement. HMP's relative
+`mouse_move` is not an absolute coordinate set: forcing its PS/2 device while
+the guest has an active absolute vmmouse and sending one huge negative delta
+does not establish a known target. The input path must not bypass the
+interactive chooser or disable driver type checking.
 
 ### Native FileChooser and direct ScreenCast acceptance
 

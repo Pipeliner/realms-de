@@ -664,26 +664,43 @@ EOF
       def select_portal_output(screenshot):
           machine.wait_until_succeeds("pgrep -u alice -x slurp", timeout=STATE_TIMEOUT)
           machine.screenshot(screenshot)
-          # HMP mouse_move is relative for a relative mouse, not coordinates.
-          # Select that device explicitly, clamp to the upper-left edge, then
-          # move into the single 1920x1080 output before the real button event.
-          mice = machine.send_monitor_command("info mice")
-          machine.log(f"portal pointer inventory: {mice}")
-          relative = [line for line in mice.splitlines() if "Mouse #" in line and "(absolute)" not in line]
-          assert relative, mice
-          mouse_match = re.search(r"Mouse #(\d+)", relative[0])
-          assert mouse_match is not None, mice
-          mouse_id = mouse_match.group(1)
-          machine.log(f"portal pointer selected: Mouse #{mouse_id}")
-          machine.send_monitor_command(f"mouse_set {mouse_id}")
-          machine.send_monitor_command("mouse_move -32767 -32767")
-          machine.send_monitor_command("mouse_move 960 540")
+          qmp = machine.qmp_client
+          assert qmp is not None, "portal pointer QMP connection is unavailable"
+
+          def pointer_command(command, arguments=None):
+              try:
+                  result = qmp.send(command, arguments) if arguments is not None else qmp.send(command)
+              except Exception as error:
+                  machine.log(f"portal pointer QMP {command} {arguments!r} raised: {error}")
+                  raise
+              machine.log(f"portal pointer QMP {command} {arguments!r} result: {result!r}")
+              assert isinstance(result, dict) and "return" in result, (
+                  f"portal pointer QMP {command} failed: {result!r}"
+              )
+              return result["return"]
+
+          mice = pointer_command("query-mice")
+          machine.log(f"portal pointer inventory: {mice!r}")
+          assert isinstance(mice, list), f"portal pointer inventory is malformed: {mice!r}"
+          active = [mouse for mouse in mice if isinstance(mouse, dict) and mouse.get("current") is True]
+          assert len(active) == 1 and active[0].get("absolute") is True, (
+              f"portal requires one active absolute pointer: {mice!r}"
+          )
+          machine.log(f"portal pointer selected: {active[0]!r}; target QMP absolute x=16384 y=16384")
+          pointer_command("input-send-event", {"events": [
+              {"type": "abs", "data": {"axis": "x", "value": 16384}},
+              {"type": "abs", "data": {"axis": "y", "value": 16384}},
+          ]})
           machine.screenshot(screenshot + "-pointer")
           deadline = time.monotonic() + STATE_TIMEOUT.total_seconds()
           while machine.execute("pgrep -u alice -x slurp", timeout=DIAGNOSTIC_TIMEOUT)[0] == 0:
               assert time.monotonic() < deadline, "portal output selection timed out"
-              machine.send_monitor_command("mouse_button 1")
-              machine.send_monitor_command("mouse_button 0")
+              pointer_command("input-send-event", {"events": [
+                  {"type": "btn", "data": {"button": "left", "down": True}},
+              ]})
+              pointer_command("input-send-event", {"events": [
+                  {"type": "btn", "data": {"button": "left", "down": False}},
+              ]})
               time.sleep(0.5)
 
       def log_portal_diagnostics():

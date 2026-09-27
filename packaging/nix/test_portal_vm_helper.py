@@ -22,39 +22,75 @@ from portal_vm_helper import (
 
 
 class PortalVmHelperContract(unittest.TestCase):
-    def picker(self, reply):
+    def picker(self, mice, results=None):
         source = Path(__file__).with_name('checks.nix').read_text()
         body = source.split('      def select_portal_output(screenshot):', 1)[1].split('      def log_portal_diagnostics():', 1)[0]
         function = textwrap.dedent('      def select_portal_output(screenshot):' + body)
         machine = mock.Mock()
-        machine.send_monitor_command.return_value = reply
-        machine.execute.return_value = (1, '')
+        machine.send_monitor_command.return_value = (
+            'Mouse #2: QEMU PS/2 Mouse\n'
+            'Mouse #4: QEMU HID Tablet (absolute)\n'
+            '* Mouse #6: vmmouse (absolute)\n'
+        )
+        results = results or {}
+        def qmp_send(command, arguments=None):
+            if command == 'query-mice':
+                return {'return': mice}
+            return results.get(command, {'return': {}})
+        machine.qmp_client.send.side_effect = qmp_send
+        machine.execute.side_effect = [(0, ''), (1, '')]
         namespace = {'machine': machine, 're': re, 'time': time,
                      'STATE_TIMEOUT': timedelta(seconds=1), 'DIAGNOSTIC_TIMEOUT': 1}
         exec(compile(function, 'checks.nix:select_portal_output', 'exec'), namespace)
         return namespace['select_portal_output'], machine
 
-    def test_actual_picker_rejects_malformed_relative_mouse_before_movement(self):
-        reply = 'Mouse #broken: QEMU PS/2 Mouse\n'
-        picker, machine = self.picker(reply)
-        with self.assertRaisesRegex(AssertionError, 'Mouse #broken'):
+    def test_actual_picker_rejects_active_relative_mouse_before_input(self):
+        mice = [{'index': 2, 'name': 'QEMU PS/2 Mouse', 'current': True, 'absolute': False}]
+        picker, machine = self.picker(mice)
+        with self.assertRaisesRegex(AssertionError, 'active absolute'):
             picker('fixture')
-        self.assertEqual(machine.send_monitor_command.call_args_list, [mock.call('info mice')])
+        self.assertEqual(machine.qmp_client.send.call_args_list, [mock.call('query-mice')])
 
-    def test_actual_picker_uses_numeric_relative_mouse_not_absolute_tablet(self):
-        picker, machine = self.picker('Mouse #2: QEMU USB Tablet (absolute)\nMouse #7: QEMU PS/2 Mouse\n')
+    def test_actual_picker_sends_absolute_midpoint_then_real_click(self):
+        mice = [
+            {'index': 2, 'name': 'QEMU PS/2 Mouse', 'current': False, 'absolute': False},
+            {'index': 4, 'name': 'QEMU HID Tablet', 'current': False, 'absolute': True},
+            {'index': 6, 'name': 'vmmouse', 'current': True, 'absolute': True},
+        ]
+        picker, machine = self.picker(mice)
         picker('fixture')
-        self.assertEqual(machine.send_monitor_command.call_args_list, [
-            mock.call('info mice'), mock.call('mouse_set 7'),
-            mock.call('mouse_move -32767 -32767'), mock.call('mouse_move 960 540')])
-        self.assertTrue(any('Mouse #7' in str(call) for call in machine.log.call_args_list))
+        self.assertEqual(machine.qmp_client.send.call_args_list, [
+            mock.call('query-mice'),
+            mock.call('input-send-event', {'events': [
+                {'type': 'abs', 'data': {'axis': 'x', 'value': 16384}},
+                {'type': 'abs', 'data': {'axis': 'y', 'value': 16384}},
+            ]}),
+            mock.call('input-send-event', {'events': [
+                {'type': 'btn', 'data': {'button': 'left', 'down': True}},
+            ]}),
+            mock.call('input-send-event', {'events': [
+                {'type': 'btn', 'data': {'button': 'left', 'down': False}},
+            ]}),
+        ])
+        self.assertTrue(any('vmmouse' in str(call) for call in machine.log.call_args_list))
         machine.screenshot.assert_any_call('fixture-pointer')
 
-    def test_actual_picker_rejects_absolute_only_inventory(self):
-        picker, machine = self.picker('Mouse #2: QEMU USB Tablet (absolute)\n')
-        with self.assertRaisesRegex(AssertionError, 'absolute'):
+    def test_actual_picker_rejects_missing_active_mouse(self):
+        picker, machine = self.picker([
+            {'index': 4, 'name': 'QEMU HID Tablet', 'current': False, 'absolute': True},
+        ])
+        with self.assertRaisesRegex(AssertionError, 'active absolute'):
             picker('fixture')
-        self.assertEqual(machine.send_monitor_command.call_args_list, [mock.call('info mice')])
+        self.assertEqual(machine.qmp_client.send.call_args_list, [mock.call('query-mice')])
+
+    def test_actual_picker_rejects_qmp_input_error(self):
+        picker, machine = self.picker(
+            [{'index': 6, 'name': 'vmmouse', 'current': True, 'absolute': True}],
+            {'input-send-event': {'error': {'class': 'GenericError', 'desc': 'input denied'}}},
+        )
+        with self.assertRaisesRegex(AssertionError, 'input denied'):
+            picker('fixture')
+        self.assertEqual(machine.screenshot.call_args_list, [mock.call('fixture')])
 
     def test_interactive_selection_and_start_allow_chooser_longer_than_ten_seconds(self):
         class Selected(Exception):
