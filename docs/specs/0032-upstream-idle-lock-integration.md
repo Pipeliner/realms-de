@@ -121,3 +121,28 @@ This proves the installed default timers and the no-backlight path only. Real
 brightness restoration, host-policy suspend/readiness/resume and native-distro
 acceptance remain outstanding. Automatic startup stays disabled, and this
 slice does not complete #79.
+
+### Real logind suspend/resume (accepted refinement, 2026-09-27)
+
+The CI VM manually starts the unchanged installed idle service with its locker
+inactive, and requires logind to list a sleep/delay inhibitor owned by that
+service's PID and UID. Record the configured inhibitor deadline. Require actual
+guest suspend support and select its supported deep sleep mode for the fixture;
+an unsupported VM fails this probe rather than counting as suspend evidence.
+
+Request `org.freedesktop.login1.Manager.Suspend(false)` from a detached system
+service. Do not inject a signal or directly start systemd-suspend.service.
+Within sixty seconds QEMU must report the guest suspended; wake it through the
+monitor's `system_wakeup` command and require the guest to respond again within
+sixty seconds. A new locker readiness timestamp must fall after the request
+and before systemd's sleep-start journal event; require a successful sleep-stop
+event and kernel suspend-entry/exit records. The resumed session remains locked,
+suppresses its launcher binding and unlocks only after the fixture password.
+Require swayidle to reacquire its own sleep/delay inhibitor after resume.
+
+Retain structured inhibitor, timing and monitor evidence, bounded journals and a
+resumed-lock screenshot on success. On failure, wake the guest if necessary and
+emit available structured results and bounded diagnostics into the build log.
+The probe introduces no production unit or host-policy changes. Physical lid
+policy and backlight restoration, and native-distro acceptance, remain separate
+obligations; package auto-start remains disabled.
