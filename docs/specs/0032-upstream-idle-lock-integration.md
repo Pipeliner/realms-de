@@ -134,7 +134,13 @@ Request `org.freedesktop.login1.Manager.Suspend(false)` from a detached system
 service. Do not inject a signal or directly start systemd-suspend.service.
 Within sixty seconds QEMU must report the guest suspended; wake it through the
 monitor's `system_wakeup` command and require the guest to respond again within
-sixty seconds. A new locker readiness timestamp must fall after the request
+sixty seconds. These inner polling budgets
+assume responsive test-driver monitor and guest I/O; they do not interrupt a
+blocked driver socket read. The canonical Nix CI job SHALL explicitly set
+`timeout-minutes: 60` as the outer execution cap, covering build and VM work.
+A root-flake policy regression SHALL reject its absence or another value even
+when other jobs have sixty-minute limits. A new locker readiness timestamp
+must fall after the request
 and before systemd's sleep-start journal event; require a successful sleep-stop
 event and kernel suspend-entry/exit records. The resumed session remains locked,
 suppresses its launcher binding and unlocks only after the fixture password.

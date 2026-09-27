@@ -69,6 +69,20 @@ expect_fail() {
 fixture_root=$(make_fixture canonical)
 expect_pass canonical-root-flake-contract "$fixture_root"
 
+fixture_root=$(make_fixture missing-nix-job-timeout)
+sed '/^  nix:/,$ { /^    timeout-minutes:/d; }' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-nix-job-timeout "$fixture_root" \
+    'Nix CI job must have an explicit sixty-minute timeout'
+
+fixture_root=$(make_fixture wrong-nix-job-timeout)
+sed '/^  nix:/,$ s/^    timeout-minutes: .*/    timeout-minutes: 120/' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail wrong-nix-job-timeout "$fixture_root" \
+    'Nix CI job must have an explicit sixty-minute timeout'
+
 fixture_root=$(make_fixture missing-flake)
 rm -f "$fixture_root/flake.nix"
 expect_fail missing-flake "$fixture_root" 'root flake.nix is required'
