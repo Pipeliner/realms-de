@@ -5,6 +5,9 @@ set -eu
 printf 'cargo|cwd=%s|home=%s|args=%s|cflags=%s\n' \
     "$PWD" "${CARGO_HOME:-}" "$*" "${CFLAGS:-}" \
     >>"${REALM_SENTINEL_LOG:?}"
+printf 'cargo-flags|cflags=%s|cppflags=%s|cxxflags=%s|ldflags=%s|rustflags=%s|encoded-rustflags=%s\n' \
+    "${CFLAGS:-}" "${CPPFLAGS:-}" "${CXXFLAGS:-}" "${LDFLAGS:-}" \
+    "${RUSTFLAGS:-}" "${CARGO_ENCODED_RUSTFLAGS:-}" >>"$REALM_SENTINEL_LOG"
 starship_metadata=false
 if [ "$#" -eq 1 ] && [ "$1" = -V ] \
     && [ "$PWD" = "${REALM_EXPECTED_STARSHIP_SOURCE:-}" ] \

@@ -253,6 +253,7 @@ jobs:
           path: |
             ${{ steps.native-temp.outputs.path }}/evidence/*.out
             ${{ steps.native-temp.outputs.path }}/evidence/*.log
+            ${{ steps.native-temp.outputs.path }}/evidence/yazi-reproducibility.txt
       - run: cargo doc --workspace --no-deps
 
   msrv:

@@ -45,6 +45,7 @@ for name in yazi ya; do
 done
 if [ "$different" -ne 0 ]; then
     echo "Yazi reproducibility mismatch; see $evidence" >&2
+    tail -n 40 "$evidence" >&2
     exit 1
 fi
 printf 'result=identical\n' >> "$evidence"
