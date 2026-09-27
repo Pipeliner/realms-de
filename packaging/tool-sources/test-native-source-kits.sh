@@ -198,13 +198,10 @@ for guide in \
         guide_failures=$((guide_failures + 1))
     fi
     if grep -F 'ln -s packaging/debian' "$guide" >/dev/null \
-        || grep -F 'git archive' "$guide" >/dev/null; then
+        || grep -F 'git archive' "$guide" >/dev/null \
+        || grep -F 'packaging/tool-sources/build-native-source-kits.sh' \
+            "$guide" >/dev/null; then
         echo "native source-kit package guide retained a forbidden build workflow" >&2
-        guide_failures=$((guide_failures + 1))
-    fi
-    if ! grep -F 'packaging/tool-sources/build-native-source-kits.sh' \
-        "$guide" >/dev/null; then
-        echo "native source-kit package guide omitted the retained-kit producer" >&2
         guide_failures=$((guide_failures + 1))
     fi
 done

@@ -7,12 +7,12 @@ package recipe.
 ## Bound source
 
 - Repository: `https://github.com/pipeliner/realms-de`
-- Commit: `e7be31c7a381ae57db6ed2f3d996d152d4c4054f`
-- Commit timestamp: `2026-09-13T07:25:20Z` (`1789284320`)
+- Commit: `2227a67c7c3654b1e49d33842a4ddb5081841bdc`
+- Commit timestamp: `2026-09-14T11:08:55Z` (`1789384135`)
 - Workspace version: `0.1.0`
 - Canonical archive: `source.tar.gz`
 - Canonical archive SHA-256:
-  `0a1b6de2ea6584488681582bb0fe34e19dae53dd22e58dc3220268677d991175`
+  `f987d8d2cf03b1fbd278f39e6ea25d692f8d1e02932ef1ee133a48e045e8f726`
 
 The archive was generated directly from the exact bound Git commit with
 `git archive --format=tar.gz --prefix=realm-workspace/ <commit> .
@@ -31,7 +31,7 @@ the archive root's retained `Cargo.lock`:
 CARGO_HOME=<intake>/cargo-home cargo vendor --locked --versioned-dirs <intake>/vendor
 ```
 
-The resulting 176 registry crates were archived as `vendor.tar.zst` by one
+The resulting 221 registry crates were archived as `vendor.tar.zst` by one
 sorted tar stream with epoch mtime, numeric uid/gid zero, and Zstandard level
 3 compression:
 

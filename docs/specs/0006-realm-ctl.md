@@ -3,8 +3,9 @@
 - **Status:** Accepted (2026-08-26; generation contract reconciled by #159;
   endpoint capability correction 2026-09-10; control-transport correction
   2026-09-11; doctor observability and owned-health corrections 2026-09-13) —
-  `theme apply`, `theme lint`, and `theme diff` implemented; remaining command
-  surface not yet implemented
+  `theme apply`, `theme lint`, `theme diff`, and `doctor` implemented; the
+  `doctor` VM acceptance and numeric tool floors remain open, and the other
+  command groups are not yet implemented
 - **Milestone:** M3, with `theme` and the argument surface in M1 and
   `orbit` / `ledger` in M2
 - **Decisions:** [ADR 0004](../adr/0004-ndjson-control-socket.md),
@@ -140,7 +141,7 @@ Four of these are additions and one is a correction. Each is a revision of
 [SPEC 0001](0001-realm-core-contracts.md) made in the same commit as the change.
 Before the first production `realmctl` control command ships, the typed Error
 kind, complete `OrbitLedger` fields, `GetHealth`/`Health` schema, and a
-corresponding `PROTOCOL_VERSION` bump must land together. The current v1 enum
+corresponding `PROTOCOL_VERSION` bump must land together. The pre-v2 enum
 may support transport tests, but it is not a final production server/client
 contract. Across that bump, the Hello request/response envelope remains
 decodable in both directions so a mismatch can always report both versions.
@@ -321,6 +322,15 @@ values. Each command has a deadline inside `doctor`'s one overall deadline.
 missing schema, or malformed output is reported rather than treated as a
 passing cursor check.
 
+The installed command must make those deliberately permitted command probes
+reachable without inheriting an interactive shell's `PATH`. Native packages
+use their normal system paths. The Nix package wraps `realmctl` with only
+`gsettings` and the reused tools it probes; it does not import or publish that
+private path through the session environment. Likewise, when packaging wraps
+the session entry with an executable launcher shim, `env/list-matches-entry`
+must inspect the installed entry payload rather than treating the readable
+shim as a malformed copy of the source.
+
 | id | What it checks | Probe | Fail, and what it prints |
 |---|---|---|---|
 | `env/identity` | `XDG_CURRENT_DESKTOP=realm`, `XDG_SESSION_TYPE=wayland`, `XDG_SESSION_DESKTOP=realm` in this process | `std::env` | *"Portals will pick the wrong backend and screen share will silently fail."* |
@@ -331,7 +341,7 @@ passing cursor check.
 | `env/agree` | the process and systemd views hold the same exact values; the D-Bus activation channel is reported separately as a functional proxy | process and systemd compared; D-Bus value shown as `unobservable` beside the proxy result | *"The import ran too early, or ran twice with different values."* Prints the two observable views side by side and fails on their disagreement; it never claims that three exact values agreed |
 | `env/stale` | systemd's `WAYLAND_DISPLAY` names a socket that exists | the property, then `stat` under `$XDG_RUNTIME_DIR` | `systemd --user` and the session bus outlive a logout, always when lingering, so a login can inherit a display name pointing at a dead socket. *"Symptoms identical to never importing it at all."* Remedy: `systemctl --user unset-environment WAYLAND_DISPLAY`, then log in again |
 | `env/cursor` | `XCURSOR_THEME`/`XCURSOR_SIZE` agree in the process and systemd views, the theme resolves to a directory containing `cursors/` under the icon search path, and GSettings agrees | process env, the systemd property, the icon search path, the GSettings value; the D-Bus activation values remain unobservable and are not claimed | *"The cursor will be the default black X11 arrow, or invisible over some surfaces, or will change size as it crosses a window."* Names the observable places, because setting one leaves it wrong in the other |
-| `env/xwayland` | `DISPLAY` agrees in the process and systemd views when XWayland is up and its socket answers | compare the observable values and connect to the X11 socket directly; report the D-Bus activation value as unobservable rather than inventing it. Realm's integer-only XWayland policy has no separately published runtime value, so this check does not claim to have probed one | `warn`. Reports honestly that the session entry's `DISPLAY` import is a known gap where the compositor does not hand its `:N` back. *"X11 apps absent, or blurred on a scaled output."* |
+| `env/xwayland` | `DISPLAY` agrees in the process and systemd views when XWayland is up and its socket answers | compare the observable values and connect to the X11 socket directly; report the D-Bus activation value as unobservable rather than inventing it. SPEC 0005 A17's purpose-built VM service may record its own inherited value, but that test-only observation does not make the activation environment generally readable. Realm's integer-only XWayland policy has no separately published runtime value, so this check does not claim to have probed one | `warn` when `DISPLAY` is absent, disagrees, or names an X11 socket that does not answer. *"X11 apps absent, or blurred on a scaled output."* |
 | `env/list-matches-entry` | `doctor`'s variable list is identical to the session entry's | both lists, compared; a **CI** check with no session needed | *"A variable was added in one place and forgotten in the other."* SPEC 0005 A3 |
 | `units/target` | `realm-session.target` is active and its `.wants` symlinks exist | `ActiveState` over D-Bus | *"A target that starts nothing and reports success."* |
 | `units/wm` | the window manager's unit is `ActiveState=active`, with `ConditionResult` reported **separately** | both properties | an unmet `ConditionEnvironment=` leaves a unit `inactive (dead)` with `ConditionResult=no`, and `systemctl start` still exits 0 with nothing in `--failed`. *"Nothing started and nothing complained."* Prints the condition that was not met |
@@ -392,16 +402,24 @@ things:
   their configuration from a TTY, and failing them for the absence of something
   they did not ask for would train them to ignore the output.
 
+The isolated Nix command-path fixture is not a healthy-session fixture. It
+deliberately supplies no portal routing/backend metadata, so unrelated checks
+may yield diagnostic exit 1. It SHALL accept only normal diagnostic exit 0 or
+1, retain the JSON report and exit status in the build log, and require the
+structured `tools/floors` row to be `skip` (all tool version commands answered;
+numeric floors remain unresolved). Other command errors remain failures.
+The installed-session VM still requires the complete healthy doctor result.
+
 #### Output shape
 
 ```
-realmctl doctor - realmctl 0.1.0, protocol 1
+realmctl doctor - realmctl 0.1.0, protocol 2
 2026-08-26T14:32:11+01:00 | Fedora 44 | kernel 6.12.4
   river backend | realm-wm 0.1.0
 
 session
   ok    socket            /run/user/1000/realm/ctl.sock - realm-wm 0.1.0
-  ok    protocol-version  1 == 1
+  ok    protocol-version  2 == 2
   ok    degraded          no DEGRADED codes in this session
 
 wm
@@ -431,7 +449,7 @@ fonts
         fix      install Symbols Nerd Font Mono, or Symbola
   ok    attribution       runes <- Symbols Nerd Font Mono (chain position 2)
 
-32 checks: 26 ok, 3 warn, 1 failed, 2 skipped
+32 checks: 25 ok, 3 warn, 1 failed, 3 skipped
 ```
 
 (An excerpt: the `units`, `portal`, `palette`, `theme` and `tools` groups are
@@ -451,7 +469,7 @@ redirected, and is therefore pasteable as-is.
 {
   "tool": "realmctl doctor",
   "version": "0.1.0",
-  "protocol": 1,
+  "protocol": 2,
   "checks": [
     {"id": "env/wayland-display/dbus", "group": "environment", "status": "fail",
      "summary": "portal did not answer within 2000 ms",
@@ -461,7 +479,7 @@ redirected, and is therefore pasteable as-is.
      "data": {"deadline_ms": 2000, "elapsed_ms": 2000,
               "activation_environment_values": "unobservable"}}
   ],
-  "summary": {"ok": 28, "warn": 3, "fail": 1, "skip": 0}
+  "summary": {"ok": 25, "warn": 3, "fail": 1, "skip": 3}
 }
 ```
 
@@ -535,13 +553,13 @@ Each row is one happy path and becomes one test.
 | B8a | Given any terminal client path/transport/I/O error other than version mismatch, when a live-session command runs, then it is not retried and exits 6; an application `Response::Error` remains a normal response and maps by its typed kind to exit 5 | `realm_ctl::tests::terminal_transport_errors_exit_six_without_retry` |
 | B9 | Given a session with three windows in orbit 1, when `ledger show 1 --json` runs, then stdout is exactly one object that deserialises as `Response::Ledger` with the windows in ledger order and the focused one marked | |
 | B10 | Given a running session, when `run foot -e yazi` runs, then it sends `Request::Spawn(["foot","-e","yazi"])`, exits 0 without waiting, and reports the argv as accepted rather than launched | |
-| B11 | Given a healthy session, when `doctor` runs, then every resolved check reports `ok` or `warn`, the two explicitly unresolved checks report their accepted `skip`, the header names the tool, protocol, distribution, kernel, backend and negotiated compositor interfaces without inventing a compositor package version, and it exits 0 | |
-| B12 | Given the session entry deliberately suppresses the D-Bus activation-environment import and no earlier activation supplied the graphical-session values, when `doctor` runs and its portal proxy cannot become usable, then `env/wayland-display/dbus` fails within its 2 s deadline, prints the 25-second-hang symptom, reports the observed portal failure without claiming to have read a missing variable, names the activation environment, portal service and selected backend as possible causes, prints the `dbus-update-activation-environment` remedy, and exits 1 | |
-| B13 | Given no session running and a font stack that covers ASCII only, when `doctor` runs, then its optional session probe resolves at most one `RuntimeDir` and reuses one `ClientEndpoint`, the session checks are `skip` with a banner, `fonts/glyphs` warns with `Probe::summary()`'s wording, and it exits 0 rather than 3 | |
-| B14 | Given no session bus and no session running, when `doctor` runs, then the D-Bus and portal checks are `skip` and not `fail`, and it exits 0 | |
+| B11 | Given a healthy fresh-login session, when `doctor` runs, then every resolved check reports `ok` or `warn`, idle lock, the unrequested file-chooser round trip and unresolved tool floors report their accepted explicit `skip`, the header names the tool, protocol, distribution, kernel, backend and negotiated compositor interfaces without inventing a compositor package version, and it exits 0. The session entry starts portal activation non-blockingly after importing its environment, rather than making the fixture warm it manually; the installed-package fixture invokes `realmctl` without an interactive-shell path and proves its permitted `gsettings` and reused-tool probes remain reachable. The VM writes the exact JSON report and canonical CI retains it in the live-evidence artifact. | `session-boots` NixOS VM (passed in canonical run `34745657307`, job `103693048500`); `realmctl-command-runtime` Nix package check |
+| B12 | Given the session entry deliberately suppresses the D-Bus activation-environment import and no earlier activation supplied the graphical-session values, when `doctor` runs and its portal proxy cannot become usable, then `env/wayland-display/dbus` fails within its 2 s deadline, prints the 25-second-hang symptom, reports the observed portal failure without claiming to have read a missing variable, names the activation environment, portal service and selected backend as possible causes, prints the `dbus-update-activation-environment` remedy, and exits 1 | `realmctl::doctor::tests::portal_failure_reports_an_observation_and_only_possible_causes` (diagnostic mapping only; missing-activation VM case pending) |
+| B13 | Given no session running and a font stack that covers ASCII only, when `doctor` runs, then its optional session probe resolves at most one `RuntimeDir` and reuses one `ClientEndpoint`, the session checks are `skip` with a banner, `fonts/glyphs` warns with `Probe::summary()`'s wording, and it exits 0 rather than 3 | `doctor_cli::no_session_report_is_ordered_bounded_and_keeps_independent_warnings` |
+| B14 | Given no session bus and no session running, when `doctor` runs, then the D-Bus and portal checks are `skip` and not `fail`, and it exits 0 | `doctor_cli::no_session_report_is_ordered_bounded_and_keeps_independent_warnings` |
 | B14a | Given no runtime directory or no `realm` entry, a retained endpoint that remains refused, an unsafe endpoint, and a version-mismatched live endpoint, when `doctor` runs each case, then only the first case is the no-session `skip`; refused and unsafe endpoints fail `session/socket`; and the mismatched endpoint passes `session/socket`, fails `session/protocol-version` with both versions, sends no `GetHealth`, and never exits 3 | |
-| B14b | Given the fixed result set completes in a different order and the portal proxy reaches its 2 s deadline, when human and JSON reports are emitted, then both contain the exact same 32 ids in the specified order, every shared portal-derived check uses that one bounded observation, and the command completes in under 3 s | |
-| B14c | Given all three reused tools answer with parseable versions but no cross-target floors have been accepted, when `doctor` runs, then `tools/floors` reports the observed versions and an explicit unresolved-floor `skip`, never `ok`; absence or malformed version remains `warn`, and the acceptance row stays open until package/template compatibility establishes real minima | |
+| B14b | Given the fixed result set completes in a different order and the portal proxy reaches its 2 s deadline, when human and JSON reports are emitted, then both contain the exact same 32 ids in the specified order, every shared portal-derived check uses that one bounded observation, and the command completes in under 3 s | `realmctl::doctor::tests::{human_and_json_reports_preserve_the_exact_32_check_order,portal_result_is_not_blocked_by_a_hung_systemd_probe,bus_deadline_is_absolute_from_probe_start,exited_probe_with_inherited_open_pipe_still_obeys_deadline}`; `doctor_cli::no_session_report_is_ordered_bounded_and_keeps_independent_warnings` |
+| B14c | Given all three reused tools answer with parseable versions but no cross-target floors have been accepted, when `doctor` runs, then `tools/floors` reports the observed versions and an explicit unresolved-floor `skip`, never `ok`; absence or malformed version remains `warn`, and the acceptance row stays open until package/template compatibility establishes real minima | `realmctl::doctor::tests::observed_tool_versions_never_claim_unresolved_floors_pass` (floor acceptance remains open) |
 | B15 | Given `theme apply` returns `Committed(generation)`, when the CLI reports it, then it exits 0 and reports exactly that generation as selected for future launches | `theme_cli::apply_reports_selected_future_generation_without_reload_or_session` |
 | B16 | Given `theme apply` returns `CommittedWithCleanupPending { generation, cause }`, when the CLI reports it, then it exits 0, reports exactly that generation as selected for future launches, and emits the safely escaped committed-cleanup warning | `realmctl::tests::cleanup_pending_reports_selected_generation_with_escaped_warning` |
 | B17 | Given `theme apply` returns `OutcomeAmbiguous { candidate, cause }`, when the CLI reports it, then it exits 6, emits no human stdout, safely reports the candidate and unconfirmed activation, claims no success, and performs no recovery or retry | `realmctl::tests::ambiguous_reports_no_success_stdout_and_escaped_cause` |

@@ -15,7 +15,12 @@ the same change whenever a contract changes.
 
 ## Repository operations
 
+- When an issue recurs, investigate and fix the shared cause at the specification
+  and implementation levels. Repeating a workaround is temporary recovery,
+  not resolution; verify that the original recurrence scenario is prevented.
 - Run `gh` outside the sandbox.
+- When sandboxing is suspected to explain a diagnostic failure, hang, or inaccessible dependency, rerun the same read-only/diagnostic command in the unsandboxed execution context before treating it as a repository defect. This does not authorize local package builds or installation; packaging remains CI-only.
+- Use `scripts/ci-monitor --once` for each Symphony CI inspection and `scripts/ci-monitor --watch` for bounded background monitoring; keep it read-only, unsandboxed, and running for the current MVP verification and future iterations.
 - At every Symphony iteration, inspect and handle the complete open pull-request
   queue, including automated dependency PRs, before selecting the next issue.
 - Commit and push completed repository work unless the user explicitly says
@@ -33,9 +38,20 @@ the same change whenever a contract changes.
   effect), record it at the appropriate durable authority, and verify the
   resulting state before claiming it was handled.
 
-- Native distro packages are built and verified in CI only. Do not install
-  distro packaging toolchains merely to reproduce package builds locally, and
-  do not treat their local absence as a blocker; inspect the matching CI job.
+- **All packaging is performed in CI only.** This includes native/Nix package
+  builds, source archives, vendor bundles, provenance/source-bundle rebinding,
+  and package installation/verification. Do not run these locally or install
+  packaging toolchains. Local source edits and lightweight tests that produce
+  no packages or bundles are allowed. Inspect CI for packaging evidence; if a
+  packaging step lacks a CI path, add that path rather than executing it locally.
+- Regularly clean stale agent-generated build caches using explicit ownership,
+  active-build exclusion, and bounded retention. Never sweep source worktrees,
+  user files, retained bundles, or verification evidence. Keep local cleanup
+  infrastructure private and record its operation at the local authority.
+- All permitted local Cargo checks across agents and worktrees use one shared
+  `CARGO_TARGET_DIR` through the private cache wrapper. Do not create per-task
+  target directories or bypass its active-build lease. Apply periodic size and
+  age cleanup only when the shared cache is inactive; packaging remains CI-only.
 - Security checks and security-hardening review are post-MVP work. Do not make
   them MVP gates; track them for the post-MVP queue instead.
 - **Never let process become the product.** Keep specifications, reviews,

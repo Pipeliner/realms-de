@@ -95,6 +95,41 @@ commit SHALL refresh the canonical archive from a new committed snapshot before
 native package CI can satisfy this contract; passing tests against the moving
 checkout do not make a stale retained archive current.
 
+### CI-only Realm workspace rebinding
+
+Producing or rebinding the Realm workspace source authority is packaging and
+SHALL run only in the repository's CI. The rebind workflow accepts one exact,
+full repository commit ID; checks out that object with complete history; and
+creates the archive only from that immutable Git object with the exclusion
+above. A branch name, tag, working-tree byte, local archive, or caller-supplied
+provenance field is not an admissible source input.
+
+The workflow SHALL refuse a commit whose `Cargo.lock` differs from the retained
+Realm-workspace lockfile. Such a change requires a separate controlled
+dependency-closure refresh; this path does not vendor dependencies. For an
+unchanged lockfile, CI stages the existing digest-bound closure in runner-local
+temporary storage, generates `source.tar.gz`, updates only the bound commit,
+commit timestamp, source digest, and provenance digest fields, and runs the
+normal bundle-linkage validator over the complete candidate bundle.
+
+Successful CI publishes an artifact containing exactly the candidate
+`source.tar.gz`, `bundle.toml`, and `provenance.md`. The workflow has read-only
+repository permission and SHALL NOT commit or push the result. A maintainer may
+place those exact three CI-produced files in the source change; the ordinary
+freshness and linkage checks remain authoritative before merge. An uploaded
+candidate alone is not package-build, install, or runtime evidence.
+
+Ordinary CI source-kit verification and Realm package builds SHALL automatically
+prepare a validated source binding from their checked-out HEAD before consuming
+the retained archive. This includes pull-request merge commits. Preparation
+uses the same CI-only producer and unchanged-lockfile restriction, then copies
+only the three validated binding files into the job checkout. The vendor
+closure remains unchanged. Preparation failure blocks the consumer. Each
+consumer retains those three binding files as a CI artifact for provenance.
+No follow-up repository commit or manual workflow dispatch is required for
+ordinary source, documentation, policy, or workflow edits. The freshness check
+continues to compare the entire retained input scope; it is not weakened.
+
 The Realm-workspace source-replacement configuration is a separately retained
 build input: native recipes SHALL stage it at the unpacked source root before
 Cargo runs. The linkage fixture SHALL verify that configuration, the retained
@@ -126,10 +161,12 @@ allowed packaging-metadata directories as well as at kit top level.
 The installed native-package build guide SHALL come from tracked outer
 packaging metadata, not from the identity-bound archive's historical
 `docs/INSTALL.md`. The emitted Debian and RPM packages SHALL document
-`build-native-source-kits.sh` and SHALL NOT retain the superseded checkout
+the CI-only package build and verification workflow, without local source-kit
+producer commands or packaging-toolchain installation instructions, and SHALL
+NOT retain the superseded checkout
 `ln -s packaging/debian` or moving `git archive ... HEAD` workflows. Updating
 package guidance SHALL NOT mutate or regenerate the canonical source authority.
-Its clean-host prerequisite commands SHALL include the direct native recipe
+The CI clean-host prerequisite commands SHALL include the direct native recipe
 requirements: Debian `pkg-config` and Fedora `make`. Because the package-native
 test phase exercises SPEC 0004's raster/text-cache tests, both package recipes
 and their CI prerequisite installs SHALL also supply a real DejaVu fallback
@@ -169,7 +206,9 @@ elevates that fixture, it SHALL first stage a complete Rust toolchain in a
 directory readable, traversable, and executable by the elevated process, and
 preflight-execute that staged Cargo and rustc. Staging may copy the real
 toolchain solely to make it accessible; it SHALL NOT replace either executable
-with a shim.
+with a shim. The CI step that invokes the network-isolated native fixture SHALL
+have a bounded job-step timeout and SHALL fail closed when the fixture exceeds
+it; an indefinitely hung isolation check is not verification evidence.
 
 The Debian recipe's production resolver SHALL continue to select its complete
 versioned Cargo/rustc pair below `/usr/lib/rust-1.[89][0-9]/bin`.  The native
@@ -314,6 +353,7 @@ the Realm template, rather than only a nonempty default prompt.
 | B3 | Given a native package install and direct or systemd-user Realm session launch, when executable and PATH ownership are inspected, then only `/usr/lib/realm/bin/*` owns the three Realm tools, Realm-launched applications resolve them, and neither user manager nor DBus activation receives the private PATH, including with `REALM_IMPORT_PATH=1`. | `packaging/tool-sources/test-native-builds.sh`; `packaging/session/test-private-tool-path.sh` |
 | B4 | Given a rendered Realm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it, then a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Realm feature. | `packaging/tool-sources/test-tool-configs.sh`; selected-runtime assertions in `packaging/tool-sources/test-native-builds.sh` |
 | B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | `packaging/tool-sources/test-bundle-linkage.sh`; `packaging/tool-sources/check-bundle-linkage.py` |
+| B6 | Given an exact committed workspace revision with an unchanged retained lockfile, when its source authority needs rebinding, then read-only repository CI alone creates and validates the candidate archive/records and retains exactly those three files as an artifact without committing or pushing them; a mutable ref, changed lockfile, local packaging command, or unvalidated candidate is rejected. | CI rebind workflow projection and transformation fixtures; bundle-linkage validator in the rebind job. |
 
 ## Boundaries and follow-on work
 

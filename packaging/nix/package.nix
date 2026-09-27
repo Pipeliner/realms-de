@@ -63,6 +63,9 @@
     install -Dm755 target/${pkgs.stdenv.targetPlatform.rust.cargoShortTarget}/release/realm-bar \
       $out/bin/realm-bar
     install -Dm755 ${src + "/packaging/session/realm-session"} $out/bin/realm-session
+    install -Dm755 ${src + "/packaging/session/realm-browser"} $out/bin/realm-browser
+    wrapProgram $out/bin/realm-browser \
+      --prefix PATH : ${lib.makeBinPath [ pkgs.xdg-utils pkgs.gtk3 ]}
 
     # The desktop entry must point at the store path, not /usr/bin.
     install -Dm644 ${src + "/packaging/session/realm.desktop"} \
@@ -103,6 +106,12 @@
 
     wrapProgram $out/bin/realm-session \
       --prefix PATH : ${lib.makeBinPath (support.wrapperRuntime pkgs)}
+
+    # doctor deliberately runs only gsettings and the reused tools' own
+    # version commands. Make that narrow probe set independent of a transient
+    # user service's default PATH without publishing it session-wide.
+    wrapProgram $out/bin/realmctl \
+      --prefix PATH : ${lib.makeBinPath ([ pkgs.glib ] ++ support.reusedTools pkgs)}
 
     # SPEC 0010: realm-sdd reads local Git objects. Keep Git out of the desktop
     # wrapper path while making the installed validator independent of caller

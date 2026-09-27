@@ -9,9 +9,22 @@ anstyle-wincon	3.0.8	MIT OR Apache-2.0	vendor/anstyle-wincon-3.0.8/Cargo.toml
 anyhow	1.0.104	MIT OR Apache-2.0	vendor/anyhow-1.0.104/Cargo.toml
 arrayref	0.3.9	BSD-2-Clause	vendor/arrayref-0.3.9/Cargo.toml
 arrayvec	0.7.8	MIT OR Apache-2.0	vendor/arrayvec-0.7.8/Cargo.toml
+async-broadcast	0.7.2	MIT OR Apache-2.0	vendor/async-broadcast-0.7.2/Cargo.toml
+async-channel	2.3.1	Apache-2.0 OR MIT	vendor/async-channel-2.3.1/Cargo.toml
+async-executor	1.13.1	Apache-2.0 OR MIT	vendor/async-executor-1.13.1/Cargo.toml
+async-fs	2.1.2	Apache-2.0 OR MIT	vendor/async-fs-2.1.2/Cargo.toml
+async-io	2.4.0	Apache-2.0 OR MIT	vendor/async-io-2.4.0/Cargo.toml
+async-lock	3.4.0	Apache-2.0 OR MIT	vendor/async-lock-3.4.0/Cargo.toml
+async-process	2.3.0	Apache-2.0 OR MIT	vendor/async-process-2.3.0/Cargo.toml
+async-recursion	1.1.1	MIT OR Apache-2.0	vendor/async-recursion-1.1.1/Cargo.toml
+async-signal	0.2.10	Apache-2.0 OR MIT	vendor/async-signal-0.2.10/Cargo.toml
+async-task	4.7.1	Apache-2.0 OR MIT	vendor/async-task-4.7.1/Cargo.toml
+async-trait	0.1.88	MIT OR Apache-2.0	vendor/async-trait-0.1.88/Cargo.toml
+atomic-waker	1.1.2	Apache-2.0 OR MIT	vendor/atomic-waker-1.1.2/Cargo.toml
 autocfg	1.5.1	Apache-2.0 OR MIT	vendor/autocfg-1.5.1/Cargo.toml
 bitflags	2.13.1	MIT OR Apache-2.0	vendor/bitflags-2.13.1/Cargo.toml
 block-buffer	0.10.4	MIT OR Apache-2.0	vendor/block-buffer-0.10.4/Cargo.toml
+blocking	1.6.1	Apache-2.0 OR MIT	vendor/blocking-1.6.1/Cargo.toml
 bytemuck	1.25.2	Zlib OR Apache-2.0 OR MIT	vendor/bytemuck-1.25.2/Cargo.toml
 bytemuck_derive	1.12.1	Zlib OR Apache-2.0 OR MIT	vendor/bytemuck_derive-1.12.1/Cargo.toml
 calloop	0.14.4	MIT	vendor/calloop-0.14.4/Cargo.toml
@@ -34,8 +47,13 @@ crypto-common	0.1.7	MIT OR Apache-2.0	vendor/crypto-common-0.1.7/Cargo.toml
 cursor-icon	1.2.0	MIT OR Apache-2.0 OR Zlib	vendor/cursor-icon-1.2.0/Cargo.toml
 digest	0.10.7	MIT OR Apache-2.0	vendor/digest-0.10.7/Cargo.toml
 downcast-rs	1.2.1	MIT/Apache-2.0	vendor/downcast-rs-1.2.1/Cargo.toml
+endi	1.1.0	MIT	vendor/endi-1.1.0/Cargo.toml
+enumflags2	0.7.11	MIT OR Apache-2.0	vendor/enumflags2-0.7.11/Cargo.toml
+enumflags2_derive	0.7.11	MIT OR Apache-2.0	vendor/enumflags2_derive-0.7.11/Cargo.toml
 equivalent	1.0.2	Apache-2.0 OR MIT	vendor/equivalent-1.0.2/Cargo.toml
 errno	0.3.14	MIT OR Apache-2.0	vendor/errno-0.3.14/Cargo.toml
+event-listener	5.4.0	Apache-2.0 OR MIT	vendor/event-listener-5.4.0/Cargo.toml
+event-listener-strategy	0.5.4	Apache-2.0 OR MIT	vendor/event-listener-strategy-0.5.4/Cargo.toml
 fastrand	2.5.0	Apache-2.0 OR MIT	vendor/fastrand-2.5.0/Cargo.toml
 fdeflate	0.3.7	MIT OR Apache-2.0	vendor/fdeflate-0.3.7/Cargo.toml
 find-msvc-tools	0.1.12	MIT OR Apache-2.0	vendor/find-msvc-tools-0.1.12/Cargo.toml
@@ -44,6 +62,9 @@ font-types	0.11.3	MIT OR Apache-2.0	vendor/font-types-0.11.3/Cargo.toml
 font-types	0.12.5	MIT OR Apache-2.0	vendor/font-types-0.12.5/Cargo.toml
 fontconfig-parser	0.5.8	MIT	vendor/fontconfig-parser-0.5.8/Cargo.toml
 fontdb	0.23.0	MIT	vendor/fontdb-0.23.0/Cargo.toml
+futures-core	0.3.33	MIT OR Apache-2.0	vendor/futures-core-0.3.33/Cargo.toml
+futures-io	0.3.33	MIT OR Apache-2.0	vendor/futures-io-0.3.33/Cargo.toml
+futures-lite	2.6.0	Apache-2.0 OR MIT	vendor/futures-lite-2.6.0/Cargo.toml
 generic-array	0.14.7	MIT	vendor/generic-array-0.14.7/Cargo.toml
 getrandom	0.4.3	MIT OR Apache-2.0	vendor/getrandom-0.4.3/Cargo.toml
 glob	0.3.4	MIT OR Apache-2.0	vendor/glob-0.3.4/Cargo.toml
@@ -51,6 +72,7 @@ harfrust	0.5.2	MIT	vendor/harfrust-0.5.2/Cargo.toml
 hashbrown	0.17.1	MIT OR Apache-2.0	vendor/hashbrown-0.17.1/Cargo.toml
 heck	0.5.0	MIT OR Apache-2.0	vendor/heck-0.5.0/Cargo.toml
 hermit-abi	0.5.3	MIT OR Apache-2.0	vendor/hermit-abi-0.5.3/Cargo.toml
+hex	0.4.3	MIT OR Apache-2.0	vendor/hex-0.4.3/Cargo.toml
 indexmap	2.14.0	Apache-2.0 OR MIT	vendor/indexmap-2.14.0/Cargo.toml
 is_terminal_polyfill	1.70.2	MIT OR Apache-2.0	vendor/is_terminal_polyfill-1.70.2/Cargo.toml
 itoa	1.0.18	MIT OR Apache-2.0	vendor/itoa-1.0.18/Cargo.toml
@@ -63,6 +85,7 @@ libc	0.2.189	MIT OR Apache-2.0	vendor/libc-0.2.189/Cargo.toml
 libm	0.2.16	MIT	vendor/libm-0.2.16/Cargo.toml
 linebender_resource_handle	0.1.1	Apache-2.0 OR MIT	vendor/linebender_resource_handle-0.1.1/Cargo.toml
 linux-raw-sys	0.12.1	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	vendor/linux-raw-sys-0.12.1/Cargo.toml
+linux-raw-sys	0.4.15	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	vendor/linux-raw-sys-0.4.15/Cargo.toml
 log	0.4.34	MIT OR Apache-2.0	vendor/log-0.4.34/Cargo.toml
 matchers	0.2.0	MIT	vendor/matchers-0.2.0/Cargo.toml
 memchr	2.8.3	Unlicense OR MIT	vendor/memchr-2.8.3/Cargo.toml
@@ -74,12 +97,16 @@ nix	0.29.0	MIT	vendor/nix-0.29.0/Cargo.toml
 nu-ansi-term	0.50.3	MIT	vendor/nu-ansi-term-0.50.3/Cargo.toml
 once_cell	1.21.4	MIT OR Apache-2.0	vendor/once_cell-1.21.4/Cargo.toml
 once_cell_polyfill	1.70.1	MIT OR Apache-2.0	vendor/once_cell_polyfill-1.70.1/Cargo.toml
+ordered-stream	0.2.0	MIT OR Apache-2.0	vendor/ordered-stream-0.2.0/Cargo.toml
+parking	2.2.1	Apache-2.0 OR MIT	vendor/parking-2.2.1/Cargo.toml
 pin-project-lite	0.2.17	Apache-2.0 OR MIT	vendor/pin-project-lite-0.2.17/Cargo.toml
+piper	0.2.4	MIT OR Apache-2.0	vendor/piper-0.2.4/Cargo.toml
 pkg-config	0.3.34	MIT OR Apache-2.0	vendor/pkg-config-0.3.34/Cargo.toml
 png	0.18.1	MIT OR Apache-2.0	vendor/png-0.18.1/Cargo.toml
 polling	3.11.0	Apache-2.0 OR MIT	vendor/polling-3.11.0/Cargo.toml
 portable-atomic	1.11.0	Apache-2.0 OR MIT	vendor/portable-atomic-1.11.0/Cargo.toml
 portable-atomic-util	0.2.4	Apache-2.0 OR MIT	vendor/portable-atomic-util-0.2.4/Cargo.toml
+proc-macro-crate	3.3.0	MIT OR Apache-2.0	vendor/proc-macro-crate-3.3.0/Cargo.toml
 proc-macro2	1.0.107	MIT OR Apache-2.0	vendor/proc-macro2-1.0.107/Cargo.toml
 quick-xml	0.41.0	MIT	vendor/quick-xml-0.41.0/Cargo.toml
 quote	1.0.47	MIT OR Apache-2.0	vendor/quote-1.0.47/Cargo.toml
@@ -91,16 +118,19 @@ regex-automata	0.4.18	MIT OR Apache-2.0	vendor/regex-automata-0.4.18/Cargo.toml
 regex-syntax	0.8.11	MIT OR Apache-2.0	vendor/regex-syntax-0.8.11/Cargo.toml
 roxmltree	0.20.0	MIT OR Apache-2.0	vendor/roxmltree-0.20.0/Cargo.toml
 rustc-hash	2.1.3	Apache-2.0 OR MIT	vendor/rustc-hash-2.1.3/Cargo.toml
+rustix	0.38.44	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	vendor/rustix-0.38.44/Cargo.toml
 rustix	1.1.4	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	vendor/rustix-1.1.4/Cargo.toml
 self_cell	1.3.0	Apache-2.0 OR GPL-2.0-only	vendor/self_cell-1.3.0/Cargo.toml
 serde	1.0.229	MIT OR Apache-2.0	vendor/serde-1.0.229/Cargo.toml
 serde_core	1.0.229	MIT OR Apache-2.0	vendor/serde_core-1.0.229/Cargo.toml
 serde_derive	1.0.229	MIT OR Apache-2.0	vendor/serde_derive-1.0.229/Cargo.toml
 serde_json	1.0.151	MIT OR Apache-2.0	vendor/serde_json-1.0.151/Cargo.toml
+serde_repr	0.1.20	MIT OR Apache-2.0	vendor/serde_repr-0.1.20/Cargo.toml
 serde_spanned	1.1.1	MIT OR Apache-2.0	vendor/serde_spanned-1.1.1/Cargo.toml
 sha2	0.10.9	MIT OR Apache-2.0	vendor/sha2-0.10.9/Cargo.toml
 sharded-slab	0.1.7	MIT	vendor/sharded-slab-0.1.7/Cargo.toml
 shlex	2.0.1	MIT OR Apache-2.0	vendor/shlex-2.0.1/Cargo.toml
+signal-hook-registry	1.4.5	Apache-2.0/MIT	vendor/signal-hook-registry-1.4.5/Cargo.toml
 simd-adler32	0.3.10	MIT	vendor/simd-adler32-0.3.10/Cargo.toml
 skrifa	0.40.0	MIT OR Apache-2.0	vendor/skrifa-0.40.0/Cargo.toml
 skrifa	0.44.0	MIT OR Apache-2.0	vendor/skrifa-0.44.0/Cargo.toml
@@ -109,6 +139,7 @@ slotmap	1.1.1	Zlib	vendor/slotmap-1.1.1/Cargo.toml
 smallvec	1.16.1	MIT OR Apache-2.0	vendor/smallvec-1.16.1/Cargo.toml
 smithay-client-toolkit	0.21.1	MIT	vendor/smithay-client-toolkit-0.21.1/Cargo.toml
 smol_str	0.3.6	MIT OR Apache-2.0	vendor/smol_str-0.3.6/Cargo.toml
+static_assertions	1.1.0	MIT OR Apache-2.0	vendor/static_assertions-1.1.0/Cargo.toml
 strict-num	0.1.1	MIT	vendor/strict-num-0.1.1/Cargo.toml
 strsim	0.11.1	MIT	vendor/strsim-0.11.1/Cargo.toml
 swash	0.2.10	Apache-2.0 OR MIT	vendor/swash-0.2.10/Cargo.toml
@@ -127,7 +158,9 @@ tiny-skia-path	0.12.0	BSD-3-Clause	vendor/tiny-skia-path-0.12.0/Cargo.toml
 tinyvec	1.13.2	Zlib OR Apache-2.0 OR MIT	vendor/tinyvec-1.13.2/Cargo.toml
 tinyvec_macros	0.1.1	MIT OR Apache-2.0 OR Zlib	vendor/tinyvec_macros-0.1.1/Cargo.toml
 toml	1.1.5+spec-1.1.0	MIT OR Apache-2.0	vendor/toml-1.1.5+spec-1.1.0/Cargo.toml
+toml_datetime	0.6.9	MIT OR Apache-2.0	vendor/toml_datetime-0.6.9/Cargo.toml
 toml_datetime	1.1.1+spec-1.1.0	MIT OR Apache-2.0	vendor/toml_datetime-1.1.1+spec-1.1.0/Cargo.toml
+toml_edit	0.22.26	MIT OR Apache-2.0	vendor/toml_edit-0.22.26/Cargo.toml
 toml_parser	1.1.3+spec-1.1.0	MIT OR Apache-2.0	vendor/toml_parser-1.1.3+spec-1.1.0/Cargo.toml
 toml_writer	1.1.2+spec-1.1.0	MIT OR Apache-2.0	vendor/toml_writer-1.1.2+spec-1.1.0/Cargo.toml
 tracing	0.1.44	MIT	vendor/tracing-0.1.44/Cargo.toml
@@ -138,6 +171,7 @@ tracing-subscriber	0.3.23	MIT	vendor/tracing-subscriber-0.3.23/Cargo.toml
 trybuild	1.0.119	MIT OR Apache-2.0	vendor/trybuild-1.0.119/Cargo.toml
 ttf-parser	0.25.1	MIT OR Apache-2.0	vendor/ttf-parser-0.25.1/Cargo.toml
 typenum	1.20.1	MIT OR Apache-2.0	vendor/typenum-1.20.1/Cargo.toml
+uds_windows	1.1.0	MIT	vendor/uds_windows-1.1.0/Cargo.toml
 unicode-bidi	0.3.18	MIT OR Apache-2.0	vendor/unicode-bidi-0.3.18/Cargo.toml
 unicode-ident	1.0.24	(MIT OR Apache-2.0) AND Unicode-3.0	vendor/unicode-ident-1.0.24/Cargo.toml
 unicode-linebreak	0.1.5	Apache-2.0	vendor/unicode-linebreak-0.1.5/Cargo.toml
@@ -155,7 +189,10 @@ wayland-protocols-misc	0.3.12	MIT	vendor/wayland-protocols-misc-0.3.12/Cargo.tom
 wayland-protocols-wlr	0.3.12	MIT	vendor/wayland-protocols-wlr-0.3.12/Cargo.toml
 wayland-scanner	0.31.11	MIT	vendor/wayland-scanner-0.31.11/Cargo.toml
 wayland-sys	0.31.11	MIT	vendor/wayland-sys-0.31.11/Cargo.toml
+winapi	0.3.9	MIT/Apache-2.0	vendor/winapi-0.3.9/Cargo.toml
+winapi-i686-pc-windows-gnu	0.4.0	MIT/Apache-2.0	vendor/winapi-i686-pc-windows-gnu-0.4.0/Cargo.toml
 winapi-util	0.1.9	Unlicense OR MIT	vendor/winapi-util-0.1.9/Cargo.toml
+winapi-x86_64-pc-windows-gnu	0.4.0	MIT/Apache-2.0	vendor/winapi-x86_64-pc-windows-gnu-0.4.0/Cargo.toml
 windows-link	0.2.1	MIT OR Apache-2.0	vendor/windows-link-0.2.1/Cargo.toml
 windows-sys	0.59.0	MIT OR Apache-2.0	vendor/windows-sys-0.59.0/Cargo.toml
 windows-sys	0.61.2	MIT OR Apache-2.0	vendor/windows-sys-0.61.2/Cargo.toml
@@ -168,10 +205,18 @@ windows_i686_msvc	0.52.6	MIT OR Apache-2.0	vendor/windows_i686_msvc-0.52.6/Cargo
 windows_x86_64_gnu	0.52.6	MIT OR Apache-2.0	vendor/windows_x86_64_gnu-0.52.6/Cargo.toml
 windows_x86_64_gnullvm	0.52.6	MIT OR Apache-2.0	vendor/windows_x86_64_gnullvm-0.52.6/Cargo.toml
 windows_x86_64_msvc	0.52.6	MIT OR Apache-2.0	vendor/windows_x86_64_msvc-0.52.6/Cargo.toml
+winnow	0.7.15	MIT	vendor/winnow-0.7.15/Cargo.toml
 winnow	1.0.4	MIT	vendor/winnow-1.0.4/Cargo.toml
 xcursor	0.3.11	MIT	vendor/xcursor-0.3.11/Cargo.toml
+xdg-home	1.3.0	MIT	vendor/xdg-home-1.3.0/Cargo.toml
 xkeysym	0.2.1	MIT OR Apache-2.0 OR Zlib	vendor/xkeysym-0.2.1/Cargo.toml
 yazi	0.2.1	Apache-2.0 OR MIT	vendor/yazi-0.2.1/Cargo.toml
+zbus	5.5.0	MIT	vendor/zbus-5.5.0/Cargo.toml
+zbus_macros	5.5.0	MIT	vendor/zbus_macros-5.5.0/Cargo.toml
+zbus_names	4.2.0	MIT	vendor/zbus_names-4.2.0/Cargo.toml
 zeno	0.3.3	Apache-2.0 OR MIT	vendor/zeno-0.3.3/Cargo.toml
 zlib-rs	0.6.7	Zlib	vendor/zlib-rs-0.6.7/Cargo.toml
 zmij	1.0.23	MIT	vendor/zmij-1.0.23/Cargo.toml
+zvariant	5.4.0	MIT	vendor/zvariant-5.4.0/Cargo.toml
+zvariant_derive	5.4.0	MIT	vendor/zvariant_derive-5.4.0/Cargo.toml
+zvariant_utils	3.2.0	MIT	vendor/zvariant_utils-3.2.0/Cargo.toml
