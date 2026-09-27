@@ -192,6 +192,7 @@ jobs:
           python3 packaging/tool-sources/test-yazi-reproducibility.py
           python3 packaging/tool-sources/test-native-fixture-routing.py
           python3 packaging/tool-sources/test-stage-tool-bundle.py
+          python3 packaging/tool-sources/test-tool-runtime-receipt.py
           python3 packaging/fedora/test-source-modes.py
       - name: Prepare lifecycle-capable native package temporary directory
         id: native-temp

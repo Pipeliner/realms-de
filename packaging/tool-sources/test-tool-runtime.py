@@ -174,7 +174,7 @@ def main() -> None:
             text=True,
         )
         match = re.fullmatch(
-            r"generation ([0-9a-f]{32}) selected for future launches\n", apply.stdout
+            r"generation ([0-9a-f]{32}) prepared for next graphical login\n", apply.stdout
         )
         if match is None:
             raise SystemExit(f"theme apply returned an unexpected receipt: {apply.stdout!r}")
