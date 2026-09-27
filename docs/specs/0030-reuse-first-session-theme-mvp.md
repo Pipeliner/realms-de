@@ -82,6 +82,19 @@ work waits for that result. Repairing a real current-bar usability defect does n
 
 ## Verification obligations before implementation is declared complete
 
+### Implementation question: overlapping sessions
+
+Investigation on 2026-09-27 found a scope conflict that must be resolved before
+the login handoff is implemented. SPEC 0005 retains a single active same-UID
+session claim, while T1/V3 above require independent overlapping selections
+without specifying whether those sessions belong to different users. Current
+startup uses one realm-session.target and user-wide systemd/D-Bus activation
+environments. Adding theme variables to that shared environment is not proof of
+same-user session isolation. The owner must confirm either that overlap means
+different users for MVP (retaining same-UID rejection), or that concurrent
+same-user sessions require isolated lifecycle/activation support now. This
+question does not silently amend T1/V3 or claim the current code conforms.
+
 | ID | Required evidence |
 | --- | --- |
 | V1 | Login with A; apply B; both an existing app and a newly launched app in that session still use A; next login uses B. |
