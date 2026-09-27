@@ -3,6 +3,65 @@ import json
 import hashlib
 import sys
 import time
+import uuid
+
+
+def trace_scripts(path, config, token):
+    marker = f'# realm-ci-owner {token}\n'
+    prefix = f'from pathlib import Path\np = Path({path!r})\n'
+    install = prefix + f'''import os, tempfile
+p.parent.mkdir(parents=True, exist_ok=True)
+fd, temporary = tempfile.mkstemp(prefix='.realm-ci-', dir=p.parent)
+try:
+    with os.fdopen(fd, 'w') as stream:
+        os.fchmod(stream.fileno(), 0o644)
+        stream.write({(marker + config)!r})
+    os.link(temporary, p)  # Exclusive publication; never replace an existing file.
+finally:
+    os.unlink(temporary)
+'''
+    cleanup = prefix + f'''if p.exists() and p.read_text().startswith({marker!r}):
+    p.unlink()
+'''
+    return install, cleanup
+
+
+def lock_trace_config(version, distro):
+    # 1.7.2's daemon preserves stderr; 1.8.6 redirects it to /dev/null.
+    # Restrict this disposable CI diagnostic to the observed Ubuntu package.
+    if (version, distro) != ('swaylock version 1.7.2', 'ubuntu'):
+        return None
+    return ('[Service]\nEnvironment=WAYLAND_DEBUG=client\nStandardError=journal\n'
+            'LogRateLimitIntervalSec=1h\nLogRateLimitBurst=1000\n')
+
+
+def failed_blank(original, guest, key, screenshot, evidence):
+    """Gather bounded evidence, never turn redraw success into acceptance."""
+    errors = {}
+    def attempt(name, action):
+        try:
+            action()
+        except Exception as error:
+            errors[name] = str(error)[:2000]
+    def retain(name, command, limit):
+        output = guest(command)
+        (evidence / name).write_bytes(output.encode()[:limit])
+    journal = ("sudo timeout 5 sh -c 'journalctl -b -n 1000 --no-pager "
+               "-o short-monotonic _SYSTEMD_USER_UNIT=realm-lock.service | head -c 65536'")
+    attempt('compositor', lambda: retain('idle-compositor-stderr.txt',
+        "sudo timeout 5 sh -c 'head -c 65536 /home/alice/.local/share/sddm/wayland-session.log; "
+        "tail -c 65536 /home/alice/.local/share/sddm/wayland-session.log'", 131072))
+    attempt('protocol-before', lambda: retain('idle-lock-protocol-before.txt', journal, 65536))
+    # A modifier cannot authenticate. No Enter/password and no acceptance retry.
+    def redraw():
+        key('ctrl')
+        time.sleep(0.25)
+        screenshot('idle-failed-redraw')
+    attempt('redraw', redraw)
+    attempt('protocol-after', lambda: retain('idle-lock-protocol-after.txt', journal, 65536))
+    attempt('errors', lambda: (evidence / 'idle-diagnostic-errors.json').write_text(
+        json.dumps(errors, indent=2) + '\n'))
+    raise original
 
 
 def timed_roundtrip(start, observe, snapshot, key, password, suppressed, gone,
@@ -93,6 +152,9 @@ def run(guest, user, key, password, snapshot, suppressed, gone, screenshot, rest
     baseline = None
     uid = guest('id -u alice').strip()
     assert uid.isdigit(), uid
+    trace_path = f'/run/user/{uid}/systemd/user/realm-lock.service.d/90-ci-protocol.conf'
+    trace_installed = False
+    trace_cleanup = None
 
     def systemctl(arguments):
         return guest(user + ' timeout 30 systemctl --user ' + arguments).strip()
@@ -102,9 +164,18 @@ def run(guest, user, key, password, snapshot, suppressed, gone, screenshot, rest
                      f'SYSLOG_IDENTIFIER=realm-idle _UID={uid}')
 
     def start():
-        nonlocal baseline
+        nonlocal baseline, trace_installed, trace_cleanup
         guest('test -z "$(ls -A /sys/class/backlight)"')
         assert snapshot()['state'] == 'inactive', 'manual fixture must leave locker inactive'
+        config = lock_trace_config(guest('swaylock --version').strip(),
+                                   guest('. /etc/os-release; printf "%s" "$ID"').strip())
+        if config:
+            # Runtime-only drop-in; leave shipped command and renderer untouched.
+            install, trace_cleanup = trace_scripts(trace_path, config, uuid.uuid4().hex)
+            # The remote write may succeed even if its SSH response is lost.
+            trace_installed = True
+            guest('sudo python3 -', install)
+            systemctl('daemon-reload')
         systemctl('start realm-idle.service')
         pid = systemctl('show realm-idle.service -p MainPID --value')
         assert pid.isdigit() and int(pid) > 0, pid
@@ -157,13 +228,24 @@ print(json.dumps({'argv': p.joinpath('cmdline').read_bytes().decode().rstrip('\\
             if uniform:
                 return
             if completed >= deadline:
-                raise AssertionError('idle lock frame is not uniformly opaque')
+                failed_blank(AssertionError('idle lock frame is not uniformly opaque'),
+                             guest, key, screenshot, evidence)
             time.sleep(0.2)
 
     def stop():
-        systemctl('stop realm-idle.service')
-        assert systemctl('show realm-idle.service -p ActiveState --value') == 'inactive'
-        gone(identity)
+        try:
+            systemctl('stop realm-idle.service')
+            assert systemctl('show realm-idle.service -p ActiveState --value') == 'inactive'
+            gone(identity)
+        finally:
+            failed = sys.exc_info()[0] is not None
+            if trace_installed:
+                try:
+                    guest('sudo python3 -', trace_cleanup)
+                    systemctl('daemon-reload')
+                except Exception:
+                    if not failed:
+                        raise
 
     return timed_roundtrip(start, observe, snapshot, key, password, suppressed,
                            gone, screenshot, blank, restored, stop, journal, evidence)

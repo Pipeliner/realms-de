@@ -6,9 +6,91 @@ import unittest
 from unittest.mock import patch
 import json
 import hashlib
+import configparser
 
 
 class IdleTests(unittest.TestCase):
+    def test_atomic_trace_cleanup_handles_lost_reply_and_preserves_existing_file(self):
+        spec = importlib.util.spec_from_file_location('idle_roundtrip', Path(__file__).with_name('idle_roundtrip.py'))
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        self.assertTrue(hasattr(probe, 'trace_scripts'), 'ownership-safe trace scripts missing')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'unit.d' / 'trace.conf'
+            install, cleanup = probe.trace_scripts(str(path), '[Service]\n', 'fixture-token')
+            exec(install, {})
+            # The remote operation succeeded but its transport reply was lost.
+            exec(cleanup, {})
+            self.assertFalse(path.exists())
+            self.assertEqual(list(path.parent.iterdir()), [])
+            path.write_text('pre-existing unrelated configuration')
+            with self.assertRaises(FileExistsError):
+                exec(install, {})
+            exec(cleanup, {})
+            self.assertEqual(path.read_text(), 'pre-existing unrelated configuration')
+            self.assertEqual(list(path.parent.iterdir()), [path])
+            path.unlink()
+            with patch('os.link', side_effect=OSError('publication failed')):
+                with self.assertRaisesRegex(OSError, 'publication failed'):
+                    exec(install, {})
+            exec(cleanup, {})
+            self.assertEqual(list(path.parent.iterdir()), [])
+
+    def test_trace_is_scoped_to_ubuntu_172_without_replacing_command(self):
+        spec = importlib.util.spec_from_file_location('idle_roundtrip', Path(__file__).with_name('idle_roundtrip.py'))
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        self.assertTrue(hasattr(probe, 'lock_trace_config'), 'version-scoped trace missing')
+        for version, distro in [('swaylock version 1.8.6', 'fedora'), ('swaylock version 1.7.2', 'fedora'), ('unknown', 'ubuntu')]:
+            self.assertIsNone(probe.lock_trace_config(version, distro))
+        config = configparser.ConfigParser()
+        config.read_string(probe.lock_trace_config('swaylock version 1.7.2', 'ubuntu'))
+        self.assertEqual(dict(config['Service']), {
+            'environment': 'WAYLAND_DEBUG=client', 'standarderror': 'journal',
+            'logratelimitintervalsec': '1h', 'logratelimitburst': '1000'})
+
+    def test_blank_diagnostic_success_and_failure_never_replace_original(self):
+        spec = importlib.util.spec_from_file_location('idle_roundtrip', Path(__file__).with_name('idle_roundtrip.py'))
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        self.assertTrue(hasattr(probe, 'failed_blank'), 'failure-only discriminator missing')
+        for broken in (False, 'transport', 'write', 'capture'):
+            with self.subTest(broken=broken), tempfile.TemporaryDirectory() as directory:
+                evidence = Path(directory)
+                original = AssertionError('idle lock frame is not uniformly opaque')
+                manifest = evidence / 'idle-blank-attempts.json'
+                manifest.write_text('["original"]')
+                if broken == 'write':
+                    for name in ('idle-compositor-stderr.txt', 'idle-lock-protocol-before.txt',
+                                 'idle-lock-protocol-after.txt', 'idle-diagnostic-errors.json'):
+                        (evidence / name).mkdir()
+                calls = []
+                def guest(command):
+                    calls.append(command)
+                    if broken == 'transport':
+                        raise TimeoutError('guest unavailable')
+                    return 'x' * 200000
+                def key(value):
+                    self.assertEqual(manifest.read_text(), '["original"]')
+                    calls.append(value)
+                    if broken == 'transport':
+                        raise TimeoutError('monitor unavailable')
+                def screenshot(name):
+                    calls.append(name)
+                    if broken == 'capture':
+                        raise TimeoutError('capture unavailable')
+                    return evidence / (name + '.ppm')
+                with self.assertRaises(AssertionError) as raised:
+                    probe.failed_blank(original, guest, key, screenshot, evidence)
+                self.assertIs(raised.exception, original)
+                self.assertEqual(calls.count('ctrl'), 1)
+                self.assertNotIn('ret', calls)
+                if not broken:
+                    self.assertEqual(calls.count('idle-failed-redraw'), 1)
+                    self.assertLessEqual((evidence / 'idle-lock-protocol-before.txt').stat().st_size, 65536)
+                    self.assertLessEqual((evidence / 'idle-compositor-stderr.txt').stat().st_size, 131072)
+                self.assertEqual(manifest.read_text(), '["original"]')
+
     def fixture(self, dim=300, lock=600, wrong_unlock=False, correct_unlock=True,
                 resume=True, stop_error=False, missing_lock=False, restoration_fails=False,
                 journal_error=False, journal_write_error=False, duplicate_dim=False):
@@ -104,9 +186,10 @@ class IdleTests(unittest.TestCase):
         probe = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(probe)
         commands = []
+        scripts = []
         keys = []
         identities = []
-        frames = {'calls': 0, 'never_blank': False}
+        frames = {'calls': 0, 'never_blank': False, 'trace_reply_lost': False}
         names = []
         argv = ['swayidle', '-w', '-C', '/dev/null',
                 'timeout', '300', 'realm-backlight dim', 'resume', 'realm-backlight restore',
@@ -117,7 +200,16 @@ class IdleTests(unittest.TestCase):
             commands.append(command)
             if script is not None:
                 compile(script, '<guest metadata>', 'exec')
+                scripts.append(script)
+                if '/systemd/user/' in script:
+                    if frames['trace_reply_lost'] and 'os.link(temporary, p)' in script:
+                        raise RuntimeError('SSH reply lost after installation')
+                    return ''
                 return json.dumps({'argv': argv, 'start_time': 44, 'executable': '/usr/bin/swayidle'})
+            if command == 'swaylock --version':
+                return 'swaylock version 1.7.2'
+            if command.startswith('. /etc/os-release'):
+                return 'ubuntu'
             if '-p MainPID' in command:
                 return '22'
             if 'time.monotonic' in command:
@@ -167,8 +259,10 @@ class IdleTests(unittest.TestCase):
                 self.assertEqual(attempt['sha256'], hashlib.sha256((evidence / attempt['path']).read_bytes()).hexdigest())
                 self.assertLessEqual(attempt['started_monotonic'], attempt['completed_monotonic'])
             frames['never_blank'] = True
+            diagnostic_start = len(names)
             with patch.object(probe.time, 'monotonic', side_effect=[0, 0, 6]), self.assertRaisesRegex(AssertionError, 'uniformly opaque'):
                 blank()
+            self.assertEqual(names[diagnostic_start:], ['idle-locked-000', 'idle-failed-redraw'])
             stop()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'blank.ppm'
@@ -183,12 +277,31 @@ class IdleTests(unittest.TestCase):
                 probe.run(guest, 'USER', keys.append, lambda text: None,
                     lambda: {'state': 'inactive'}, lambda: None,
                     identities.append, screenshot, lambda present: None, Path(directory))
-        self.assertEqual(keys, ['esc'])
+        self.assertEqual(keys, ['esc', 'ctrl'])
         self.assertEqual(identities, [{'22': {'start_time': 44}}])
         self.assertIn('USER timeout 30 systemctl --user start realm-idle.service', commands)
         self.assertIn('USER timeout 30 systemctl --user stop realm-idle.service', commands)
         self.assertIn('id -u alice', commands)
+        self.assertEqual(commands.count('USER timeout 30 systemctl --user daemon-reload'), 2)
+        self.assertEqual(sum('os.link(temporary, p)' in script for script in scripts), 1)
+        self.assertEqual(sum('p.unlink()' in script for script in scripts), 1)
         self.assertIn('sudo journalctl -b -n 200 --no-pager -o json SYSLOG_IDENTIFIER=realm-idle _UID=1001', commands)
+        frames['trace_reply_lost'] = True
+        scripts.clear()
+        def failed_start(start, observe, snapshot, key, password, suppressed, gone,
+                         screenshot, blank, restored, stop, journal, evidence):
+            try:
+                start()
+            finally:
+                stop()
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(probe, 'timed_roundtrip', side_effect=failed_start):
+                with self.assertRaisesRegex(RuntimeError, 'SSH reply lost'):
+                    probe.run(guest, 'USER', keys.append, lambda text: None,
+                        lambda: {'state': 'inactive'}, lambda: None,
+                        identities.append, screenshot, lambda present: None, Path(directory))
+        self.assertEqual(sum('p.unlink()' in script for script in scripts), 1,
+                         'uncertain remote completion must still run owned-file cleanup')
 
 
 if __name__ == '__main__':

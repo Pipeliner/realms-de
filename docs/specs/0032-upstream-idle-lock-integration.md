@@ -120,6 +120,23 @@ No injected timers, clocks or replacement locker are allowed in the VM.
 The no-backlight VM must log the real dim no-op, still lock, show an opaque
 uniform frame before password input, reject a wrong password, suppress the
 launcher, accept the correct password and restore the launcher binding.
+CI-only discriminator after run 36354366061: Ubuntu retained 25 identical fresh
+partial frames across five seconds, excluding reused capture files. Retain up
+to 128 KiB of SDDM compositor/session stderr and 64 KiB of lock journal evidence.
+Only the installed Ubuntu swaylock 1.7.2 may receive a disposable runtime unit
+drop-in enabling client protocol tracing (its daemon preserves stderr), with a
+1000-message/hour journal rate bound; remove the drop-in after the idle probe.
+Publish the complete token-tagged drop-in atomically without overwriting an
+existing file. Cleanup must cover uncertain SSH completion and partial writes,
+remove temporary files, and never remove a pre-existing unrelated drop-in.
+Do not change ExecStart, renderer selection, package versions or shipped units.
+On opaque-frame failure only, after retaining the original indexed frames and
+manifest, collect pre-redraw protocol evidence, send one non-authenticating
+Control key and retain one separate bounded screenshot and post-redraw trace.
+These diagnostics must always re-raise the original opacity failure, including
+when diagnostic commands, captures or writes fail. A successful redraw cannot
+satisfy acceptance. This is component discrimination, not a proven runtime fix.
+
 The unchanged five-second blank-frame retry window uses a fresh, never-existing
 capture path for each bounded attempt and retains every complete frame plus
 host monotonic capture timestamps and SHA-256 hashes. A pre-existing complete
