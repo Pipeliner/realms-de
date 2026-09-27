@@ -220,6 +220,13 @@ logs are uploaded, not extracted package trees or source bundles. Each case
 announces its start in the live job log. Missing logs after a forced runner loss
 remain missing evidence, not a passing fixture. The timeout stays bounded;
 retaining diagnostics does not waive it or prove why the build exceeded it.
+The evidence directory SHALL be under the fixture's dedicated `/tmp` parent,
+outside its disposable scratch child, rather than beneath runner-owned home
+directories. Before invoking native package drivers, CI SHALL prove file creation and append
+from the same root-mapped network namespace used by the driver. Host-root write
+access alone is insufficient: capabilities in a child user namespace do not
+grant access through host-owned private ancestor directories. A failed probe
+SHALL report ancestor permissions and stop before the expensive package work.
 
 The Debian recipe's production resolver SHALL continue to select its complete
 versioned Cargo/rustc pair below `/usr/lib/rust-1.[89][0-9]/bin`.  The native
