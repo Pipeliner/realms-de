@@ -44,6 +44,7 @@ does not serve it waits — however good it would look in a screenshot.
 | Minimal-motion pass | none — v1 is motionless by design | M6 |
 | Multi-monitor beyond "it doesn't break" | single output is the tested path | M6 |
 | Runtime keyboard-layout switching | preserve the keymap/layout River created for each keyboard | Post-MVP input contract |
+| Suspend/resume integration and verification | no suspend-protection guarantee; manual locking and 5-minute dim / 10-minute lock-blank remain required | Post-MVP; #256 and SPEC 0032 |
 | In-incarnation recovery after an admitted policy response reports `Io` or `Unsupported` | fail closed, let supervision restart `realm-session`, and relearn compositor authority through River replay; emit no ordinary completion/effect from the failed transaction | Post-MVP transaction-recovery contract |
 
 ---
