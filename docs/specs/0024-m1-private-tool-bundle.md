@@ -351,6 +351,12 @@ executables from two clean builds using the same Debian Yazi recipe and supplied
 toolchain. The second build uses a fresh source kit and target directory. The
 fixture retains UTC execution times, paths and SHA-256 hashes and fails on any
 byte difference; no normalization is currently declared.
+Direct invocation of the shared Debian target SHALL export the same effective
+dpkg build-flag defaults as Debhelper: CFLAGS, CPPFLAGS, CXXFLAGS, LDFLAGS and
+RUSTFLAGS, while preserving explicit caller overrides. Run 36331107468 showed
+that restoring only CFLAGS left the other four empty in the repeat, including
+the missing Rust frame-pointer option. Such unequal inputs are not a valid
+same-recipe comparison; byte equality remains required after correcting them.
 The CI diagnostic artifact SHALL include the explicit `yazi-reproducibility.txt`
 report as well as driver `.out` and sentinel `.log` files. On mismatch the helper
 SHALL print at most the last 40 report lines into the driver log, preserving
