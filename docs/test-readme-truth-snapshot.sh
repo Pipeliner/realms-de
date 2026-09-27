@@ -154,9 +154,9 @@ expect_fail missing-capture-review-link "$fixture_root" \
     'README capture caption must link the visual review correction'
 
 fixture_root=$(make_fixture missing-blocker)
-sed '/issues\/168/d' "$fixture_root/README.md" >"$fixture_root/README.next"
+sed '/issues\/25/d' "$fixture_root/README.md" >"$fixture_root/README.next"
 mv "$fixture_root/README.next" "$fixture_root/README.md"
-expect_fail missing-blocker "$fixture_root" 'missing needs-human snapshot issue #168'
+expect_fail missing-blocker "$fixture_root" 'missing needs-human snapshot issue #25'
 
 fixture_root=$(make_fixture resolved-font-question)
 sed '/## Repo map/i\\| [#34 — resolved font policy](https://github.com/Pipeliner/realms-de/issues/34) | must not return |' \
@@ -165,13 +165,13 @@ mv "$fixture_root/README.next" "$fixture_root/README.md"
 expect_fail resolved-font-question "$fixture_root" 'closed issue #34 must not appear in the needs-human snapshot'
 
 fixture_root=$(make_fixture changed-issue-title)
-sed 's/Does the 𓂃 prompt sigil survive/Does the prompt sigil survive/' \
+sed 's/Template: GTK 3, GTK 4 and libadwaita stylesheets/Template: obsolete toolkit title/' \
     "$fixture_root/README.md" >"$fixture_root/README.next"
 mv "$fixture_root/README.next" "$fixture_root/README.md"
 expect_fail changed-issue-title "$fixture_root" 'needs-human snapshot title differs from GitHub'
 
 fixture_root=$(make_fixture empty-blocker)
-sed "s/The public \`theme lint\` and \`theme diff\` JSON contracts\./ /" \
+sed '/issues\/25/s/ |.* |$/ | |/' \
     "$fixture_root/README.md" >"$fixture_root/README.next"
 mv "$fixture_root/README.next" "$fixture_root/README.md"
 expect_fail empty-blocker "$fixture_root" 'needs-human snapshot blocker is empty'
@@ -194,6 +194,37 @@ sed '/\.\/docs\/test-readme-truth-snapshot\.sh/d' \
     "$fixture_root/.github/workflows/ci.yml" >"$fixture_root/ci.next.yml"
 mv "$fixture_root/ci.next.yml" "$fixture_root/.github/workflows/ci.yml"
 expect_fail missing-ci-invocation "$fixture_root" 'documentation CI must run the README truth snapshot fixtures'
+
+fixture_root=$(make_fixture missing-native-vm-run)
+sed 's@actions/runs/36327811527@actions/runs/1@g' "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail missing-native-vm-run "$fixture_root" 'README status must link the verified native VM run'
+
+fixture_root=$(make_fixture missing-trial-expiry)
+sed 's/2026-12-26/unknown/g' "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail missing-trial-expiry "$fixture_root" 'README trial must disclose artifact expiry'
+
+fixture_root=$(make_fixture missing-trial-desktop-warning)
+sed 's/desktop and display manager installed/desktop removed/' "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail missing-trial-desktop-warning "$fixture_root" 'README trial must preserve the existing desktop'
+
+fixture_root=$(make_fixture missing-trial-package)
+sed 's@artifacts/10935181555@artifacts/1@g' "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail missing-trial-package "$fixture_root" 'README trial must link its verified package artifact'
+
+fixture_root=$(make_fixture missing-overall-failure)
+sed 's/the overall run failed/the overall run passed/g' "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail missing-overall-failure "$fixture_root" 'README must distinguish passing native jobs from the failed overall run'
+
+fixture_root=$(make_fixture obsolete-human-row)
+sed '/## Repo map/i\\| [#168 — obsolete](https://github.com/Pipeliner/realms-de/issues/168) | obsolete blocker |' \
+    "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail obsolete-human-row "$fixture_root" 'needs-human snapshot must contain exactly the accepted issue set'
 
 fixture_root=$(make_fixture commented-ci-invocations)
 sed 's@^[[:space:]]*\./docs/\(test-readme-truth-snapshot\|check-readme-truth-snapshot\)\.sh@          # \&@' \
@@ -244,7 +275,7 @@ mv "$fixture_root/README.next" "$fixture_root/README.md"
 expect_fail relocated-readme-m3 "$fixture_root" 'README status must identify M3 as the MVP'
 
 fixture_root=$(make_fixture changed-snapshot-timestamp)
-sed 's/2026-08-30T06:18:36Z/2026-08-30T06:18:37Z/' "$fixture_root/README.md" \
+sed 's/2026-09-27/2026-09-26/' "$fixture_root/README.md" \
     >"$fixture_root/README.next"
 mv "$fixture_root/README.next" "$fixture_root/README.md"
 expect_fail changed-snapshot-timestamp "$fixture_root" 'README needs-human snapshot timestamp differs from the accepted snapshot'
