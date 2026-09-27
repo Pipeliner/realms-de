@@ -7,6 +7,8 @@ ConditionEnvironment=WAYLAND_DISPLAY
 
 [Service]
 Type=forking
+ExitType=cgroup
+GuessMainPID=no
 ExecStart=/usr/bin/swaylock -f -C /dev/null
 Restart=no
 Slice=app.slice

@@ -65,6 +65,24 @@ install_guest() {
     test ! -e /etc/systemd/user/realm-session.target.wants/realm-idle.service
     swaylock --version
 
+    # Disposable CI guest only. SSH remains key-only; use the distro PAM stack.
+    printf '%s\n' 'alice:realmtest' | chpasswd
+    {
+        swaylock --version
+        case "$target" in
+            ubuntu-24.04-x86_64)
+                dpkg-query -W swaylock swayidle brightnessctl libpam0g libpam-modules
+                dpkg-query -S /usr/bin/swaylock /etc/pam.d/swaylock
+                ;;
+            fedora-44-x86_64)
+                rpm -q swaylock swayidle brightnessctl pam
+                rpm -qf /usr/bin/swaylock /etc/pam.d/swaylock
+                ;;
+        esac
+        # Preserve the small distro PAM configuration, including include targets.
+        find -L /etc/pam.d -maxdepth 1 -type f -print -exec head -c 16384 {} \;
+    } > /var/tmp/realm-native-lock-packages-pam.txt
+
     install -d -m 0755 /etc/sddm.conf.d
     printf '%s\n' \
         '[Autologin]' \
@@ -175,6 +193,7 @@ probe_guest() {
         "$evidence/realmctl-doctor.json"
 
     cp /var/tmp/realm-native-packages.txt "$evidence/packages.txt"
+    cp /var/tmp/realm-native-lock-packages-pam.txt "$evidence/lock-packages-pam.txt"
     cp /var/tmp/realm-native-session-owner.txt "$evidence/session-entry-owner.txt"
     cp /usr/share/wayland-sessions/realm.desktop "$evidence/realm.desktop"
     cp /etc/sddm.conf.d/realm-native-vm.conf "$evidence/sddm-autologin.conf"

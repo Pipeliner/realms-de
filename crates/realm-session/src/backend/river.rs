@@ -1,6 +1,6 @@
 //! Production River v0.4.8 window-management backend.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::io;
 use std::os::fd::{BorrowedFd, OwnedFd};
 use std::os::unix::net::UnixStream;
@@ -127,6 +127,8 @@ enum Incoming {
         height: i32,
     },
     ExclusiveFocus(bool),
+    SessionLocked,
+    SessionUnlocked,
     BindingPressed(BackendBindingId),
     BindingReleased(BackendBindingId),
     BindingRepeatStopped(BackendBindingId),
@@ -331,8 +333,12 @@ impl ObjectData for DirectData {
                         self.emit(Incoming::SeatCreated(id));
                         return Some(DirectData::new(ObjectKind::Seat, &self.incoming));
                     }
-                    Ok((_, river_window_manager_v1::Event::SessionLocked))
-                    | Ok((_, river_window_manager_v1::Event::SessionUnlocked)) => {}
+                    Ok((_, river_window_manager_v1::Event::SessionLocked)) => {
+                        self.emit(Incoming::SessionLocked);
+                    }
+                    Ok((_, river_window_manager_v1::Event::SessionUnlocked)) => {
+                        self.emit(Incoming::SessionUnlocked);
+                    }
                     _ => self.emit(Incoming::Malformed),
                 }
             }
@@ -587,6 +593,10 @@ pub struct RiverBackend {
     bindings: BTreeMap<super::BackendBindingId, BackendBindingSpec>,
     binding_objects: BTreeMap<BackendBindingId, Binding>,
     watched_modifiers: Vec<BackendModifier>,
+    session_locked: bool,
+    binding_input_suspended: bool,
+    unlock_gate_turn: Option<BackendPolicyTurnId>,
+    held_bindings: BTreeSet<BackendBindingId>,
     default_output: Option<ObjectId>,
     focused_window: Option<WinId>,
     exclusive_focus: bool,
@@ -668,6 +678,10 @@ impl RiverBackend {
             bindings: BTreeMap::new(),
             binding_objects: BTreeMap::new(),
             watched_modifiers: Vec::new(),
+            session_locked: false,
+            binding_input_suspended: false,
+            unlock_gate_turn: None,
+            held_bindings: BTreeSet::new(),
             default_output: None,
             focused_window: None,
             exclusive_focus: false,
@@ -1079,7 +1093,8 @@ impl RiverBackend {
         }
 
         for (id, binding) in &mut self.binding_objects {
-            let enabled = response.bindings.enabled.binary_search(id).is_ok();
+            let enabled =
+                !self.session_locked && response.bindings.enabled.binary_search(id).is_ok();
             if binding.enabled != enabled {
                 if enabled {
                     binding.proxy.enable();
@@ -1089,16 +1104,26 @@ impl RiverBackend {
                 binding.enabled = enabled;
             }
         }
-        if self.watched_modifiers != response.bindings.watched_modifiers {
+        let watched_modifiers = if self.session_locked {
+            &[][..]
+        } else {
+            response.bindings.watched_modifiers.as_slice()
+        };
+        if self.watched_modifiers != watched_modifiers {
             self.xkb_seat
                 .as_ref()
                 .ok_or_else(protocol_error)?
                 .modifiers_watch(river_seat_v1::Modifiers::from_bits_truncate(
-                    modifiers_bits(&response.bindings.watched_modifiers),
+                    modifiers_bits(watched_modifiers),
                 ));
-            self.watched_modifiers = response.bindings.watched_modifiers.clone();
+            self.watched_modifiers = watched_modifiers.to_vec();
         }
-        match response.bindings.next_key_edge {
+        let next_key_edge = if self.session_locked {
+            BackendNextKeyEdge::Cancel
+        } else {
+            response.bindings.next_key_edge
+        };
+        match next_key_edge {
             BackendNextKeyEdge::Preserve => {}
             BackendNextKeyEdge::Ensure => self
                 .xkb_seat
@@ -1189,6 +1214,13 @@ impl RiverBackend {
             return Ok(None);
         }
         if let Some(event) = self.public_events.pop_front() {
+            if matches!(
+                &event,
+                BackendEvent::PolicyTurn(turn) if self.unlock_gate_turn == Some(turn.id)
+            ) {
+                self.unlock_gate_turn = None;
+                self.binding_input_suspended = false;
+            }
             return Ok(Some(event));
         }
         if self.open_turn.is_some() {
@@ -1769,36 +1801,72 @@ impl RiverBackend {
                 self.policy_events
                     .push(BackendPolicyEvent::ExclusiveFocusChanged(exclusive));
             }
+            Incoming::SessionLocked => {
+                self.session_locked = true;
+                self.binding_input_suspended = true;
+                self.unlock_gate_turn = None;
+                let mut repeat_stops = std::mem::take(&mut self.held_bindings);
+                self.policy_events.retain(|event| match event {
+                    BackendPolicyEvent::BindingPressed(id)
+                    | BackendPolicyEvent::BindingReleased(id)
+                    | BackendPolicyEvent::BindingRepeatStopped(id) => {
+                        repeat_stops.insert(*id);
+                        false
+                    }
+                    BackendPolicyEvent::UnboundKeyEaten
+                    | BackendPolicyEvent::ModifiersChanged { .. } => false,
+                    _ => true,
+                });
+                self.policy_events.extend(
+                    repeat_stops
+                        .into_iter()
+                        .map(BackendPolicyEvent::BindingRepeatStopped),
+                );
+            }
+            Incoming::SessionUnlocked => self.session_locked = false,
             Incoming::BindingPressed(id) => {
                 if !self.binding_objects.contains_key(&id) {
                     return Err(protocol_error());
                 }
-                self.policy_events
-                    .push(BackendPolicyEvent::BindingPressed(id));
+                if !self.session_locked {
+                    self.held_bindings.insert(id);
+                    self.policy_events
+                        .push(BackendPolicyEvent::BindingPressed(id));
+                }
             }
             Incoming::BindingReleased(id) => {
                 if !self.binding_objects.contains_key(&id) {
                     return Err(protocol_error());
                 }
-                self.policy_events
-                    .push(BackendPolicyEvent::BindingReleased(id));
+                if !self.session_locked {
+                    self.held_bindings.remove(&id);
+                    self.policy_events
+                        .push(BackendPolicyEvent::BindingReleased(id));
+                }
             }
             Incoming::BindingRepeatStopped(id) => {
                 if !self.binding_objects.contains_key(&id) {
                     return Err(protocol_error());
                 }
-                self.policy_events
-                    .push(BackendPolicyEvent::BindingRepeatStopped(id));
+                if !self.session_locked {
+                    self.held_bindings.remove(&id);
+                    self.policy_events
+                        .push(BackendPolicyEvent::BindingRepeatStopped(id));
+                }
             }
             Incoming::UnboundKeyEaten => {
-                self.policy_events.push(BackendPolicyEvent::UnboundKeyEaten)
+                if !self.session_locked {
+                    self.policy_events.push(BackendPolicyEvent::UnboundKeyEaten);
+                }
             }
             Incoming::ModifiersChanged { old, new } => {
-                self.policy_events
-                    .push(BackendPolicyEvent::ModifiersChanged {
-                        old: decode_modifiers(old)?,
-                        new: decode_modifiers(new)?,
-                    })
+                if !self.session_locked {
+                    self.policy_events
+                        .push(BackendPolicyEvent::ModifiersChanged {
+                            old: decode_modifiers(old)?,
+                            new: decode_modifiers(new)?,
+                        });
+                }
             }
             Incoming::ManageStart => {
                 self.turn_requested = false;
@@ -2019,6 +2087,9 @@ impl RiverBackend {
             .ok_or_else(|| capacity(BackendCapacityResource::PolicyTurnIds, u64::MAX))?;
         let id = BackendPolicyTurnId::new(self.next_turn).ok_or_else(protocol_error)?;
         let events = std::mem::take(&mut self.policy_events);
+        if self.binding_input_suspended && !self.session_locked {
+            self.unlock_gate_turn = Some(id);
+        }
         self.open_turn = Some(id);
         self.public_events
             .push_back(BackendEvent::PolicyTurn(BackendPolicyTurn {
@@ -2211,6 +2282,10 @@ impl WmBackend for RiverBackend {
 
     fn poll_interest(&self) -> BackendPollInterest {
         RiverBackend::poll_interest(self)
+    }
+
+    fn binding_input_suspended(&self) -> bool {
+        self.binding_input_suspended
     }
 
     fn service(
