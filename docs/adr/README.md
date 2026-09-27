@@ -15,6 +15,10 @@ Copy [`template.md`](template.md) to start a new one.
 
 ## The record
 
+**Current MVP override:** [ADR 0023](0023-reuse-first-session-theme-mvp.md)
+accepts session-scoped themes and an evidence-based Waybar comparison. Historical
+activation and renderer rows below are superseded only within its stated scope.
+
 | # | Title | Status | In one line | Reversal |
 |---|---|---|---|---|
 | [0001](0001-ledger-as-single-source-of-truth.md) | The ledger is the single source of truth | Accepted | Ordered `Vec<WinId>` per orbit; layouts are pure projections; undo restores an older ledger | **Structural** — the whole DE assumes it |
