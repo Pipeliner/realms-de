@@ -53,7 +53,7 @@ existing `flake.nix` check wiring only if required; never make its experiment
 failure mask ordinary acceptance evidence.
 
 - [ ] Write failing source tests for `render_state(state: dict) -> dict`:
-  all six numbered orbits with occupied/active/urgent distinctions, layout,
+  all six numbered orbits with occupied/active/empty distinctions, layout,
   mode, focused title, chord echo; empty title and markup-like title roundtrip
   as literal JSON text. Include narrow/long-title input without unbounded text.
 - [ ] Write failing socket fixtures for Hello/initial State/update/Shutdown,

@@ -21,6 +21,35 @@ let
     "realm-xwayland-window-observation"
     { }
     (builtins.readFile ./xwayland_window_observation.py);
+  # Opt-in comparison fixture only. The ordinary session-boots VM never starts
+  # Waybar; Task 2 supplies the bounded launch and measurement sequence.
+  waybarComparisonConfig = pkgs.writeText "realm-waybar-comparison.json" (
+    builtins.toJSON {
+      position = "bottom";
+      layer = "top";
+      exclusive = true;
+      "modules-left" = [ "custom/realm" ];
+      "modules-right" = [ "clock" "cpu" "memory" "network" "battery" ];
+      "custom/realm" = {
+        exec = "${pkgs.python3}/bin/python3 ${src + "/packaging/nix/waybar_compare.py"}";
+        "return-type" = "json";
+        format = "{text}";
+        escape = true;
+        tooltip = true;
+        # No interval or signal: Waybar consumes the adapter's event stream.
+      };
+      clock = { interval = 1; format = "{:%H:%M:%S}"; };
+      cpu = { interval = 1; format = "cpu {usage}%"; };
+      memory = { interval = 1; format = "mem {percentage}%"; };
+      network = {
+        interval = 1;
+        "format-ethernet" = "net {ifname}";
+        "format-wifi" = "net {essid}";
+        "format-disconnected" = "net down";
+      };
+      battery = { interval = 1; format = "bat {capacity}%"; };
+    }
+  );
   realmYazi = lib.findFirst (
     package: lib.getName package == "yazi"
   ) null (support.reusedTools pkgs);
@@ -59,6 +88,7 @@ assert realmYazi.version == "25.4.8";
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_browser_screencast.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_window_controls.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_relogin.py"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_waybar_compare.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/native-vm/test_relogin_roundtrip.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/native-vm/test_window_roundtrip.py"}
         bash ${src + "/packaging/session/test-portal-warmup.sh"}
@@ -66,6 +96,9 @@ assert realmYazi.version == "25.4.8";
       '';
 
   package = realm;
+
+  # A separate path for the experiment; not an acceptance result.
+  waybar-comparison-config = waybarComparisonConfig;
 
   # Execute the packaged helper's exact GI import path before spending time on
   # the graphical VM. This catches a typelib placed in a non-default output;
