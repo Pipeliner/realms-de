@@ -348,6 +348,7 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 25
     # An empty string means "no container", which is how ubuntu runs on the
     # host runner while fedora runs inside its own image from the same matrix.
     container: ${{ matrix.container }}
@@ -397,7 +398,20 @@ jobs:
           key: distro-${{ matrix.name }}
 
       - run: cargo build --workspace --all-features --locked
-      - run: cargo test --workspace --all-features --locked
+      - name: Run workspace Rust tests
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace --all-features --locked 2>&1 | tee rust-tests.log
+      - name: Retain Rust test diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rust-test-diagnostics-${{ matrix.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: rust-tests.log
+          if-no-files-found: warn
+          retention-days: 7
 
   nix:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
