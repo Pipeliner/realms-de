@@ -341,6 +341,16 @@ from a crashed session.
    supervised one unstartable *forever* — and a naive `Restart=` turns that into
    a permanent restart loop. See failure mode **N2**.
 
+Before installed-session verification, source-level daemon readiness fixtures
+must report readiness timeout without joining a still-running daemon. Drop
+the readiness receiver on timeout so a delayed ready callback fails instead
+of entering an unobserved live loop. Joining an already-finished daemon for
+its diagnostic result is allowed. Keep the existing two-second readiness
+budget and normal real-socket GetState/Quit receipt proof; a delayed-callback
+regression must itself finish with bounded cleanup. This is fixture behavior,
+not a production startup timeout change. The ready callback uses a rendezvous
+channel so an unobserved readiness notification cannot be queued after timeout.
+
 **A10 native recovery evidence (accepted refinement, 2026-09-27).** Open
 three distinguishable terminals through real keyboard bindings, alter their
 ledger order, and await the matching durable `ledger.json` before SIGKILL of

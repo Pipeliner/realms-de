@@ -1792,12 +1792,64 @@ mod tests {
         fs::remove_dir_all(fixture).unwrap();
     }
 
+    fn await_daemon_ready<T: std::fmt::Debug>(
+        ready_rx: mpsc::Receiver<()>,
+        daemon: std::thread::JoinHandle<T>,
+        timeout: Duration,
+    ) -> std::thread::JoinHandle<T> {
+        if let Err(error) = ready_rx.recv_timeout(timeout) {
+            drop(ready_rx);
+            if daemon.is_finished() {
+                panic!(
+                    "daemon did not become ready ({error:?}): {:?}",
+                    daemon.join()
+                );
+            }
+            panic!("daemon did not become ready ({error:?}); daemon still running");
+        }
+        daemon
+    }
+
+    #[test]
+    fn readiness_timeout_does_not_join_a_delayed_live_daemon() {
+        // Buffer this negative fixture so restoring the bad join still permits
+        // its cleanup after the assertion deadline; the live fixture rendezvous
+        // below separately prevents a late notification being queued.
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let (send_result_tx, send_result_rx) = mpsc::sync_channel(1);
+        let daemon = std::thread::spawn(move || {
+            release_rx.recv().unwrap();
+            send_result_tx.send(ready_tx.send(()).is_err()).unwrap();
+        });
+        let (finished_tx, finished_rx) = mpsc::sync_channel(1);
+        let observer = std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                await_daemon_ready(ready_rx, daemon, Duration::ZERO)
+            }));
+            finished_tx.send(result.is_err()).unwrap();
+        });
+        let completed = finished_rx.recv_timeout(Duration::from_secs(1));
+        // Always release the fixture before asserting, including the red path.
+        release_tx.send(()).unwrap();
+        observer.join().unwrap();
+        assert_eq!(
+            completed,
+            Ok(true),
+            "readiness diagnostic joined a live daemon"
+        );
+        assert!(
+            send_result_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "timed-out receiver admitted the delayed readiness callback"
+        );
+    }
+
     #[test]
     fn real_socket_get_state_and_exact_quit_receipt_drive_clean_exit() {
         let root = endpoint_fixture_dir("get-state-quit");
         let server_runtime = test_runtime_dir(&root).unwrap();
         let client_endpoint = test_runtime_dir(&root).unwrap().client_endpoint();
-        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (ready_tx, ready_rx) = mpsc::sync_channel(0);
         let daemon = std::thread::spawn(move || {
             run_daemon_with(
                 server_runtime,
@@ -1811,12 +1863,7 @@ mod tests {
             )
         });
 
-        if let Err(error) = ready_rx.recv_timeout(Duration::from_secs(2)) {
-            panic!(
-                "daemon did not become ready ({error:?}): {:?}",
-                daemon.join()
-            );
-        }
+        let daemon = await_daemon_ready(ready_rx, daemon, Duration::from_secs(2));
         let mut client = client_endpoint.connect("runtime-fixture").unwrap();
         let Response::State(state) = client.request(Request::GetState).unwrap() else {
             panic!("GetState did not return state");
