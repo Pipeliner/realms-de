@@ -354,6 +354,9 @@ run_native_session_vm() (
         15
     printf '%s\n' "$target" > "$evidence_dir/target.txt"
 
+    timeout 240 python3 "$script_dir/consumer_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+
     stop_qemu "$qemu_pid"
     qemu_pid=''
     trap - EXIT

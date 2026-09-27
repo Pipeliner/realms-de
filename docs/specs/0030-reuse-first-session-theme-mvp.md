@@ -180,6 +180,29 @@ work waits for that result. Repairing a real current-bar usability defect does n
 
 ## Verification obligations before implementation is declared complete
 
+### Native consumer acceptance (Ubuntu/Fedora)
+
+The installed graphical-session CI journey opens Foot through the real default
+binding, observes its managed window and actual Zsh child, and records their
+selected-generation environment and Foot arguments.
+The native fixture records the installed Foot version and independently checks
+the generated modern-then-legacy configuration variants with that binary's
+`--check-config`; the launched arguments must match the supported selection.
+Neither variant parsing successfully is a failure, not a fallback waiver.
+After applying generation B, the login record and retained terminal/shell remain
+on A. Keyboard input to that
+shell must execute a fixture script and open the installed private Yazi on a
+fixture directory; Yazi must inherit A's configuration, not B.
+The fixture observes the actual Yazi process before reading the shell/tool proof
+files written sequentially before Yazi executes; an earlier marker alone is not
+a completion barrier. Record executable identities, shell execution evidence,
+compositor state and complete framebuffers;
+quit Yazi and the terminal and verify clean process/window closure. Missing
+private Yazi/Starship is a failure, not a skipped acceptance. This CI slice
+depends on SPEC 0024's native tool delivery (#236); it does not add distro tool
+substitutes, enable live theme changes, or claim GTK/Qt, portal/browser or
+next-login/relogin acceptance.
+
 ### Overlap scope resolved
 
 The owner confirmed one session on 2026-09-27 in response to the explicit
