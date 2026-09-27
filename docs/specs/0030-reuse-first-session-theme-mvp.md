@@ -140,6 +140,11 @@ falls back to a mutable user configuration after both variants fail.
 Hung-command fixtures must actually remain blocked with their restricted PATH
 on native and Nix test hosts. Use a shell-builtin self-stop, not a host-specific
 `/bin/sleep` path, and retain stderr when the expected timeout is absent.
+The standalone shell-behaviour check invokes the fixture through its declared
+shell interpreter, including with a writable fixture descriptor still open;
+Linux executable-file exclusion must not obscure the self-stop assertion.
+Real consumer tests continue executing the fixture directly through production
+launch/probe code.
 
 One generation-derived child environment supplies REALM_GENERATION, ZDOTDIR,
 STARSHIP_CONFIG, YAZI_CONFIG_HOME, GTK_THEME and the Qt platform selector. GTK

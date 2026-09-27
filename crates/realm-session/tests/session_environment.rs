@@ -205,7 +205,15 @@ fn hung_foot_fixture_self_stops_without_external_helpers() {
     use std::time::{Duration, Instant};
 
     let login = Login::new();
-    let mut child = Command::new(login.tools.path().join("foot"))
+    // Reproduce Linux executable-file exclusion independently of scheduling.
+    let _writer = fs::OpenOptions::new()
+        .write(true)
+        .open(login.tools.path().join("foot"))
+        .unwrap();
+    // Test shell behaviour, not exec's ETXTBSY exclusion for a generated file.
+    // Production consumer tests above still execute the fixture directly.
+    let mut child = Command::new("/bin/sh")
+        .arg(login.tools.path().join("foot"))
         .args(["--check-config", "fixture.ini"])
         .env("PATH", login.tools.path())
         .env("TEST_ROOT", login.root.path())
