@@ -103,6 +103,15 @@ another desktop's defaults. A session-local config overlay may be used where a
 tool cannot import a theme. Do not claim GTK/Qt coverage without real packaged
 consumer evidence, including supported runtime/plugin versions.
 
+GTK3 and GTK4 `font-family` output must serialize each ordered
+`typography.fallback` family as a quoted CSS string. Escape quotes,
+backslashes and control characters within each family; joining raw palette
+names is invalid for a name such as `Noto Sans Symbols 2`. The selected font
+order and other template consumers must not change. A source-only parse of
+the previously rendered GTK3 sheet with GTK 3.24.33 reported line 49
+`Junk at end of value for font-family`; the exact GTK 3.24.52 VM stderr still
+requires CI evidence, and this parser result alone does not complete V4.
+
 The packaged toolkit VM probe must distinguish compositor-reported focused
 window title from visible text. It must require exactly two managed windows
 (the terminal and launched toolkit in this fixture), focus on that toolkit's
