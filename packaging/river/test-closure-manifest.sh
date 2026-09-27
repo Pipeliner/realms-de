@@ -163,4 +163,10 @@ expect_fail corrupt-cache "cached archive digest mismatch: river-0.4.8.tar.gz" \
 expect_fail extra-cache "archive cache inventory differs" \
     "$checker" --repo-root "$repo_root" --archive-dir "$archive_dir" "$cache_manifest"
 
+for policy in '--retry 3' '--connect-timeout 20' '--max-time 120' '--retry-max-time 300'; do
+    grep -F -- "$policy" "$repo_root/packaging/river/acquire-noble-closure.sh" >/dev/null || {
+        echo "missing bounded acquisition policy: $policy" >&2
+        exit 1
+    }
+done
 printf 'PASS: %s Ubuntu River closure manifest fixtures\n' "$pass_count"
