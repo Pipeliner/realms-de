@@ -94,3 +94,30 @@ guessing returned zero for the multiprocess locker. Systemd documents cgroup
 lifetime tracking for services without a reliable main process and warns that
 PID guessing is unreliable for multiprocess daemons:
 [systemd.service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html).
+
+### Installed dormant idle timing (accepted refinement, 2026-09-27)
+
+After the two existing lock round-trips, the NixOS VM manually starts the
+unmodified installed idle service. No wants link or shortened test timers are
+introduced. With no backlight device, a real idle cycle must log the helper's
+unavailable-device diagnostic at 300 seconds and still reach compositor-backed
+lock readiness at 600 seconds. Record the virtual input reset's boot-monotonic
+time, journal monotonic timestamps, and the lock service's active-enter
+monotonic timestamp. Allow one second of input/measurement uncertainty and up
+to thirty seconds of CI scheduling delay; fail an earlier or missing event.
+
+While idle-locked, a deliberately wrong password must leave the same live locker
+process identities and service active after a five-second observation interval;
+the launcher binding remains suppressed. Correct authentication then unlocks.
+Activity must produce a second unavailable-backlight diagnostic through the
+resume hook. Stopping idle must leave the service inactive and no live swayidle
+process. On failure, emit structured results and the last 200 journal entries
+into the build log before attempting artifact writes, where the driver can
+still collect them. Successful derivations retain journal JSON, structured
+results and lock screenshots for artifact upload. Failed-derivation screenshot
+retention is not claimed.
+
+This proves the installed default timers and the no-backlight path only. Real
+brightness restoration, host-policy suspend/readiness/resume and native-distro
+acceptance remain outstanding. Automatic startup stays disabled, and this
+slice does not complete #79.

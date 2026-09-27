@@ -288,6 +288,7 @@ EOF
       import hashlib
       import json
       import shlex
+      import time
       from pathlib import Path
       from test_driver.errors import RequestedAssertionFailed
 
@@ -863,6 +864,129 @@ EOF
           )
           write_artifact("lock-journal.txt", journal)
           write_artifact("lock-roundtrip.json", json.dumps(lock_results, indent=2) + "\n")
+
+      # Exercise the installed, unmodified 300/600-second timers. This VM has
+      # no backlight; its real helper diagnostic proves that failure cannot
+      # prevent the independent locker timeout. Package auto-start stays off.
+      idle_results = {"auto_enabled": False, "backlight": "absent"}
+      idle_unit = "realm-idle.service"
+
+      def idle_journal():
+          raw = machine.succeed(
+              "journalctl --no-pager -b -o json _SYSTEMD_USER_UNIT=realm-idle.service"
+          )
+          return raw, [json.loads(line) for line in raw.splitlines() if line.strip()]
+
+      def backlight_events(after):
+          _raw, entries = idle_journal()
+          return [
+              int(entry["__MONOTONIC_TIMESTAMP"]) / 1_000_000
+              for entry in entries
+              if "backlight adjustment unavailable" in entry.get("MESSAGE", "")
+              and int(entry["__MONOTONIC_TIMESTAMP"]) / 1_000_000 >= after
+          ]
+
+      try:
+          machine.succeed("test -z \"$(ls -A /sys/class/backlight)\"")
+          machine.succeed(as_alice("systemctl", "--user", "start", idle_unit))
+          idle_pid = machine.succeed(as_alice(
+              "systemctl", "--user", "show", "--property=MainPID", "--value", idle_unit
+          )).strip()
+          assert idle_pid.isdigit() and int(idle_pid) > 0, idle_pid
+          machine.wait_until_succeeds(
+              f"readlink /proc/{idle_pid}/exe | grep -q swayidle", timeout=STATE_TIMEOUT
+          )
+          idle_executable = machine.succeed(f"readlink /proc/{idle_pid}/exe").strip()
+          idle_stat = machine.succeed(f"cat /proc/{idle_pid}/stat")
+          idle_start_time = int(idle_stat.rsplit(")", 1)[1].split()[19])
+          idle_args = machine.succeed(
+              f"tr '\\0' '\\n' < /proc/{idle_pid}/cmdline"
+          ).splitlines()
+          assert idle_args[1:] == [
+              "-w", "-C", "/dev/null",
+              "timeout", "300", "realm-backlight dim", "resume", "realm-backlight restore",
+              "timeout", "600", "systemctl --user start realm-lock.service",
+              "before-sleep", "systemctl --user start realm-lock.service",
+              "lock", "systemctl --user start realm-lock.service",
+          ], idle_args
+          # Give the real client time to bind its idle notifications, then
+          # reset inactivity through actual compositor input, not a fake clock.
+          time.sleep(1)
+          baseline = float(machine.succeed("cut -d ' ' -f 1 /proc/uptime").strip())
+          machine.send_key("esc")
+          idle_results.update({"idle_pid": idle_pid, "argv": idle_args,
+                               "executable": idle_executable, "start_time": idle_start_time,
+                               "reset_monotonic_seconds": baseline})
+          deadline = time.monotonic() + 640
+          dim_time = None
+          lock_time = None
+          while time.monotonic() < deadline:
+              events = backlight_events(baseline)
+              if events and dim_time is None:
+                  dim_time = events[0]
+                  idle_results["dim_elapsed_seconds"] = dim_time - baseline
+                  assert 299 <= dim_time - baseline <= 330, idle_results
+                  machine.log(f"real idle dim callback after {dim_time - baseline:.2f}s")
+              state = lock_systemctl("show", "--property=ActiveState", "--value")
+              if state == "active":
+                  lock_time = int(lock_systemctl(
+                      "show", "--property=ActiveEnterTimestampMonotonic", "--value"
+                  )) / 1_000_000
+                  idle_results["lock_elapsed_seconds"] = lock_time - baseline
+                  assert 599 <= lock_time - baseline <= 630, idle_results
+                  break
+              time.sleep(5)
+          assert dim_time is not None and lock_time is not None, idle_results
+          idle_results["locker_processes"] = lock_processes()
+          machine.screenshot("realm-idle-locked")
+          machine.send_chars("deliberately-wrong-password")
+          machine.send_key("ret")
+          time.sleep(5)
+          assert lock_systemctl("is-active") == "active"
+          assert lock_processes() == idle_results["locker_processes"]
+          machine.send_key("meta_l-d")
+          machine.succeed(
+              "for attempt in $(seq 1 20); do "
+              "if pgrep -u alice -x fuzzel; then exit 1; fi; sleep 0.1; done"
+          )
+          idle_results["wrong_password_still_locked"] = True
+          machine.screenshot("realm-idle-wrong-password")
+          machine.send_key("ctrl-u")
+          machine.send_chars("realmtest")
+          machine.send_key("ret")
+          machine.wait_until_succeeds(
+              as_alice("systemctl", "--user", "show", "--property=ActiveState",
+                       "--value", lock_unit) + " | grep -qx inactive",
+              timeout=STATE_TIMEOUT,
+          )
+          idle_results["password_unlock"] = True
+          # Input wakes the 300-second notification even on a locked display.
+          assert len(backlight_events(baseline)) >= 2, "missing idle resume callback"
+          idle_results["resume_backlight_noop"] = True
+      finally:
+          stop_status, stop_output = machine.execute(as_alice(
+              "timeout", "30", "systemctl", "--user", "stop", idle_unit
+          ))
+          idle_results["stop_status"] = stop_status
+          idle_results["stop_output"] = stop_output
+          # Failed derivation output directories are not uploaded. Emit the
+          # bounded diagnostics before any artifact write can itself fail.
+          machine.log("idle-roundtrip: " + json.dumps(idle_results, sort_keys=True))
+          _status, journal = machine.execute(
+              "journalctl --no-pager -b -n 200 -o json _SYSTEMD_USER_UNIT=realm-idle.service"
+          )
+          machine.log("idle-journal (last 200 entries):\n" + journal)
+          write_artifact("idle-journal.jsonl", journal)
+          write_artifact("idle-roundtrip.json", json.dumps(idle_results, indent=2) + "\n")
+      assert stop_status == 0, stop_output
+      machine.succeed(as_alice("systemctl", "--user", "show",
+                               "--property=ActiveState", "--value", idle_unit)
+                      + " | grep -qx inactive")
+      status, remaining_stat = machine.execute(f"cat /proc/{idle_pid}/stat")
+      if status == 0:
+          assert int(remaining_stat.rsplit(")", 1)[1].split()[19]) != idle_start_time, remaining_stat
+      idle_results["stopped_without_live_idle"] = True
+      write_artifact("idle-roundtrip.json", json.dumps(idle_results, indent=2) + "\n")
 
       # Also proves the default terminal binding is restored after unlock.
       machine.send_key("meta_l-ret")
