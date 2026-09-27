@@ -194,6 +194,55 @@ disabled and empty Cargo registry/Git caches, reject a
 closure/configuration/lockfile mismatch, and fail when an adversarial
 injected-fetch attempt is present in either recipe.
 
+The selected Starship 1.23.0 source invokes `shadow-rs` from its build script.
+Before native compilation, the selected-tool stager SHALL apply one
+Starship-specific, record-bound patch which extends `shadow-rs`'s upstream
+default deny set with `CARGO_TREE`. The bundle record SHALL bind the patch
+digest and the exact SHA-256 of `build.rs` before and after application. The
+stager SHALL first validate and unpack the original retained source archive
+unchanged, refuse a missing, symlinked, digest-mismatched, or path-escaping
+patch, refuse a preimage mismatch, apply the patch exactly once, and refuse a
+postimage mismatch. Staging repeatedly into the same destination SHALL replace
+the old stage with a fully materialized copy from the original archive and
+produce the same patched `build.rs`; it SHALL NOT apply the patch cumulatively
+or mutate the retained archive. A failed replacement SHALL restore the prior
+complete stage. Staging happens before compilation and makes no concurrent
+consumer or continuously-present-path guarantee. Native package build metadata
+and every CI lane which invokes the stager SHALL declare the `patch` utility
+rather than inherit it accidentally from the host.
+
+With `CARGO_TREE` denied, the pinned `shadow-rs` build still makes one
+unconditional `cargo -V` metadata query. The native fixture MAY classify only
+that exact invocation from the selected Starship source and Cargo
+home as build-script metadata. It SHALL execute the supplied real Cargo
+unchanged, retain the validated source-replacement configuration in the now
+populated Starship Cargo home, and require the query to succeed. This metadata
+query is not a recipe build/test invocation and does not weaken the requirement
+that the three authoritative builds and one workspace test use
+`--frozen --offline --locked`. `cargo tree`, any other nested Cargo command, a
+fifth authoritative build/test within either full package case, or Cargo from
+another source/home remains a failure. The separately recorded same-recipe
+Yazi reproducibility case SHALL execute exactly one additional offline Yazi
+build from its fresh selected source/home, with the same denied Git probes.
+
+Pinned `shadow-rs` also attempts local VCS metadata commands even though the
+retained source archive contains no Git repository. During the selected
+Starship stage, the fixture SHALL put a denying sentinel ahead of Git, require
+the exact read-only metadata attempts made by pinned `shadow-rs`, and prove
+that no real Git executable ran. The allowlisted attempts are limited to
+`status`, `rev-parse`, `log`, `show`, `tag`, `describe`, and `symbolic-ref`
+queries. Any acquisition or mutation command, including `fetch`, `clone`,
+`pull`, `checkout`, `reset`, `clean`, `init`, `add`, `commit`, or `tag` with a
+mutation argument, remains a failure. Network access remains disabled around
+the entire package path. This compositional fixture exception records and
+denies an upstream metadata attempt; it does not permit either native recipe to
+invoke Git or weaken the source archive's deterministic authority.
+
+The selected Yazi build additionally attempts exactly `git --version` from
+its `yazi-boot`, `yazi-dds`, and `yazi-cli` source directories. These three
+probes SHALL likewise be classified separately and denied without executing
+Git. Other arguments or directories remain forbidden.
+
 The fixture's disposable build tree SHALL be on a Linux filesystem that
 supports `O_TMPFILE` with file `fsync`, atomic `renameat2` publication/exchange,
 and directory `fsync`, as required by the retained lifecycle tests. CI SHALL
@@ -246,6 +295,15 @@ Cargo unchanged.  That input exists only to make the real nested Debhelper
 invocation reproducible in an isolated fixture; it SHALL be consumed by the
 resolver itself, not used to override its selected binary directory or bypass
 the completeness check.
+Fixture helper functions SHALL preserve the repository-root authority while
+constructing per-case toolchain directories, so repeated cases and the
+reproducibility helper continue resolving the same checked-out scripts.
+
+Starship version verification SHALL require a successful command exit and the exact selected version on the
+first output line and retain the complete output as evidence. Its additional
+build-metadata lines are not part of the version identity; they SHALL NOT make
+the selected version fail comparison. Empty output, a different version, or a
+version embedded after another first line SHALL fail.
 
 The Yazi build SHALL set deterministic source-date and VCS metadata. The intake
 record SHALL bind the selected tag to its upstream commit SHA and commit
@@ -255,6 +313,13 @@ SHALL not accept `vergen`'s fallback metadata as release evidence or assume that
 `SOURCE_DATE_EPOCH` alone controls it. The reproducibility fixture SHALL build
 in two different directories/times and either compare the normalized declared
 artifacts or explicitly record and justify every remaining non-identical field.
+The declared comparison artifacts are the pre-packaging `yazi` and `ya`
+executables from two clean builds using the same Debian Yazi recipe and supplied
+toolchain. The second build uses a fresh source kit and target directory. The
+fixture retains UTC execution times, paths and SHA-256 hashes and fails on any
+byte difference; no normalization is currently declared. Debian-versus-RPM
+installed-byte equality is not this comparison: their C flags and packaging
+strip operations differ. Both native installed-version checks remain required.
 
 For the selected `25.4.8` bundle, both native recipes SHALL set
 `SOURCE_DATE_EPOCH=1744112829`,
@@ -373,7 +438,7 @@ the Realm template, rather than only a nonempty default prompt.
 | # | Given / When / Then | Test |
 |---|---|---|
 | B1 | Given a selected tool or Realm-workspace source bundle, when its intake linkage is validated, then archive, lockfile, every resolved Cargo source, vendor tree, source-replacement config, digest records, and dependency license report agree exactly. | `packaging/tool-sources/test-bundle-linkage.sh`; `packaging/tool-sources/check-bundle-linkage.py` |
-| B2 | Given retained-only Debian and Fedora source kits and their actual package build paths with networking disabled and empty Cargo caches, when source-kit recursion, emitted package documentation, selected bundles, the complete Realm workspace build, and all package-relevant staged workspace tests run (excluding only non-packaged `realm-agent-sdd`), then no hidden workspace is accepted, the installed guide names only the retained-kit workflow, all Cargo invocations use `--frozen --offline --locked`, deterministic source/VCS metadata where applicable, and no recipe fetch path exists. | `packaging/tool-sources/test-native-source-kits.sh`; `packaging/tool-sources/test-native-builds.sh` |
+| B2 | Given retained-only Debian and Fedora source kits and their actual package build paths with networking disabled and empty Cargo caches, when source-kit recursion, emitted package documentation, selected bundles, the complete Realm workspace build, and all package-relevant staged workspace tests run (excluding only non-packaged `realm-agent-sdd`), then no hidden workspace is accepted, the installed guide names only the retained-kit workflow, all authoritative Cargo build/test invocations use `--frozen --offline --locked`, deterministic source/VCS metadata where applicable, the exact isolated Starship version query and denied upstream Git metadata probes are classified separately, and no recipe fetch path exists. | `packaging/tool-sources/test-native-source-kits.sh`; `packaging/tool-sources/test-native-builds.sh` |
 | B3 | Given a native package install and direct or systemd-user Realm session launch, when executable and PATH ownership are inspected, then only `/usr/lib/realm/bin/*` owns the three Realm tools, Realm-launched applications resolve them, and neither user manager nor DBus activation receives the private PATH, including with `REALM_IMPORT_PATH=1`. | `packaging/tool-sources/test-native-builds.sh`; `packaging/session/test-private-tool-path.sh` |
 | B4 | Given a rendered Realm Yazi theme at `YAZI_CONFIG_HOME`, when the selected v25.4 runtime loads it, then a strict schema guard has rejected legacy fields and canonical fields are consumed; given a controlled Starship invocation, the rendered configuration has no diagnostics and renders a known Realm feature. | `packaging/tool-sources/test-tool-configs.sh`; selected-runtime assertions in `packaging/tool-sources/test-native-builds.sh` |
 | B5 | Given a selected dependency closure, when license evidence is inspected, then every resolved dependency has a linked license/notice record. | `packaging/tool-sources/test-bundle-linkage.sh`; `packaging/tool-sources/check-bundle-linkage.py` |

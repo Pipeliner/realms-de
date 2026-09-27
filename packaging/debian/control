@@ -26,6 +26,7 @@ Build-Depends: debhelper-compat (= 13),
                cargo-1.89 | cargo (>= 1.89),
                rustc-1.89 | rustc (>= 1.89),
                fonts-dejavu-core,
+               patch,
                pkg-config,
                python3,
                zstd

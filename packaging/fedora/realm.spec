@@ -63,6 +63,7 @@ BuildRequires:  dejavu-sans-fonts
 BuildRequires:  dejavu-sans-mono-fonts
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  make
+BuildRequires:  patch
 BuildRequires:  python3
 BuildRequires:  zstd
 
