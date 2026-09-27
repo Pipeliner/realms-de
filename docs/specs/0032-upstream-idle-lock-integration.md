@@ -122,6 +122,9 @@ Activity must produce the pending
 restore no-op. Stopping idle must leave its captured process identity gone.
 Retain bounded journal and partial structured results on failure. These VMs
 prove absence handling, not brightness restoration on physical backlights.
+Final journal collection and persistence are required evidence: either failure
+keeps readiness false and fails an otherwise successful probe. An existing
+acceptance or cleanup failure takes precedence over this evidence failure.
 Source fixtures exercise rejection of early/missing callbacks, failed auth and
 cleanup without running a local VM. Readiness remains unverified until CI
 evidence is reviewed; adding a probe is not passing that probe.

@@ -66,19 +66,23 @@ def timed_roundtrip(start, observe, snapshot, key, password, suppressed, gone,
             cleanup_error = error
             result['stop_error'] = str(error)
         # Diagnostics must never replace the acceptance/transport exception.
+        evidence_error = None
         try:
             (evidence / 'idle-journal.jsonl').write_text(journal())
         except Exception as error:
+            evidence_error = error
             result['journal_error'] = str(error)
-        result['readiness_verified'] = not failed and cleanup_error is None
+        result['readiness_verified'] = not failed and cleanup_error is None and evidence_error is None
         print('idle-roundtrip: ' + json.dumps(result, sort_keys=True), flush=True)
         try:
             (evidence / 'idle-roundtrip.json').write_text(json.dumps(result, indent=2) + '\n')
         except Exception:
-            if not failed and cleanup_error is None:
+            if not failed and cleanup_error is None and evidence_error is None:
                 raise
         if cleanup_error is not None and not failed:
             raise cleanup_error
+        if evidence_error is not None and not failed:
+            raise evidence_error
     return result
 
 

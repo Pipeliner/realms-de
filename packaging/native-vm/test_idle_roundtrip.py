@@ -9,7 +9,8 @@ import json
 
 class IdleTests(unittest.TestCase):
     def fixture(self, dim=300, lock=600, wrong_unlock=False, correct_unlock=True,
-                resume=True, stop_error=False, missing_lock=False, restoration_fails=False):
+                resume=True, stop_error=False, missing_lock=False, restoration_fails=False,
+                journal_error=False, journal_write_error=False):
         path = Path(__file__).with_name('idle_roundtrip.py')
         self.assertTrue(path.exists(), 'native real idle acceptance probe is missing')
         spec = importlib.util.spec_from_file_location('idle_roundtrip', path)
@@ -37,18 +38,40 @@ class IdleTests(unittest.TestCase):
                 raise RuntimeError('stop failed')
         def restored(present):
             assert not restoration_fails, 'launcher restoration failed'
+        def journal():
+            if journal_error:
+                raise RuntimeError('journal collection failed')
+            return ''
         with tempfile.TemporaryDirectory() as directory:
+            if journal_write_error:
+                (Path(directory) / 'idle-journal.jsonl').mkdir()
             try:
                 result = probe.timed_roundtrip(lambda: {'baseline': 0}, observe,
                     snapshot, lambda key: None, password, lambda: None,
                     lambda old: None, lambda name: None, lambda: None,
-                    restored, stop, lambda: '', Path(directory), sleep, lambda: state['now'])
+                    restored, stop, journal, Path(directory), sleep, lambda: state['now'])
                 self.assertTrue(result['password_unlock'])
                 self.assertEqual(result['dim_elapsed_seconds'], 300)
                 self.assertEqual(result['lock_elapsed_seconds'], 600)
             finally:
                 self.assertTrue(state['stopped'])
                 self.assertTrue((Path(directory) / 'idle-roundtrip.json').exists())
+                if journal_error or journal_write_error:
+                    saved = json.loads((Path(directory) / 'idle-roundtrip.json').read_text())
+                    self.assertFalse(saved['readiness_verified'])
+
+    def test_journal_collection_or_persistence_failure_blocks_readiness(self):
+        with self.assertRaisesRegex(RuntimeError, 'journal collection failed'):
+            self.fixture(journal_error=True)
+        with self.assertRaises(IsADirectoryError):
+            self.fixture(journal_write_error=True)
+
+    def test_journal_failure_preserves_acceptance_and_cleanup_errors(self):
+        for option in ('journal_error', 'journal_write_error'):
+            with self.subTest(option=option), self.assertRaises(AssertionError):
+                self.fixture(dim=30, **{option: True})
+            with self.subTest(option=option), self.assertRaisesRegex(RuntimeError, 'stop failed'):
+                self.fixture(stop_error=True, **{option: True})
 
     def test_real_timer_acceptance(self):
         self.fixture()
