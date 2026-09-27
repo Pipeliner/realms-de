@@ -213,9 +213,20 @@ jobs:
         run: |
           sudo env \
             REALM_NATIVE_TMPDIR="${{ steps.native-temp.outputs.path }}" \
+            REALM_NATIVE_EVIDENCE_DIR="${{ runner.temp }}/realm-native-fixture-evidence" \
             REALM_REAL_CARGO="${{ steps.native-rust.outputs.path }}/bin/cargo" \
             REALM_REAL_RUSTC="${{ steps.native-rust.outputs.path }}/bin/rustc" \
-            ./packaging/tool-sources/test-native-builds.sh
+          ./packaging/tool-sources/test-native-builds.sh
+      - name: Retain native fixture diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-fixture-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/realm-native-fixture-evidence/*.out
+            ${{ runner.temp }}/realm-native-fixture-evidence/*.log
       - run: cargo doc --workspace --no-deps
 
   msrv:

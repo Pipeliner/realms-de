@@ -48,6 +48,19 @@ class LaunchPolicy(unittest.TestCase):
         for update in config['updates']:
             self.assertEqual(update['open-pull-requests-limit'], '0')
 
+    def test_failed_native_fixture_uploads_only_persistent_text_logs(self):
+        steps = workflow('ci.yml')['jobs']['docs']['steps']
+        fixture = next(s for s in steps if s.get('name') == 'Check network-isolated native package paths')
+        self.assertIn('REALM_NATIVE_EVIDENCE_DIR=', fixture['run'])
+        uploads = [s for s in steps if s.get('name') == 'Retain native fixture diagnostics']
+        self.assertEqual(len(uploads), 1)
+        upload = uploads[0]
+        self.assertEqual(upload['if'], 'always()')
+        self.assertEqual(upload['with']['path'].splitlines(), [
+            '${{ runner.temp }}/realm-native-fixture-evidence/*.out',
+            '${{ runner.temp }}/realm-native-fixture-evidence/*.log',
+        ])
+
 
 if __name__ == '__main__':
     unittest.main()
