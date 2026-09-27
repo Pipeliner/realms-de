@@ -91,8 +91,9 @@ with `realm-session.target` on a fresh login. Debian, RPM and Nix ship the
 relative wants link `../realm-idle.service`; the RPM owns that link and the
 NixOS module declares the same wantedBy relationship. The idle unit declares
 its install target; the locker remains on-demand with no wants link.
-Preparation may occur on an isolated unpublished branch, but integration and
-publication of enablement require that evidence review. Suspend is not a gate.
+Preparation and publication of an isolated CI candidate are allowed to obtain
+evidence; default integration and release require that evidence review.
+Suspend is not a gate.
 
 Installed native and NixOS VM probes SHALL require the shipped link and observe
 the idle service active after graphical login without manually starting it.
@@ -100,6 +101,26 @@ They then stop idle before the long controlled acceptance journey; existing
 manual locking and unchanged real 300/600-second timing checks remain required.
 Stopping in the disposable fixture is not production policy. Existing session
 target ownership and stop semantics remain unchanged.
+
+### Native real idle evidence (accepted, 2026-09-27)
+
+Ubuntu and Fedora CI run a dedicated native idle probe after the manual-lock
+probe, reusing its guest transport, QEMU keyboard, process identity and PAM
+helpers. The outer deadline is 900 seconds. The installed swayidle argv must
+retain the production 300/600 timers. Real keyboard activity resets inactivity;
+guest monotonic timestamps establish dim at 299–330 seconds and lock readiness
+at 599–630 seconds, with a separate host-clock 640-second observation bound.
+No injected timers, clocks or replacement locker are allowed in the VM.
+The no-backlight VM must log the real dim no-op, still lock, show an opaque
+uniform frame before password input, reject a wrong password, suppress the
+launcher, accept the correct password and restore the launcher binding.
+Activity must produce the pending
+restore no-op. Stopping idle must leave its captured process identity gone.
+Retain bounded journal and partial structured results on failure. These VMs
+prove absence handling, not brightness restoration on physical backlights.
+Source fixtures exercise rejection of early/missing callbacks, failed auth and
+cleanup without running a local VM. Readiness remains unverified until CI
+evidence is reviewed; adding a probe is not passing that probe.
 
 ### Historical package staging before enablement
 

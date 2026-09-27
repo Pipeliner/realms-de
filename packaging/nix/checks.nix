@@ -888,8 +888,9 @@ EOF
 
       # Exercise the installed, unmodified 300/600-second timers. This VM has
       # no backlight; its real helper diagnostic proves that failure cannot
-      # prevent the independent locker timeout. Package auto-start stays off.
-      idle_results = {"auto_enabled": False, "backlight": "absent"}
+      # prevent the independent locker timeout. Fresh-login activation was
+      # checked above; restart here only resets the controlled timing fixture.
+      idle_results = {"auto_enabled": True, "backlight": "absent"}
       idle_unit = "realm-idle.service"
 
       def idle_journal():

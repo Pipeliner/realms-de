@@ -117,7 +117,8 @@ print(json.dumps({'state': props['ActiveState'], 'main_pid': int(props['MainPID'
 
 
 def main():
-    monitor, evidence_path, *ssh = sys.argv[1:]
+    idle_mode = sys.argv[1:2] == ['--idle']
+    monitor, evidence_path, *ssh = sys.argv[2:] if idle_mode else sys.argv[1:]
     evidence = Path(evidence_path)
 
     def guest(command, script=None):
@@ -150,6 +151,7 @@ def main():
             if time.monotonic() >= deadline:
                 raise AssertionError(f'incomplete QEMU screenshot: {path}')
             time.sleep(0.05)
+        return path
 
     def gone(identities):
         guest('sudo python3 -', 'import pathlib\nidentities = ' + repr(identities) + '''
@@ -171,11 +173,17 @@ for pid, old in identities.items():
         current = json.loads(guest('sudo python3 -', SNAPSHOT))
         observations.append(current)
         print(json.dumps(current), flush=True)
-        (evidence / 'lock-observations.json').write_text(json.dumps(observations, indent=2) + '\n')
+        (evidence / ('idle-lock-observations.json' if idle_mode else 'lock-observations.json')).write_text(json.dumps(observations, indent=2) + '\n')
         return current
 
     try:
         assert guest(user + ' timeout 10 systemctl --user show realm-idle.service -p ActiveState --value').strip() == 'inactive'
+        if idle_mode:
+            from idle_roundtrip import run
+            run(guest, user, key, password, snapshot,
+                lambda: guest("for attempt in $(seq 1 20); do if pgrep -u alice -x fuzzel; then exit 1; fi; sleep 0.1; done"),
+                gone, screenshot, restored, evidence)
+            return
         roundtrips(
             lambda: guest(user + ' timeout 30 systemctl --user start realm-lock.service'),
             snapshot, key, password,
@@ -185,13 +193,13 @@ for pid, old in identities.items():
     finally:
         # Diagnostics must not replace the original assertion/transport failure.
         for name, collect in (
-            ('screenshot', lambda: screenshot('lock-final')),
+            ('screenshot', lambda: screenshot('idle-final' if idle_mode else 'lock-final')),
             ('journal', lambda: guest('sudo journalctl -b -n 200 --no-pager _SYSTEMD_USER_UNIT=realm-lock.service + _COMM=swaylock + _COMM=unix_chkpwd')),
         ):
             try:
                 output = collect()
-                if output is not None:
-                    (evidence / ('lock-' + name + '.txt')).write_text(output)
+                if isinstance(output, str):
+                    (evidence / (('idle-lock-' if idle_mode else 'lock-') + name + '.txt')).write_text(output)
                     print(output, flush=True)
             except Exception as error:
                 print(f'lock diagnostic {name} failed: {error}', file=sys.stderr, flush=True)

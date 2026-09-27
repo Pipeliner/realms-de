@@ -1,0 +1,132 @@
+"""Native timing acceptance decisions; injected external clock/VM boundaries only."""
+import importlib.util
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+import json
+
+
+class IdleTests(unittest.TestCase):
+    def fixture(self, dim=300, lock=600, wrong_unlock=False, correct_unlock=True,
+                resume=True, stop_error=False, missing_lock=False, restoration_fails=False):
+        path = Path(__file__).with_name('idle_roundtrip.py')
+        self.assertTrue(path.exists(), 'native real idle acceptance probe is missing')
+        spec = importlib.util.spec_from_file_location('idle_roundtrip', path)
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        state = {'now': 0, 'unlocked': False, 'activity': False, 'stopped': False}
+        locked = {'state': 'active', 'processes': {'17': {'start_time': 22}}}
+        def snapshot():
+            active = state['now'] >= lock and not state['unlocked'] and not missing_lock
+            return locked if active else {'state': 'inactive', 'processes': {}}
+        def observe():
+            events = [dim] if state['now'] >= dim else []
+            if state['activity'] and resume:
+                events.append(state['now'])
+            return {'events': events, 'lock_time': lock, 'lock': snapshot()}
+        def password(value):
+            state['activity'] = True
+            if wrong_unlock or (value == 'realmtest' and correct_unlock):
+                state['unlocked'] = True
+        def sleep(seconds):
+            state['now'] += seconds
+        def stop():
+            state['stopped'] = True
+            if stop_error:
+                raise RuntimeError('stop failed')
+        def restored(present):
+            assert not restoration_fails, 'launcher restoration failed'
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                result = probe.timed_roundtrip(lambda: {'baseline': 0}, observe,
+                    snapshot, lambda key: None, password, lambda: None,
+                    lambda old: None, lambda name: None, lambda: None,
+                    restored, stop, lambda: '', Path(directory), sleep, lambda: state['now'])
+                self.assertTrue(result['password_unlock'])
+                self.assertEqual(result['dim_elapsed_seconds'], 300)
+                self.assertEqual(result['lock_elapsed_seconds'], 600)
+            finally:
+                self.assertTrue(state['stopped'])
+                self.assertTrue((Path(directory) / 'idle-roundtrip.json').exists())
+
+    def test_real_timer_acceptance(self):
+        self.fixture()
+
+    def test_short_or_missing_timers_rejected(self):
+        for options in ({'dim': 30}, {'lock': 60}, {'dim': 900}, {'missing_lock': True}):
+            with self.subTest(options=options), self.assertRaises(AssertionError):
+                self.fixture(**options)
+
+    def test_auth_resume_and_cleanup_failures_rejected(self):
+        for options in ({'wrong_unlock': True}, {'correct_unlock': False}, {'resume': False}, {'restoration_fails': True}):
+            with self.subTest(options=options), self.assertRaises(AssertionError):
+                self.fixture(**options)
+        with self.assertRaisesRegex(RuntimeError, 'stop failed'):
+            self.fixture(stop_error=True)
+
+    def test_cleanup_cannot_mask_original_failure(self):
+        with self.assertRaises(AssertionError):
+            self.fixture(dim=30, stop_error=True)
+
+    def test_real_adapters_validate_guest_script_argv_events_and_identity(self):
+        spec = importlib.util.spec_from_file_location('idle_roundtrip', Path(__file__).with_name('idle_roundtrip.py'))
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        commands = []
+        keys = []
+        identities = []
+        frames = {'calls': 0, 'never_blank': False}
+        argv = ['swayidle', '-w', '-C', '/dev/null',
+                'timeout', '300', 'realm-backlight dim', 'resume', 'realm-backlight restore',
+                'timeout', '600', 'systemctl --user start realm-lock.service',
+                'before-sleep', 'systemctl --user start realm-lock.service',
+                'lock', 'systemctl --user start realm-lock.service']
+        def guest(command, script=None):
+            commands.append(command)
+            if script is not None:
+                compile(script, '<guest metadata>', 'exec')
+                return json.dumps({'argv': argv, 'start_time': 44, 'executable': '/usr/bin/swayidle'})
+            if '-p MainPID' in command:
+                return '22'
+            if 'time.monotonic' in command:
+                return '100'
+            if 'journalctl' in command:
+                return '\n'.join(json.dumps({'__MONOTONIC_TIMESTAMP': str(t * 1000000),
+                    'MESSAGE': 'realm: backlight adjustment unavailable; idle locking remains enabled'})
+                    for t in (90, 400))
+            if '-p ActiveEnterTimestampMonotonic' in command:
+                return '700000000'
+            if '-p ActiveState' in command:
+                return 'inactive'
+            return ''
+        def exercise(start, observe, snapshot, key, password, suppressed, gone,
+                     screenshot, blank, restored, stop, journal, evidence):
+            self.assertEqual(start()['baseline'], 100)
+            self.assertEqual(observe()['events'], [400])
+            self.assertEqual(observe()['lock_time'], 700)
+            blank()
+            self.assertEqual(frames['calls'], 2, 'first transitional frame must be retried')
+            frames['never_blank'] = True
+            with patch.object(probe.time, 'monotonic', side_effect=[0, 6]), self.assertRaisesRegex(AssertionError, 'uniformly opaque'):
+                blank()
+            stop()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'blank.ppm'
+            def screenshot(name):
+                frames['calls'] += 1
+                pixels = b'\x22' * 6 if frames['calls'] > 1 and not frames['never_blank'] else b'\x22' * 3 + b'\x33' * 3
+                path.write_bytes(b'P6\n2 1\n255\n' + pixels)
+                return path
+            with patch.object(probe, 'timed_roundtrip', side_effect=exercise), patch.object(probe.time, 'sleep'):
+                probe.run(guest, 'USER', keys.append, lambda text: None,
+                    lambda: {'state': 'inactive'}, lambda: None,
+                    identities.append, screenshot, lambda present: None, Path(directory))
+        self.assertEqual(keys, ['esc'])
+        self.assertEqual(identities, [{'22': {'start_time': 44}}])
+        self.assertIn('USER timeout 30 systemctl --user start realm-idle.service', commands)
+        self.assertIn('USER timeout 30 systemctl --user stop realm-idle.service', commands)
+
+
+if __name__ == '__main__':
+    unittest.main()
