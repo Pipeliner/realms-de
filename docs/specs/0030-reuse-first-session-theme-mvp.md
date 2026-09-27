@@ -203,6 +203,16 @@ depends on SPEC 0024's native tool delivery (#236); it does not add distro tool
 substitutes, enable live theme changes, or claim GTK/Qt, portal/browser or
 next-login/relogin acceptance.
 
+The separate native relogin slice requests normal session quit and observes the
+fixture's existing SDDM automatic relogin, without restarting the display manager
+or manually removing login state. It requires the prior graphical logind session,
+entry owner, River, WM and bar process identities to end, a distinct graphical
+session and new live identities, and the prepared B selection in the new login
+record. Open a real terminal through its binding and verify its Foot/Zsh children
+consume B and form a managed window; close it normally. Retain before/after
+identity, selection, state and framebuffer evidence. A timeout or stale A owner
+fails rather than repairing the session in the fixture.
+
 ### Overlap scope resolved
 
 The owner confirmed one session on 2026-09-27 in response to the explicit

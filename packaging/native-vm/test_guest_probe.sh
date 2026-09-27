@@ -37,3 +37,8 @@ python3() { test "$preflight_seen" = true; test "$2" = --check-imports; }
 preflight_seen=false
 install_portal_test_clients
 printf 'native VM portal provisioning order fixture passed\n'
+
+# Run the browser input-order regression through this existing CI entry point.
+unset -f python3
+python3 "$script_dir/test_browser_roundtrip.py"
+python3 "$script_dir/test_relogin_roundtrip.py"

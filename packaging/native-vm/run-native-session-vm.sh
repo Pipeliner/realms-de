@@ -206,11 +206,8 @@ run_native_session_vm() (
         if [[ -n "$qemu_pid" ]] && kill -0 "$qemu_pid" 2>/dev/null; then
             capture_framebuffer_if_absent "$evidence_dir/framebuffer.ppm" || true
             timeout "$cleanup_timeout" ssh "${ssh_options[@]}" alice@127.0.0.1 \
-                'sudo journalctl -b --no-pager' \
+                'sudo head -v -c 65536 /var/tmp/realm-native-portal-runtime.txt; sudo journalctl -b --no-pager' \
                 > "$evidence_dir/cleanup-journal.txt" 2>&1 || true
-            timeout "$cleanup_timeout" ssh "${ssh_options[@]}" alice@127.0.0.1 \
-                'sudo cat /var/tmp/realm-native-portal-runtime.txt' \
-                > "$evidence_dir/portal-package-runtime.txt" 2>&1 || true
         fi
         [[ -f "$serial_log" ]] && cp "$serial_log" "$evidence_dir/qemu-serial.log"
         stop_qemu "$qemu_pid"
@@ -330,6 +327,8 @@ run_native_session_vm() (
     timeout 60 scp "${scp_options[@]}" \
         "$guest_probe" "$control_probe" "$check_inputs" \
         "$script_dir/../nix/portal_vm_helper.py" \
+        "$script_dir/../nix/browser_screencast.py" \
+        "$script_dir/../nix/browser_screencast.html" \
         "alice@127.0.0.1:$realm_native_vm_guest_probe_dir/"
     timeout "$install_timeout" ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
         "$realm_native_vm_guest_probe_dir/guest-probe.sh" install "$target" \
@@ -367,6 +366,14 @@ run_native_session_vm() (
         'sudo cat /var/tmp/realm-native-portal-runtime.txt' \
         > "$evidence_dir/portal-package-runtime.txt"
     timeout 240 python3 "$script_dir/portal_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+
+    timeout "$install_timeout" ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
+        "$realm_native_vm_guest_probe_dir/guest-probe.sh" browser-client "$target"
+    timeout 300 python3 "$script_dir/browser_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+
+    timeout 240 python3 "$script_dir/relogin_roundtrip.py" \
         "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
 
     stop_qemu "$qemu_pid"

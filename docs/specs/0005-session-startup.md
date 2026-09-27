@@ -550,6 +550,8 @@ virtual pointer input and consume/hash a nonempty PipeWire frame. Retain request
 response, frame metadata, screenshots and bounded diagnostics on failure as well
 as success where guest/monitor I/O remains available. A failed portal is never
 skipped. This does not substitute for SPEC 0031's separate browser-share journey.
+Failure cleanup collects labelled package-runtime evidence and the journal in
+one shared bounded SSH operation, preserving the original failing status.
 
 Before installing test-only Python GI/GStreamer clients, native CI records and
 requires the package-only PipeWire executable/user service/socket and Slurp.
@@ -631,6 +633,21 @@ portal helper permits up to 120 seconds for interactive Start, while the VM
 bounds output-selection input retries to 60 seconds after chooser startup.
 This proves browser-delivered capture from one emulated
 output, not remote conferencing, audio sharing or physical-machine capture.
+
+Native Ubuntu/Fedora CI applies the same A13b browser proof after its package-only
+and direct-portal checks. Fedora uses distro Firefox; Ubuntu uses Mozilla's
+official signed APT DEB repository (not Ubuntu's transitional Snap package),
+retaining repository/package/version evidence. This does not claim Snap coverage
+or make Firefox a Realm runtime dependency. A disposable default-browser desktop
+entry launches the installed browser through Super+B. Bounded screenshot/OCR
+waits must observe the capture page and ordinary permission prompt before Enter
+and Alt+A; timeouts fail rather than sending permission input blindly. Browser
+result polling allows at least 35 seconds, covering the page's own 30-second
+frame-delivery deadline; the native browser action remains capped at 300 seconds.
+Firefox and English OCR packages are guest-only test dependencies. The existing collector
+and page remain unchanged; retain actual PNG frame bytes, hashes, result/error
+metadata and permission/picker/completion screenshots, then stop the collector
+and close the browser. No permission/sandbox bypass or fake media is allowed.
 
 ### 6. Non-systemd and non-D-Bus paths
 

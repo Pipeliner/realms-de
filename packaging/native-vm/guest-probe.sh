@@ -134,6 +134,63 @@ install_portal_test_clients() {
     python3 "$probe_input_dir/portal_vm_helper.py" --check-imports
 }
 
+install_browser_test_client() {
+    # CI-only; this action is after package-only and direct portal acceptance.
+    case "$target" in
+        ubuntu-24.04-x86_64)
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get install --yes ca-certificates curl gnupg
+            install -d -m 0755 /etc/apt/keyrings
+            curl --fail --location --connect-timeout 15 --max-time 60 \
+                https://packages.mozilla.org/apt/repo-signing-key.gpg \
+                -o /etc/apt/keyrings/packages.mozilla.org.asc
+            local fingerprint
+            fingerprint=$(gpg --batch --show-keys --with-colons \
+                /etc/apt/keyrings/packages.mozilla.org.asc | awk -F: '$1 == "fpr" { print $10; exit }')
+            test "$fingerprint" = 35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3
+            printf '%s\n' \
+                'deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main' \
+                > /etc/apt/sources.list.d/mozilla.list
+            printf '%s\n' 'Package: firefox*' 'Pin: origin packages.mozilla.org' \
+                'Pin-Priority: 1000' '' 'Package: firefox' 'Pin: release o=Ubuntu' \
+                'Pin-Priority: -1' > /etc/apt/preferences.d/realm-browser-fixture
+            apt-get update
+            apt-get install --yes firefox tesseract-ocr tesseract-ocr-eng
+            {
+                printf 'Mozilla signing-key fingerprint: %s\n' "$fingerprint"
+                cat /etc/apt/sources.list.d/mozilla.list /etc/apt/preferences.d/realm-browser-fixture
+                apt-cache policy firefox
+                dpkg-query -W firefox tesseract-ocr tesseract-ocr-eng
+                dpkg-query -S /usr/bin/firefox
+            } > /var/tmp/realm-native-browser-packages.txt
+            if dpkg-query -W -f='${Version}' firefox | grep -q snap; then
+                fail 'browser fixture installed the Ubuntu Snap transition instead of Mozilla DEB'
+            fi
+            ;;
+        fedora-44-x86_64)
+            dnf -y install firefox tesseract tesseract-langpack-eng
+            {
+                rpm -q firefox tesseract tesseract-langpack-eng
+                rpm -qf /usr/bin/firefox
+                dnf info --installed firefox
+            } > /var/tmp/realm-native-browser-packages.txt
+            ;;
+        *) fail "unknown browser fixture target: $target" ;;
+    esac
+    firefox --version >> /var/tmp/realm-native-browser-packages.txt
+    tesseract --list-langs 2>&1 | tee -a /var/tmp/realm-native-browser-packages.txt | grep -Fxq eng
+    install -d -m 0755 /usr/share/applications /etc/xdg
+    printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Realm Browser Test' \
+        'Exec=/usr/bin/firefox --no-remote http://127.0.0.1:8765/' \
+        'MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;' \
+        > /usr/share/applications/realm-browser-test.desktop
+    printf '%s\n' '[Default Applications]' \
+        'text/html=realm-browser-test.desktop' \
+        'x-scheme-handler/http=realm-browser-test.desktop' \
+        'x-scheme-handler/https=realm-browser-test.desktop' \
+        > /etc/xdg/mimeapps.list
+}
+
 find_realm_session() {
     local deadline=$((SECONDS + 90)) session name type remote
     while ((SECONDS < deadline)); do
@@ -255,8 +312,11 @@ main() {
         portal-clients)
             install_portal_test_clients
             ;;
+        browser-client)
+            install_browser_test_client
+            ;;
         *)
-            fail 'usage: guest-probe.sh {install TARGET PACKAGE_DIR|probe TARGET EVIDENCE_DIR|portal-clients TARGET}'
+            fail 'usage: guest-probe.sh {install TARGET PACKAGE_DIR|probe TARGET EVIDENCE_DIR|portal-clients TARGET|browser-client TARGET}'
             ;;
     esac
 }
