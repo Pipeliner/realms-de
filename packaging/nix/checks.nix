@@ -1532,7 +1532,8 @@ EOF
       )
 
       # Shared installed-window keyboard acceptance.
-      window_result = {"passed": False, "observations": []}
+      window_observations: list[dict[str, object]] = []
+      window_result: dict[str, object] = {"passed": False, "observations": window_observations}
 
       def window_wait(predicate, description):
           observed = None
@@ -1545,7 +1546,7 @@ EOF
               observed = json.loads(raw)
               window_result["last_observation"] = observed
               if predicate(observed):
-                  window_result["observations"].append({"step": description, **observed})
+                  window_observations.append({"step": description, **observed})
                   return True
               if last_try:
                   machine.log(f"window control {description}: {observed!r}")

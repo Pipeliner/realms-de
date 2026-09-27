@@ -88,8 +88,11 @@ three fixture windows through the normal close binding afterward.
 Every transition has a finite readiness deadline; absent state or unchanged
 incorrect focus/order fails rather than passing on command dispatch. Retain
 structured observations and complete framebuffer screenshots of the meaningful
-states, plus bounded failure diagnostics. This proves the installed keyboard
-path and compositor-backed state; screenshots remain CI visual evidence, not
+states, plus bounded failure diagnostics.
+The Nix companion probe must retain these observations with explicit collection
+types compatible with the test driver's enabled static type checking; its
+heterogeneous result object must not obscure the appendable observation list.
+This proves the installed keyboard path and compositor-backed state; screenshots remain CI visual evidence, not
 an assertion that a local unit fixture rendered the UI. No new control command,
 window-management feature or browser-automation dependency is introduced.
 
