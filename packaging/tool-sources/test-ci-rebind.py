@@ -102,6 +102,38 @@ Dependency statement remains byte-exact.
 
 
 class RebindWorkflowContract(unittest.TestCase):
+    def test_preparation_validates_before_staging_and_retains_provenance(self):
+        text = (ROOT / ".github/actions/prepare-realm-source/action.yml").read_text()
+        self.assertIn("source_commit=$(git rev-parse HEAD)", text)
+        self.assertLess(text.index('git config --global --add safe.directory "$GITHUB_WORKSPACE"'),
+                        text.index("source_commit=$(git rev-parse HEAD)"))
+        self.assertLess(text.index("ci_rebind_realm_workspace.py"),
+                        text.index("check-bundle-linkage.py"))
+        self.assertLess(text.index("check-bundle-linkage.py"), text.index('cp "$candidate/$file"'))
+        self.assertIn("for file in source.tar.gz bundle.toml provenance.md", text)
+        self.assertIn("actions/upload-artifact@", text)
+        self.assertIn("set -euo pipefail", text)
+
+    def test_consumers_prepare_binding_before_package_checks(self):
+        import yaml
+
+        consumers = {"ci.yml": ["docs"], "distro.yml": [
+            "ubuntu-river-debian", "ubuntu-debian-package", "fedora-rpm-package", "nix"
+        ]}
+        for workflow, jobs in consumers.items():
+            document = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())
+            for job in jobs:
+                steps = document["jobs"][job]["steps"]
+                preparation = [i for i, step in enumerate(steps)
+                               if step.get("uses") == "./.github/actions/prepare-realm-source"]
+                self.assertEqual(len(preparation), 1, (workflow, job))
+                consumers_at = [i for i, step in enumerate(steps)
+                                if any(command in step.get("run", "") for command in (
+                                    "test-native-source-kits.sh", "build-native-source-kits.sh",
+                                    "nix build", "nix flake check"))]
+                self.assertTrue(consumers_at, (workflow, job))
+                self.assertLess(preparation[0], min(consumers_at))
+
     def test_workflow_is_read_only_and_retains_exact_candidate_files(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         for required in (

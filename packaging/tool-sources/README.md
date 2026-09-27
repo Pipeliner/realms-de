@@ -22,3 +22,9 @@ changes, validates the complete candidate bundle, and uploads exactly
 `source.tar.gz`, `bundle.toml`, and `provenance.md` without committing or pushing
 them. Those CI-produced files can then be placed unchanged in the source change
 and verified by the ordinary freshness and linkage checks.
+
+Ordinary CI consumers use `.github/actions/prepare-realm-source` before
+verification or packaging. It prepares and validates a binding for the exact
+checked-out commit, stages only those three files, and uploads them for the
+job's provenance. Source changes therefore do not require a follow-up bundle
+commit. Dependency lockfile changes still require a controlled closure refresh.

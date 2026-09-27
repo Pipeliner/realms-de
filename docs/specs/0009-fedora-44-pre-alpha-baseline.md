@@ -8,6 +8,9 @@
   its exact output into an empty Fedora 44 installroot with normal DNF
   dependency resolution, then executes the installed Realm CLI and River; this
   remains distinct from graphical-session evidence.
+- **Amendment:** Accepted (2026-09-13): SPEC 0029 adds one separate x86_64
+  artifact-consuming graphical-session VM matrix entry. It does not change the
+  two Fedora build/container lanes, the baseline lifecycle, or SELinux policy.
 - **Milestone:** M0 support-claim correction; M3 Fedora runtime acceptance is separate
 - **Decision:** [ADR 0015](../adr/0015-fedora-44-pre-alpha-baseline.md)
 - **Issue:** [#138](https://github.com/Pipeliner/realms-de/issues/138)
@@ -55,7 +58,8 @@ portal, SELinux, upgrade, or daily-driver acceptance obligations have passed.
   ([#131](https://github.com/Pipeliner/realms-de/issues/131) and
   [#132](https://github.com/Pipeliner/realms-de/issues/132));
 - a Fedora VM, graphical login, portal, SELinux, or complete M2/M3 support
-  claim;
+  claim, except for SPEC 0029's independently accepted bounded native-login
+  evidence;
 - additional architectures, runners, KVM procurement, or self-hosted CI;
 - a scheduled live-network canary or a release-admission/retirement SLA;
 - an offline Fedora 41 fixture, unless a later issue names a concrete
@@ -136,7 +140,7 @@ without a daemon, scheduled job, or network request.
 
 ### 3. Honest CI evidence
 
-Fedora 44 has exactly two and only two workflow lanes. The existing
+Fedora 44 has exactly two and only two build/container lanes. The existing
 `fedora-44-cargo-smoke` matrix entry remains the sole Cargo-smoke lane, and
 `fedora-rpm-package` is the sole retained-source RPM build lane. These are the
 only Fedora-family container images anywhere under `.github/workflows/`, and each resolves to the
@@ -177,6 +181,12 @@ pinned base/current-packages boundary still applies. This evidence does not
 establish a graphical session or login, portal behavior, SELinux behavior,
 GPU/hardware compatibility, support for every architecture in the image
 index, upgrades, or a daily-drivable Realm desktop.
+
+SPEC 0029's later native-session VM is not a third build/container lane. It
+consumes this RPM lane's exact same-run artifact without rebuilding it, boots
+the separately checksum-pinned official Fedora 44 cloud image, and establishes
+only its enumerated x86_64 emulated graphical-session evidence. It records the
+image's unchanged SELinux mode but adds no Realm policy or AVC/security gate.
 
 ### 4. Fedora's native River package
 
@@ -251,8 +261,9 @@ Fedora 44 installation without promising application-state migration.
 
 Passing this specification establishes a truthful Fedora 44 **pre-alpha
 baseline only**. Repository text may report the exact empty-installroot and
-installed-command evidence, but must continue to say that graphical login,
-portal and SELinux behavior remain unverified.
+installed-command evidence. When SPEC 0029 passes it may additionally report
+that exact x86_64 cloud-image graphical-login and portal subset, while
+continuing to say that hardware and SELinux policy/AVC behavior are unverified.
 
 A clean, complete, daily-drivable Fedora support claim remains blocked on the
 accepted outcomes of #134 and #135 and on the relevant M2/M3 RPM,
@@ -309,10 +320,11 @@ record when later work uses it.
 ## Budgets
 
 #138 retains the one Cargo-smoke lane and the one specified retained-source RPM
-lane. The installroot check is a post-build step in that existing RPM lane; it
-does not add a third Fedora lane, runner class, native-architecture matrix, VM,
-or scheduled job. No new timing budget is introduced. M2/M3 runtime and VM
-budgets remain owned by their accepted contracts.
+lane. The installroot check is a post-build step in that existing RPM lane and
+did not itself add a third build lane, runner class, native-architecture
+matrix, VM, or scheduled job. SPEC 0029 independently owns the later
+artifact-consuming x86_64 VM and its deadline. M2/M3 runtime budgets remain
+owned by their accepted contracts.
 
 ## Failure modes
 

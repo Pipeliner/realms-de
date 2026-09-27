@@ -25,7 +25,8 @@ clean Noble minbase installation/version/ELF/preflight proof.
 
 **Out:** an apt repository or published binary; Fedora or Nix changes; another
 architecture or Zig toolchain; Debian archive policy submission; graphical
-login; real DRM/input devices; changing River/wlroots features; and packaging
+login except for SPEC 0029's independently accepted artifact-consuming VM;
+real DRM/input devices; changing River/wlroots features; and packaging
 development headers, static libraries, build tools or diagnostic utilities.
 
 ## Package and path contract
@@ -138,7 +139,7 @@ remains unproven until the later hardware obligation.
 | D2 | Given the Debian metadata and a staged fixture tree, when package ownership is projected, then the exact runtime payload is below `/usr/lib/realm`, no `/usr/bin/river`, development file, global udev rule/callout or build input enters the binary package, and metadata names amd64 `realm-river` 0.4.8-1 with versioned River provision. | `packaging/river/test-noble-river-package.sh` |
 | D3 | Given the package build, when compilation runs, then the namespace/network checks, exact wlroots features, private libinput 1.31.3, staged all-object recursive ELF resolution and exact version probe pass before `dpkg-buildpackage` succeeds; package rules omit only optional `dh_dwz` while retaining ordinary stripping, and no pre-install claim is made for logical-prefix data lookup. | `packaging/river/test-noble-river-package-build.sh`; `.github/workflows/distro.yml` — `ubuntu-river-debian` build log |
 | D4 | Given a fresh Noble minbase root with a temporary procfs mounted for real chroot execution, when `realm-river` and `realm` are installed together with archive dependencies, then dpkg reports both configured, `realm`'s River dependency is satisfied by `realm-river`, selected libinput quirks exist at the compiled `/usr/lib/realm/share/libinput` path, `/usr/lib/realm/bin/river -version` prints exactly `0.4.8 +xwayland`, resolution stays private with `LD_LIBRARY_PATH` unset, and Realm's existing private-PATH fixture plus installed `realm-session --check` find that default compositor. The procfs mount is unmounted when the step exits. | `packaging/river/test-noble-river-package-build.sh`; `.github/workflows/distro.yml` — `ubuntu-river-debian`; `packaging/session/test-private-tool-path.sh` |
-| D5 | Given the successful job, when support claims are inspected, then they say only that the two native packages build and clean-install on amd64 Noble; graphical login, DRM/input hardware and package publication remain unverified. | SPEC 0028 boundary and `docs/INSTALL.md` |
+| D5 | Given the successful job, when support claims are inspected, then this job says only that the two native packages build and clean-install on amd64 Noble; graphical login remains unverified until SPEC 0029 passes, while DRM/input hardware and package publication remain unverified regardless. | SPEC 0028 boundary and `docs/INSTALL.md` |
 
 ## Failure modes
 
@@ -156,6 +157,7 @@ remains unproven until the later hardware obligation.
 
 ## Open questions
 
-None for this increment. Graphical verification remains a later VM/hardware
-obligation, and producing an arm64 package requires a separately selected Zig
-input and CI proof rather than renaming this amd64 result.
+None for this increment. SPEC 0029 separately accepts the later native
+graphical VM; hardware verification remains independent. Producing an arm64
+package requires a separately selected Zig input and CI proof rather than
+renaming this amd64 result.

@@ -79,3 +79,4 @@ Sequential, never reused. A superseded spec keeps its number and gains a
 | [0025](0025-realm-project-namespace.md) | Realm project namespace | Accepted |
 | [0026](0026-ubuntu-river-private-closure.md) | Ubuntu Noble private River closure probe | Accepted |
 | [0028](0028-ubuntu-private-river-debian-package.md) | Ubuntu private River Debian package | Accepted |
+| [0029](0029-native-graphical-session-vm.md) | Native graphical-session VM evidence | Accepted |

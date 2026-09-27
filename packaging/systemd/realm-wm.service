@@ -14,8 +14,7 @@
 [Unit]
 Description=realm window manager and session daemon
 Documentation=https://github.com/pipeliner/realms-de/blob/main/docs/specs/0005-session-startup.md
-PartOf=graphical-session.target
-After=graphical-session.target
+PartOf=realm-session.target graphical-session.target
 # Refuse to start rather than come up displayless. Note what this does NOT do:
 # an unmet condition is a *skip*, not a failure — the unit goes inactive (dead)
 # with ConditionResult=no, nothing appears in `systemctl --user --failed`, and

@@ -8,3 +8,5 @@ result-*
 *.deb
 *.rpm
 .realm-scratch/
+.agent/monitor/*.log
+.agent/monitor/*.pid
