@@ -1,0 +1,28 @@
+name: Prepare Realm source binding
+description: Bind retained dependencies to the checked-out commit in CI
+runs:
+  using: composite
+  steps:
+    - name: Produce and validate current source binding
+      shell: bash
+      run: |
+        set -euo pipefail
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        source_commit=$(git rev-parse HEAD)
+        candidate="$RUNNER_TEMP/realm-source-${GITHUB_JOB}-${GITHUB_RUN_ATTEMPT}"
+        python3 packaging/tool-sources/ci_rebind_realm_workspace.py \
+          --repo "$GITHUB_WORKSPACE" --commit "$source_commit" --output "$candidate"
+        python3 packaging/tool-sources/check-bundle-linkage.py "$candidate"
+        for file in source.tar.gz bundle.toml provenance.md; do
+          cp "$candidate/$file" "packaging/tool-sources/bundles/realm-workspace/$file"
+        done
+    - name: Retain tested source binding
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: realm-source-${{ github.workflow }}-${{ github.job }}-${{ github.run_attempt }}
+        retention-days: 7
+        if-no-files-found: error
+        path: |
+          packaging/tool-sources/bundles/realm-workspace/source.tar.gz
+          packaging/tool-sources/bundles/realm-workspace/bundle.toml
+          packaging/tool-sources/bundles/realm-workspace/provenance.md

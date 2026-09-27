@@ -81,6 +81,7 @@ jobs:
             xwayland \
             xz-utils \
             zstd
+      - uses: ./.github/actions/prepare-realm-source
       - name: Validate and acquire pinned closure sources
         run: |
           set -euo pipefail
@@ -184,6 +185,7 @@ jobs:
             pkg-config \
             python3 \
             zstd
+      - uses: ./.github/actions/prepare-realm-source
       - name: Build retained-only Debian source kit with the archive toolchain
         run: |
           set -euo pipefail
@@ -202,6 +204,7 @@ jobs:
       - name: Install RPM build prerequisites
         run: dnf -y install --setopt=install_weak_deps=False git rpm-build rust cargo systemd-rpm-macros make patch python3 zstd dejavu-sans-fonts dejavu-sans-mono-fonts
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/prepare-realm-source
       - name: Build retained-only RPM Source0
         run: |
           set -euo pipefail
@@ -395,6 +398,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/prepare-realm-source
 
       # ADR 0010 makes the committed root flake and lock the reference build.
       # This preflight fails rather than skipping if either disappears.
