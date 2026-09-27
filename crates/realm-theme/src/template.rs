@@ -421,11 +421,8 @@ test ! -e "$ZDOTDIR/.zcompdump"
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn zsh_completion_falls_back_for_existing_unwritable_cache() {
-        use std::os::unix::fs::PermissionsExt;
-
         for readonly_dump in [false, true] {
             let root = tempfile::tempdir().unwrap();
             let zdotdir = root.path().join("zsh");
@@ -435,9 +432,6 @@ test ! -e "$ZDOTDIR/.zcompdump"
             let dump = cache_dir.join("zcompdump");
             if readonly_dump {
                 fs::write(&dump, "old cache").unwrap();
-                fs::set_permissions(&dump, fs::Permissions::from_mode(0o444)).unwrap();
-            } else {
-                fs::set_permissions(&cache_dir, fs::Permissions::from_mode(0o555)).unwrap();
             }
             let profile = templates()
                 .into_iter()
@@ -451,6 +445,12 @@ test ! -e "$ZDOTDIR/.zcompdump"
 autoload() { :; }
 starship() { :; }
 compinit() { test "${1-}" = -D; : > "$HOME/completion-ready"; }
+# Model a denied writability check regardless of the test runner's UID.
+# Root containers can write through mode 0444/0555 under CAP_DAC_OVERRIDE.
+function [ {
+  if test "${1-}" = -w && test "${2-}" = "$UNWRITABLE_PATH"; then return 1; fi
+  builtin [ "$@"
+}
 . "$ZDOTDIR/.zshrc"
 test -f "$HOME/completion-ready"
 test ! -e "$ZDOTDIR/.zcompdump"
@@ -458,14 +458,13 @@ test ! -e "$ZDOTDIR/.zcompdump"
                 )
                 .env("ZDOTDIR", &zdotdir)
                 .env("XDG_CACHE_HOME", root.path().join("cache"))
+                .env(
+                    "UNWRITABLE_PATH",
+                    if readonly_dump { &dump } else { &cache_dir },
+                )
                 .env("HOME", root.path())
                 .output()
                 .unwrap();
-            if readonly_dump {
-                fs::set_permissions(&dump, fs::Permissions::from_mode(0o644)).unwrap();
-            } else {
-                fs::set_permissions(&cache_dir, fs::Permissions::from_mode(0o755)).unwrap();
-            }
             assert!(
                 output.status.success() && output.stderr.is_empty(),
                 "completion fallback failed (readonly_dump={readonly_dump}): {output:?}"
