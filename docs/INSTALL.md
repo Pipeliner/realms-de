@@ -163,8 +163,9 @@ palette and session preflight. That is native package-integration evidence,
 not a published installation path or a graphical-login result.
 
 The producer copies only Debian metadata, the staging/linkage helpers, and the
-retained Realm workspace bundle into the package source directory. The checkout
-is intake context for running that producer; it is not the package build input.
+retained Realm workspace, Yazi 25.4.8, and Starship 1.23.0 bundles into the
+package source directory. The checkout is intake context for running that
+producer; it is not the package build input.
 `debian/rules` rejects a full checkout before Cargo rather than treating it as
 a second workspace authority.
 
@@ -176,14 +177,23 @@ selects the newest complete versioned pair it finds, failing rather than
 building with the wrong compiler. This records the package-build contract; it
 is not a local build instruction.
 
-**Three runtime dependencies are not in the Ubuntu 24.04 archive** (checked
-against noble's package lists):
+**These tools are not supplied by the Ubuntu 24.04 archive** (checked against
+noble's package lists). River is a separate companion package; the current
+`realm` recipe builds the other tools from retained sources and installs them
+privately, without replacing distribution executables:
 
-| Missing | Effect | Current status |
+| Tool | Effect without it | Current native-package route |
 |---|---|---|
 | `river` (any version) | No compositor — realm cannot start | The separate `realm-river` 0.4.8-1 package supplies Realm's private River closure on amd64 Noble; its exact pair with `realm` clean-installs in CI |
-| `yazi` | charon (files) is missing | Packaging remains unresolved |
-| `starship` | thoth's prompt falls back to plain zsh | Packaging remains unresolved |
+| `yazi` and `ya` | charon (files) is missing | The `realm` recipe installs Yazi 25.4.8 and `ya` under `/usr/lib/realm/bin/`; it does not install `/usr/bin/yazi` or `/usr/bin/ya` |
+| `starship` | thoth's prompt falls back to plain zsh | The `realm` recipe installs Starship 1.23.0 as `/usr/lib/realm/bin/starship`; it does not install `/usr/bin/starship` |
+
+The current branch also supplies Realm-scoped PATH wiring for direct and
+systemd-user launches. That consumer activation is not part of the older
+downloadable trial linked from the README; package ownership alone does not
+verify that every application resolves these private tools in a graphical
+session. Native graphical-login verification and integration of this branch
+remain separate from the package recipe's installed-file contract.
 
 `fonts-ibm-plex` is in *multiverse*, so it is a Recommends rather than a
 Depends: a hard dependency would make realm uninstallable on a box with only
@@ -194,8 +204,9 @@ install fonts-ibm-plex` fixes it.
 
 ### What this actually installs today
 
-`/usr/bin/realm-session`, `/usr/share/wayland-sessions/realm.desktop`, the four
-user units under `/usr/lib/systemd/user/` **plus the
+`/usr/bin/realm-session`, `/usr/bin/realm-browser`, `/usr/bin/realm-idle`,
+`/usr/bin/realm-backlight`, `/usr/share/wayland-sessions/realm.desktop`, the
+session target and five services under `/usr/lib/systemd/user/` **plus the
 `realm-session.target.wants/` symlinks**, `/usr/share/xdg-desktop-portal/realm-portals.conf`
 and `/usr/share/realm/palette.toml`, plus the mandatory `/usr/bin/realmctl`,
 `/usr/bin/realm-wm`, and `/usr/bin/realm-bar` runtime payload. A missing binary
@@ -203,6 +214,9 @@ fails the package build. The companion `realm-river` package installs River at
 `/usr/lib/realm/bin/river`, its private shared-library closure under
 `/usr/lib/realm/lib`, and its selected libinput quirks under
 `/usr/lib/realm/share/libinput`; it does not replace `/usr/bin/river`.
+The `realm` package also installs `/usr/lib/realm/bin/yazi`,
+`/usr/lib/realm/bin/ya`, and `/usr/lib/realm/bin/starship` from its retained
+tool bundles. These private paths do not replace same-named system commands.
 
 ---
 
@@ -219,8 +233,9 @@ graphical session, portals, SELinux, or physical hardware, and the successful
 output is not currently published for download.
 
 The resulting RPM `Source0` contains only Fedora metadata, the shared helpers,
-and the same retained Realm bundle. `%prep` rejects a checkout-shaped Source0
-and stages Cargo exclusively from the canonical inner `source.tar.gz`.
+and the same three retained Realm workspace, Yazi, and Starship bundles.
+`%prep` rejects a checkout-shaped Source0 and stages Cargo exclusively from
+those validated inner source archives.
 
 Fedora 44's official package listing reported `rust` and `cargo` 1.97.1 on
 2026-08-29, above the current Rust 1.89 MSRV. Fedora repositories float, so
@@ -252,8 +267,10 @@ above.
 ### What this actually installs today
 
 The same set as the deb: the mandatory `realmctl`, `realm-wm`, and `realm-bar`
-runtime payload, session entry, login entry, four user units and their `.wants`
-symlinks, portal policy, and palette. A missing runtime binary fails `%install`.
+runtime payload, session and helper entries, login entry, session target and
+five services with the `.wants` symlinks, portal policy, palette, and private
+Yazi, `ya`, and Starship under `/usr/lib/realm/bin/`. A missing runtime binary
+fails `%install`.
 
 ---
 
