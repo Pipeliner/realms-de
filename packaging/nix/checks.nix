@@ -74,6 +74,20 @@ in
     touch $out
   '';
 
+  xwayland-window-observation = pkgs.runCommand
+    "realm-xwayland-window-observation-tests"
+    {
+      nativeBuildInputs = [
+        pkgs.coreutils
+        pkgs.python3
+      ];
+    }
+    ''
+      PYTHONDONTWRITEBYTECODE=1 ${pkgs.python3}/bin/python3 \
+        ${src + "/packaging/nix/test_xwayland_window_observation.py"}
+      touch $out
+    '';
+
   # The installed command owns the narrow command path needed by its two
   # expressly permitted external probes. A systemd transient service supplies
   # no interactive-shell path, so exercise the same condition directly.
