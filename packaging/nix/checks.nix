@@ -803,16 +803,34 @@ EOF
               "timeout", "30", "systemctl", "--user", *args, lock_unit
           )).strip()
 
+      def lock_processes():
+          properties = lock_systemctl("show", "--property=ActiveState,SubState,MainPID,ControlGroup")
+          machine.log("locker properties:\n" + properties)
+          group = lock_systemctl("show", "--property=ControlGroup", "--value")
+          assert group.startswith("/") and group != "/", group
+          pids = machine.succeed(shlex.join([
+              "cat", "/sys/fs/cgroup" + group + "/cgroup.procs"
+          ])).split()
+          identities = {}
+          for pid in pids:
+              assert pid.isdigit() and int(pid) > 0, pid
+              stat = machine.succeed(f"cat /proc/{pid}/stat")
+              fields = stat.rsplit(")", 1)[1].split()
+              executable = machine.succeed(f"readlink /proc/{pid}/exe").strip()
+              machine.log(f"locker process {pid}: {stat.strip()} exe={executable}")
+              assert fields[0] not in ("Z", "X"), stat
+              assert "swaylock" in Path(executable).name, executable
+              identities[pid] = {"start_time": int(fields[19]), "executable": executable}
+          assert identities, "active locker has no live processes"
+          return identities
+
       try:
           for cycle in range(2):
               lock_systemctl("start")
               assert lock_systemctl("is-active") == "active"
-              locker_pid = lock_systemctl("show", "--property=MainPID", "--value")
-              assert locker_pid.isdigit() and int(locker_pid) > 0, locker_pid
-              locker_exe = machine.succeed(f"readlink /proc/{locker_pid}/exe").strip()
-              assert "swaylock" in Path(locker_exe).name, locker_exe
+              locker_processes = lock_processes()
               lock_systemctl("start")
-              assert lock_systemctl("show", "--property=MainPID", "--value") == locker_pid
+              assert lock_processes() == locker_processes
               machine.screenshot(f"realm-locked-{cycle}")
 
               machine.send_key("meta_l-d")
@@ -830,10 +848,13 @@ EOF
                            "--value", lock_unit) + " | grep -qx inactive",
                   timeout=STATE_TIMEOUT,
               )
-              machine.succeed(f"test ! -d /proc/{locker_pid}")
+              for pid, identity in locker_processes.items():
+                  status, stat = machine.execute(f"cat /proc/{pid}/stat")
+                  if status == 0:
+                      assert int(stat.rsplit(")", 1)[1].split()[19]) != identity["start_time"], stat
               lock_results.append({
-                  "cycle": cycle, "main_pid": int(locker_pid), "executable": locker_exe,
-                  "duplicate_start_same_pid": True, "launcher_binding_suppressed": True,
+                  "cycle": cycle, "processes": locker_processes,
+                  "duplicate_start_same_processes": True, "launcher_binding_suppressed": True,
                   "password_unlock": True,
               })
       finally:

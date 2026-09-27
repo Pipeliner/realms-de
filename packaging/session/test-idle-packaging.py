@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Source package contract checks; actual installations are checked only in CI."""
 from pathlib import Path
+import configparser
 import re
 import unittest
 
@@ -8,6 +9,16 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class IdlePackaging(unittest.TestCase):
+    def test_locker_tracks_all_processes_without_guessing_main_pid(self):
+        unit = configparser.ConfigParser(interpolation=None)
+        unit.read(ROOT / 'packaging/systemd/realm-lock.service')
+        service = unit['Service']
+        self.assertEqual(service.get('Type'), 'forking')
+        self.assertEqual(service.get('ExitType'), 'cgroup')
+        self.assertEqual(service.get('GuessMainPID'), 'no')
+        self.assertEqual(service.get('Restart'), 'no')
+        self.assertEqual(service.get('ExecStart'), '/usr/bin/swaylock -f -C /dev/null')
+
     def test_debian_declares_lock_runtime_dependencies(self):
         control = (ROOT / 'packaging/debian/control').read_text()
         depends = re.search(r'^Depends: (.*(?:\n[ \t]+.*)*)', control, re.M).group(1)

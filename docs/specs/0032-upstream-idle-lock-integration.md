@@ -24,8 +24,10 @@ The delay is not an unlimited guarantee against a host forcing sleep.
 
 The locker service is Type=forking and runs swaylock -f: the parent exits only
 after the compositor accepts locking. Systemd coalesces repeated start requests
-while the service is starting or active; it tracks the locker lifetime. Verify
-main-PID tracking with the actual packaged swaylock/PAM process tree, not mocks.
+while the service is starting or active; it tracks the locker lifetime through
+its cgroup (`ExitType=cgroup`, `GuessMainPID=no`). PAM-backed swaylock forks an
+authentication child as well as the graphical daemon, so no uniquely guessed
+MainPID is required. Verify the actual packaged process group, not mocks.
 It has no automatic restart that could relock after successful authentication.
 The normal swaylock opaque background provides blanking; display power-off is
 not claimed by this slice. Use swaylock's default appearance initially, not a
@@ -77,9 +79,18 @@ wants link. These package checks do not claim password or suspend correctness.
 
 The graphical VM uses an explicit test-only account password and manually starts
 the shipped lock service, without enabling idle timers. Two lock/unlock cycles
-must prove synchronous start, a live swaylock MainPID, unchanged MainPID after
+must prove synchronous start, live swaylock processes in the service cgroup,
+unchanged PID/start-time identities after
 a duplicate start, PAM password unlock through the virtual keyboard, and a clean
-inactive service afterward. While locked, the launcher shortcut must not launch
+inactive service afterward with all captured process identities gone. Retain
+service properties and process identities before assertions. While locked, the launcher shortcut must not launch
 the launcher; after unlock the same shortcut must work. Retain lock screenshots
 and structured results. This does not replace idle timing, wrong-password,
 suspend, native-distro or hardware acceptance.
+
+This corrects the failed MainPID assertion in CI run 36317090486: the compositor
+had accepted locking and systemd reported the service active, but its PID
+guessing returned zero for the multiprocess locker. Systemd documents cgroup
+lifetime tracking for services without a reliable main process and warns that
+PID guessing is unreliable for multiprocess daemons:
+[systemd.service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html).
