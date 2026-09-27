@@ -359,6 +359,8 @@ run_native_session_vm() (
 
     timeout 240 python3 "$script_dir/consumer_roundtrip.py" \
         "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+    timeout 300 python3 "$script_dir/window_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
 
     timeout "$install_timeout" ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
         "$realm_native_vm_guest_probe_dir/guest-probe.sh" portal-clients "$target"

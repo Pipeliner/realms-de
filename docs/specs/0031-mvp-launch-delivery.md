@@ -72,6 +72,27 @@ explicitly rather than claiming VM suspend proves laptop behavior. Begin #78's
 real week of daily use as soon as the journey is usable; cosmetic work continues
 in parallel. A week cannot be fabricated or replaced by a green CI run.
 
+### Native window controls and key discovery (accepted refinement, 2026-09-27)
+
+Step 3's installed Ubuntu/Fedora VM probe opens three real terminals through
+the default terminal binding, then uses their interactive shells to give them
+distinct titles and visible labels. All focus, swap, orbit, layout and help
+actions use real QEMU keyboard input. Protocol-v2 Hello/GetState/ShowLedger are
+read-only observations, never action injection. The probe requires exact
+window identities/order and focused titles for forward/back focus, neighbour
+swap and restoration, empty-orbit switch and return, and mono/triptych changes.
+Which-key must hide/show/dismiss and full key help must open/dismiss through
+their shipped bindings. Preserve the initial which-key setting and close the
+three fixture windows through the normal close binding afterward.
+
+Every transition has a finite readiness deadline; absent state or unchanged
+incorrect focus/order fails rather than passing on command dispatch. Retain
+structured observations and complete framebuffer screenshots of the meaningful
+states, plus bounded failure diagnostics. This proves the installed keyboard
+path and compositor-backed state; screenshots remain CI visual evidence, not
+an assertion that a local unit fixture rendered the UI. No new control command,
+window-management feature or browser-automation dependency is introduced.
+
 ## Doctor cut line and reconciliation
 
 For MVP, #72 covers actionable session/backend connectivity, required executable

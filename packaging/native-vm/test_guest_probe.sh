@@ -42,3 +42,4 @@ printf 'native VM portal provisioning order fixture passed\n'
 unset -f python3
 python3 "$script_dir/test_browser_roundtrip.py"
 python3 "$script_dir/test_relogin_roundtrip.py"
+python3 "$script_dir/test_window_roundtrip.py"
