@@ -12,6 +12,8 @@
   support,
   src,
 }:
+assert lib.assertMsg (lib.versionAtLeast pkgs.swaylock.version "1.7")
+  "Realm requires swaylock >= 1.7 for session-lock protocol support";
 (support.rustPlatformFor pkgs).buildRustPackage {
   pname = "realm";
   inherit (support) version;
@@ -64,6 +66,12 @@
       $out/bin/realm-bar
     install -Dm755 ${src + "/packaging/session/realm-session"} $out/bin/realm-session
     install -Dm755 ${src + "/packaging/session/realm-browser"} $out/bin/realm-browser
+    install -Dm755 ${src + "/packaging/session/realm-idle"} $out/bin/realm-idle
+    install -Dm755 ${src + "/packaging/session/realm-backlight"} $out/bin/realm-backlight
+    wrapProgram $out/bin/realm-backlight \
+      --prefix PATH : ${lib.makeBinPath [ pkgs.brightnessctl ]}
+    wrapProgram $out/bin/realm-idle \
+      --prefix PATH : "$out/bin:${lib.makeBinPath [ pkgs.swayidle pkgs.systemd ]}"
     wrapProgram $out/bin/realm-browser \
       --prefix PATH : ${lib.makeBinPath [ pkgs.xdg-utils pkgs.gtk3 ]}
 
@@ -98,6 +106,8 @@
     # unchanged.
     substituteInPlace $out/lib/systemd/user/*.service \
       --replace-quiet /usr/bin/ $out/bin/
+    substituteInPlace $out/lib/systemd/user/realm-lock.service \
+      --replace-fail "$out/bin/swaylock" "${pkgs.swaylock}/bin/swaylock"
     substituteInPlace $out/lib/systemd/user/realm-wm.service \
       --replace-fail 'Environment=PATH=' \
         'Environment=PATH=${lib.makeBinPath (support.reusedTools pkgs)}:'

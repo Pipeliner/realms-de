@@ -8,15 +8,16 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
-# Superseded runs are cancelled: the loop (S9) pushes repeatedly to the same
-# working branch, and paying for every intermediate commit's CI wastes minutes
-# that the loop needs for the commit that actually lands.
+# Superseded PR runs can stop; running main verification must finish.
+# SPEC 0031: branch pushes use PR checks, not a duplicate push workflow.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Read-only by default. Nothing here writes to the repo; anything that needs
 # to (agentic-loop.yml) elevates at the job level, never here.
@@ -31,12 +32,22 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  launch-policy:
+    name: launch CI policy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 -m pip install 'PyYAML==6.0.2'
+      - run: python3 scripts/test-launch-ci-policy.py
+
   browser-dispatch:
     name: browser dispatch
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 packaging/session/test-browser.py
+      - run: python3 packaging/session/test-idle.py
+      - run: python3 packaging/session/test-idle-packaging.py
 
   dependency-policy:
     name: dependency policy
@@ -132,6 +143,8 @@ jobs:
         run: cargo test -p realm-control --test control_socket_linux --locked shell_two_frame_interoperability_is_ordered -- --exact --ignored
 
   docs:
+    # Includes native package fixtures; draft PRs retain the source-check jobs.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: docs
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -202,9 +215,20 @@ jobs:
         run: |
           sudo env \
             REALM_NATIVE_TMPDIR="${{ steps.native-temp.outputs.path }}" \
+            REALM_NATIVE_EVIDENCE_DIR="${{ runner.temp }}/realm-native-fixture-evidence" \
             REALM_REAL_CARGO="${{ steps.native-rust.outputs.path }}/bin/cargo" \
             REALM_REAL_RUSTC="${{ steps.native-rust.outputs.path }}/bin/rustc" \
-            ./packaging/tool-sources/test-native-builds.sh
+          ./packaging/tool-sources/test-native-builds.sh
+      - name: Retain native fixture diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-fixture-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/realm-native-fixture-evidence/*.out
+            ${{ runner.temp }}/realm-native-fixture-evidence/*.log
       - run: cargo doc --workspace --no-deps
 
   msrv:

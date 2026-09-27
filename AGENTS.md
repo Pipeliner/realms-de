@@ -15,6 +15,12 @@ the same change whenever a contract changes.
 
 ## Repository operations
 
+- For the MVP launch, follow `docs/specs/0031-mvp-launch-delivery.md`: three
+  bounded delivery lanes, one writer for shared launch plumbing, draft PRs for
+  development and full CI before integration. Batch docs/queue updates; defer
+  routine dependency PRs but inspect them. Reuse #78's acceptance evidence and
+  do not turn optional Waybar/UWSM evaluation into an open-ended launch blocker.
+
 - When an issue recurs, investigate and fix the shared cause at the specification
   and implementation levels. Repeating a workaround is temporary recovery,
   not resolution; verify that the original recurrence scenario is prevented.

@@ -84,6 +84,9 @@ fi
 tmp=$(mktemp -d "$native_tmp/realm-native-builds.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
+evidence=${REALM_NATIVE_EVIDENCE_DIR:-$tmp}
+mkdir -p "$evidence"
+printf 'native fixture: preparing retained source kits\n'
 "$kit_builder" "$tmp/production"
 
 run_isolated() {
@@ -273,6 +276,7 @@ rejects_before_cargo() {
     fixture=$3
     log=$4
     output=$5
+    printf 'native fixture: %s rejects mismatched source\n' "$name"
     : >"$log"
     if "$runner" "$fixture" "$log" >"$output" 2>&1; then
         fail "$name accepted a same-name source archive with a different digest"
@@ -291,6 +295,7 @@ accepts_offline_cargo() {
     fixture=$3
     log=$4
     output=$5
+    printf 'native fixture: %s real offline build and tests; log: %s\n' "$name" "$output"
     : >"$log"
     if "$runner" "$fixture" "$log" >"$output" 2>&1; then
         runner_status=0
@@ -410,6 +415,7 @@ rejects_injected_fetch() {
     fixture=$3
     log=$4
     output=$5
+    printf 'native fixture: %s rejects injected fetch\n' "$name"
     : >"$log"
     if "$runner" "$fixture" "$log" >"$output" 2>&1; then
         fail "$name executed an injected fetch without failing"
@@ -430,7 +436,7 @@ make_debian_kit "$tmp/debian-invalid"
 printf 'different retained bytes\n' >> \
     "$tmp/debian-invalid/packaging/tool-sources/bundles/realm-workspace/source.tar.gz"
 rejects_before_cargo Debian run_debian "$tmp/debian-invalid" \
-    "$tmp/debian-invalid.log" "$tmp/debian-invalid.out"
+    "$evidence/debian-invalid.log" "$evidence/debian-invalid.out"
 
 make_debian_kit "$tmp/debian-valid"
 REALM_EXPECTED_SOURCE="$tmp/debian-valid/debian/realm-workspace/source"
@@ -441,13 +447,13 @@ REALM_EXPECTED_PACKAGE_ROOT="$tmp"
 export REALM_EXPECTED_SOURCE REALM_EXPECTED_CARGO_HOME REALM_EXPECTED_CARGO_CONFIG REALM_EXPECTED_TARGET_DIR \
     REALM_EXPECTED_PACKAGE_ROOT
 accepts_offline_cargo Debian run_debian "$tmp/debian-valid" \
-    "$tmp/debian-valid.log" "$tmp/debian-valid.out"
+    "$evidence/debian-valid.log" "$evidence/debian-valid.out"
 
 make_debian_kit "$tmp/debian-fetch"
 sed -i '/^override_dh_auto_build:/a\
 \tgit fetch https://example.invalid/realm' "$tmp/debian-fetch/debian/rules"
 rejects_injected_fetch Debian run_debian "$tmp/debian-fetch" \
-    "$tmp/debian-fetch.log" "$tmp/debian-fetch.out"
+    "$evidence/debian-fetch.log" "$evidence/debian-fetch.out"
 
 make_rpm_tree "$tmp/rpm-invalid"
 mkdir -p "$tmp/rpm-invalid/substitution"
@@ -458,7 +464,7 @@ printf 'different retained bytes\n' >> \
 tar -C "$tmp/rpm-invalid/substitution" -czf \
     "$tmp/rpm-invalid/top/SOURCES/realm-0.1.0.tar.gz" realm-0.1.0
 rejects_before_cargo RPM run_rpm "$tmp/rpm-invalid" \
-    "$tmp/rpm-invalid.log" "$tmp/rpm-invalid.out"
+    "$evidence/rpm-invalid.log" "$evidence/rpm-invalid.out"
 
 make_rpm_tree "$tmp/rpm-valid"
 REALM_EXPECTED_SOURCE="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.realm-workspace/source"
@@ -469,13 +475,13 @@ REALM_EXPECTED_PACKAGE_ROOT="$tmp/rpm-valid/top/RPMS"
 export REALM_EXPECTED_SOURCE REALM_EXPECTED_CARGO_HOME REALM_EXPECTED_CARGO_CONFIG REALM_EXPECTED_TARGET_DIR \
     REALM_EXPECTED_PACKAGE_ROOT
 accepts_offline_cargo RPM run_rpm "$tmp/rpm-valid" \
-    "$tmp/rpm-valid.log" "$tmp/rpm-valid.out"
+    "$evidence/rpm-valid.log" "$evidence/rpm-valid.out"
 
 make_rpm_tree "$tmp/rpm-fetch"
 sed -i '/^%build$/a git fetch https://example.invalid/realm' \
     "$tmp/rpm-fetch/top/SPECS/realm.spec"
 rejects_injected_fetch RPM run_rpm "$tmp/rpm-fetch" \
-    "$tmp/rpm-fetch.log" "$tmp/rpm-fetch.out"
+    "$evidence/rpm-fetch.log" "$evidence/rpm-fetch.out"
 
 if [ "$failures" -ne 0 ]; then
     exit 1

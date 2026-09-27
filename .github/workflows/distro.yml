@@ -11,12 +11,14 @@ name: distro
 
 on:
   push:
+    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 concurrency:
   group: distro-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -28,6 +30,7 @@ env:
 
 jobs:
   ubuntu-river-debian:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: Ubuntu 24.04 private River Debian integration
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -167,6 +170,7 @@ jobs:
           path: ${{ runner.temp }}/realm-native-artifacts/ubuntu/
 
   ubuntu-debian-package:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: Ubuntu 24.04 Debian package
     runs-on: ubuntu-24.04
     steps:
@@ -195,6 +199,7 @@ jobs:
   # into an empty Fedora 44 installroot, and probes installed commands. It does not
   # exercise a graphical session, portals, hardware, or SELinux.
   fedora-rpm-package:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: Fedora 44 retained-source RPM build
     runs-on: ubuntu-24.04
     container: registry.fedoraproject.org/fedora:44@sha256:df52038ff64ee61affa188d78beb85cf6eecfe4e9f6042238269ccdc8e944392
@@ -249,6 +254,7 @@ jobs:
           path: ${{ runner.temp }}/realm-native-artifacts/fedora/
 
   native-session-vm:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     # SPEC 0029: exact emulated login evidence only; not hardware, full
     # application usability, daily-driver, or SELinux-policy evidence.
     name: native graphical session (${{ matrix.target }})
@@ -319,6 +325,7 @@ jobs:
           path: ${{ runner.temp }}/realm-native-vm-evidence/
 
   fedora-baseline-contract:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: Fedora baseline contract
     runs-on: ubuntu-24.04
     steps:
@@ -338,6 +345,7 @@ jobs:
           python3 packaging/systemd/test-session-ordering.py
 
   build:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runs-on }}
     # An empty string means "no container", which is how ubuntu runs on the
@@ -392,6 +400,7 @@ jobs:
       - run: cargo test --workspace --all-features --locked
 
   nix:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: nix flake check
     runs-on: ubuntu-24.04
     steps:

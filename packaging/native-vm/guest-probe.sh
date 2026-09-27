@@ -54,6 +54,17 @@ install_guest() {
     grep -Fxq 'Exec=/usr/bin/realm-session' /usr/share/wayland-sessions/realm.desktop
     grep -Fxq 'TryExec=/usr/bin/realm-session' /usr/share/wayland-sessions/realm.desktop
 
+    # SPEC 0032 package staging is deliberately not automatic idle enablement.
+    for helper in realm-idle realm-backlight swayidle swaylock brightnessctl; do
+        test -x "/usr/bin/$helper" || fail "missing idle/lock helper: $helper"
+    done
+    test -f /etc/pam.d/swaylock
+    test -f /usr/lib/systemd/user/realm-idle.service
+    grep -Fxq 'ExecStart=/usr/bin/swaylock -f -C /dev/null' /usr/lib/systemd/user/realm-lock.service
+    test ! -e /usr/lib/systemd/user/realm-session.target.wants/realm-idle.service
+    test ! -e /etc/systemd/user/realm-session.target.wants/realm-idle.service
+    swaylock --version
+
     install -d -m 0755 /etc/sddm.conf.d
     printf '%s\n' \
         '[Autologin]' \

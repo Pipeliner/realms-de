@@ -1,0 +1,12 @@
+#!/bin/sh
+# SPEC 0032. Installed PATH supplies upstream tools and Realm's small helper.
+set -eu
+if [ "$#" -ne 0 ]; then
+    echo 'usage: realm-idle' >&2
+    exit 64
+fi
+exec swayidle -w -C /dev/null \
+    timeout 300 'realm-backlight dim' resume 'realm-backlight restore' \
+    timeout 600 'systemctl --user start realm-lock.service' \
+    before-sleep 'systemctl --user start realm-lock.service' \
+    lock 'systemctl --user start realm-lock.service'

@@ -1,5 +1,12 @@
 # SPEC 0005 — Session startup and desktop integration
 
+> **MVP scope override (Accepted 2026-09-27):** [ADR 0023](../adr/0023-reuse-first-session-theme-mvp.md)
+> and [SPEC 0030](0030-reuse-first-session-theme-mvp.md) supersede conflicting
+> per-launch theme ownership and mandatory custom-renderer clauses below.
+> Themes are selected once at login; apply prepares the next login. Historical
+> generation/lease/fresh-Exec obligations are shelved, not new MVP gates.
+> Unrelated behavior remains in force; runtime migration is not yet verified.
+
 - **Status:** Draft — the NixOS session-discovery contract, startup step 3,
   XWayland display discovery and publication, current-incarnation
   doctor-health handoff, distro-native swayidle/swaylock selection, and the
@@ -843,8 +850,14 @@ register yet. They are recorded here as findings for a human to add.
 
 ## Open questions
 
-- **OQ-1 — resolved.** Dim after 5 minutes and lock/blank after 10 minutes;
-  the lid/suspend boundary remains the separately accepted host-policy path.
+**OQ-1 is superseded by accepted [SPEC 0032](0032-upstream-idle-lock-integration.md):**
+use packaged swayidle and PAM-backed swaylock, host lid policy, dim at 300 seconds,
+lock/blank at 600 seconds and synchronous lock-before-suspend. The alternative
+clients discussed below are historical alternatives, not unresolved product decisions.
+
+- **OQ-1 — resolved for MVP.** Dim after 5 minutes and lock/blank after 10
+  minutes; host lid policy remains authoritative and lock-before-suspend is
+  required. Remaining locker implementation details stay below.
 
   *Locker (resolved).* river 0.4 implements `ext-session-lock-v1` and reports
   `session_locked`/`session_unlocked` to the window manager, so realm can disable
