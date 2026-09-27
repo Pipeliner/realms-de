@@ -51,7 +51,7 @@ fn install_stopping_stub(directory: &Path, name: &str) {
     let path = directory.join(name);
     fs::write(
         &path,
-        "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$REALM_TEST_PID\"\nprintf '%s\\n' \"$@\" > \"$REALM_TEST_ARGS\"\nkill -STOP \"$$\"\n",
+        "#!/bin/sh\nif [ \"$1\" = --check-config ]; then exit 0; fi\nprintf '%s\\n' \"$$\" > \"$REALM_TEST_PID\"\nprintf '%s\\n' \"$@\" > \"$REALM_TEST_ARGS\"\nkill -STOP \"$$\"\n",
     )
     .unwrap();
     fs::set_permissions(path, PermissionsExt::from_mode(0o700)).unwrap();
@@ -110,9 +110,11 @@ fn fixed_consumers_exec_exact_generation_argv_and_hold_the_ordinary_process_leas
             vec![
                 format!(
                     "--config={}",
-                    generation_path.join("foot/foot.ini").display()
+                    generation_path.join("foot/foot-modern.ini").display()
                 ),
+                "--log-level=error".to_owned(),
                 "--override=key-bindings.spawn-terminal=none".to_owned(),
+                "zsh".to_owned(),
             ]
         } else {
             vec![format!(

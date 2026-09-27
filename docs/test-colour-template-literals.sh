@@ -47,6 +47,14 @@ expect_fail() {
 
 expect_pass shipped "$checker" --root "$fixture"
 
+for static_profile in zshrc yazi.toml yazi-keymap.toml btop.conf qt6ct.conf; do
+    printf '\n#abcdef\n' >>"$fixture/configs/templates/$static_profile"
+    expect_fail "static-profile-raw-colour-$static_profile" \
+        "$static_profile" "$checker" --root "$fixture"
+    cp "$root/configs/templates/$static_profile" \
+        "$fixture/configs/templates/$static_profile"
+done
+
 printf '\nextra = "#aabbcc"\n' >>"$fixture/configs/templates/starship.toml"
 expect_fail starship-literal 'starship.toml' "$checker" --root "$fixture"
 cp "$root/configs/templates/starship.toml" "$fixture/configs/templates/starship.toml"
@@ -70,6 +78,12 @@ sed -i 's/^alpha=0\.5$/alpha=1.0/' "$fixture/configs/templates/foot.ini"
 sed -i 's/{{ background\.void\.bare }}/112233/' "$fixture/configs/templates/foot.ini"
 expect_fail foot-raw-colour 'foot.ini' "$checker" --root "$fixture"
 cp "$root/configs/templates/foot.ini" "$fixture/configs/templates/foot.ini"
+
+sed -i 's/{{ background\.void\.bare }}/112233/' \
+    "$fixture/configs/templates/foot-modern.ini"
+expect_fail foot-modern-raw-colour 'foot-modern.ini' "$checker" --root "$fixture"
+cp "$root/configs/templates/foot-modern.ini" \
+    "$fixture/configs/templates/foot-modern.ini"
 
 sed -i '/^cursor={{ background\.void\.bare }} {{ accent\.violet\.bare }}$/d' \
     "$fixture/configs/templates/foot.ini"
@@ -125,6 +139,13 @@ cp "$root/configs/templates/qt6ct-colors.conf" "$fixture/configs/templates/qt6ct
 
 sed -i '/^    ]$/i\        Template { source: include_str!("../../../configs/templates/gtk3.css") },' "$fixture/crates/realm-theme/src/template.rs"
 expect_fail catalogue-duplicate-operand 'template.rs' "$checker" --root "$fixture"
+cp "$root/crates/realm-theme/src/template.rs" "$fixture/crates/realm-theme/src/template.rs"
+
+sed -i '0,/\.\.\/\.\.\/\.\.\/configs\/templates\/gtk3\.css/! s|../../../configs/templates/gtk3\.css|../../../configs/templates/gtk4.css|' \
+    "$fixture/crates/realm-theme/src/template.rs"
+expect_fail catalogue-missing-gtk-alias \
+    'embedded template inventory differs from SPEC 0022' \
+    "$checker" --root "$fixture"
 cp "$root/crates/realm-theme/src/template.rs" "$fixture/crates/realm-theme/src/template.rs"
 
 sed -i 's#../../../configs/templates/gtk3\.css#../../../configs/templates/unlisted.css#' "$fixture/crates/realm-theme/src/template.rs"

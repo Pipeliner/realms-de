@@ -1,5 +1,6 @@
 //! Concrete request and poll-loop adapter for the Realm session daemon.
 
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read;
 use std::os::fd::AsFd;
@@ -755,12 +756,27 @@ where
     F: FnOnce() -> Result<B, BackendError>,
     R: FnOnce() -> std::io::Result<()>,
 {
+    run_daemon_with_environment(runtime, make_backend, ready, degraded_codes, Vec::new())
+}
+
+fn run_daemon_with_environment<B, F, R>(
+    runtime: RuntimeDir,
+    make_backend: F,
+    ready: R,
+    degraded_codes: Option<Vec<String>>,
+    environment: Vec<(OsString, OsString)>,
+) -> Result<(), RuntimeError>
+where
+    B: WmBackend,
+    F: FnOnce() -> Result<B, BackendError>,
+    R: FnOnce() -> std::io::Result<()>,
+{
     let started_at = Instant::now();
     let mut clock = ClockRuntime::system();
     let snapshot_path = runtime.path().join("realm/ledger.json");
     let bound = runtime.prepare_server_endpoint()?.bind()?;
 
-    let mut worker = Worker::start(snapshot_path)?;
+    let mut worker = Worker::start_with_environment(snapshot_path, environment)?;
     let recovered = load_startup_snapshot(&mut worker)?;
     let mut persistence = PersistenceCoordinator::new(recovered.clone());
 
@@ -888,17 +904,22 @@ where
     F: FnOnce() -> Result<B, BackendError>,
 {
     let runtime = production_runtime_dir()?;
-    prepare_startup_theme(runtime.path())?;
+    let environment = prepare_startup_theme(runtime.path())?;
     let degraded_codes = load_degraded_handoff(&runtime);
-    run_daemon_with(runtime, make_backend, notify_ready, degraded_codes)
+    run_daemon_with_environment(
+        runtime,
+        make_backend,
+        notify_ready,
+        degraded_codes,
+        environment,
+    )
 }
 
 fn prepare_startup_theme(
     runtime_dir: &std::path::Path,
-) -> Result<realm_theme::generation::GenerationId, RuntimeError> {
+) -> Result<Vec<(OsString, OsString)>, RuntimeError> {
     let selected = crate::login_theme::load(runtime_dir).map_err(RuntimeError::Configuration)?;
-    realm_theme::generation::GenerationId::parse(selected.as_str())
-        .map_err(RuntimeError::Configuration)
+    crate::consumer::session_environment(&selected).map_err(RuntimeError::Configuration)
 }
 
 fn load_startup_snapshot(
@@ -1709,9 +1730,11 @@ mod tests {
         crate::login_theme::prepare(&root, &runtime, std::process::id()).unwrap();
         let selected = crate::login_theme::load(&runtime).unwrap();
         let first = super::prepare_startup_theme(&runtime).unwrap();
-        assert_eq!(first.as_str(), selected.as_str());
+        assert!(first
+            .iter()
+            .any(|(key, value)| key == "REALM_GENERATION" && value == selected.path().as_os_str()));
         let next = realm_theme::apply(&root).unwrap();
-        assert_ne!(next.as_str(), first.as_str());
+        assert_ne!(next.as_str(), selected.as_str());
         let second = super::prepare_startup_theme(&runtime).unwrap();
         assert_eq!(second, first);
         fs::write(root.join("realm/generated/current"), b"malformed\n").unwrap();

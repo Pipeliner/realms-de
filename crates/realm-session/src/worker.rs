@@ -1,5 +1,6 @@
 //! Bounded filesystem and process worker for the session daemon.
 
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
@@ -47,6 +48,7 @@ enum WorkerMessage {
 struct ChildOwner {
     sender: SyncSender<Child>,
     count: Arc<AtomicUsize>,
+    environment: Vec<(OsString, OsString)>,
 }
 
 /// One terminal result returned by the worker.
@@ -127,6 +129,14 @@ pub struct Worker {
 impl Worker {
     /// Start the sole filesystem/process worker for one daemon incarnation.
     pub fn start(snapshot_path: PathBuf) -> io::Result<Self> {
+        Self::start_with_environment(snapshot_path, Vec::new())
+    }
+
+    /// Start with child-only selectors captured from this login's generation.
+    pub(crate) fn start_with_environment(
+        snapshot_path: PathBuf,
+        environment: Vec<(OsString, OsString)>,
+    ) -> io::Result<Self> {
         let event_fd = Arc::new(eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK)?);
         let (message_tx, message_rx) = mpsc::sync_channel(MAX_WORKER_JOBS + 2);
         let (snapshot_tx, snapshot_rx) = mpsc::sync_channel(1);
@@ -143,6 +153,7 @@ impl Worker {
         let child_owner = ChildOwner {
             sender: child_tx,
             count: Arc::clone(&owned_children),
+            environment,
         };
         std::thread::Builder::new()
             .name("realm-worker".to_owned())
@@ -383,7 +394,7 @@ fn worker_main(
                 WorkerResult::SnapshotRead(read_snapshot_bounded(&snapshot_path))
             }
             WorkerMessage::Process(ProcessJob::Spawn(argv)) => WorkerResult::Process {
-                result: spawn_owned(spawn_argv(argv), &child_owner),
+                result: spawn_owned(spawn_argv(argv, &child_owner.environment), &child_owner),
             },
             WorkerMessage::Process(ProcessJob::FixedConsumer(consumer)) => WorkerResult::Process {
                 result: spawn_owned(
@@ -419,11 +430,14 @@ fn worker_main(
     }
 }
 
-fn spawn_argv(argv: Vec<String>) -> io::Result<Child> {
+fn spawn_argv(argv: Vec<String>, environment: &[(OsString, OsString)]) -> io::Result<Child> {
     let Some(program) = argv.first() else {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty argv"));
     };
-    Command::new(program).args(&argv[1..]).spawn()
+    Command::new(program)
+        .args(&argv[1..])
+        .envs(environment.iter().cloned())
+        .spawn()
 }
 
 fn spawn_owned(child: io::Result<Child>, owner: &ChildOwner) -> io::Result<()> {
@@ -686,6 +700,65 @@ mod tests {
         }
         let all = worker.reserve_process_jobs(MAX_WORKER_JOBS).unwrap();
         worker.cancel(all);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_child_keeps_captured_login_environment_after_apply_without_mutating_parent() {
+        let root = fixture_dir("login-child-environment");
+        let runtime = root.join("runtime");
+        fs::create_dir(&runtime).unwrap();
+        crate::login_theme::prepare(&root, &runtime, std::process::id()).unwrap();
+        let selection = crate::login_theme::load(&runtime).unwrap();
+        let parent_environment: std::collections::BTreeMap<_, _> = std::env::vars_os().collect();
+        let environment = crate::consumer::session_environment(&selection).unwrap();
+        let expected_data = environment
+            .iter()
+            .find(|(key, _)| key == "XDG_DATA_DIRS")
+            .unwrap()
+            .1
+            .clone();
+        let mut worker =
+            Worker::start_with_environment(root.join("ledger.json"), environment).unwrap();
+        let next = realm_theme::apply(&root).unwrap();
+        assert_ne!(next.as_str(), selection.as_str());
+        let output = root.join("child.env");
+        let reservation = worker.reserve_process_jobs(1).unwrap();
+        worker.commit(reservation, vec![ProcessJob::Spawn(vec![
+            "sh".into(), "-c".into(),
+            "printf '%s\\n' \"$REALM_GENERATION\" \"$GTK_THEME\" \"$XDG_DATA_DIRS\" > \"$1\"".into(),
+            "child".into(), output.to_str().unwrap().into(),
+        ])]).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(WorkerResult::Process { result }) = worker.try_result().unwrap() {
+                result.unwrap();
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        while worker
+            .owned_children
+            .load(std::sync::atomic::Ordering::Acquire)
+            != 0
+        {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let actual = fs::read_to_string(output).unwrap();
+        assert_eq!(
+            actual.lines().collect::<Vec<_>>(),
+            vec![
+                selection.path().to_str().unwrap(),
+                "realm",
+                expected_data.to_str().unwrap()
+            ]
+        );
+        assert!(
+            std::env::vars_os().collect::<std::collections::BTreeMap<_, _>>() == parent_environment,
+            "constructing or applying child selectors changed the parent environment"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

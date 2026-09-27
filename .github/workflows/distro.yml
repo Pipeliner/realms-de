@@ -458,6 +458,15 @@ jobs:
           path: |
             ${{ runner.temp }}/realm-session-boots/realm-tiled-desktop.png
             ${{ runner.temp }}/realm-session-boots/realm-grimoire.png
+            ${{ runner.temp }}/realm-session-boots/realm-terminal-prompt.png
+            ${{ runner.temp }}/realm-session-boots/realm-gtk*-*.png
+            ${{ runner.temp }}/realm-session-boots/realm-qt6-*.png
+            ${{ runner.temp }}/realm-session-boots/control-gtk*-state.json
+            ${{ runner.temp }}/realm-session-boots/control-qt6-*-state.json
+            ${{ runner.temp }}/realm-session-boots/consumer-versions.json
+            ${{ runner.temp }}/realm-session-boots/*-launcher-environment.json
+            ${{ runner.temp }}/realm-session-boots/*-openat.log
+            ${{ runner.temp }}/realm-session-boots/*-stderr.log
             ${{ runner.temp }}/realm-session-boots/capture-provenance.json
             ${{ runner.temp }}/realm-session-boots/realmctl-doctor.json
             ${{ runner.temp }}/realm-session-boots/control-get-state.json

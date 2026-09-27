@@ -116,6 +116,40 @@ Session shutdown uses ordinary service/scope lifecycle management. Required
 environment discovery, portal startup ordering and client isolation remain;
 UWSM is an optional implementation evaluation, not a new prerequisite.
 
+### Reused consumer integration boundary
+
+Reuse the terminal/toolkit assets and probes from PRs #240/#241, but select the
+login record rather than `current`. The terminal executes zsh with the generated
+profile, Starship configuration and Yazi configuration/keymap. Its btop adapter
+passes the separate supported config and themes-directory arguments; the
+published btop config is read-only so ordinary writeback cannot alter the
+session snapshot. No additional garbage-collection policy is introduced.
+
+Foot configuration selection probes the generated modern and legacy section
+variants with `--check-config` under one shared one-second deadline. It never
+falls back to a mutable user configuration after both variants fail.
+
+One generation-derived child environment supplies REALM_GENERATION, ZDOTDIR,
+STARSHIP_CONFIG, YAZI_CONFIG_HOME, GTK_THEME and the Qt platform selector. GTK
+uses the generated named-theme aliases; Qt uses the generated qt6ct profile.
+Generation search roots precede existing XDG_DATA_DIRS/XDG_CONFIG_DIRS, or their
+standard defaults if absent. XDG_CONFIG_HOME remains unchanged, preserving the
+precedence of a user's explicit qt6ct configuration. A nonempty explicitly
+inherited QT_QPA_PLATFORMTHEME remains authoritative; otherwise use qt6ct.
+
+Apply this environment to both fixed consumers and direct argv launches from
+the session worker (including the existing browser dispatcher). Construct the
+worker's environment once from the login selection at daemon startup; WM
+restart still reloads that same selection. Do not mutate the daemon process
+environment or import these overrides into shared systemd/D-Bus activation
+state. Newly execed applications inherit it; reused processes and shared
+activation services retain the documented boundary above.
+
+Source tests must capture real child argv/environment for terminal, launcher
+and worker launches, preserve caller environment and user files, and exercise
+apply B followed by fresh children still selecting login A. CI reuses the real
+Foot/Yazi/btop/zsh/Starship/GTK3/GTK4/Qt6 probes, extended to launcher descendants.
+
 ## B1 — Waybar comparison, not automatic replacement
 
 Compare the existing bar with packaged Waybar on the same CI-built River session.
