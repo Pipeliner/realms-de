@@ -46,6 +46,8 @@ assert lib.assertMsg (lib.versionAtLeast pkgs.swaylock.version "1.7")
     pkgs.makeWrapper
     pkgs.git
   ];
+  # Completion fixtures execute Bash through PATH, never a host /bin/bash.
+  nativeCheckInputs = [ pkgs.bash ];
 
   # realm-core's tests include the palette lint, so a palette that fails its
   # WCAG floors fails the build. That is the intended behaviour (ADR 0005).

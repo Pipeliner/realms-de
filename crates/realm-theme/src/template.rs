@@ -335,6 +335,27 @@ mod tests {
         );
     }
 
+    fn completion_shell() -> Command {
+        Command::new("bash")
+    }
+
+    #[test]
+    fn completion_fixture_resolves_its_shell_from_test_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let shell = root.path().join("bash");
+        fs::write(&shell, "#!/bin/sh\nprintf '%s' declared-check-shell\n").unwrap();
+        fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+        let output = completion_shell()
+            .env("PATH", root.path())
+            .arg("-c")
+            .arg(":")
+            .output()
+            .expect("completion fixture requires Bash on the test PATH");
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"declared-check-shell");
+    }
+
     #[test]
     fn ubuntu_global_completion_does_not_write_into_sealed_zdotdir() {
         let root = tempfile::tempdir().unwrap();
@@ -352,7 +373,7 @@ mod tests {
         // Ubuntu's /etc/zsh/zshrc runs compinit between .zshenv and .zshrc.
         // The fake below models only compinit's documented dump-file side effect;
         // the native VM exercises the installed shell and package for real.
-        let status = Command::new("/bin/bash")
+        let status = completion_shell()
             .arg("-c")
             .arg(
                 r#"set -eu
@@ -376,7 +397,7 @@ test -f "$XDG_CACHE_HOME/realm/zcompdump"
             .env("XDG_CACHE_HOME", &cache)
             .env("HOME", root.path())
             .status()
-            .unwrap();
+            .expect("completion fixture requires Bash on the test PATH");
         assert!(
             status.success(),
             "Zsh startup wrote into its sealed configuration tree"
@@ -394,7 +415,7 @@ test -f "$XDG_CACHE_HOME/realm/zcompdump"
             .find(|template| template.id == "zsh-profile")
             .unwrap();
         fs::write(zdotdir.join(".zshrc"), profile.source).unwrap();
-        let output = Command::new("/bin/bash")
+        let output = completion_shell()
             .arg("-c")
             .arg(
                 r#"set -eu
@@ -410,7 +431,7 @@ test ! -e "$ZDOTDIR/.zcompdump"
             .env("XDG_CACHE_HOME", root.path().join("cache"))
             .env("HOME", root.path())
             .output()
-            .unwrap();
+            .expect("completion fixture requires Bash on the test PATH");
         assert!(
             output.status.success(),
             "completion fallback failed: {output:?}"
@@ -438,7 +459,7 @@ test ! -e "$ZDOTDIR/.zcompdump"
                 .find(|template| template.id == "zsh-profile")
                 .unwrap();
             fs::write(zdotdir.join(".zshrc"), profile.source).unwrap();
-            let output = Command::new("/bin/bash")
+            let output = completion_shell()
                 .arg("-c")
                 .arg(
                     r#"set -eu
@@ -464,7 +485,7 @@ test ! -e "$ZDOTDIR/.zcompdump"
                 )
                 .env("HOME", root.path())
                 .output()
-                .unwrap();
+                .expect("completion fixture requires Bash on the test PATH");
             assert!(
                 output.status.success() && output.stderr.is_empty(),
                 "completion fallback failed (readonly_dump={readonly_dump}): {output:?}"

@@ -167,6 +167,11 @@ relative entry so CI can identify the writer without accepting that mutation.
 The installed native terminal probe records the generated `zsh/` entry names
 before and after actual Zsh startup, and requires a completion dump to appear
 in the user's cache rather than in the sealed generation before re-applying.
+Completion source fixtures invoke Bash through the test environment's PATH,
+with Bash explicitly declared as a Nix check-time input. They must not assume
+a host `/bin/bash` or skip the checks when the interpreter is absent. Missing
+interpreter diagnostics must name the required test dependency; production
+Zsh startup and installed runtime dependencies are unchanged.
 Generation search roots precede existing XDG_DATA_DIRS/XDG_CONFIG_DIRS, or their
 standard defaults if absent. XDG_CONFIG_HOME remains unchanged, preserving the
 precedence of a user's explicit qt6ct configuration. A nonempty explicitly
