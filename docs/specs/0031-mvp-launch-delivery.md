@@ -64,11 +64,16 @@ install documentation and README screenshots; do not build parallel proof sets.
 2. Open terminal, browser and files; verify theme, shell and ordinary launch.
 3. Exercise focus/swap/orbits/layout, which-key and full key help.
 4. Open a real file chooser and perform a real browser screen share.
-5. Verify 5-minute dim, 10-minute lock/blank, and lock before host-policy suspend.
+5. Verify manual locking, 5-minute dim and 10-minute lock/blank.
 6. Logout/relogin; verify clean restart and next-login theme selection.
 
+Suspend/resume integration and verification are explicitly deferred until after
+MVP by the owner (2026-09-27). They do not gate this journey or idle enablement;
+lock-before-host-policy-suspend remains the intended post-MVP behavior, not a
+verified launch guarantee. Retain the failed VM evidence for that follow-up.
+
 Run the same journey on all supported distros; retain hardware-only limitations
-explicitly rather than claiming VM suspend proves laptop behavior. Begin #78's
+explicitly. Begin #78's
 real week of daily use as soon as the journey is usable; cosmetic work continues
 in parallel. A week cannot be fabricated or replaced by a green CI run.
 
@@ -116,8 +121,10 @@ remain required wherever they affect the journey.
 
 ## Verification
 
-**Accepted bounded Rust-test mitigation (2026-09-27).** The workspace Rust
-test step has a 20-minute execution limit and its job a 25-minute limit, leaving
+**Accepted bounded Rust-test mitigation (2026-09-27).** Every direct workspace
+Rust-test step in the launch workflows (`ci.yml` and `distro.yml`, including
+both Ubuntu and Fedora smoke matrix entries) has a 20-minute execution limit
+and its job a 25-minute limit, leaving
 time for diagnostic upload and cleanup. Neighboring completed test jobs took
 about two minutes; main run 36331319678 remained in its test step for over
 100 minutes without downloadable logs. This bound prevents recurrence of an
@@ -127,6 +134,16 @@ the logging pipeline. Retain only its combined text output for seven days using
 an always-run upload, including after step failure or timeout where the runner
 remains available. Missing logs after runner loss are missing evidence, never
 success. Main cancellation policy remains unchanged.
+
+The initial correction covered `ci.yml` alone. Distro run 36337828094 completed
+its build in 29 seconds but its Ubuntu test step, started at 17:41:26 UTC,
+remained active beyond 50 minutes; another theme-candidate distro job completed
+in 2m24s. Apply the same bound to the shared cause across both launch workflows,
+retaining distro's `--locked` selection and matrix-unique seven-day text-log
+artifacts. A workflow fixture discovers all direct workspace test steps in
+these workflows so a new launch lane cannot silently omit the contract. This
+does not diagnose a deadlock without logs. The optional `agentic-loop.yml`
+workflow is outside the MVP launch lanes and remains deferred.
 
 Workflow configuration tests guard event registration, draft/full boundaries,
 main cancellation policy and routine dependency freeze. Remote CI supplies the

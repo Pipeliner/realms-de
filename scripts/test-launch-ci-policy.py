@@ -15,19 +15,32 @@ def workflow(name):
 
 class LaunchPolicy(unittest.TestCase):
     def test_rust_test_gate_is_bounded_and_retains_failure_diagnostics(self):
-        job = workflow('ci.yml')['jobs']['test']
-        self.assertEqual(job.get('timeout-minutes'), '25')
-        test = next(s for s in job['steps'] if 'cargo test --workspace --all-features' in s.get('run', ''))
-        self.assertEqual(test.get('timeout-minutes'), '20')
-        self.assertEqual(test.get('shell'), 'bash')
-        self.assertIn('set -o pipefail', test['run'])
-        self.assertIn('cargo test --workspace --all-features 2>&1 | tee rust-tests.log', test['run'])
-        self.assertNotIn('continue-on-error', test)
-        upload = next(s for s in job['steps'] if s.get('name') == 'Retain Rust test diagnostics')
-        self.assertEqual(upload['if'], 'always()')
-        self.assertTrue(upload['uses'].startswith('actions/upload-artifact@'))
-        self.assertEqual(upload['with']['path'], 'rust-tests.log')
-        self.assertEqual(upload['with']['retention-days'], '7')
+        for name in ('ci.yml', 'distro.yml'):
+            tested_jobs = []
+            for job_id, job in workflow(name)['jobs'].items():
+                tests = [step for step in job['steps']
+                         if 'cargo test --workspace' in step.get('run', '')]
+                if not tests:
+                    continue
+                tested_jobs.append(job_id)
+                with self.subTest(workflow=name, job=job_id):
+                    self.assertEqual(job.get('timeout-minutes'), '25')
+                    for test in tests:
+                        self.assertEqual(test.get('timeout-minutes'), '20')
+                        self.assertEqual(test.get('shell'), 'bash')
+                        self.assertIn('set -o pipefail', test['run'])
+                        locked = ' --locked' if name == 'distro.yml' else ''
+                        self.assertIn('cargo test --workspace --all-features' + locked
+                                      + ' 2>&1 | tee rust-tests.log', test['run'])
+                        self.assertNotIn('continue-on-error', test)
+                    upload = next(s for s in job['steps'] if s.get('name') == 'Retain Rust test diagnostics')
+                    self.assertEqual(upload['if'], 'always()')
+                    self.assertTrue(upload['uses'].startswith('actions/upload-artifact@'))
+                    self.assertEqual(upload['with']['path'], 'rust-tests.log')
+                    self.assertEqual(upload['with']['retention-days'], '7')
+                    if 'strategy' in job:
+                        self.assertIn('${{ matrix.name }}', upload['with']['name'])
+            self.assertTrue(tested_jobs, f'{name} lost workspace test coverage')
 
     def test_branch_push_cannot_duplicate_pr_workflows(self):
         for name in ('ci.yml', 'distro.yml', 'palette.yml'):

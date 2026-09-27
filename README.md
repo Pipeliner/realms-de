@@ -151,6 +151,10 @@ are not certified by these builds. In particular, this Ubuntu build's Fuzzel
 configuration may prevent the launcher opening; its compatibility fix is newer.
 Do not rely on this trial for locking or suspend protection.
 
+Suspend/resume support and verification are deferred until after MVP. Manual
+locking and idle dim after 5 minutes / lock-blank after 10 minutes remain planned
+MVP requirements; this scope change does not certify the trial builds above.
+
 ### Download a CI-built package
 
 Verified **2026-09-27** against the exact run/revision in the status table above.
