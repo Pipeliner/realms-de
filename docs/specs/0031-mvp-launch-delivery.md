@@ -113,6 +113,18 @@ remain required wherever they affect the journey.
 
 ## Verification
 
+**Accepted bounded Rust-test mitigation (2026-09-27).** The workspace Rust
+test step has a 20-minute execution limit and its job a 25-minute limit, leaving
+time for diagnostic upload and cleanup. Neighboring completed test jobs took
+about two minutes; main run 36331319678 remained in its test step for over
+100 minutes without downloadable logs. This bound prevents recurrence of an
+unbounded test gate; it does not identify or fix a test deadlock or runner fault.
+Keep the existing workspace/all-features selection and preserve failure through
+the logging pipeline. Retain only its combined text output for seven days using
+an always-run upload, including after step failure or timeout where the runner
+remains available. Missing logs after runner loss are missing evidence, never
+success. Main cancellation policy remains unchanged.
+
 Workflow configuration tests guard event registration, draft/full boundaries,
 main cancellation policy and routine dependency freeze. Remote CI supplies the
 actual execution evidence; local configuration tests cannot certify a package.
