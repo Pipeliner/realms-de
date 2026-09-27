@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import json
+import hashlib
 
 
 class IdleTests(unittest.TestCase):
@@ -106,6 +107,7 @@ class IdleTests(unittest.TestCase):
         keys = []
         identities = []
         frames = {'calls': 0, 'never_blank': False}
+        names = []
         argv = ['swayidle', '-w', '-C', '/dev/null',
                 'timeout', '300', 'realm-backlight dim', 'resume', 'realm-backlight restore',
                 'timeout', '600', 'systemctl --user start realm-lock.service',
@@ -158,13 +160,21 @@ class IdleTests(unittest.TestCase):
             self.assertEqual(observe()['lock_time'], 700)
             blank()
             self.assertEqual(frames['calls'], 2, 'first transitional frame must be retried')
+            self.assertEqual(names, ['idle-locked-000', 'idle-locked-001'])
+            retained = json.loads((evidence / 'idle-blank-attempts.json').read_text())
+            self.assertEqual([attempt['uniform'] for attempt in retained], [False, True])
+            for attempt in retained:
+                self.assertEqual(attempt['sha256'], hashlib.sha256((evidence / attempt['path']).read_bytes()).hexdigest())
+                self.assertLessEqual(attempt['started_monotonic'], attempt['completed_monotonic'])
             frames['never_blank'] = True
-            with patch.object(probe.time, 'monotonic', side_effect=[0, 6]), self.assertRaisesRegex(AssertionError, 'uniformly opaque'):
+            with patch.object(probe.time, 'monotonic', side_effect=[0, 0, 6]), self.assertRaisesRegex(AssertionError, 'uniformly opaque'):
                 blank()
             stop()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'blank.ppm'
             def screenshot(name):
+                names.append(name)
+                path = Path(directory) / (name + '.ppm')
                 frames['calls'] += 1
                 pixels = b'\x22' * 6 if frames['calls'] > 1 and not frames['never_blank'] else b'\x22' * 3 + b'\x33' * 3
                 path.write_bytes(b'P6\n2 1\n255\n' + pixels)

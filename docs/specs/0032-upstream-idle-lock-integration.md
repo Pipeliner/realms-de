@@ -120,6 +120,18 @@ No injected timers, clocks or replacement locker are allowed in the VM.
 The no-backlight VM must log the real dim no-op, still lock, show an opaque
 uniform frame before password input, reject a wrong password, suppress the
 launcher, accept the correct password and restore the launcher binding.
+The unchanged five-second blank-frame retry window uses a fresh, never-existing
+capture path for each bounded attempt and retains every complete frame plus
+host monotonic capture timestamps and SHA-256 hashes. A pre-existing complete
+file is not evidence of the current capture. Ubuntu run 36350431294 retained
+a partial initial lock image with desktop hints while Fedora passed; these
+diagnostics distinguish capture freshness from rendering without treating
+stale-file reuse as the established cause. This is a retry window, not a hard
+five-second total: an in-flight capture retains the existing separately bounded
+five-second HMP exchange and five-second file-completeness wait, and may finish
+after the retry deadline. Do not relax opacity or extend these existing bounds,
+inject lock input before the blank check, or change installed locker
+configuration on the strength of this observation.
 Activity must produce the pending
 restore no-op. Stopping idle must leave its captured process identity gone.
 The native no-backlight journal probe SHALL select the current boot's

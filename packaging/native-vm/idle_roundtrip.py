@@ -1,5 +1,6 @@
 """CI-only real native idle timing, using the manual-lock transport adapters."""
 import json
+import hashlib
 import sys
 import time
 
@@ -136,16 +137,26 @@ print(json.dumps({'argv': p.joinpath('cmdline').read_bytes().decode().rstrip('\\
 
     def blank():
         deadline = time.monotonic() + 5
+        attempts = []
         while True:
-            path = screenshot('idle-locked')  # Adapter requires a complete P6.
+            started = time.monotonic()
+            path = screenshot(f'idle-locked-{len(attempts):03d}')
             with path.open('rb') as stream:
                 assert stream.readline() == b'P6\n'
                 stream.readline()
                 assert stream.readline() == b'255\n'
                 pixels = stream.read()
-            if pixels and pixels == pixels[:3] * (len(pixels) // 3):
+            completed = time.monotonic()
+            uniform = bool(pixels) and pixels == pixels[:3] * (len(pixels) // 3)
+            attempts.append({'path': path.name,
+                             'started_monotonic': started,
+                             'completed_monotonic': completed,
+                             'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                             'uniform': uniform})
+            (evidence / 'idle-blank-attempts.json').write_text(json.dumps(attempts, indent=2) + '\n')
+            if uniform:
                 return
-            if time.monotonic() >= deadline:
+            if completed >= deadline:
                 raise AssertionError('idle lock frame is not uniformly opaque')
             time.sleep(0.2)
 

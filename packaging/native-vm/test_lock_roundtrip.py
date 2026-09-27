@@ -14,6 +14,20 @@ spec.loader.exec_module(probe)
 
 
 class RoundtripTests(unittest.TestCase):
+    def test_fresh_capture_rejects_old_complete_frame_before_monitor_command(self):
+        self.assertTrue(hasattr(probe, 'fresh_screenshot'), 'capture must reject an old complete frame')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'frame.ppm'
+            path.write_bytes(b'P6\n2 1\n255\n' + b'\0' * 6)
+            with self.assertRaisesRegex(AssertionError, 'already exists'):
+                probe.fresh_screenshot(path, lambda: self.fail('old frame admitted'))
+            path.unlink()
+            result = probe.fresh_screenshot(path, lambda: path.write_bytes(b'P6\n2 1\n255\n' + b'\0' * 6))
+            self.assertEqual(result, path)
+            path.unlink()
+            with patch.object(probe.time, 'monotonic', side_effect=[0, 6]), self.assertRaisesRegex(AssertionError, 'incomplete'):
+                probe.fresh_screenshot(path, lambda: path.write_bytes(b'P6\n2 1\n255\n' + b'\0' * 5))
+
     def test_real_unix_monitor_handshake_split_reply_and_eof(self):
         for premature_eof in (False, True):
             with self.subTest(premature_eof=premature_eof), tempfile.TemporaryDirectory() as directory:

@@ -90,6 +90,17 @@ def complete_ppm(path):
         return False
 
 
+def fresh_screenshot(path, capture):
+    assert not path.exists(), f'capture path already exists: {path}'
+    capture()
+    deadline = time.monotonic() + 5
+    while not complete_ppm(path):
+        if time.monotonic() >= deadline:
+            raise AssertionError(f'incomplete QEMU screenshot: {path}')
+        time.sleep(0.05)
+    return path
+
+
 # Execute in the guest so /proc identities cannot accidentally describe the host.
 SNAPSHOT = r'''
 import json, pathlib, subprocess
@@ -146,13 +157,7 @@ def main():
     def screenshot(name):
         path = evidence / (name + '.ppm')
         assert not any(character.isspace() for character in str(path)), path
-        hmp('screendump ' + str(path))
-        deadline = time.monotonic() + 5
-        while not complete_ppm(path):
-            if time.monotonic() >= deadline:
-                raise AssertionError(f'incomplete QEMU screenshot: {path}')
-            time.sleep(0.05)
-        return path
+        return fresh_screenshot(path, lambda: hmp('screendump ' + str(path)))
 
     def gone(identities):
         guest('sudo python3 -', 'import pathlib\nidentities = ' + repr(identities) + '''
