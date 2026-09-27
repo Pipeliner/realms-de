@@ -188,6 +188,14 @@ and their CI prerequisite installs SHALL also supply a real DejaVu fallback
 font: Debian/Ubuntu uses `fonts-dejavu-core`, while Fedora uses
 `dejavu-sans-fonts` and `dejavu-sans-mono-fonts`. The build must not inherit
 this test input accidentally from the CI host's font database.
+The CI font guard SHALL check exact font-package tokens in the retained
+RPM job's and native-fixture job's prerequisite install commands, not equality
+of the entire command line. Additional prerequisites or package reordering
+SHALL not fail this font contract; a missing font, similarly named package,
+comment-only mention or fonts installed only in a
+different job SHALL still fail. This prevents the stale full-line assertions
+triggered by adding the required `patch` prerequisite without weakening explicit
+font provisioning.
 
 The Debian and Fedora package paths SHALL unpack only these retained inputs and
 build using `cargo --frozen --offline --locked`. They MAY consume declared,

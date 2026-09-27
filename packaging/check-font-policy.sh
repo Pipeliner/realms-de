@@ -24,6 +24,8 @@ require_file() {
 }
 
 for path in \
+    .github/workflows/distro.yml \
+    .github/workflows/ci.yml \
     docs/adr/0012-font-fallback-is-a-contract.md \
     docs/INSTALL.md \
     packaging/debian/cargo-deb.toml.fragment \
@@ -32,6 +34,36 @@ for path in \
     packaging/nix/nixos-module.nix; do
     require_file "$path"
 done
+
+# Check only the named job/step install command. Extra prerequisites and their
+# ordering are not font policy, and another job cannot supply these test fonts.
+require_ci_font() {
+    awk -v job="$2" -v step="$3" -v manager="$4" -v font="$5" '
+        /^  [A-Za-z0-9_-]+:$/ { in_job = ($0 == "  " job ":"); in_step = 0 }
+        in_job && /^      - / { in_step = ($0 == "      - name: " step) }
+        in_step {
+            command = $0
+            sub(/#.*/, "", command)
+            count = split(command, words, /[[:space:]]+/)
+            has_manager = has_install = has_font = 0
+            for (i = 1; i <= count; i++) {
+                if (words[i] == ";" || words[i] == "&&" || words[i] == "||") break
+                if (words[i] == manager) has_manager = 1
+                if (words[i] == "install") has_install = 1
+                if (words[i] == font) has_font = 1
+            }
+            if (has_manager && has_install && has_font) found = 1
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$root/$1" || fail "$2 prerequisite install does not explicitly include $5"
+}
+
+for font in dejavu-sans-fonts dejavu-sans-mono-fonts; do
+    require_ci_font .github/workflows/distro.yml fedora-rpm-package \
+        'Install RPM build prerequisites' dnf "$font"
+done
+require_ci_font .github/workflows/ci.yml docs \
+    'Install native package build drivers' apt-get fonts-dejavu-core
 
 adr="$root/docs/adr/0012-font-fallback-is-a-contract.md"
 grep -Fq 'Realm does not redistribute Symbola or a generic Nerd Font.' "$adr" \
