@@ -6,39 +6,53 @@ set -euo pipefail
 
 interval=${CI_MONITOR_INTERVAL_SECONDS:-30}
 max_seconds=${CI_MONITOR_MAX_SECONDS:-1800}
+if [[ ! $interval =~ ^[1-9][0-9]*$ || ! $max_seconds =~ ^[1-9][0-9]*$ ]]; then
+  printf '%s\n' 'monitor timing settings must be positive decimal integers' >&2
+  exit 64
+fi
 mode=once
 if [[ ${1:-} == "--watch" ]]; then
   mode=watch
 fi
 
-repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+started=$(date +%s)
+repo=$(timeout "$max_seconds" gh repo view --json nameWithOwner --jq .nameWithOwner)
 
 snapshot() {
-  gh run list --repo "$repo" --limit 30 --json databaseId,status,conclusion,name,headBranch,headSha,updatedAt |
+  timeout "$1" gh api "repos/$repo/actions/runs?branch=main&per_page=30" |
     jq -r '
-      .[] | select(.headBranch == "main" and (.name == "ci" or .name == "distro" or .name == "palette")) |
-      [.databaseId,.name,.status,(.conclusion // ""),.headSha,.updatedAt] | @tsv'
+      if (.workflow_runs | type) != "array" then error("invalid workflow run response") else
+      .workflow_runs[] | select(.head_branch == "main" and (.name == "ci" or .name == "distro" or .name == "palette")) |
+      [.id,.name,.status,(.conclusion // ""),.head_sha,.updated_at] | @tsv end'
 }
 
 if [[ $mode == once ]]; then
-  snapshot
+  snapshot "$max_seconds"
   exit 0
 fi
 
-started=$(date +%s)
+last_status=1
 while :; do
   now=$(date +%s)
-  if ! state=$(snapshot 2>&1); then
+  remaining=$(( max_seconds - (now - started) ))
+  if (( remaining <= 0 )); then
+    exit "$last_status"
+  fi
+  if ! state=$(snapshot "$remaining" 2>&1); then
+    last_status=1
     printf '%s monitor query failed; retrying\n' "$(date -u +%FT%TZ)" >&2
-    sleep "$interval"
-    continue
+    printf '%s\n' "$state" >&2
+  else
+    last_status=0
+    printf '%s\n' "$state"
+    if ! printf '%s\n' "$state" | awk -F '\t' '$3 == "in_progress" || $3 == "queued" { active=1 } END { exit !active }'; then
+      exit 0
+    fi
   fi
-  printf '%s\n' "$state"
-  if (( now - started >= max_seconds )); then
-    exit 0
+  now=$(date +%s)
+  remaining=$(( max_seconds - (now - started) ))
+  if (( remaining <= 0 )); then
+    exit "$last_status"
   fi
-  if ! printf '%s\n' "$state" | awk -F '\t' '$3 == "in_progress" || $3 == "queued" { active=1 } END { exit !active }'; then
-    exit 0
-  fi
-  sleep "$interval"
+  sleep "$(( interval < remaining ? interval : remaining ))"
 done

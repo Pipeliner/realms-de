@@ -185,7 +185,6 @@ fn select_foot_config(generation: &Path) -> Result<PathBuf, String> {
 }
 
 /// Construct child-only selectors without changing caller or activation environments.
-
 pub fn session_environment(
     selection: &GenerationSelection,
 ) -> Result<Vec<(OsString, OsString)>, String> {

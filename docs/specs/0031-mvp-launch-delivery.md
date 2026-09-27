@@ -19,6 +19,16 @@ run; this is not a promise to verify every intermediate main commit. Batch docs
 and queue bookkeeping into one push rather than repeatedly invalidating evidence.
 No package builds, installation or archives run locally.
 
+The read-only `scripts/ci-monitor` queries main-branch workflow runs at the API
+boundary, before any result limit, so recent PR traffic cannot hide main.
+It reports the required ci/distro/palette workflows. Query or response errors
+fail `--once`; `--watch` retries only within its configured wall-clock budget,
+including failed queries and sleeps, then fails if no successful final query
+was possible. It never treats an API failure as an empty successful snapshot.
+Interval and maximum-duration settings must be positive decimal integers;
+invalid settings fail before querying, rather than disabling timeouts or polling
+without delay.
+
 Pause routine Dependabot version PR creation until MVP acceptance. Continue
 inspecting the complete incoming PR queue; defer routine upgrades with a visible
 post-MVP disposition, and admit only a documented launch/CI-blocking exception.
