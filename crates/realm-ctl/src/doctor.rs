@@ -1090,7 +1090,7 @@ fn apply_deferred_checks(
         checks,
         Check::skipped(
             "units/idle-lock",
-            "locker selection remains an accepted needs-human decision",
+            "swayidle/swaylock selected; automatic enablement awaits SPEC 0032 acceptance; runtime readiness is not probed",
         ),
     );
     if !portal_roundtrip {

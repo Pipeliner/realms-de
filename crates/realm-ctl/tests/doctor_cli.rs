@@ -108,6 +108,12 @@ fn no_session_report_is_ordered_bounded_and_keeps_independent_warnings() {
     assert_eq!(checks[10]["status"], "skip");
     assert_eq!(checks[24]["id"], "portal/config");
     assert_eq!(checks[24]["status"], "ok");
+    assert_eq!(checks[22]["id"], "units/idle-lock");
+    assert_eq!(checks[22]["status"], "skip");
+    assert_eq!(
+        checks[22]["summary"],
+        "swayidle/swaylock selected; automatic enablement awaits SPEC 0032 acceptance; runtime readiness is not probed"
+    );
     assert_eq!(checks[29]["id"], "fonts/glyphs");
     assert_eq!(checks[29]["status"], "warn");
     assert!(checks[29]["summary"]
