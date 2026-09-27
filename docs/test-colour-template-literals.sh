@@ -47,6 +47,14 @@ expect_fail() {
 
 expect_pass shipped "$checker" --root "$fixture"
 
+for static_profile in zshrc yazi.toml yazi-keymap.toml btop.conf; do
+    printf '\n#abcdef\n' >>"$fixture/configs/templates/$static_profile"
+    expect_fail "static-profile-raw-colour-$static_profile" \
+        "$static_profile" "$checker" --root "$fixture"
+    cp "$root/configs/templates/$static_profile" \
+        "$fixture/configs/templates/$static_profile"
+done
+
 printf '\nextra = "#aabbcc"\n' >>"$fixture/configs/templates/starship.toml"
 expect_fail starship-literal 'starship.toml' "$checker" --root "$fixture"
 cp "$root/configs/templates/starship.toml" "$fixture/configs/templates/starship.toml"

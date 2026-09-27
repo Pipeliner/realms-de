@@ -2,8 +2,8 @@
 #
 # `shellcheck` and `package` build on any Linux builder; `session-boots` is a
 # NixOS VM test and needs /dev/kvm. CI (.github/workflows/distro.yml) falls back
-# to `nix flake check --no-build` plus the two buildable checks when KVM is
-# absent, so those two must stay independently buildable.
+# to `nix flake check --no-build` plus selected buildable checks when KVM is
+# absent, so those checks must stay independently buildable.
 {
   pkgs,
   lib,
@@ -12,10 +12,22 @@
   desktopAdmissionVmTest,
   nixosModule,
   sourceRevision,
+  support,
   vmControlHelper,
   portalVmHelper,
 }:
-{
+let
+  realmYazi = lib.findFirst (
+    package: lib.getName package == "yazi"
+  ) null (support.reusedTools pkgs);
+  xwaylandWindowObservation = pkgs.writers.writePython3Bin
+    "realm-xwayland-window-observation"
+    { }
+    (builtins.readFile ./xwayland_window_observation.py);
+in
+assert realmYazi != null;
+assert realmYazi.version == "25.4.8";
+rec {
   # The session wrapper is the file most likely to break a login, and the only
   # shell in the repo. Keep it clean.
   shellcheck =
@@ -30,7 +42,9 @@
           ${src + "/packaging/check-font-policy.sh"} \
           ${src + "/packaging/font-policy-test.sh"} \
           ${src + "/packaging/nix/check-root-flake-ci.sh"} \
+          ${src + "/packaging/nix/check-vm-evidence-status.sh"} \
           ${src + "/packaging/nix/test-root-flake-ci.sh"} \
+          ${src + "/packaging/nix/test-vm-evidence-status.sh"} \
           ${src + "/docs/check-readme-truth-snapshot.sh"} \
           ${src + "/docs/test-readme-truth-snapshot.sh"} \
           ${src + "/docs/check-contribution-templates.sh"} \
@@ -43,6 +57,7 @@
         bash ${src + "/packaging/session/test-runtime-dir-mode.sh"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_portal_vm_helper.py"}
         bash ${src + "/packaging/session/test-portal-warmup.sh"}
+        sh ${src + "/packaging/nix/test-vm-evidence-status.sh"}
         touch $out
       '';
 
@@ -106,6 +121,20 @@
     test -d ${pkgs.adwaita-icon-theme}/share/icons/Adwaita/cursors
     touch $out
   '';
+
+  xwayland-window-observation = pkgs.runCommand
+    "realm-xwayland-window-observation-tests"
+    {
+      nativeBuildInputs = [
+        pkgs.coreutils
+        pkgs.python3
+      ];
+    }
+    ''
+      PYTHONDONTWRITEBYTECODE=1 ${pkgs.python3}/bin/python3 \
+        ${src + "/packaging/nix/test_xwayland_window_observation.py"}
+      touch $out
+    '';
 
   # The local agent-SDD validator reads Git objects at runtime.  Its package
   # wrapper must supply Git without adding it to the desktop session wrapper.
@@ -174,9 +203,11 @@ EOF
 
   # `pkgs.testers.nixosTest`, not the old top-level `nixosTest` alias, which
   # nixpkgs now refuses.
-  session-boots = pkgs.testers.nixosTest {
-    name = "realm-session-boots";
-    enableOCR = true;
+  session-boots-evidence =
+    let
+      test = pkgs.testers.nixosTest {
+        name = "realm-session-boots";
+        enableOCR = true;
 
     nodes.machine =
       { config, pkgs, ... }:
@@ -203,9 +234,12 @@ EOF
               if reply is not RequestNameReply.PRIMARY_OWNER:
                   raise SystemExit("D-Bus probe did not acquire its configured name")
 
+              title = "Realm X11 Probe A17-" + str(os.getpid())
               child = await asyncio.create_subprocess_exec(
                   "${pkgs.xmessage}"
                   "/bin/xmessage",
+                  "-title",
+                  title,
                   "-center",
                   "Realm X11 Probe",
               )
@@ -213,7 +247,8 @@ EOF
               marker.write_text(
                   "display=" + display + "\n"
                   "service_pid=" + str(os.getpid()) + "\n"
-                  "child_pid=" + str(child.pid) + "\n",
+                  "child_pid=" + str(child.pid) + "\n"
+                  "title=" + title + "\n",
                   encoding="utf-8",
               )
               await child.wait()
@@ -257,6 +292,10 @@ EOF
           vmControlHelper
           portalVmHelper
           pkgs.foot
+          pkgs.zsh
+          pkgs.starship
+          pkgs.yazi
+          pkgs.btop
           pkgs.firefox
           (pkgs.makeDesktopItem {
             name = "realm-browser-test";
@@ -283,7 +322,9 @@ EOF
       import datetime as dt
       import hashlib
       import json
+      import re
       import shlex
+      import time
       from pathlib import Path
       from test_driver.errors import RequestedAssertionFailed
 
@@ -307,7 +348,7 @@ EOF
           output = machine.succeed(as_alice("realm-vm-control", *argv))
           return output, json.loads(output)
 
-      def wait_for_state(predicate, description):
+      def wait_for_state(predicate, description, timeout=STATE_TIMEOUT):
           observed_raw = None
           observed = None
 
@@ -328,8 +369,88 @@ EOF
                   machine.log(f"last state while waiting for {description}: {observed!r}")
               return False
 
-          retry(matches, timeout=STATE_TIMEOUT)
+          retry(matches, timeout=timeout)
           return observed_raw, observed
+
+      def remaining_timeout(deadline, description):
+          remaining = deadline - time.monotonic()
+          assert remaining > 0, f"{description} exhausted the shared X11 deadline"
+          return dt.timedelta(seconds=remaining)
+
+      def x11_observation(display, title, timeout=DIAGNOSTIC_TIMEOUT):
+          status, output = machine.execute(
+              as_alice(
+                  "${xwaylandWindowObservation}"
+                  "/bin/realm-xwayland-window-observation",
+                  "--timeout-bin",
+                  "${pkgs.coreutils}/bin/timeout",
+                  "--xwininfo-bin",
+                  "${pkgs.xwininfo}/bin/xwininfo",
+                  "--display",
+                  display,
+                  "--title",
+                  title,
+                  "--command-timeout",
+                  "2s",
+              ),
+              timeout=timeout,
+          )
+          if status != 0:
+              return {
+                  "observer_status": status,
+                  "observer_output": output,
+                  "tree": {"status": None, "output": ""},
+                  "window_ids": [],
+                  "stats": [],
+                  "viewable": False,
+              }
+          return json.loads(output)
+
+      def log_x11_diagnostics(observation, child_pid):
+          tree = observation["tree"]
+          machine.log(f"X11 root tree (exit {tree['status']}):\n{tree['output']}")
+          for stats in observation["stats"]:
+              machine.log(
+                  f"X11 window {stats['window_id']} stats "
+                  f"(exit {stats['status']}):\n{stats['output']}"
+              )
+          if "observer_status" in observation:
+              machine.log(
+                  f"X11 observer (exit {observation['observer_status']}):\n"
+                  f"{observation['observer_output']}"
+              )
+          stderr_status, stderr = machine.execute(
+              "journalctl -b --no-pager -o cat "
+              f"_PID={shlex.quote(child_pid)}",
+              timeout=DIAGNOSTIC_TIMEOUT,
+          )
+          machine.log(
+              f"X11 child journal/stderr (exit {stderr_status}):\n{stderr}"
+          )
+
+      def wait_for_x11_mapping(display, title, child_pid, deadline):
+          last_observation = None
+
+          def mapped(_last_try):
+              nonlocal last_observation
+              last_observation = x11_observation(
+                  display,
+                  title,
+                  timeout=remaining_timeout(deadline, "X11 window mapping"),
+              )
+              return last_observation["viewable"]
+
+          try:
+              retry(
+                  mapped,
+                  timeout=remaining_timeout(deadline, "X11 window mapping"),
+              )
+          except Exception:
+              if last_observation is None:
+                  last_observation = x11_observation(display, title)
+              log_x11_diagnostics(last_observation, child_pid)
+              raise
+          return last_observation
 
       def wait_for_single_user_process(name):
           quoted = shlex.quote(name)
@@ -354,6 +475,15 @@ EOF
           lease = machine.succeed(f"cat {shlex.quote(leases[0])}")
           assert f"generation {generation}\n" in lease, lease
           assert f"pid {pid}\n" in lease, lease
+
+      def process_environment(pid):
+          return dict(
+              line.split("=", 1)
+              for line in machine.succeed(
+                  f"tr '\\0' '\\n' < /proc/{pid}/environ"
+              ).splitlines()
+              if "=" in line
+          )
 
       def write_artifact(name, content):
           (Path(machine.out_dir) / name).write_text(content, encoding="utf-8")
@@ -448,6 +578,14 @@ EOF
       # the compositor and the D-Bus tooling are present.
       machine.succeed("realm-session --version")
       machine.succeed("realm-session --check")
+      machine.succeed(
+          "rm -f /tmp/realm-yazi-version; "
+          + "${pkgs.util-linux}/bin/setsid --wait yazi --version "
+          + "</dev/null >/tmp/realm-yazi-version 2>&1 && "
+          + "grep -aFxq "
+          + "'Yazi 25.4.8 (99ea3b74c4260a724b43af812df0f68ef59395b7 2025-04-08)' "
+          + "/tmp/realm-yazi-version"
+      )
 
       # river 0.4.x, the compositor realm drives. `-version` (one dash) is
       # river's own spelling. Anything below 0.4 does not implement
@@ -537,6 +675,10 @@ EOF
       assert '${realm}/bin' in daemon_path, daemon_path
       assert '${pkgs.foot}/bin' in daemon_path, daemon_path
       assert '${pkgs.fuzzel}/bin' in daemon_path, daemon_path
+      assert '${pkgs.zsh}/bin' in daemon_path, daemon_path
+      assert '${pkgs.starship}/bin' in daemon_path, daemon_path
+      assert '${realmYazi}/bin' in daemon_path, daemon_path
+      assert '${pkgs.btop}/bin' in daemon_path, daemon_path
 
       # Check the user-manager publication against the installed daemon that
       # inherited it. A client started without this value cannot map a surface.
@@ -619,6 +761,7 @@ EOF
       baseline_windows = sum(
           cell["windows"] for cell in baseline["data"]["orbits"]
       )
+      x11_deadline = time.monotonic() + STATE_TIMEOUT.total_seconds()
       machine.succeed(
           as_alice(
               "env",
@@ -632,7 +775,10 @@ EOF
           )
       )
       marker = "/run/user/1000/realm-xwayland-probe"
-      machine.wait_until_succeeds(f"test -s {marker}", timeout=STATE_TIMEOUT)
+      machine.wait_until_succeeds(
+          f"test -s {marker}",
+          timeout=remaining_timeout(x11_deadline, "D-Bus activation marker"),
+      )
       activated_display = machine.succeed(
           f"sed -n 's/^display=//p' {marker}"
       ).strip()
@@ -642,6 +788,9 @@ EOF
       x11_pid = machine.succeed(
           f"sed -n 's/^child_pid=//p' {marker}"
       ).strip()
+      x11_title = machine.succeed(
+          f"sed -n 's/^title=//p' {marker}"
+      ).strip()
       assert activated_display == imported_display, (
           activated_display,
           imported_display,
@@ -649,12 +798,29 @@ EOF
       x11_exe = machine.succeed(f"readlink /proc/{x11_pid}/exe").strip()
       expected_x11_exe = "${pkgs.xmessage}/bin/.xmessage-wrapped"
       assert x11_exe == expected_x11_exe, (x11_exe, expected_x11_exe)
-      wait_for_state(
-          lambda response: sum(
-              cell["windows"] for cell in response["data"]["orbits"]
-          ) == baseline_windows + 1,
-          "D-Bus-activated X11 window",
+      assert x11_title == f"Realm X11 Probe A17-{service_pid}", x11_title
+      x11_mapping = wait_for_x11_mapping(
+          activated_display,
+          x11_title,
+          x11_pid,
+          x11_deadline,
       )
+      try:
+          wait_for_state(
+              lambda response: sum(
+                  cell["windows"] for cell in response["data"]["orbits"]
+              ) == baseline_windows + 1,
+              "D-Bus-activated X11 window",
+              timeout=remaining_timeout(x11_deadline, "Realm X11 observation"),
+          )
+      except Exception:
+          x11_observation_after_projection = x11_observation(
+              activated_display,
+              x11_title,
+          )
+          log_x11_diagnostics(x11_observation_after_projection, x11_pid)
+          machine.log(f"X11 mapping-boundary observation:\n{x11_mapping!r}")
+          raise
       machine.wait_for_text("Realm X11 Probe", timeout=OCR_TIMEOUT)
       machine.succeed(f"kill -TERM {x11_pid}")
       machine.wait_until_succeeds(
@@ -800,10 +966,130 @@ EOF
           [
               "foot",
               f"--config={generation_root}/foot/foot.ini",
+              "--log-level=error",
               "--override=key-bindings.spawn-terminal=none",
+              "zsh",
           ],
           generation,
       )
+      zsh_pid = wait_for_single_user_process("zsh")
+      zsh_environment = process_environment(zsh_pid)
+      assert (
+          zsh_environment["REALM_GENERATION"] == generation_root
+      ), zsh_environment
+      assert (
+          zsh_environment["ZDOTDIR"] == f"{generation_root}/zsh"
+      ), zsh_environment
+      assert (
+          zsh_environment["STARSHIP_CONFIG"]
+          == f"{generation_root}/starship.toml"
+      ), zsh_environment
+      assert (
+          zsh_environment["YAZI_CONFIG_HOME"]
+          == f"{generation_root}/yazi"
+      ), zsh_environment
+      prompt = machine.succeed(
+          "cd /home/alice && "
+          + shlex.join([
+              "sudo",
+              "-u",
+              "alice",
+              "env",
+              "HOME=/home/alice",
+              "TERM=foot",
+              f"STARSHIP_CONFIG={generation_root}/starship.toml",
+              "STARSHIP_SHELL=zsh",
+              "${pkgs.zsh}/bin/zsh",
+              "-dfc",
+              "prompt=\"$(${pkgs.starship}/bin/starship prompt "
+              + "--status 0 --cmd-duration 0 --keymap viins)\"; "
+              + "print -Pnr -- \"$prompt\"",
+          ])
+      )
+      plain_prompt = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", prompt)
+      assert plain_prompt == "alice@machine :: ~ ~% ", repr(plain_prompt)
+
+      # OCR is useful for user-visible proof but cannot reliably join adjacent
+      # differently coloured prompt spans. Keep the unmodified prompt in the
+      # framebuffer, then prove the real shell is accepting and executing input
+      # with a marker that does not occur contiguously in the command itself.
+      machine.wait_for_text("alice@machine", timeout=OCR_TIMEOUT)
+      machine.screenshot("realm-terminal-prompt")
+      machine.send_chars("printf 'REALM-%s-READY\\n' SHELL\n")
+      machine.wait_for_text("REALM-SHELL-READY", timeout=OCR_TIMEOUT)
+
+      machine.succeed(
+          "install -d -o alice -g users -m 0755 /tmp/realm-yazi-proof && "
+          "install -o alice -g users -m 0644 /dev/null "
+          "/tmp/realm-yazi-proof/realm-yazi-visible"
+      )
+      btop_config = f"{generation_root}/btop/btop.conf"
+      btop_config_digest = machine.succeed(
+          f"sha256sum {shlex.quote(btop_config)}"
+      ).split()[0]
+      machine.succeed(
+          f"sudo -u alice test ! -w {shlex.quote(btop_config)}"
+      )
+      machine.send_chars("cd /tmp/realm-yazi-proof && yazi\n")
+      yazi_pid = wait_for_single_user_process("yazi")
+      yazi_environment = process_environment(yazi_pid)
+      assert (
+          yazi_environment["REALM_GENERATION"] == generation_root
+      ), yazi_environment
+      assert (
+          yazi_environment["YAZI_CONFIG_HOME"]
+          == f"{generation_root}/yazi"
+      ), yazi_environment
+      machine.wait_for_text("realm-yazi-visible", timeout=OCR_TIMEOUT)
+
+      machine.send_key("ctrl-p")
+      btop_pid = wait_for_single_user_process("btop")
+      btop_args = machine.succeed(
+          f"tr '\\0' '\\n' < /proc/{btop_pid}/cmdline"
+      ).splitlines()
+      assert btop_args == [
+          "btop",
+          "--config",
+          f"{generation_root}/btop/btop.conf",
+          "--themes-dir",
+          f"{generation_root}/btop/themes",
+      ], btop_args
+      machine.wait_for_text("CPU", timeout=OCR_TIMEOUT)
+      machine.fail(
+          as_alice("sh", "-c", f"printf x >> {shlex.quote(btop_config)}")
+      )
+      assert machine.succeed(
+          f"sha256sum {shlex.quote(btop_config)}"
+      ).split()[0] == btop_config_digest
+      machine.send_key("q")
+      machine.wait_until_succeeds(
+          f"test ! -d /proc/{btop_pid}", timeout=STATE_TIMEOUT
+      )
+      assert machine.succeed(
+          f"sha256sum {shlex.quote(btop_config)}"
+      ).split()[0] == btop_config_digest
+      machine.send_key("q")
+      machine.wait_until_succeeds(
+          f"test ! -d /proc/{yazi_pid}", timeout=STATE_TIMEOUT
+      )
+
+      previous_generation = generation
+      machine.succeed(
+          as_alice(
+              "XDG_CONFIG_HOME=/home/alice/.config",
+              "realmctl",
+              "theme",
+              "apply",
+          )
+      )
+      generation = machine.succeed(
+          "cat /home/alice/.config/realm/generated/current"
+      ).strip()
+      assert generation != previous_generation, (
+          generation,
+          previous_generation,
+      )
+      machine.succeed(f"test -d {shlex.quote(generation_root)}")
       machine.succeed(f"kill -TERM {terminal_pid}")
       machine.wait_until_succeeds(
           f"test ! -d /proc/{terminal_pid}", timeout=STATE_TIMEOUT
@@ -813,6 +1099,10 @@ EOF
               cell["windows"] for cell in response["data"]["orbits"]
           ) == 0,
           "default-binding terminal close",
+      )
+      machine.succeed(f"test -d {shlex.quote(generation_root)}")
+      generation_root = (
+          f"/home/alice/.config/realm/generated/generations/{generation}"
       )
 
       machine.succeed(
@@ -968,5 +1258,36 @@ EOF
           f"test ! -d /proc/{river_pid}", timeout=EXIT_TIMEOUT
       )
     '';
-  };
+      };
+    in
+    test.overrideTestDerivation (old: {
+      name = "realm-session-boots-evidence";
+      nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.coreutils ];
+      buildCommand = ''
+        mkdir -p "$out"
+        export LOGFILE=/dev/null
+        set +e
+        set -o pipefail
+        ${test.driver}/bin/nixos-test-driver -o "$out" 2>&1 \
+          | tee "$out/driver.log"
+        status=''${PIPESTATUS[0]}
+        set -e
+        printf 'realm-session-boots-status/v1\nexit_code=%s\n' "$status" \
+          > "$out/test-status"
+        exit 0
+      '';
+    });
+
+  # Keep the public check authoritative. The evidence producer retains output
+  # from the one real driver run even when it fails; this gate rejects absent,
+  # malformed, or nonzero status and exposes that same output on success.
+  session-boots = session-boots-evidence.overrideTestDerivation (_old: {
+    name = "realm-session-boots";
+    buildCommand = ''
+      sh ${src + "/packaging/nix/check-vm-evidence-status.sh"} \
+        ${session-boots-evidence}/test-status
+      mkdir -p "$out"
+      cp -R ${session-boots-evidence}/. "$out/"
+    '';
+  });
 }

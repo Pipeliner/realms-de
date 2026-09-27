@@ -29,11 +29,18 @@ rpm=$rpm_parent/realm-0.1.0
 copy_authority() {
     kit=$1
     mkdir -p "$kit/packaging/tool-sources/bundles"
-    for helper in check-bundle-linkage.py check-native-source-kit.py stage-realm-workspace.py; do
+    for helper in \
+        check-bundle-linkage.py \
+        check-native-source-kit.py \
+        stage-realm-workspace.py \
+        stage-tool-bundle.py \
+        test-tool-runtime.py; do
         cp "$root/packaging/tool-sources/$helper" "$kit/packaging/tool-sources/$helper"
     done
-    cp -R "$root/packaging/tool-sources/bundles/realm-workspace" \
-        "$kit/packaging/tool-sources/bundles/realm-workspace"
+    for selected in realm-workspace yazi-25.4.8 starship-1.23.0; do
+        cp -R "$root/packaging/tool-sources/bundles/$selected" \
+            "$kit/packaging/tool-sources/bundles/$selected"
+    done
 }
 
 copy_package_docs() {

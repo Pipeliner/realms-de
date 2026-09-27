@@ -117,6 +117,63 @@ def source_archive_root(archive: Path, destination: Path, lockfile: Path) -> Pat
     return root
 
 
+def tool_source_archive_root(archive: Path, destination: Path, lockfile: Path) -> Path:
+    """Extract one digest-bound upstream source archive, preserving safe links."""
+    try:
+        with tarfile.open(archive, mode="r:gz") as contents:
+            members = contents.getmembers()
+            names: set[str] = set()
+            roots: set[str] = set()
+            root_members = []
+            symlinks: set[str] = set()
+            for member in members:
+                parts = member.name.split("/")
+                if (not member.name or member.name.startswith("/") or
+                        any(part in {"", ".", ".."} for part in parts)):
+                    raise SystemExit("source archive member path escapes source root")
+                if member.name in names:
+                    raise SystemExit("source archive has duplicate member")
+                if any("/".join(parts[:index]) in symlinks
+                       for index in range(1, len(parts))):
+                    raise SystemExit("source archive member traverses a symlink")
+                if member.issym():
+                    target = member.linkname
+                    target_parts = target.split("/")
+                    if (not target or target.startswith("/") or
+                            any(part in {"", "."} for part in target_parts)):
+                        raise SystemExit("source archive symlink escapes source root")
+                    resolved = list(parts[:-1])
+                    for part in target_parts:
+                        if part == "..":
+                            if not resolved:
+                                raise SystemExit("source archive symlink escapes source root")
+                            resolved.pop()
+                        else:
+                            resolved.append(part)
+                    if not resolved or resolved[0] != parts[0]:
+                        raise SystemExit("source archive symlink escapes source root")
+                    symlinks.add(member.name)
+                elif not (member.isdir() or member.isreg()):
+                    raise SystemExit("source archive contains unsafe member")
+                names.add(member.name)
+                roots.add(parts[0])
+                if len(parts) == 1:
+                    root_members.append(member)
+            if len(roots) != 1 or len(root_members) != 1 or not root_members[0].isdir():
+                raise SystemExit("source archive must contain one regular top-level root")
+            contents.extractall(destination, members=members)
+    except SystemExit:
+        raise
+    except (OSError, tarfile.TarError):
+        raise SystemExit("source archive cannot be read")
+    root = destination / next(iter(roots))
+    unpacked_lockfile = root / "Cargo.lock"
+    if (unpacked_lockfile.is_symlink() or not unpacked_lockfile.is_file() or
+            unpacked_lockfile.read_bytes() != lockfile.read_bytes()):
+        raise SystemExit("source archive Cargo.lock differs from retained lockfile")
+    return root
+
+
 def cargo_packages(lockfile: Path) -> list[dict[str, str]]:
     packages: list[dict[str, str]] = []
     package: dict[str, str] = {}
@@ -283,7 +340,7 @@ def license_rows(report: Path, vendor: Path) -> set[tuple[str, str]]:
     return covered
 
 
-def materialize_realm_stage(source: Path, vendor: Path, config: Path, destination: Path) -> Path:
+def materialize_stage(source: Path, vendor: Path, config: Path, destination: Path) -> Path:
     destination = Path(os.path.abspath(destination))
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
@@ -292,7 +349,7 @@ def materialize_realm_stage(source: Path, vendor: Path, config: Path, destinatio
             prefix=f".{destination.name}.stage-", dir=destination.parent) as temporary:
         temporary_root = Path(temporary)
         staged = temporary_root / "staged"
-        shutil.copytree(source, staged / "source")
+        shutil.copytree(source, staged / "source", symlinks=True)
         shutil.copytree(vendor, staged / "vendor")
         (staged / ".cargo").mkdir()
         shutil.copyfile(config, staged / ".cargo" / "config.toml")
@@ -350,17 +407,21 @@ def validate_bundle(root: Path, destination: Path | None = None) -> Path | None:
 
     source_temporary = None
     source = None
-    if realm_bundle:
-        if record["source"] != "source.tar.gz":
+    if realm_bundle or (destination is not None and "source" in record):
+        if realm_bundle and record["source"] != "source.tar.gz":
             raise SystemExit("Realm source archive path is not source.tar.gz")
-        if record["source_archive_format"] != "tar.gz":
+        if realm_bundle and record["source_archive_format"] != "tar.gz":
             raise SystemExit("source archive format is not tar.gz")
         source_temporary = tempfile.TemporaryDirectory()
         source_directory = Path(source_temporary.name)
         staged_source = stage_source_archive(
             root, record["source"], record["source_sha256"], source_directory)
-        source = source_archive_root(
-            staged_source, source_directory / "source", paths["lockfile"])
+        if realm_bundle:
+            source = source_archive_root(
+                staged_source, source_directory / "source", paths["lockfile"])
+        else:
+            source = tool_source_archive_root(
+                staged_source, source_directory / "source", paths["lockfile"])
 
     config = cargo_source_config(paths["cargo_config"])
     temporary = None
@@ -412,8 +473,8 @@ def validate_bundle(root: Path, destination: Path | None = None) -> Path | None:
 
     if destination is not None:
         if source is None:
-            raise SystemExit("only the Realm workspace bundle can be staged")
-        return materialize_realm_stage(source, vendor, paths["cargo_config"], destination)
+            raise SystemExit("bundle does not contain a staged source authority")
+        return materialize_stage(source, vendor, paths["cargo_config"], destination)
     return None
 
 
