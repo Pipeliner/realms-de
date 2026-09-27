@@ -118,6 +118,13 @@ realm-build-yazi:
 	@set -e; \
 	yazi_source="$$(python3 "$(TOOL_STAGER)" "$(YAZI_BUNDLE)" "$(YAZI_STAGE)")"; \
 	cd "$$yazi_source"; \
+	remap="--remap-path-prefix=$(CURDIR)=/usr/src/realm-0.1.0"; \
+	if [ "$${CARGO_ENCODED_RUSTFLAGS+x}" = x ]; then \
+		separator="$$(printf '\037')"; \
+		export CARGO_ENCODED_RUSTFLAGS="$${CARGO_ENCODED_RUSTFLAGS}$${CARGO_ENCODED_RUSTFLAGS:+$$separator}$$remap"; \
+	else \
+		export RUSTFLAGS="$${RUSTFLAGS:+$$RUSTFLAGS }$$remap"; \
+	fi; \
 	printf 'yazi-build-start-utc=%s\nyazi-cflags=%s\n' \
 		"$$(date -u +%FT%TZ)" "$(CFLAGS) -std=gnu17"; \
 	CARGO_HOME="$(YAZI_STAGE)/.cargo" CARGO_TARGET_DIR="$(YAZI_TARGET)" \

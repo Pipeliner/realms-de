@@ -345,6 +345,14 @@ RUSTFLAGS, while preserving explicit caller overrides. Run 36331107468 showed
 that restoring only CFLAGS left the other four empty in the repeat, including
 the missing Rust frame-pointer option. Such unequal inputs are not a valid
 same-recipe comparison; byte equality remains required after correcting them.
+The shared Debian Yazi recipe SHALL append Rust source-path remapping from the
+source-kit root to `/usr/src/realm-0.1.0`, covering staged sources and vendored
+dependencies. Run 36337157087 retained different absolute vendor paths in both
+executables despite equal Rust flags: C/C++ prefix maps do not remap Rust
+source locations. Preserve caller Rust flags and Cargo's encoded-flags
+precedence (including an explicitly empty encoded value), appending the map
+to the effective flag channel. This is compile-time path mapping, not binary
+normalization; the strict byte comparison remains unchanged.
 The CI diagnostic artifact SHALL include the explicit `yazi-reproducibility.txt`
 report as well as driver `.out` and sentinel `.log` files. On mismatch the helper
 SHALL print at most the last 40 report lines into the driver log, preserving

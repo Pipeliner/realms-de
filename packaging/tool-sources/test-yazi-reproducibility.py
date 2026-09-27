@@ -2,6 +2,7 @@
 """Lightweight command-routing tests; never builds or extracts packages."""
 import os
 import fnmatch
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -11,6 +12,44 @@ HELPER = Path(__file__).with_name("check-yazi-reproducibility.sh")
 
 
 class Reproducibility(unittest.TestCase):
+    def test_yazi_recipe_remaps_vendor_paths_without_losing_caller_flags(self):
+        # Run the real target, replacing only extraction and compilation with
+        # inert boundary doubles. No archive, vendor tree or binary is created.
+        rules = HELPER.parents[1] / "debian/rules"
+        for encoded in (None, "", "--cfg\x1fcaller_encoded"):
+            with self.subTest(encoded=encoded), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                bindir = root / "usr/lib/rust-1.90/bin"
+                bindir.mkdir(parents=True)
+                (bindir / "rustc").symlink_to("/bin/true")
+                cargo = bindir / "cargo"
+                cargo.write_text('#!/usr/bin/env python3\nimport json, os\n'
+                                 'print("FLAGS=" + json.dumps({k: os.environ.get(k) for k in '
+                                 '("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS")}))\n')
+                cargo.chmod(0o755)
+                stager = root / "inert-stage.py"
+                stager.write_text('import os\nprint(os.getcwd())\n')
+                environment = dict(os.environ, RUSTFLAGS="--cfg caller_plain")
+                environment.pop("CARGO_ENCODED_RUSTFLAGS", None)
+                if encoded is not None:
+                    environment["CARGO_ENCODED_RUSTFLAGS"] = encoded
+                result = subprocess.run(
+                    ["make", "--no-print-directory", "-f", str(rules),
+                     "REALM_RUST_VERSIONED_ROOT=" + str(root),
+                     "TOOL_STAGER=" + str(stager), "realm-build-yazi"],
+                    cwd=root, env=environment, capture_output=True, text=True,
+                    check=True, timeout=10)
+                actual = json.loads(next(line[6:] for line in result.stdout.splitlines()
+                                         if line.startswith("FLAGS=")))
+                remap = "--remap-path-prefix=" + str(root) + "=/usr/src/realm-0.1.0"
+                if encoded is None:
+                    self.assertEqual(actual["RUSTFLAGS"], "--cfg caller_plain " + remap)
+                    self.assertIsNone(actual["CARGO_ENCODED_RUSTFLAGS"])
+                else:
+                    self.assertEqual(actual["RUSTFLAGS"], "--cfg caller_plain")
+                    self.assertEqual(actual["CARGO_ENCODED_RUSTFLAGS"],
+                                     encoded + ("\x1f" if encoded else "") + remap)
+
     def test_direct_rules_export_distro_flags_and_preserve_overrides(self):
         flags = ("CFLAGS", "CPPFLAGS", "CXXFLAGS", "LDFLAGS", "RUSTFLAGS")
         with tempfile.TemporaryDirectory() as temporary:
