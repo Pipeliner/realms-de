@@ -186,6 +186,6 @@ expect_pass ci-invokes-checker \
     grep -F 'scripts/check-colour-template-literals' "$fixture/.github/workflows/palette.yml"
 
 expect_pass ci-ignores-retained-source-bundles \
-    grep -F "'packaging/tool-sources/bundles/*'" "$fixture/.github/workflows/palette.yml"
+    python3 "$root/docs/test-colour-literals.py"
 
 printf 'PASS: %s colour-template guard fixtures\n' "$run"

@@ -30,6 +30,12 @@ The existing repository-wide `#RRGGBB` check remains in force. This guard is
 an additional target-aware check; it does not weaken existing exclusions or
 allowlists.
 
+The repository-wide guard lives in `scripts/check-colour-literals`, invoked
+identically by local checks and the palette workflow. Preserve its tracked-file
+scan, six-digit hex matching, existing path allowlist, Rust test-tail exemption,
+diagnostics and nonzero refusal. Its regression fixtures exercise canonical
+palette/prose allowances and rejection outside them; extraction adds no policy.
+
 ## Behaviour
 
 1. One checked-in checker receives a repository root, scans the complete fixed

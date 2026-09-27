@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# ── The allowlist. One place, extend here. ──────────────────────────
+# These are the places a colour is allowed to appear as a literal: the
+# source of truth, the design provenance, prose, and CI itself.
+#
+# Bash pattern matching, not pathname expansion — so `*` crosses `/`
+# and one 'docs/*' entry covers every subtree beneath it: docs/adr/,
+# docs/specs/ (S14), docs/assets/ and anything added later. Prose
+# quotes palette values to explain them, which is documenting the one
+# source of truth rather than duplicating it.
+#
+# Retained Cargo source closures are immutable third-party inputs,
+# not Realm-rendered consumers. Their compressed bytes can contain
+# accidental hex-looking sequences and are covered by their own
+# provenance and checksum gates.
+# The River source manifest similarly records archive digests and a
+# commit-fragment URL; neither is a rendered theme consumer.
+#
+# configs/templates/ is deliberately NOT here. Those land in M1 and are
+# rendered *from* palette.toml, so they hold placeholders, not colours
+# — a literal in a template is exactly the drift this job exists to
+# catch. Add a path here only when it is documentation of a colour,
+# never when it is a consumer of one.
+ALLOWLIST=(
+  'palette.toml'
+  'design/*'
+  'docs/*'
+  '.github/*'
+  '.claude/*'
+  'packaging/river/sources.toml'
+  'packaging/tool-sources/bundles/*'
+  'README.md'
+)
+# ───────────────────────────────────────────────────────────────────
+
+HEX='#[0-9a-fA-F]{6}'
+violations=0
+
+while IFS= read -r f; do
+  for pat in "${ALLOWLIST[@]}"; do
+    # shellcheck disable=SC2053  # $pat is a glob on purpose
+    [[ $f == $pat ]] && continue 2
+  done
+
+  # Rust test modules may name shipped colours: they assert that
+  # palette.toml parsed to the values it claims. That is the palette
+  # being checked, not a second copy of it. Everything from the first
+  # `#[cfg(test)]` down is dropped — cutting the tail keeps the line
+  # numbers of the head honest.
+  if [[ $f == *.rs ]]; then
+    body=$(sed '/^#\[cfg(test)\]/,$d' -- "$f")
+  else
+    body=$(cat -- "$f")
+  fi
+
+  hits=$(printf '%s\n' "$body" | grep -nE "$HEX" || true)
+  [[ -z $hits ]] && continue
+
+  while IFS= read -r hit; do
+    line=${hit%%:*}
+    text=${hit#*:}
+    printf '%s:%s: %s\n' "$f" "$line" "${text#"${text%%[![:space:]]*}"}"
+    echo "::error file=$f,line=$line::hex colour literal outside palette.toml"
+    violations=$((violations + 1))
+  done <<< "$hits"
+done < <(git ls-files)
+
+if [ "$violations" -ne 0 ]; then
+  cat >&2 <<'MSG'
+
+─────────────────────────────────────────────────────────────────────
+Colour literals found outside palette.toml (listed above, file:line).
+
+realm writes every colour down exactly once, in palette.toml, and
+generates everything else from it (ADR 0005). A second copy is a
+second source of truth, and the two drift.
+
+To fix:
+  • Themed output?  Render it from palette.toml via a template in
+                    configs/templates/ (realm-theme, M1).
+  • Rust code?      Take the colour from `Palette`, not a literal.
+  • Test fixture?   Put it inside the `#[cfg(test)]` module, which is
+                    exempt — tests are allowed to assert the palette.
+  • Genuinely docs? Add the path to ALLOWLIST at the top of this step,
+                    with a comment saying why.
+─────────────────────────────────────────────────────────────────────
+MSG
+  exit 1
+fi
+
+echo "No colour literals outside palette.toml."
