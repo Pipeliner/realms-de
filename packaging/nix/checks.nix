@@ -53,6 +53,8 @@ assert realmYazi.version == "25.4.8";
         bash ${src + "/packaging/session/test-runtime-dir-mode.sh"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_portal_vm_helper.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_browser_screencast.py"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_window_controls.py"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/native-vm/test_window_roundtrip.py"}
         bash ${src + "/packaging/session/test-portal-warmup.sh"}
         touch $out
       '';
@@ -299,12 +301,18 @@ EOF
       ''
       import datetime as dt
       import hashlib
+      import importlib
       import json
       import re
       import shlex
+      import sys
       import time
       from pathlib import Path
       from test_driver.errors import RequestedAssertionFailed
+      sys.path.insert(0, "${src + "/packaging/native-vm"}")
+      window_probe = importlib.import_module("window_roundtrip")
+      WINDOW_SNAPSHOT = window_probe.SNAPSHOT
+      exercise_controls = window_probe.exercise_controls
 
       STARTUP_TIMEOUT = dt.timedelta(seconds=120)
       STATE_TIMEOUT = dt.timedelta(seconds=60)
@@ -1347,7 +1355,7 @@ EOF
                   if browser_capture_passed:
                       raise
           try:
-              machine.copy_from_vm(browser_evidence, "browser-screencast")
+              machine.copy_from_machine(browser_evidence, "browser-screencast")
           except Exception as error:
               machine.log(f"browser capture evidence copy unavailable: {error}")
               if browser_capture_passed:
@@ -1359,6 +1367,58 @@ EOF
           ) == 0,
           "browser window closes through the default binding",
       )
+
+      # Shared installed-window keyboard acceptance.
+      window_result = {"passed": False, "observations": []}
+
+      def window_wait(predicate, description):
+          observed = None
+
+          def matches(last_try):
+              nonlocal observed
+              raw = machine.succeed(as_alice(
+                  "python3", "-c", WINDOW_SNAPSHOT, "/run/user/1000/realm/ctl.sock"
+              ), timeout=DIAGNOSTIC_TIMEOUT)
+              observed = json.loads(raw)
+              window_result["last_observation"] = observed
+              if predicate(observed):
+                  window_result["observations"].append({"step": description, **observed})
+                  return True
+              if last_try:
+                  machine.log(f"window control {description}: {observed!r}")
+              return False
+
+          retry(matches, timeout=STATE_TIMEOUT)
+          return observed
+
+      def window_count(value):
+          return sum(len(orbit["windows"]) for orbit in value["ledger"])
+
+      def window_screenshot(name):
+          machine.screenshot(name)
+          assert (Path(machine.out_dir) / (name + ".png")).stat().st_size > 0
+
+      try:
+          window_wait(lambda value: window_count(value) == 0, "empty window fixture")
+          for number, letter in enumerate("ABC", 1):
+              machine.send_key("meta_l-ret")
+              window_wait(lambda value: window_count(value) == number, "open terminal " + letter)
+              # Execute only through the real terminal's interactive shell.
+              machine.send_chars(
+                  "printf '\\033]0;Realm window " + letter + "\\007'; "
+                  "printf '\\nRealm window " + letter + "\\nKeyboard acceptance fixture\\n'; "
+                  "exec sleep infinity\n"
+              )
+              window_wait(lambda value: value["state"]["focused_title"] == "Realm window " + letter,
+                          "title terminal " + letter)
+          exercise_controls(window_wait, machine.send_key, window_screenshot)
+          for remaining in (2, 1, 0):
+              machine.send_key("meta_l-q")
+              window_wait(lambda value: window_count(value) == remaining, "close terminal " + str(remaining))
+          window_result["passed"] = True
+      finally:
+          machine.log(json.dumps(window_result))
+          write_artifact("window-roundtrip.json", json.dumps(window_result, indent=2))
 
       for number in range(1, 4):
           command = (
