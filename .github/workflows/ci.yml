@@ -8,15 +8,16 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
-# Superseded runs are cancelled: the loop (S9) pushes repeatedly to the same
-# working branch, and paying for every intermediate commit's CI wastes minutes
-# that the loop needs for the commit that actually lands.
+# Superseded PR runs can stop; running main verification must finish.
+# SPEC 0031: branch pushes use PR checks, not a duplicate push workflow.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Read-only by default. Nothing here writes to the repo; anything that needs
 # to (agentic-loop.yml) elevates at the job level, never here.
@@ -31,6 +32,14 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  launch-policy:
+    name: launch CI policy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 -m pip install 'PyYAML==6.0.2'
+      - run: python3 scripts/test-launch-ci-policy.py
+
   browser-dispatch:
     name: browser dispatch
     runs-on: ubuntu-24.04
@@ -132,6 +141,8 @@ jobs:
         run: cargo test -p realm-control --test control_socket_linux --locked shell_two_frame_interoperability_is_ordered -- --exact --ignored
 
   docs:
+    # Includes native package fixtures; draft PRs retain the source-check jobs.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: docs
     runs-on: ubuntu-24.04
     timeout-minutes: 30

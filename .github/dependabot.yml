@@ -14,7 +14,9 @@ updates:
       day: monday
       time: "06:00"
       timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    # SPEC 0031 launch freeze. Restore five after MVP acceptance.
+    open-pull-requests-limit: 0
+    rebase-strategy: disabled
     labels:
       - dependencies
       - rust
@@ -40,7 +42,9 @@ updates:
       day: monday
       time: "06:00"
       timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    # SPEC 0031 launch freeze. Restore five after MVP acceptance.
+    open-pull-requests-limit: 0
+    rebase-strategy: disabled
     labels:
       - dependencies
       - ci

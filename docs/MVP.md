@@ -90,6 +90,10 @@ They are tracked as post-MVP work and do not gate the M0–M3 critical path.
 
 ## Sequencing rules
 
+[SPEC 0031](specs/0031-mvp-launch-delivery.md) governs the approved three delivery
+lanes, draft/full CI split, dependency freeze, bounded reuse experiments,
+actionable doctor scope and shared acceptance journey. All three distros remain.
+
 1. **Contracts before implementations.** `realm-core` types land before the crate
    that consumes them, so two components are never invented in parallel.
 2. **Stopgaps must be swappable.** Every stopgap (fuzzel, river, btop) sits
