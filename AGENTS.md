@@ -76,6 +76,9 @@ the same change whenever a contract changes.
   age cleanup only when the shared cache is inactive; packaging remains CI-only.
 - Security checks and security-hardening review are post-MVP work. Do not make
   them MVP gates; track them for the post-MVP queue instead.
+- Suspend/resume integration and verification are post-MVP (owner direction,
+  2026-09-27). They must not gate MVP delivery or idle enablement. Manual locking
+  and idle dim at 5 minutes / lock-blank at 10 minutes remain MVP requirements.
 - **Never let process become the product.** Keep specifications, reviews,
   memory, orchestration, and verification proportional to the user-visible
   risk. If meta-work becomes the MVP critical path without directly improving

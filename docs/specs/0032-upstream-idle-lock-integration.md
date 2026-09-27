@@ -8,6 +8,16 @@
 
 ## Behavior and implementation boundary
 
+### Accepted MVP scope amendment (owner, 2026-09-27)
+
+Suspend/resume integration, diagnostics and verification are deferred until
+after MVP. The before-sleep behavior described below is retained as post-MVP
+intent, not a launch guarantee. Suspend failures must not gate MVP or enablement
+of independently verified manual locking and idle timers. Default MVP CI must
+retain manual lock, authentication, binding suppression and real idle timing
+checks while excluding the suspend roundtrip; retain its reproducer separately
+for explicit post-MVP execution. Do not claim laptop suspend protection.
+
 Use distro-provided PAM-backed swaylock supporting ext-session-lock-v1
 (minimum 1.7) and systemd-enabled swayidle. NixOS explicitly enables swaylock's
 PAM service. Verify actual packaged versions/protocols in CI before enabling.
@@ -56,7 +66,8 @@ swayidle failure. These prove glue only, not locking or authentication.
 CI-only package integration must install helpers/units, dependencies and wants;
 Nix wrappers resolve their own executable paths. Actual VM/hardware evidence
 must prove lock readiness, password unlock, duplicate starts, binding suppression,
-idle timing, restore and host-policy suspend. #78 retains the evidence. Source
+idle timing and restore. Host-policy suspend evidence is post-MVP. #78 retains
+the launch evidence. Source
 helpers may land dormant before package enablement; do not count that as #79 done.
 
 ### Package staging before enablement
