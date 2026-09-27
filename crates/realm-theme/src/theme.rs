@@ -135,7 +135,8 @@ impl ThemeSnapshot {
         let templates = templates_preimage(&self.templates)?;
         let renderer = renderer_preimage(&self.renderer_options)?;
         let derived = palette.derived();
-        let mut outputs = Vec::with_capacity(self.templates.len());
+        let mut outputs = Vec::with_capacity(self.templates.len() + 1);
+        outputs.push(("realm/palette.toml".into(), self.palette.clone()));
         for template in self.templates {
             let target = normalized_generation_target(&template.target)?;
             let rendered = render_derived(&derived, template.id, template.source)?;
@@ -1416,6 +1417,11 @@ mod tests {
         let store = GenerationStore::open(&root.path().join("realm/generated")).unwrap();
         let selected = store.select_current().unwrap();
         assert_eq!(selected.as_str(), generation.as_str());
+        assert_eq!(
+            selected.read_output("realm/palette.toml").unwrap(),
+            SHIPPED_PALETTE.as_bytes(),
+            "the published palette snapshot must be the validated source bytes"
+        );
         let templates = templates();
         assert!(!templates.is_empty());
         for template in templates {
@@ -1683,9 +1689,10 @@ mod tests {
 
         assert_eq!(
             changes,
-            vec![ThemeOutputChange::ByteDifferent(PathBuf::from(
-                "violet.conf"
-            ))]
+            vec![
+                ThemeOutputChange::ByteDifferent(PathBuf::from("realm/palette.toml")),
+                ThemeOutputChange::ByteDifferent(PathBuf::from("violet.conf")),
+            ]
         );
         assert_eq!(
             inventory(root.path()),

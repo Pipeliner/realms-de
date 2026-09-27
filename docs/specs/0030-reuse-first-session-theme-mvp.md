@@ -74,6 +74,26 @@ exec. Contention exits 73 without running session cleanup. The lock file is not
 unlinked on exit; entry exit releases the claim after teardown. Native packages
 declare the flock executable dependency and the Nix wrapper supplies it.
 
+The published generation includes its validated source palette bytes as the
+manifest-listed `realm/palette.toml` output. The bar reads this immutable output
+through the same live-login selection as other clients, including after a bar
+restart; it does not reread user, system or compiled fallback palettes. Shared
+login-record loading belongs in the theme library rather than making the bar
+depend on the WM/session implementation. A previously prepared generation
+without this required output is incomplete for this contract: diagnose it and
+require an explicit `realmctl theme apply` before login, rather than borrowing
+mutable palette bytes or silently changing the selection. This repository has
+no supported pre-MVP user migration obligation.
+Explicit apply publishes a new complete generation even when palette/template
+inputs match an older snapshot-less generation; immutable old data is never
+overwritten to retrofit the snapshot. Existing random generation IDs already
+permit this; no new identity mechanism is needed.
+
+Verification covers login A, source edits and apply B, bar restart still using
+A, and next login using B. Missing/corrupt selected palette data must fail
+without falling back. Publication/diff tests include the palette snapshot in
+the complete output set.
+
 ## T2 — Consumer activation
 
 Configure foot, fuzzel, Yazi, btop, zsh/Starship, GTK and Qt using their supported

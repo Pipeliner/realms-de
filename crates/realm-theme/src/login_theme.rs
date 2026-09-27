@@ -1,5 +1,5 @@
 //! Immutable theme selection handed from graphical login to session clients.
-use realm_theme::generation::{GenerationId, GenerationSelection, GenerationStore};
+use crate::generation::{GenerationId, GenerationSelection, GenerationStore};
 use rustix::fs::{flock, FlockOperation};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -120,10 +120,13 @@ pub fn prepare(config_root: &Path, runtime_dir: &Path, owner_pid: u32) -> Result
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.to_string()),
     }
-    realm_theme::ensure_current(config_root).map_err(|error| error.to_string())?;
+    crate::ensure_current(config_root).map_err(|error| error.to_string())?;
     let config_root = fs::canonicalize(config_root).map_err(|error| error.to_string())?;
     let store = GenerationStore::open(&config_root.join("realm/generated"))?;
     let selection = store.select_current_for_process(owner_pid)?;
+    selection.read_output("realm/palette.toml").map_err(|error| {
+        format!("selected theme lacks a valid palette snapshot: {error}; run realmctl theme apply before login")
+    })?;
     let record = Record {
         config_root,
         generation: selection.as_str().into(),
@@ -170,6 +173,38 @@ pub fn load(runtime_dir: &Path) -> Result<GenerationSelection, String> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn login_rejects_old_generation_without_palette_snapshot_before_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        crate::apply(root.path()).unwrap();
+        let store = GenerationStore::open(&root.path().join("realm/generated")).unwrap();
+        store.publish(legacy_generation).unwrap();
+        let current = fs::read(root.path().join("realm/generated/current")).unwrap();
+        let error = prepare(root.path(), runtime.path(), std::process::id()).unwrap_err();
+        assert!(error.contains("realmctl theme apply"), "{error}");
+        assert!(!runtime.path().join("realm/session-theme.json").exists());
+        assert_eq!(
+            fs::read(root.path().join("realm/generated/current")).unwrap(),
+            current
+        );
+        let repaired = crate::apply(root.path()).unwrap();
+        prepare(root.path(), runtime.path(), std::process::id()).unwrap();
+        let selected = load(runtime.path()).unwrap();
+        assert_eq!(selected.as_str(), repaired.as_str());
+        assert_eq!(
+            selected.read_output("realm/palette.toml").unwrap(),
+            crate::SHIPPED_PALETTE.as_bytes()
+        );
+    }
+
+    fn legacy_generation() -> Result<crate::generation::GenerationPublication, String> {
+        crate::generation::GenerationPublication::new(
+            std::array::from_fn(|_| "a".repeat(64)),
+            vec![("foot/foot.ini".into(), b"legacy output\n".to_vec())],
+        )
+    }
 
     #[test]
     fn login_record_survives_current_removal_and_rejects_competing_login() {

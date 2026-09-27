@@ -1,4 +1,7 @@
 task,actor,category,start_utc,end_utc,outcome
+#117-bar-snapshot,codex-review-login-integration,implementation,2026-09-27T12:41:35Z,2026-09-27T12:49:51Z,Agent elapsed implementation and local verification; theme245 pass5 ignored plus bar22 and session155 pass; explicitapply recovery regression passes; no local packaging
+#117-bar-snapshot,codex-review-login-primitives,review,2026-09-27T12:48:24Z,2026-09-27T12:48:38Z,No correctness blockers; explicitapply recovery test added afterward; stronger lease GC evidence remains in primitive tests
+#72-doctor-deadline,codex-review-login-primitives,review,2026-09-27T12:46:19Z,2026-09-27T12:46:30Z,Budget reserve fixes identified accounting error; font results still coupled to slow tool results; runtime verification pending
 mvp-assessment-2026-09-27,codex-root,assessment,2026-09-27T11:42:36Z,2026-09-27T11:44:36Z,120 seconds measured: audited 75 open issues and 11 PRs; documented all 48 MVP candidates and 27 deferrals; excludes initial untimed discovery and publication
 issue-134-pr-236,codex-root,investigation,2026-09-27T11:45:45Z,2026-09-27T11:46:02Z,17 seconds: full PR queue inspected; diagnostic CI 36316415592 still queued; no new failure logs
 issue-77,codex-root,implementation,2026-09-27T11:46:02Z,2026-09-27T11:46:43Z,41 seconds: corrected four install-guide passages against SPEC 0030; migration explicitly pending; diff check passed; publication excluded
