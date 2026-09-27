@@ -22,3 +22,6 @@ service, or changes CI.
 * [`2026-09-27-reuse-first-mvp.md`](2026-09-27-reuse-first-mvp.md)
   reassesses reusable desktop components and the contracts that prevent simpler
   integration; recommendations do not supersede accepted architecture.
+* [`2026-09-27-expanded-reuse-review.md`](2026-09-27-expanded-reuse-review.md)
+  expands the shortlist to concrete session, theme, desktop-client and packaging
+  code; records compatibility traps, license uncertainties and bounded experiments.

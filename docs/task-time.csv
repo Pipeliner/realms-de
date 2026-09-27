@@ -4,3 +4,7 @@ issue-134-pr-236,codex-root,investigation,2026-09-27T11:45:45Z,2026-09-27T11:46:
 issue-77,codex-root,implementation,2026-09-27T11:46:02Z,2026-09-27T11:46:43Z,41 seconds: corrected four install-guide passages against SPEC 0030; migration explicitly pending; diff check passed; publication excluded
 issue-117,codex-root,investigation,2026-09-27T11:47:18Z,2026-09-27T11:49:00Z,102 seconds: traced per-launch current selection and login startup; found SPEC 0005 same-UID singleton versus SPEC 0030 overlap ambiguity; product clarification required; publication excluded
 issue-79-and-117,codex-root,verification,2026-09-27T11:49:54Z,2026-09-27T11:51:07Z,73 seconds combined interval: CI inspection and lock artifact red-green test; interrupted to record owner single-session decision; exact per-task split unmeasured; publication excluded
+reuse-research-expanded,codex-root,investigation,2026-09-27T11:51:55Z,2026-09-27T11:56:22Z,267 seconds primary-source theme research and synthesis; parallel effort below overlaps this interval; publication excluded
+reuse-research-session,codex-reuse-session,investigation,2026-09-27T11:52:08Z,2026-09-27T11:52:41Z,33 seconds agent-reported read-only session and activation research
+reuse-research-desktop,codex-reuse-desktop,investigation,2026-09-27T11:52:18Z,2026-09-27T11:53:39Z,81 seconds agent-reported read-only desktop-client research
+reuse-research-packaging,codex-reuse-packaging,investigation,2026-09-27T11:52:30Z,2026-09-27T11:53:41Z,71 seconds agent-reported read-only packaging and VM-harness research
