@@ -25,12 +25,14 @@ launch instead of silently choosing another application.
 > Every section below has a **What this actually installs today** block that says
 > exactly what you get and what you do not.
 >
-> [SPEC 0012](specs/0012-activation-launch-lifecycle.md) is Accepted, and the
-> shipped fixed terminal and launcher select one sealed generation and hold its
-> process lease until the owned child exits. The broader durable profile-launch
-> admission, record reconciliation and restart/logout ownership path is not yet
-> wired into every launcher. Do not read the fixed-consumer proof as complete
-> profile-lifecycle or daily-driver evidence.
+> The accepted MVP theme contract is now
+> [SPEC 0030](specs/0030-reuse-first-session-theme-mvp.md): select one coherent
+> theme at graphical login; apply prepares the next login, including for apps
+> launched later in the current session. Migration and consumer verification
+> remain pending. Existing fixed terminal/launcher generation leases describe
+> current implementation, not a requirement to finish the shelved broader
+> per-launch lifecycle before MVP. Do not read existing tests as proof of the
+> new session-scoped behavior.
 
 realm intends to support three M3 platforms, but today's evidence differs by
 target ([ARCHITECTURE.md §5](ARCHITECTURE.md)):
@@ -261,9 +263,9 @@ symlinks, portal policy, and palette. A missing runtime binary fails `%install`.
 ADR 0011, and the order is the entire point:
 
 The numbered list below describes the currently shipped SPEC 0005 path.
-Accepted SPEC 0012 defines the broader crash-safe activation lifecycle. Its
-sealed-generation fixed terminal/launcher slice is shipped; complete durable
-profile-launch admission and reconciliation is still pending.
+SPEC 0030 supersedes the broader per-launch theme lifecycle obligations.
+The once-per-login theme migration is still pending; the startup ordering
+requirements below remain applicable.
 
 1. Export `XDG_CURRENT_DESKTOP=realm`, `XDG_SESSION_TYPE=wayland`,
    `XDG_SESSION_DESKTOP=realm`, `XCURSOR_THEME`, `XCURSOR_SIZE` — **before** the
@@ -295,9 +297,9 @@ profile-launch admission and reconciliation is still pending.
 On exit the current pre-alpha script stops the Realm target and clears both
 environments so the next session does not inherit a `WAYLAND_DISPLAY` pointing
 at a dead socket. The target is bound to `graphical-session.target`, and the
-fixed terminal/launcher children hold generation process leases. This is not
-proof that every SPEC 0012 profile-launch path is complete: durable admission
-freeze and record reconciliation are not yet wired into every launcher.
+fixed terminal/launcher children currently hold generation process leases.
+Those leases must not be removed blindly during the SPEC 0030 migration, but
+extending them into every launch path is no longer an MVP requirement.
 
 Every degradation emits exactly one line with a stable code, so it can be
 grepped, quoted in a bug report and looked up here:
@@ -469,11 +471,16 @@ starts nothing at all and still exits 0.
 
 ### Running apps keep the old theme after `realmctl theme apply`
 
-This is expected: apply selects a sealed generation for future launches and
-never rethemes an existing process. Test a newly launched program started
-through a verified Realm launch profile. If that future launch still uses the
-old generation, check the generation selection/profile integration before
-debugging toolkit reload behavior.
+The accepted behavior is next-login application, not live retheming: both
+existing and newly launched applications in the current Realm session keep
+the theme selected at login. Log out and log in again to select the prepared
+theme. A single-instance application already running outside that session may
+keep its old appearance.
+
+**Pre-alpha migration caveat:** current per-launch generation code is not yet
+verified to implement that contract. Report an in-session change or a next-login
+selection failure against #117; do not use a fresh launch as the acceptance test
+or attempt toolkit reloads to work around the missing session boundary.
 
 User units started before the import and inherited an empty environment. Compare
 the three views: the compositor's `/proc/<pid>/environ`, `systemctl --user
