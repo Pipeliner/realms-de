@@ -59,6 +59,7 @@ class LaunchPolicy(unittest.TestCase):
         self.assertEqual(upload['with']['path'].splitlines(), [
             '${{ steps.native-temp.outputs.path }}/evidence/*.out',
             '${{ steps.native-temp.outputs.path }}/evidence/*.log',
+            '${{ steps.native-temp.outputs.path }}/evidence/yazi-reproducibility.txt',
         ])
 
     def test_native_fixture_has_bounded_cold_build_budget(self):
