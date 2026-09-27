@@ -149,6 +149,10 @@ Source tests must capture real child argv/environment for terminal, launcher
 and worker launches, preserve caller environment and user files, and exercise
 apply B followed by fresh children still selecting login A. CI reuses the real
 Foot/Yazi/btop/zsh/Starship/GTK3/GTK4/Qt6 probes, extended to launcher descendants.
+The stopping-child fixture SHALL observe the kernel's child-stop notification
+after argv capture before inspecting files or sending continuation. Merely
+creating or writing a PID file is not readiness: it can expose empty bytes,
+precede complete argv capture, and race a continuation against the later stop.
 
 ## B1 — Waybar comparison, not automatic replacement
 

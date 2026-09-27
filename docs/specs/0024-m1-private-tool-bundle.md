@@ -257,6 +257,14 @@ artifacts or explicitly record and justify every remaining non-identical field.
 
 ## Executable ownership and session scope
 
+Native fixture evidence SHALL live under the dedicated `/tmp` build parent,
+not runner-private home ancestors. Before package work, CI SHALL prove file
+creation and append from the same root-mapped user/network namespace as the
+driver. Host-root write access alone is insufficient: child-namespace
+capabilities do not bypass host-owned private ancestor permissions. Probe
+failure reports ancestor permissions and stops before package work. Artifact
+upload SHALL read the same evidence directory; existing bounds remain.
+
 Native packages SHALL install only these Realm-owned executables:
 
 ```text
