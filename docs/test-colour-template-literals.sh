@@ -85,9 +85,11 @@ expect_fail foot-modern-raw-colour 'foot-modern.ini' "$checker" --root "$fixture
 cp "$root/configs/templates/foot-modern.ini" \
     "$fixture/configs/templates/foot-modern.ini"
 
-sed -i '/^cursor={{ background\.void\.bare }} {{ accent\.violet\.bare }}$/d' \
+sed -i '/^color={{ background\.void\.bare }} {{ accent\.violet\.bare }}$/d' \
     "$fixture/configs/templates/foot.ini"
-sed -i '/^style=block$/a color={{ background.void.bare }} {{ accent.violet.bare }}' \
+expect_fail foot-missing-legacy-cursor-colour 'missing required [cursor] color key' \
+    "$checker" --root "$fixture"
+sed -i '/^urls=/a cursor={{ background.void.bare }} {{ accent.violet.bare }}' \
     "$fixture/configs/templates/foot.ini"
 expect_fail foot-misplaced-cursor-colour 'foot.ini' "$checker" --root "$fixture"
 cp "$root/configs/templates/foot.ini" "$fixture/configs/templates/foot.ini"

@@ -304,20 +304,25 @@ class Checker:
             self.fail(path, text, match.start(), text[match.start():end])
 
     def foot(self, path: Path, text: str) -> None:
-        section = "[colors-dark]" if path.name == "foot-modern.ini" else "[colors]"
+        modern = path.name == "foot-modern.ini"
+        section = "[colors-dark]" if modern else "[colors]"
         in_colours = False
+        in_cursor = False
         colour_keys = {
             "background", "foreground", "selection-background", "selection-foreground", "urls",
-            "cursor",
             *(f"regular{number}" for number in range(8)),
             *(f"bright{number}" for number in range(8)),
         }
+        if modern:
+            colour_keys.add("cursor")
         seen: set[str] = set()
+        cursor_color_seen = False
         offset = 0
         for raw in text.splitlines(keepends=True):
             line = raw.rstrip("\r\n")
             if line.startswith("[") and line.endswith("]"):
                 in_colours = line == section
+                in_cursor = not modern and line == "[cursor]"
             elif in_colours and "=" in line:
                 key, value = line.split("=", 1)
                 value = value.strip()
@@ -335,9 +340,16 @@ class Checker:
                     allowed = re.compile(rf"{PLACEHOLDER}(?:\s+{PLACEHOLDER})?")
                     if not allowed.fullmatch(value):
                         self.fail(path, text, offset, line)
+            elif in_cursor and line.startswith("color="):
+                value = line.removeprefix("color=").strip()
+                if cursor_color_seen or not re.fullmatch(rf"{PLACEHOLDER}\s+{PLACEHOLDER}", value):
+                    self.fail(path, text, offset, line)
+                cursor_color_seen = True
             offset += len(raw)
         if seen != colour_keys:
             self.errors.append(f"{path.as_posix()}: missing required {section} key")
+        if not modern and not cursor_color_seen:
+            self.errors.append(f"{path.as_posix()}: missing required [cursor] color key")
 
     def fuzzel(self, path: Path, text: str) -> None:
         self.ini_colour_section(path, text, re.compile(rf"{PLACEHOLDER}ff"), "fuzzel")

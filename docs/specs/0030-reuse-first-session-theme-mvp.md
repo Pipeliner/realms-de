@@ -137,6 +137,11 @@ session snapshot. No additional garbage-collection policy is introduced.
 Foot configuration selection probes the generated modern and legacy section
 variants with `--check-config` under one shared one-second deadline. It never
 falls back to a mutable user configuration after both variants fail.
+Ubuntu 24.04's Foot 1.16.2 requires cursor colors as `color=` under `[cursor]`;
+its `[colors]` section does not accept `cursor=`. Keep the legacy generated
+variant compatible with that installed parser while the modern variant retains
+its supported `[colors-dark]` form. Both cursor colors remain palette-derived.
+Reference: [Ubuntu's Foot 1.16.2 manual](https://manpages.ubuntu.com/manpages/noble/man5/foot.ini.5.html).
 Hung-command fixtures must actually remain blocked with their restricted PATH
 on native and Nix test hosts. Use a shell-builtin self-stop, not a host-specific
 `/bin/sleep` path, and retain stderr when the expected timeout is absent.

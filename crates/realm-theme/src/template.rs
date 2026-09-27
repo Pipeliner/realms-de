@@ -190,9 +190,43 @@ mod tests {
     use std::process::Command;
 
     use super::templates;
+    use crate::render::render_derived;
+    use crate::theme::SHIPPED_PALETTE;
 
     #[test]
-    fn foot_configs_are_byte_equivalent_except_for_the_supported_section_header() {
+    fn rendered_legacy_foot_cursor_uses_ubuntu_supported_section() {
+        let palette = realm_core::Palette::from_toml(SHIPPED_PALETTE).unwrap();
+        let legacy = templates()
+            .into_iter()
+            .find(|template| template.id == "foot")
+            .expect("legacy Foot template");
+        let derived = palette.derived();
+        let config = render_derived(&derived, legacy.id, legacy.source).unwrap();
+        let colors = config
+            .split("[colors]\n")
+            .nth(1)
+            .unwrap()
+            .split("\n[")
+            .next()
+            .unwrap();
+        let cursor = config
+            .split("[cursor]\n")
+            .nth(1)
+            .unwrap()
+            .split("\n[")
+            .next()
+            .unwrap();
+        assert!(!colors.lines().any(|line| line.starts_with("cursor=")));
+        assert!(cursor.lines().any(|line| line
+            == format!(
+                "color={} {}",
+                derived.background.void.hex_bare(),
+                derived.accent.violet.hex_bare(),
+            )));
+    }
+
+    #[test]
+    fn foot_configs_differ_only_in_supported_section_and_cursor_key() {
         let mut catalogue = templates().into_iter();
         let legacy = catalogue
             .find(|template| template.id == "foot")
@@ -203,11 +237,29 @@ mod tests {
 
         assert_eq!(legacy.target, PathBuf::from("foot/foot.ini"));
         assert_eq!(modern.target, PathBuf::from("foot/foot-modern.ini"));
+        let legacy_common = legacy
+            .source
+            .lines()
+            .filter(|line| !line.starts_with("color="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let modern_common = modern
+            .source
+            .lines()
+            .filter(|line| !line.starts_with("cursor="))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert_eq!(
-            legacy.source.replacen("[colors]", "[colors-dark]", 1),
-            modern.source,
-            "Foot variants differed by more than the one supported section header",
+            legacy_common.replacen("[colors]", "[colors-dark]", 1),
+            modern_common,
+            "Foot variants differed beyond their supported section and cursor key",
         );
+        assert!(legacy.source.contains(
+            "[cursor]\nstyle=block\ncolor={{ background.void.bare }} {{ accent.violet.bare }}"
+        ));
+        assert!(modern
+            .source
+            .contains("cursor={{ background.void.bare }} {{ accent.violet.bare }}"));
     }
 
     #[test]
