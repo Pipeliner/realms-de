@@ -16,18 +16,39 @@ if [[ ${1:-} == "--watch" ]]; then
 fi
 
 started=$(date +%s)
-repo=$(timeout "$max_seconds" gh repo view --json nameWithOwner --jq .nameWithOwner)
+repo=$(timeout "$(( max_seconds < 30 ? max_seconds : 30 ))" gh repo view --json nameWithOwner --jq .nameWithOwner)
 
 snapshot() {
-  timeout "$1" gh api "repos/$repo/actions/runs?branch=main&per_page=30" |
-    jq -r '
-      if (.workflow_runs | type) != "array" then error("invalid workflow run response") else
-      .workflow_runs[] | select(.head_branch == "main" and (.name == "ci" or .name == "distro" or .name == "palette")) |
-      [.id,.name,.status,(.conclusion // ""),.head_sha,.updated_at] | @tsv end'
+  local deadline=$(( $(date +%s) + $1 )) status remaining response runs query all='[]'
+  local -a pagination
+  for status in recent queued pending waiting requested in_progress; do
+    remaining=$(( deadline - $(date +%s) ))
+    (( remaining > 0 )) || return 124
+    pagination=()
+    query="repos/$repo/actions/runs?branch=main&per_page=30"
+    if [[ $status != recent ]]; then
+      query="repos/$repo/actions/runs?branch=main&status=$status&per_page=100"
+      pagination=(--paginate)
+    fi
+    response=$(timeout "$(( remaining < 30 ? remaining : 30 ))" gh api "$query" "${pagination[@]}") || return
+    runs=$(printf '%s\n' "$response" | jq -cs --arg status "$status" '
+      if length == 0 or any(.[]; (.workflow_runs | type) != "array" or (.total_count | type) != "number")
+      then error("invalid workflow run response") else
+        ([.[].workflow_runs[]]) as $runs |
+        if $status != "recent" and ($runs | length) < (map(.total_count) | max)
+        then error("incomplete nonterminal workflow history")
+        else $runs | map({id,name,status,conclusion,head_branch,head_sha,updated_at}) end
+      end') || return
+    all=$(printf '%s\n%s\n' "$all" "$runs" | jq -cs add) || return
+  done
+  printf '%s\n' "$all" | jq -r '
+    group_by(.id)[] | ((map(select(.status != "completed")) + .)[0]) |
+    select(.head_branch == "main" and (.name == "ci" or .name == "distro" or .name == "palette")) |
+    [.id,.name,.status,(.conclusion // ""),.head_sha,.updated_at] | @tsv'
 }
 
 if [[ $mode == once ]]; then
-  snapshot "$max_seconds"
+  snapshot "$(( max_seconds - ($(date +%s) - started) ))"
   exit 0
 fi
 
@@ -38,14 +59,16 @@ while :; do
   if (( remaining <= 0 )); then
     exit "$last_status"
   fi
-  if ! state=$(snapshot "$remaining" 2>&1); then
-    last_status=1
+  query_status=0
+  state=$(snapshot "$remaining" 2>&1) || query_status=$?
+  if (( query_status != 0 )); then
+    last_status=$(( query_status == 124 ? 124 : 1 ))
     printf '%s monitor query failed; retrying\n' "$(date -u +%FT%TZ)" >&2
     printf '%s\n' "$state" >&2
   else
-    last_status=0
+    last_status=124
     printf '%s\n' "$state"
-    if ! printf '%s\n' "$state" | awk -F '\t' '$3 == "in_progress" || $3 == "queued" { active=1 } END { exit !active }'; then
+    if ! printf '%s\n' "$state" | awk -F '\t' 'NF && $3 != "completed" { active=1 } END { exit !active }'; then
       exit 0
     fi
   fi
