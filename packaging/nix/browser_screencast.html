@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Realm browser capture acceptance</title>
+<style>
+body { font: 32px sans-serif; background: #15334b; color: white; padding: 40px; }
+button { font: inherit; padding: 20px; }
+video { width: 480px; max-height: 270px; }
+</style>
+<h1>Realm browser capture ready</h1>
+<button id="share" autofocus>Share screen</button>
+<p id="status">Select Share screen, allow Firefox, then select the output.</p>
+<video id="video" autoplay muted playsinline></video>
+<script>
+const status = document.getElementById("status");
+const video = document.getElementById("video");
+async function post(path, body) {
+  const response = await fetch(path, {method: "POST", body});
+  if (!response.ok) throw new Error(`collector ${path}: ${response.status}`);
+}
+document.getElementById("share").onclick = async () => {
+  let stream;
+  let timer;
+  try {
+    // This call stays in the real click handler: no synthetic user activation.
+    stream = await navigator.mediaDevices.getDisplayMedia({video: true, audio: false});
+    timer = setTimeout(() => {
+      stream.getTracks().forEach(track => track.stop());
+      post("/error", JSON.stringify({error: "frame delivery timeout"}));
+      status.textContent = "Realm capture failed: frame delivery timeout";
+    }, 30000);
+    video.srcObject = stream;
+    await video.play();
+    const frames = [];
+    for (let index = 0; index < 2; index++) {
+      const metadata = await new Promise(resolve => video.requestVideoFrameCallback((_, data) => resolve(data)));
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext("2d").drawImage(video, 0, 0);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+      await post(`/frame-${index}.png`, blob);
+      frames.push({mediaTime: metadata.mediaTime, width: canvas.width, height: canvas.height});
+      document.body.style.background = "#793747";
+      status.textContent = "Realm browser delivered frame " + (index + 1);
+    }
+    stream.getTracks().forEach(track => track.stop());
+    clearTimeout(timer);
+    await post("/result", JSON.stringify({frames, stopped: true,
+      trackStates: stream.getTracks().map(track => track.readyState), userAgent: navigator.userAgent}));
+    status.textContent = "Realm capture passed and stopped";
+  } catch (error) {
+    clearTimeout(timer);
+    if (stream) stream.getTracks().forEach(track => track.stop());
+    status.textContent = "Realm capture failed: " + error;
+    await post("/error", JSON.stringify({error: String(error)}));
+  }
+};
+</script>

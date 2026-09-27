@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,12 +11,34 @@ from portal_vm_helper import (
     PortalClient,
     frame_evidence,
     main,
+    run,
     request_path,
     single_stream_node,
 )
 
 
 class PortalVmHelperContract(unittest.TestCase):
+    def test_interactive_start_allows_chooser_longer_than_ten_seconds(self):
+        class Selected(Exception):
+            pass
+
+        def request(_interface, method, *_args, timeout_ms=10_000):
+            if method == "CreateSession":
+                return "/request", {"session_handle": "/org/freedesktop/portal/desktop/session/test"}
+            if method == "Start":
+                if timeout_ms < 30_000:
+                    raise TimeoutError("healthy interactive selection took 30 seconds")
+                self.assertLessEqual(timeout_ms, 120_000)
+                raise Selected()
+            return "/request", {}
+
+        portal = mock.Mock()
+        portal.begin_request.side_effect = request
+        portal.call.return_value = ({},)
+        with mock.patch("portal_vm_helper.load_namespaces", return_value=(mock.Mock(), mock.Mock(), mock.Mock(), mock.Mock())), mock.patch("portal_vm_helper.PortalClient", return_value=portal), mock.patch.dict(os.environ, REALM_PORTAL_FILECHOOSER_READY="/tmp/test-ready"):
+            with self.assertRaises(Selected):
+                run()
+
     def test_vm_background_launcher_detaches_driver_fds_and_retains_evidence(self):
         source = Path(__file__).with_name("checks.nix").read_text(encoding="utf-8")
         launcher = source.split("portal_command = shlex.join", 1)[1].split(

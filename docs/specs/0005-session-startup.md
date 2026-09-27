@@ -14,6 +14,9 @@
   dim/10-minute lock defaults are accepted; SPEC 0029 separately accepts the
   bounded native x86_64 graphical-login proof. Open questions below remain
   unresolved where noted (`needs-human`)
+- **Accepted browser VM refinement (2026-09-27):** A13b below supplies the
+  bounded browser capture portion of SPEC 0031's acceptance journey; A15's
+  physical-machine evidence remains separate.
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
   [ADR 0013](../adr/0013-river-window-management-backend.md),
@@ -529,10 +532,9 @@ nothing in Firefox", with no error anywhere.
 `wlr-screencopy-unstable-v1`** and, for output selection, a chooser
 (`slurp` for the default `simple` chooser), plus a live per-user PipeWire
 service. Merely installing the PipeWire client library linked by xdpw does not
-start that service. The NixOS module enables it explicitly. The VM guard may
-select xdpw's `none` chooser only in its node configuration so one emulated
-output is selected without synthetic pointer input; the shipped chooser policy
-remains unchanged.
+start that service. The NixOS module enables it explicitly. The installed VM
+uses the production interactive output chooser, driven through real VM input;
+it does not bypass output selection with xdpw's `none` chooser.
 
 **Verification, not assumption.** A portal that answers on D-Bus is not proof
 that it works.
@@ -582,6 +584,23 @@ that it works.
   namespaces to load; source presence is not sufficient. It does **not** prove
   a real browser exposes the chooser or that a physical machine captures a
   useful stream; A15 remains hardware-only.
+
+The accepted A13b browser refinement serves a controlled loopback page to the
+installed Firefox started by the normal browser binding. A real user-input
+event invokes `getDisplayMedia`; Firefox permissions and the real portal output
+chooser remain enabled. The page must deliver two nonempty PNG frames with
+positive dimensions from its returned video stream, prove advancing video
+time, and explicitly stop its tracks. The VM retains the frame bytes and
+digests, result metadata, chooser/capture screenshots and browser version.
+Failures and timeouts are evidence, not skipped success. A local standard-library
+HTTP collector and the existing VM keyboard/mouse driver are sufficient; fake
+media sources, permission bypasses and a new browser automation stack are not
+part of this test. Collector readiness and result/error markers are published
+atomically, so observers never accept partially written metadata. The direct
+portal helper permits up to 120 seconds for interactive Start, while the VM
+bounds output-selection input retries to 60 seconds after chooser startup.
+This proves browser-delivered capture from one emulated
+output, not remote conferencing, audio sharing or physical-machine capture.
 
 ### 6. Non-systemd and non-D-Bus paths
 
@@ -733,7 +752,7 @@ gate (ADR 0011's guard).
 | `portal/answers` | `org.freedesktop.portal.Desktop` responds without a pause | The 25 s hang | VM |
 | `portal/config` | A `realm-portals.conf` is found and names a backend per interface | Behaviour that changes with what is installed | **CI** (file) / VM (effect) |
 | `portal/filechooser` | `--portal-roundtrip`: a handle within 2 s | "Open File does nothing" | VM |
-| `portal/screencast` | The interface/configured implementation checks pass and the installed VM consumes a nonempty buffer from the restricted PipeWire node returned by a complete ScreenCast request sequence | Screen share silently produces nothing | VM; the browser picker and physical-machine capture remain **HARDWARE** |
+| `portal/screencast` | The interface/configured implementation checks pass and the installed VM consumes a nonempty buffer from the restricted PipeWire node returned by a complete ScreenCast request sequence | Screen share silently produces nothing | VM including real Firefox capture (A13b); physical-machine capture remains **HARDWARE** |
 | `session/socket` | `$XDG_RUNTIME_DIR/realm/ctl.sock` answers `Hello` | — | VM |
 | `session/protocol-version` | Matches `realm_core::ipc::PROTOCOL_VERSION` | Bar and session disagree | **CI** |
 | `session/degraded` | Reports each `DEGRADED` code in this incarnation from the bounded handoff above, never by scanning historical logs | A degraded session pretending to be healthy | **CI** (degraded paths) |
@@ -774,7 +793,8 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A11 | Given a stale window manager already holding river's window-management global, when `realm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed; it names the holding process only if an independent observation identifies it, otherwise it states that the holder identity is unavailable | VM | |
 | A12 | Given a running session, when `realm-bar` is killed, then it is restarted, and `realm-session.target` and `realm-wm.service` both stay `active` throughout | VM | |
 | A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the effective configuration and installed `.portal` metadata name the required backends without claiming the running portal disclosed its selected backend identity | VM | |
-| A13a | Given the installed graphical VM with its test-only noninteractive ScreenCast chooser and per-user PipeWire service, when the pre-VM packaged-helper import check loads Gio, GStreamer, and GstApp and one persistent portal client subscribes on the exact token-derived FileChooser request path before `OpenFile`, publishes a VM-only readiness marker only after that exact handle returns within 2 s, and keeps waiting while the driver observes the actual managed and rendered chooser and activates its explicit `_Cancel` action through the real `Alt+C` GTK mnemonic, then the exact request emits user-cancel response code 1 within the finite VM state/UI deadlines; the same client reads `Settings.ReadAll`, completes the ScreenCast request/session sequence, and opens the restricted PipeWire remote; a missing, success, or catch-all FileChooser response is rejected, the Settings reply has its specified map type, one nonempty video buffer is consumed from the returned node, and the uploaded VM evidence retains the FileChooser response plus the node id, mapped byte count, dimensions, and digest in `portal-roundtrip.json`; this does not replace A13's separate `realmctl doctor --portal-roundtrip` Close probe and does not satisfy A15 | VM | `packaging/nix/test_portal_vm_helper.py` — `import-only`, `filechooser-rendered-cancel-response`; `packaging/nix/test-root-flake-ci.sh` — `portal-helper-imports`, `portal-evidence-upload` |
+| A13a | Given the installed graphical VM with its production interactive ScreenCast chooser driven by real VM pointer input and per-user PipeWire service, when the pre-VM packaged-helper import check loads Gio, GStreamer, and GstApp and one persistent portal client subscribes on the exact token-derived FileChooser request path before `OpenFile`, publishes a VM-only readiness marker only after that exact handle returns within 2 s, and keeps waiting while the driver observes the actual managed and rendered chooser and activates its explicit `_Cancel` action through the real `Alt+C` GTK mnemonic, then the exact request emits user-cancel response code 1 within the finite VM state/UI deadlines; the same client reads `Settings.ReadAll`, completes the ScreenCast request/session sequence, and opens the restricted PipeWire remote; a missing, success, or catch-all FileChooser response is rejected, the Settings reply has its specified map type, one nonempty video buffer is consumed from the returned node, and the uploaded VM evidence retains the FileChooser response plus the node id, mapped byte count, dimensions, and digest in `portal-roundtrip.json`; this does not replace A13's separate `realmctl doctor --portal-roundtrip` Close probe and does not satisfy A15 | VM | `packaging/nix/test_portal_vm_helper.py` — `import-only`, `filechooser-rendered-cancel-response`; `packaging/nix/test-root-flake-ci.sh` — `portal-helper-imports`, `portal-evidence-upload` |
+| A13b | Given the installed Firefox opened through the default browser binding and a controlled loopback page, when real keyboard input activates getDisplayMedia, accepts Firefox's ordinary permission prompt and selects the output through the production portal chooser, then two positive-dimension browser-delivered PNG frames have advancing media timestamps and retained byte counts/digests; the page explicitly stops every track and the collector records ended state. Bounded readiness/UI deadlines fail on permission rejection, absent frames or missing stop. Evidence includes raw frames, result/error metadata, browser version and permission/chooser/completion screenshots. Fake media and permission bypasses are prohibited; this does not satisfy A15. | VM | `packaging/nix/test_browser_screencast.py`; installed `session-boots` browser capture |
 | A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
 | A16 | Given a real laptop, when the lid is closed, then the session locks within the configured delay and the screen is blank on reopen until authentication | **HARDWARE** *(blocked on OQ-1)* | |

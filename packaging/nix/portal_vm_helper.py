@@ -443,6 +443,7 @@ def run() -> dict[str, Any]:
         "Start",
         GLib.Variant("(osa{sv})", (session_handle, "", start_options)),
         "realm_start",
+        timeout_ms=120_000,
     )
     streams = start_results.get("streams")
     if not isinstance(streams, list):

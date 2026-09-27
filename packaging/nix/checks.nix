@@ -52,6 +52,7 @@ assert realmYazi.version == "25.4.8";
           ${src + "/packaging/debian/test-toolchain-path.sh"}
         bash ${src + "/packaging/session/test-runtime-dir-mode.sh"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_portal_vm_helper.py"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_browser_screencast.py"}
         bash ${src + "/packaging/session/test-portal-warmup.sh"}
         touch $out
       '';
@@ -251,9 +252,7 @@ EOF
           enable = true;
           user = "alice";
         };
-        # Only the VM bypasses the interactive output chooser. The installed
-        # module keeps xdpw's normal chooser for users and hardware acceptance.
-        xdg.portal.wlr.settings.screencast.chooser_type = "none";
+        # Use the installed interactive slurp chooser, including for Firefox.
         virtualisation.memorySize = 2048;
         virtualisation.resolution = {
           x = 1920;
@@ -303,6 +302,7 @@ EOF
       import json
       import re
       import shlex
+      import time
       from pathlib import Path
       from test_driver.errors import RequestedAssertionFailed
 
@@ -543,6 +543,26 @@ EOF
                   machine.log(f"{label} (exit {status}):\n{output}")
               except Exception as error:
                   machine.log(f"{label} unavailable: {error}")
+
+      def select_portal_output(screenshot):
+          machine.wait_until_succeeds("pgrep -u alice -x slurp", timeout=STATE_TIMEOUT)
+          machine.screenshot(screenshot)
+          # HMP mouse_move is relative for a relative mouse, not coordinates.
+          # Select that device explicitly, clamp to the upper-left edge, then
+          # move into the single 1920x1080 output before the real button event.
+          mice = machine.send_monitor_command("info mice")
+          relative = [line for line in mice.splitlines() if "Mouse #" in line and "(absolute)" not in line]
+          assert relative, mice
+          mouse_id = re.search(r"Mouse #(\d+)", relative[0]).group(1)
+          machine.send_monitor_command(f"mouse_set {mouse_id}")
+          machine.send_monitor_command("mouse_move -32767 -32767")
+          machine.send_monitor_command("mouse_move 960 540")
+          deadline = time.monotonic() + STATE_TIMEOUT.total_seconds()
+          while machine.execute("pgrep -u alice -x slurp", timeout=DIAGNOSTIC_TIMEOUT)[0] == 0:
+              assert time.monotonic() < deadline, "portal output selection timed out"
+              machine.send_monitor_command("mouse_button 1")
+              machine.send_monitor_command("mouse_button 0")
+              time.sleep(0.5)
 
       def log_portal_diagnostics():
           commands = [
@@ -896,6 +916,7 @@ EOF
               "portal file chooser close after explicit Cancel",
           )
 
+          select_portal_output("realm-portal-output-chooser")
           machine.wait_until_succeeds(
               f"test -s {portal_status_path}", timeout=OCR_TIMEOUT
           )
@@ -1261,6 +1282,74 @@ EOF
       )
       write_artifact("control-browser-state.json", browser_raw)
       machine.screenshot("realm-browser")
+      # SPEC 0005 A13b: exercise real getDisplayMedia, Firefox permission,
+      # the installed portal picker, browser-delivered pixels and track stop.
+      browser_evidence = "/tmp/realm-browser-screencast"
+      collector = shlex.join([
+          "${pkgs.python3}/bin/python3",
+          "${src + /packaging/nix/browser_screencast.py}",
+          "--page", "${src + /packaging/nix/browser_screencast.html}",
+          "--output", browser_evidence,
+      ])
+      machine.succeed(
+          f"mkdir -p {browser_evidence}; "
+          f"{collector} < /dev/null > {browser_evidence}/server.log 2>&1 & "
+          f"echo $! > {browser_evidence}/server.pid"
+      )
+      browser_capture_passed = False
+      try:
+          machine.wait_until_succeeds(
+              f"test -s {browser_evidence}/ready", timeout=STATE_TIMEOUT
+          )
+          machine.send_key("ctrl-l")
+          machine.send_chars("http://127.0.0.1:8765/\n")
+          machine.wait_for_text("Realm browser capture ready", timeout=OCR_TIMEOUT)
+          machine.send_key("ret")
+          machine.wait_for_text("Use operating system settings", timeout=OCR_TIMEOUT)
+          machine.screenshot("realm-browser-permission")
+          machine.send_key("alt-a")
+          select_portal_output("realm-browser-output-chooser")
+          machine.wait_until_succeeds(
+              f"test -s {browser_evidence}/result.json || test -s {browser_evidence}/error.json",
+              timeout=STATE_TIMEOUT,
+          )
+          machine.succeed(f"test ! -e {browser_evidence}/error.json")
+          capture = json.loads(machine.succeed(f"cat {browser_evidence}/result.json"))
+          assert capture["stopped"] and capture["trackStates"] == ["ended"], capture
+          assert len(capture["frames"]) == 2, capture
+          machine.wait_for_text("Realm capture passed and stopped", timeout=OCR_TIMEOUT)
+          machine.screenshot("realm-browser-capture-stopped")
+          browser_capture_passed = True
+      except Exception:
+          for name in ("result.json", "error.json", "server.log"):
+              try:
+                  code, output = machine.execute(
+                      f"tail -c 16384 {browser_evidence}/{name}", timeout=DIAGNOSTIC_TIMEOUT
+                  )
+                  machine.log(f"browser capture {name} (exit {code}):\n{output}")
+              except Exception as error:
+                  machine.log(f"browser capture {name} unavailable: {error}")
+          log_portal_diagnostics()
+          raise
+      finally:
+          for command in (
+              f"kill $(cat {browser_evidence}/server.pid)",
+              f"${pkgs.firefox}/bin/firefox --version > {browser_evidence}/firefox-version.txt && test -s {browser_evidence}/firefox-version.txt",
+          ):
+              try:
+                  code, output = machine.execute(command, timeout=DIAGNOSTIC_TIMEOUT)
+                  if browser_capture_passed:
+                      assert code == 0, (command, code, output)
+              except Exception as error:
+                  machine.log(f"browser capture cleanup/version unavailable: {error}")
+                  if browser_capture_passed:
+                      raise
+          try:
+              machine.copy_from_vm(browser_evidence, "browser-screencast")
+          except Exception as error:
+              machine.log(f"browser capture evidence copy unavailable: {error}")
+              if browser_capture_passed:
+                  raise
       machine.send_key("meta_l-q")
       wait_for_state(
           lambda response: sum(
