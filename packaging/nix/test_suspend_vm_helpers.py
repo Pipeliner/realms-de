@@ -6,13 +6,69 @@ import json
 from pathlib import Path
 import shlex
 import textwrap
+import subprocess
 from queue import Queue
+
+# Evaluate the real fixture module with a lazy, build-free nixosTest identity.
+# No nixpkgs fetch, package derivation or production module evaluation is needed.
+checks_path = Path(__file__).with_name("checks.nix").resolve()
+expression = '''let
+  checks = import CHECKS { pkgs.testers.nixosTest = value: value;
+    lib = {}; src = ./.; realm = null; desktopAdmissionVmTest = null;
+    nixosModule = "production-module"; sourceRevision = "test";
+    vmControlHelper = null; portalVmHelper = null; };
+  node = checks.session-boots.nodes.machine { config = {}; pkgs = {}; };
+in { options = node.virtualisation.qemu.options or [];
+     params = node.boot.kernelParams;
+     imports = node.imports;
+     manager = node.systemd.settings.Manager or {}; }
+'''.replace('CHECKS', str(checks_path))
+fixture = json.loads(subprocess.check_output(
+    ['nix-instantiate', '--eval', '--strict', '--json', '--expr', expression], text=True))
+assert '-global ICH9-LPC.enable_tco=off' in fixture['options'], fixture
+assert 'initcall_debug' in fixture['params'], fixture
+assert 'no_console_suspend' in fixture['params'], fixture
+assert fixture['imports'] == ['production-module'] and fixture['manager'] == {}, fixture
 
 source = Path(__file__).with_name("checks.nix").read_text()
 source = textwrap.dedent(
     source[source.index("      import datetime"):source.rfind("    '';" )]
 )
 tree = ast.parse(source)
+# Execute the real acceptance assertions with good and deliberately bad
+# observations. Removing a guard, or weakening its comparison, must fail here.
+assertions = [node for node in ast.walk(tree) if isinstance(node, ast.Assert)]
+checks = [
+    ('"suspended" in monitor_status', {'monitor_status': 'paused (suspended)'},
+     {'monitor_status': 'running'}),
+    ('request_time <= ready_time <= sleep_time',
+     {'request_time': 10, 'ready_time': 11, 'sleep_time': 12},
+     {'request_time': 10, 'ready_time': 13, 'sleep_time': 12}),
+    ('"PM: suspend entry (deep)" in kernel_sleep and "PM: suspend exit" in kernel_sleep',
+     {'kernel_sleep': 'PM: suspend entry (deep)\nPM: suspend exit'},
+     {'kernel_sleep': 'PM: suspend entry (deep)'}),
+    ('lock_systemctl("is-active") == "active"',
+     {'lock_systemctl': lambda *args: 'active'},
+     {'lock_systemctl': lambda *args: 'inactive'}),
+    ('suspend_results["inhibitors_after"]',
+     {'suspend_results': {'inhibitors_after': [['sleep', 'swayidle']]}},
+     {'suspend_results': {'inhibitors_after': []}}),
+]
+for expression, accepted, rejected in checks:
+    wanted = ast.dump(ast.parse(expression, mode='eval').body)
+    matches = [node for node in assertions if ast.dump(node.test) == wanted]
+    assert matches, f'critical acceptance assertion missing: {expression}'
+    assertion = ast.Assert(test=matches[0].test, msg=None)
+    compiled = compile(ast.fix_missing_locations(ast.Module(body=[assertion], type_ignores=[])),
+                       '<real suspend acceptance assertion>', 'exec')
+    exec(compiled, accepted)
+    try:
+        exec(compiled, rejected)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError(f'invalid suspend observation accepted: {expression}')
+print('suspend fixture experiment: options isolated; real suspend/readiness/resume/lock guards PASS')
 functions = {"login_call", "login_property", "own_sleep_inhibitors", "suspend_host_diagnostics"}
 constants = {"login_bus", "login_object", "DIAGNOSTIC_TIMEOUT"}
 selected = [

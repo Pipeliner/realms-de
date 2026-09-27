@@ -19,7 +19,7 @@
   # The session wrapper is the file most likely to break a login, and the only
   # shell in the repo. Keep it clean.
   shellcheck =
-    pkgs.runCommand "realm-shellcheck" { nativeBuildInputs = [ pkgs.shellcheck ]; }
+    pkgs.runCommand "realm-shellcheck" { nativeBuildInputs = [ pkgs.shellcheck pkgs.nix ]; }
       ''
         shellcheck --shell=bash \
           ${src + "/packaging/session/realm-session"} \
@@ -248,8 +248,11 @@ EOF
         # module keeps xdpw's normal chooser for users and hardware acceptance.
         xdg.portal.wlr.settings.screencast.chooser_type = "none";
         virtualisation.memorySize = 2048;
+        # CI hypothesis only: ICH9 TCO reset followed a stalled S3 resume.
+        # Removing this virtual device must not waive real suspend acceptance.
+        virtualisation.qemu.options = [ "-global ICH9-LPC.enable_tco=off" ];
         # Keep resume/panic evidence visible if QEMU closes both driver sockets.
-        boot.kernelParams = [ "no_console_suspend" ];
+        boot.kernelParams = [ "no_console_suspend" "initcall_debug" ];
         virtualisation.resolution = {
           x = 1920;
           y = 1080;
@@ -1014,7 +1017,9 @@ EOF
                   evidence["qmp_events"].append(machine.qmp_client.pending_events.get_nowait())
           return evidence
 
-      suspend_results = {"auto_enabled": False}
+      suspend_results = {"auto_enabled": False,
+                         "fixture_experiment": "ICH9 TCO removal; resume root cause unproven",
+                         "qemu_option": "-global ICH9-LPC.enable_tco=off"}
       suspend_journal = ""
       login_bus = ["timeout", "5", "busctl", "--system", "--timeout=5", "--json=short"]
       login_object = ["org.freedesktop.login1", "/org/freedesktop/login1",
@@ -1043,6 +1048,15 @@ EOF
 
       try:
           assert lock_systemctl("show", "--property=ActiveState", "--value") == "inactive"
+          machine.succeed("echo 1 > /sys/power/pm_debug_messages")
+          suspend_results["watchdog_inventory"] = machine.succeed(
+              "for name in /sys/class/watchdog/watchdog*/identity; do "
+              "test ! -f \"$name\" || cat \"$name\"; done"
+          ).strip()
+          suspend_results["pm_debug_messages"] = machine.succeed(
+              "cat /sys/power/pm_debug_messages"
+          ).strip()
+          assert suspend_results["pm_debug_messages"] == "1", suspend_results
           assert login_call("CanSuspend")["data"] == ["yes"]
           machine.succeed("grep -qw mem /sys/power/state; grep -qw deep /sys/power/mem_sleep")
           # Select supported ACPI sleep only inside this disposable fixture.

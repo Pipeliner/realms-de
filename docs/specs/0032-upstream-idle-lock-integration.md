@@ -186,3 +186,16 @@ defines the nonblocking read boundary used here.
 The probe introduces no production unit or host-policy changes. Physical lid
 policy and backlight restoration, and native-distro acceptance, remain separate
 obligations; package auto-start remains disabled.
+
+Bounded CI experiment after run 36327468167: QMP observed SUSPEND, WAKEUP,
+then an ICH9 TCO watchdog reset about 46 seconds later while guest device resume
+had not completed. This does not establish that the watchdog caused the stall.
+Only the disposable Nix VM disables its virtual TCO device with QEMU 11.1.0's
+`-global ICH9-LPC.enable_tco=off`; production watchdog policy is unchanged.
+Enable kernel PM callback diagnostics and retain the experiment option and
+observed watchdog inventory in suspend evidence. Preserve deep/logind suspend,
+lock readiness, resumed-lock suppression/password unlock, inhibitor reacquisition
+and every existing bound. A stalled resume still fails; neither this experiment
+nor removal of a reset is successful suspend evidence. Source tests evaluate the
+VM options and exercise the existing critical acceptance assertions.
+The exact property is defined by [pinned QEMU's ICH9 header](https://github.com/qemu/qemu/blob/v11.1.0/include/hw/acpi/ich9.h).
