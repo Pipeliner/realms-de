@@ -3,8 +3,9 @@
 set -eu
 
 root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
+# shellcheck source=packaging/tool-sources/native-version-check.sh
+. "$root/packaging/tool-sources/native-version-check.sh"
 kit_builder=$root/packaging/tool-sources/build-native-source-kits.sh
-cargo_wrapper=$root/packaging/tool-sources/native-cargo-wrapper.sh
 native_tmp=${REALM_NATIVE_TMPDIR:-${TMPDIR:-/tmp}}
 failures=0
 
@@ -86,8 +87,6 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 evidence=${REALM_NATIVE_EVIDENCE_DIR:-$tmp}
 mkdir -p "$evidence"
-printf 'native fixture: preparing retained source kits\n'
-"$kit_builder" "$tmp/production"
 
 run_isolated() {
     if [ "${REALM_NATIVE_NETWORK_ISOLATED:-0}" = 1 ]; then
@@ -117,15 +116,43 @@ make_sentinels() {
     directory=$1
     mkdir -p "$directory"
     for command in git curl wget ssh scp; do
-        sed "s/@COMMAND@/$command/g" >"$directory/$command" <<'EOF'
-#!/bin/sh
-printf 'forbidden|command=@COMMAND@|cwd=%s|args=%s\n' "$PWD" "$*" >>"${REALM_SENTINEL_LOG:?}"
-exit 97
-EOF
+        cp "$native_support/native-command-sentinel.sh" \
+            "$directory/$command"
         chmod +x "$directory/$command"
     done
-    cp "$cargo_wrapper" "$directory/cargo"
+    cp "$native_support/native-cargo-wrapper.sh" "$directory/cargo"
     chmod +x "$directory/cargo"
+}
+
+stage_native_support() {
+    native_support=$tmp/support
+    mkdir -p "$native_support"
+    for support_file in native-command-sentinel.sh native-cargo-wrapper.sh check-yazi-reproducibility.sh; do
+        cp "$root/packaging/tool-sources/$support_file" "$native_support/$support_file"
+        chmod +x "$native_support/$support_file"
+    done
+}
+
+preflight_native_support() {
+    make_sentinels "$native_support/sentinels"
+    # These positional parameters belong to the isolated child shell.
+    # shellcheck disable=SC2016
+    run_isolated sh -eu -c '
+        cd "$1"
+        for helper in native-command-sentinel.sh native-cargo-wrapper.sh check-yazi-reproducibility.sh; do
+            test -r "$helper" && test -x "$helper"
+            sh -n "$helper"
+        done
+        for command in git curl wget ssh scp; do
+            status=0
+            REALM_SENTINEL_LOG="$1/preflight.log" "$1/sentinels/$command" --realm-fixture-probe || status=$?
+            test "$status" = 97
+            grep -F "forbidden|command=$command|" "$1/preflight.log" >/dev/null
+        done
+        sh -n "$1/sentinels/cargo"
+        "$2" --version >/dev/null
+        "$3" --version >/dev/null
+    ' native-support-preflight "$native_support" "$real_cargo" "$real_rustc"
 }
 
 make_rustc_selector() {
@@ -140,10 +167,10 @@ EOF
 }
 
 make_versioned_toolchain_root() {
-    root=$1
+    toolchain_root=$1
     cargo_path=$2
     rustc_path=$3
-    bin=$root/usr/lib/rust-1.90/bin
+    bin=$toolchain_root/usr/lib/rust-1.90/bin
     mkdir -p "$bin"
     # Cargo instrumentation is transparent: it immediately execs REALM_REAL_CARGO.
     # The resolver nevertheless sees a complete versioned pair, including in
@@ -167,6 +194,11 @@ run_debian() {
     versioned_root=$fixture_state/versioned-rust
     make_versioned_toolchain_root "$versioned_root" "$sentinels/cargo" "$real_rustc"
     mkdir -p "$fixture_state/outer-cargo-home"
+    if [ "$#" -eq 4 ]; then
+        set -- sh "$native_support/check-yazi-reproducibility.sh" "$3" "$kit" "$4"
+    else
+        set -- make -C "$kit" -f debian/rules binary
+    fi
     run_isolated env \
         PATH="$sentinels:$real_rust_bin:/usr/bin:/bin" \
         RUSTC="$selectors/rustc" \
@@ -192,7 +224,7 @@ run_debian() {
         CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= \
         CARGO_INCREMENTAL=0 \
         CARGO_PROFILE_RELEASE_DEBUG=0 \
-        make -C "$kit" -f debian/rules binary
+        "$@"
 }
 
 assert_current_package_guide() {
@@ -295,6 +327,7 @@ accepts_offline_cargo() {
     fixture=$3
     log=$4
     output=$5
+    package_root=
     printf 'native fixture: %s real offline build and tests; log: %s\n' "$name" "$output"
     : >"$log"
     if "$runner" "$fixture" "$log" >"$output" 2>&1; then
@@ -312,6 +345,33 @@ accepts_offline_cargo() {
     if grep '^forbidden|' "$log" >/dev/null; then
         fail "$name invoked Git or a network command"
     fi
+    git_metadata=$output.git-metadata
+    grep '^yazi-git-metadata-denied|' "$log" | sort >"$output.yazi-git-metadata" || true
+    for crate in yazi-boot yazi-cli yazi-dds; do
+        printf 'yazi-git-metadata-denied|cwd=%s/%s|argc=1|args=--version\n' \
+            "$REALM_EXPECTED_YAZI_SOURCE" "$crate"
+    done >"$output.yazi-git-metadata.expected"
+    if ! cmp "$output.yazi-git-metadata.expected" "$output.yazi-git-metadata"; then
+        fail "$name did not deny the exact pinned Yazi Git version attempts"
+    fi
+    grep '^git-metadata-denied|' "$log" >"$git_metadata" || true
+    cat >"$git_metadata.expected" <<EOF
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=2|args=status --porcelain
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=2|args=status --porcelain
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=3|args=status --porcelain --untracked-files=all
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=2|args=rev-parse HEAD
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=3|args=rev-parse --short HEAD
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=3|args=log -1 --pretty=format:%an
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=3|args=log -1 --pretty=format:%ae
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=4|args=show --pretty=format:%ct --date=raw -s
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=3|args=symbolic-ref --short HEAD
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=4|args=tag -l --contains HEAD
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=4|args=describe --tags --abbrev=0 HEAD
+git-metadata-denied|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|argc=3|args=describe --tags HEAD
+EOF
+    if ! cmp "$git_metadata.expected" "$git_metadata"; then
+        fail "$name did not deny the exact pinned Starship Git metadata attempts"
+    fi
     if grep '^rustc-selector|' "$log" >/dev/null; then
         fail "$name honored an inherited rustc selector"
     fi
@@ -319,27 +379,50 @@ accepts_offline_cargo() {
         fail "$name did not use an otherwise-empty Cargo home containing the retained source configuration"
     fi
     cargo_count=$(grep -c '^cargo|' "$log" || true)
-    if [ "$cargo_count" -ne 2 ]; then
-        fail "$name made $cargo_count Cargo invocations instead of build and test only"
+    if [ "$cargo_count" -ne 5 ]; then
+        fail "$name made $cargo_count Cargo invocations instead of three builds, one test and one metadata query"
     fi
     build_count=$(grep -c '|args=build ' "$log" || true)
     test_count=$(grep -c '|args=test ' "$log" || true)
-    if [ "$build_count" -ne 1 ] || [ "$test_count" -ne 1 ]; then
-        fail "$name did not make exactly one Cargo build and one Cargo test invocation"
+    if [ "$build_count" -ne 3 ] || [ "$test_count" -ne 1 ]; then
+        fail "$name did not make exactly three Cargo builds and one Cargo test invocation"
     fi
-    build_invocation=$(grep '|args=build ' "$log" | head -n 1 || true)
+    build_invocation=$(grep '|args=build .*--workspace' "$log" | head -n 1 || true)
     case $build_invocation in
-        *"|args=build --release --frozen --offline --locked --workspace") ;;
+        *"|args=build --release --frozen --offline --locked --workspace|cflags="*) ;;
         *) fail "$name did not run the exact complete staged workspace build" ;;
+    esac
+    yazi_invocation=$(grep '|args=build .*--package yazi-fm' "$log" | head -n 1 || true)
+    case $yazi_invocation in
+        *"|args=build --release --frozen --offline --locked --package yazi-fm --package yazi-cli|cflags="*) ;;
+        *) fail "$name did not run the exact selected Yazi build" ;;
+    esac
+    case $yazi_invocation in
+        *"|cflags="*" -std=gnu17"*) ;;
+        *) fail "$name did not select GNU C17 for the retained Yazi C dependency" ;;
+    esac
+    starship_invocation=$(grep '|args=build .*--bin starship' "$log" | head -n 1 || true)
+    case $starship_invocation in
+        *"|args=build --release --frozen --offline --locked --bin starship|cflags="*) ;;
+        *) fail "$name did not run the exact selected Starship build" ;;
+    esac
+    case "$build_invocation $starship_invocation" in
+        *" -std=gnu17"*) fail "$name leaked the Yazi C standard selection into another build" ;;
+        *) ;;
     esac
     test_invocation=$(grep '|args=test ' "$log" | head -n 1 || true)
     case $test_invocation in
-        *"|args=test --release --frozen --offline --locked --workspace --exclude realm-agent-sdd") ;;
+        *"|args=test --release --frozen --offline --locked --workspace --exclude realm-agent-sdd|cflags="*) ;;
         *) fail "$name did not run the exact package-relevant workspace test selection" ;;
     esac
-    for bin in realmctl realm-wm realm-bar; do
+    metadata_invocation=$(grep '|args=-V|' "$log" || true)
+    case $metadata_invocation in
+        "cargo|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|home=${REALM_EXPECTED_STARSHIP_CARGO_HOME}|args=-V|cflags="*) ;;
+        *) fail "$name did not isolate the exact Starship Cargo version query" ;;
+    esac
+    for bin in realmctl realm-wm realm-bar yazi ya starship; do
         if ! grep -F -x "cargo-output|binary=$bin|executable=yes" "$log" >/dev/null; then
-            fail "$name Cargo build did not produce the staged workspace $bin"
+            fail "$name Cargo build did not produce $bin"
         fi
     done
     case $name in
@@ -356,6 +439,7 @@ accepts_offline_cargo() {
                         fail "$name package did not contain the staged workspace $bin"
                     fi
                 done
+                package_root=$output.deb-root
                 assert_current_package_guide "$name" "$output.deb-root" \
                     "$output.package-guide"
             fi
@@ -377,28 +461,66 @@ accepts_offline_cargo() {
                     fail "$name package could not be converted for guide inspection"
                 else
                     tar -C "$output.rpm-root" -xzf "$rpm_tar"
+                    package_root=$output.rpm-root
                     assert_current_package_guide "$name" "$output.rpm-root" \
                         "$output.package-guide"
                 fi
             fi
             ;;
     esac
+    if [ -n "${package_root:-}" ]; then
+        for bin in yazi ya starship; do
+            private=$package_root/usr/lib/realm/bin/$bin
+            if [ ! -x "$private" ]; then
+                fail "$name package omitted private $bin"
+            fi
+            if [ -e "$package_root/usr/bin/$bin" ] || [ -L "$package_root/usr/bin/$bin" ]; then
+                fail "$name package took ownership of /usr/bin/$bin"
+            fi
+            resolved=$(PATH="$package_root/usr/lib/realm/bin:/usr/bin:/bin" command -v "$bin" || true)
+            if [ "$resolved" != "$private" ]; then
+                fail "$name Realm session PATH did not resolve private $bin"
+            fi
+        done
+        yazi_version=$("$package_root/usr/lib/realm/bin/yazi" --version 2>&1 || true)
+        ya_version=$("$package_root/usr/lib/realm/bin/ya" --version 2>&1 || true)
+        if starship_version=$("$package_root/usr/lib/realm/bin/starship" --version 2>&1); then
+            :
+        else
+            fail "$name Starship version command failed"
+        fi
+        if [ "$yazi_version" != \
+            'Yazi 25.4.8 (99ea3b74c4260a724b43af812df0f68ef59395b7 2025-04-08)' ]; then
+            fail "$name package has unexpected Yazi version metadata: $yazi_version"
+        fi
+        if [ "$ya_version" != \
+            'Ya 25.4.8 (99ea3b74c4260a724b43af812df0f68ef59395b7 2025-04-08)' ]; then
+            fail "$name package has unexpected ya version metadata: $ya_version"
+        fi
+        printf '%s\n' "$starship_version" >"$output.starship-version"
+        if ! starship_version_is_selected "$starship_version"; then
+            fail "$name package has unexpected Starship version: $starship_version"
+        fi
+    fi
     if ! grep -F 'test result: ok.' "$output" >/dev/null; then
         fail "$name Cargo test did not execute the staged workspace tests"
     fi
     result_count=$(grep -c '^cargo-result|status=0$' "$log" || true)
-    if [ "$result_count" -ne 2 ]; then
-        fail "$name did not complete both real Cargo invocations successfully"
+    if [ "$result_count" -ne 5 ]; then
+        fail "$name did not complete all five real Cargo invocations successfully"
     fi
     grep '^cargo|' "$log" >"$output.cargo"
     while IFS= read -r invocation; do
         case $invocation in
-            *"|cwd=${REALM_EXPECTED_SOURCE}"*) ;;
-            *) fail "$name invoked Cargo outside its staged canonical source" ;;
+            *"|cwd=${REALM_EXPECTED_SOURCE}|home=${REALM_EXPECTED_CARGO_HOME}|"* \
+            | *"|cwd=${REALM_EXPECTED_YAZI_SOURCE}|home=${REALM_EXPECTED_YAZI_CARGO_HOME}|"* \
+            | *"|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|home=${REALM_EXPECTED_STARSHIP_CARGO_HOME}|"*) ;;
+            *) fail "$name invoked Cargo outside a selected retained stage" ;;
         esac
         case $invocation in
-            *"|home=${REALM_EXPECTED_CARGO_HOME}"*) ;;
-            *) fail "$name did not inherit its retained-config Cargo home" ;;
+            *"|cwd=${REALM_EXPECTED_STARSHIP_SOURCE}|home=${REALM_EXPECTED_STARSHIP_CARGO_HOME}|args=-V|"*)
+                continue
+                ;;
         esac
         for flag in --frozen --offline --locked; do
             case " $invocation " in
@@ -432,6 +554,12 @@ rejects_injected_fetch() {
     fi
 }
 
+stage_native_support
+printf 'native fixture: checking support paths inside the network namespace\n'
+preflight_native_support
+printf 'native fixture: preparing retained source kits\n'
+"$kit_builder" "$tmp/production"
+
 make_debian_kit "$tmp/debian-invalid"
 printf 'different retained bytes\n' >> \
     "$tmp/debian-invalid/packaging/tool-sources/bundles/realm-workspace/source.tar.gz"
@@ -443,11 +571,46 @@ REALM_EXPECTED_SOURCE="$tmp/debian-valid/debian/realm-workspace/source"
 REALM_EXPECTED_CARGO_HOME="$tmp/debian-valid/debian/realm-workspace/.cargo"
 REALM_EXPECTED_CARGO_CONFIG="$tmp/debian-valid/packaging/tool-sources/bundles/realm-workspace/config.toml"
 REALM_EXPECTED_TARGET_DIR="$tmp/debian-valid/debian/cargo-target"
+REALM_EXPECTED_YAZI_SOURCE="$tmp/debian-valid/debian/yazi-25.4.8/source"
+REALM_EXPECTED_YAZI_CARGO_HOME="$tmp/debian-valid/debian/yazi-25.4.8/.cargo"
+REALM_EXPECTED_STARSHIP_SOURCE="$tmp/debian-valid/debian/starship-1.23.0/source"
+REALM_EXPECTED_STARSHIP_CARGO_HOME="$tmp/debian-valid/debian/starship-1.23.0/.cargo"
 REALM_EXPECTED_PACKAGE_ROOT="$tmp"
 export REALM_EXPECTED_SOURCE REALM_EXPECTED_CARGO_HOME REALM_EXPECTED_CARGO_CONFIG REALM_EXPECTED_TARGET_DIR \
+    REALM_EXPECTED_YAZI_SOURCE REALM_EXPECTED_YAZI_CARGO_HOME \
+    REALM_EXPECTED_STARSHIP_SOURCE REALM_EXPECTED_STARSHIP_CARGO_HOME \
     REALM_EXPECTED_PACKAGE_ROOT
 accepts_offline_cargo Debian run_debian "$tmp/debian-valid" \
     "$evidence/debian-valid.log" "$evidence/debian-valid.out"
+
+make_debian_kit "$tmp/debian-repro"
+REALM_EXPECTED_YAZI_SOURCE="$tmp/debian-repro/debian/yazi-25.4.8/source"
+REALM_EXPECTED_YAZI_CARGO_HOME="$tmp/debian-repro/debian/yazi-25.4.8/.cargo"
+printf 'native fixture: Debian controlled Yazi rebuild\n'
+: >"$evidence/debian-repro.log"
+if ! run_debian "$tmp/debian-repro" "$evidence/debian-repro.log" \
+    "$tmp/debian-valid" "$evidence/yazi-reproducibility.txt" \
+    >"$evidence/debian-repro.out" 2>&1; then
+    fail "same-recipe Yazi reproducibility failed"
+    tail -n 80 "$evidence/debian-repro.out" >&2
+fi
+if grep -E '^(forbidden|cargo-home-not-retained-config|rustc-selector)\|' "$evidence/debian-repro.log" >/dev/null \
+    || [ "$(grep -c '^cargo|' "$evidence/debian-repro.log" || true)" -ne 1 ] \
+    || [ "$(grep -c '^cargo-result|status=0$' "$evidence/debian-repro.log" || true)" -ne 1 ]; then
+    fail "Yazi rebuild did not complete exactly one real offline Cargo build"
+fi
+if ! grep -F "cargo|cwd=$REALM_EXPECTED_YAZI_SOURCE|home=$REALM_EXPECTED_YAZI_CARGO_HOME|args=build --release --frozen --offline --locked --package yazi-fm --package yazi-cli|" \
+    "$evidence/debian-repro.log" >/dev/null; then
+    fail "Yazi rebuild changed the authoritative offline command"
+fi
+grep '^yazi-git-metadata-denied|' "$evidence/debian-repro.log" | sort >"$evidence/debian-repro.git" || true
+for crate in yazi-boot yazi-cli yazi-dds; do
+    printf 'yazi-git-metadata-denied|cwd=%s/%s|argc=1|args=--version\n' \
+        "$REALM_EXPECTED_YAZI_SOURCE" "$crate"
+done >"$evidence/debian-repro.git.expected"
+if ! cmp "$evidence/debian-repro.git.expected" "$evidence/debian-repro.git"; then
+    fail "Yazi rebuild did not deny the exact pinned Git version attempts"
+fi
 
 make_debian_kit "$tmp/debian-fetch"
 sed -i '/^override_dh_auto_build:/a\
@@ -471,8 +634,14 @@ REALM_EXPECTED_SOURCE="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.realm-workspace/sou
 REALM_EXPECTED_CARGO_HOME="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.realm-workspace/.cargo"
 REALM_EXPECTED_CARGO_CONFIG="$tmp/rpm-valid/top/BUILD/realm-0.1.0/packaging/tool-sources/bundles/realm-workspace/config.toml"
 REALM_EXPECTED_TARGET_DIR="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.cargo-target"
+REALM_EXPECTED_YAZI_SOURCE="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.yazi-25.4.8/source"
+REALM_EXPECTED_YAZI_CARGO_HOME="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.yazi-25.4.8/.cargo"
+REALM_EXPECTED_STARSHIP_SOURCE="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.starship-1.23.0/source"
+REALM_EXPECTED_STARSHIP_CARGO_HOME="$tmp/rpm-valid/top/BUILD/realm-0.1.0/.starship-1.23.0/.cargo"
 REALM_EXPECTED_PACKAGE_ROOT="$tmp/rpm-valid/top/RPMS"
 export REALM_EXPECTED_SOURCE REALM_EXPECTED_CARGO_HOME REALM_EXPECTED_CARGO_CONFIG REALM_EXPECTED_TARGET_DIR \
+    REALM_EXPECTED_YAZI_SOURCE REALM_EXPECTED_YAZI_CARGO_HOME \
+    REALM_EXPECTED_STARSHIP_SOURCE REALM_EXPECTED_STARSHIP_CARGO_HOME \
     REALM_EXPECTED_PACKAGE_ROOT
 accepts_offline_cargo RPM run_rpm "$tmp/rpm-valid" \
     "$evidence/rpm-valid.log" "$evidence/rpm-valid.out"
