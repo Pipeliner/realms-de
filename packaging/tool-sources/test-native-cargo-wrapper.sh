@@ -46,7 +46,11 @@ run_wrapper() {
 }
 
 complete_log=$tmp/complete.log
-run_wrapper 'realmctl realm-wm realm-bar' "$tmp/complete-target" "$complete_log" --workspace
+CFLAGS='-O2' CPPFLAGS='-Dfixture' CXXFLAGS='-O1' LDFLAGS='-Wl,fixture' \
+    RUSTFLAGS='--cfg fixture' CARGO_ENCODED_RUSTFLAGS='encoded-fixture' \
+    run_wrapper 'realmctl realm-wm realm-bar' "$tmp/complete-target" "$complete_log" --workspace
+grep -F -x 'cargo-flags|cflags=-O2|cppflags=-Dfixture|cxxflags=-O1|ldflags=-Wl,fixture|rustflags=--cfg fixture|encoded-rustflags=encoded-fixture' \
+    "$complete_log" >/dev/null
 rm -rf "$tmp/complete-target"
 for bin in realmctl realm-wm realm-bar; do
     if ! grep -F -x "cargo-output|binary=$bin|executable=yes" \

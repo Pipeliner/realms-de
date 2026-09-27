@@ -330,7 +330,18 @@ The declared comparison artifacts are the pre-packaging `yazi` and `ya`
 executables from two clean builds using the same Debian Yazi recipe and supplied
 toolchain. The second build uses a fresh source kit and target directory. The
 fixture retains UTC execution times, paths and SHA-256 hashes and fails on any
-byte difference; no normalization is currently declared. Debian-versus-RPM
+byte difference; no normalization is currently declared.
+The CI diagnostic artifact SHALL include the explicit `yazi-reproducibility.txt`
+report as well as driver `.out` and sentinel `.log` files. On mismatch the helper
+SHALL print at most the last 40 report lines into the driver log, preserving
+the compared artifact hashes and first byte differences even if upload fails.
+Transparent Cargo instrumentation SHALL record effective `CFLAGS`, `CPPFLAGS`,
+`CXXFLAGS`, `LDFLAGS`, `RUSTFLAGS`, and `CARGO_ENCODED_RUSTFLAGS` for both builds
+without changing them. CI run 36324975517 completed both builds but lost the
+comparison report and did not record all flags; this proves a mismatch, not its
+cause. Do not retain binary artifacts or weaken byte equality to diagnose it.
+
+Debian-versus-RPM
 installed-byte equality is not this comparison: their C flags and packaging
 strip operations differ. Both native installed-version checks remain required.
 
