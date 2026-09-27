@@ -38,7 +38,9 @@ document.getElementById("share").onclick = async () => {
         if (expired) return;
         if (callbacks.length < 32) callbacks.push({mediaTime: metadata.mediaTime,
           presentedFrames: metadata.presentedFrames});
-        if (Number.isFinite(metadata.mediaTime) && metadata.mediaTime > previous) {
+        if (Number.isFinite(metadata.mediaTime) &&
+            Number.isSafeInteger(metadata.presentedFrames) &&
+            metadata.presentedFrames > previous) {
           cancelPending = () => {};
           resolve(metadata);
         } else {
@@ -63,7 +65,7 @@ document.getElementById("share").onclick = async () => {
       await video.play();
       active();
       for (let index = 0; index < 2; index++) {
-        const metadata = await advancingFrame(index ? frames[0].mediaTime : -1);
+        const metadata = await advancingFrame(index ? frames[0].presentedFrames : 0);
         active();
         const canvas = document.createElement("canvas");
         canvas.width = video.videoWidth;
@@ -73,7 +75,8 @@ document.getElementById("share").onclick = async () => {
         active();
         await post(`/frame-${index}.png`, blob);
         active();
-        frames.push({mediaTime: metadata.mediaTime, width: canvas.width, height: canvas.height});
+        frames.push({mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames,
+          width: canvas.width, height: canvas.height});
         status.textContent = "Realm browser delivered frame " + (index + 1);
       }
     })()]);

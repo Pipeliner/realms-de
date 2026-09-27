@@ -20,8 +20,8 @@ async function run(times) {
     requestVideoFrameCallback(callback) {
       const id = ++nextId;
       if (times.length) {
-        const mediaTime = times.shift();
-        setImmediate(() => callback(now, {mediaTime, presentedFrames: id}));
+        const metadata = times.shift();
+        setImmediate(() => callback(now, metadata));
       } else {
         lateCallback = callback;
         setImmediate(() => {
@@ -60,14 +60,19 @@ async function run(times) {
 }
 
 (async () => {
-  const success = await run([1, 1, NaN, 2]);
+  const frame = (presentedFrames, mediaTime = 0) => ({mediaTime, presentedFrames});
+  const success = await run([frame(2), frame(2), frame(1), frame(2.5), frame(true),
+    {mediaTime: 0}, frame(3, NaN), frame(3)]);
+  assert.ok(success.posts.some(([path]) => path === '/result'),
+    'live frames with zero mediaTime and advancing counters must succeed');
   const result = JSON.parse(success.posts.find(([path]) => path === '/result')[1]);
-  assert.deepEqual(result.frames.map(frame => frame.mediaTime), [1, 2]);
+  assert.deepEqual(result.frames.map(frame => frame.mediaTime), [0, 0]);
+  assert.deepEqual(result.frames.map(frame => frame.presentedFrames), [2, 3]);
   assert.equal(success.posts.filter(([path]) => path.startsWith('/frame-')).length, 2);
-  const timeout = await run([1, 1]);
+  const timeout = await run([frame(2), frame(2)]);
   assert.equal(timeout.posts.some(([path]) => path === '/result'), false);
   assert.ok(timeout.posts.some(([path, body]) => path === '/error' && body.includes('frame delivery timeout')));
   assert.ok(timeout.cancelled > 0);
-  const many = await run([1, ...Array(40).fill(1), 2]);
+  const many = await run([frame(2), ...Array(40).fill(frame(2)), frame(3)]);
   assert.equal(JSON.parse(many.posts.find(([path]) => path === '/result')[1]).callbacks.length, 32);
 })().catch(error => { console.error(error); process.exitCode = 1; });

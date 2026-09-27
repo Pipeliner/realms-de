@@ -45,8 +45,8 @@ class EvidenceTests(unittest.TestCase):
         self.output = pathlib.Path(self.tmp.name)
 
     def result(self):
-        return {"frames": [{"mediaTime": 1, "width": 1, "height": 1},
-                           {"mediaTime": 2, "width": 1, "height": 1}],
+        return {"frames": [{"mediaTime": 0, "presentedFrames": 2, "width": 1, "height": 1},
+                           {"mediaTime": 0, "presentedFrames": 3, "width": 1, "height": 1}],
                 "stopped": True, "trackStates": ["ended"], "userAgent": "Firefox/test"}
 
     def frames(self):
@@ -86,15 +86,24 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.collector.validate_result(self.output, self.result())
 
-    def test_rejects_stationary_time_dimensions_and_live_tracks(self):
+    def test_rejects_invalid_counters_time_dimensions_and_live_tracks(self):
         self.frames()
-        for mutation in ("time", "dimensions", "stopped", "live"):
+        for mutation in ("time", "boolean_time", "dimensions", "stopped", "live"):
             result = self.result()
-            if mutation == "time": result["frames"][1]["mediaTime"] = 1
+            if mutation == "time": result["frames"][1]["mediaTime"] = float("nan")
+            if mutation == "boolean_time": result["frames"][1]["mediaTime"] = True
             if mutation == "dimensions": result["frames"][1]["width"] = 0
             if mutation == "stopped": result["stopped"] = False
             if mutation == "live": result["trackStates"] = ["live"]
             with self.assertRaises(ValueError, msg=mutation):
+                self.collector.validate_result(self.output, result)
+        for count in (None, True, 0, -1, 1, 2, 2.5, "3", float("inf")):
+            result = self.result()
+            if count is None:
+                del result["frames"][1]["presentedFrames"]
+            else:
+                result["frames"][1]["presentedFrames"] = count
+            with self.assertRaises(ValueError, msg=repr(count)):
                 self.collector.validate_result(self.output, result)
 
     def test_http_page_frames_and_result_are_retained(self):
@@ -120,13 +129,13 @@ class EvidenceTests(unittest.TestCase):
             self.assertTrue(json.loads((self.output / "result.json").read_text())["stopped"])
             self.assertEqual((self.output / "frame-1.png").read_bytes(), PNG)
             invalid = self.result()
-            invalid["frames"][1]["mediaTime"] = 1
+            invalid["frames"][1]["presentedFrames"] = 2
             with self.assertRaises(urllib.error.HTTPError):
                 urllib.request.urlopen(origin + "/result", data=json.dumps(invalid).encode())
             with urllib.request.urlopen(origin + "/error", data=b'{"error":"collector /result: 400"}'):
                 pass
             error = json.loads((self.output / "error.json").read_text())
-            self.assertEqual(error["error"], "video time must advance")
+            self.assertEqual(error["error"], "presented frame count must advance")
             self.assertEqual(error["rejected"]["frames"], invalid["frames"])
         finally:
             process.terminate()

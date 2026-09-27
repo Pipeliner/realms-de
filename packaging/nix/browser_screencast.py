@@ -20,12 +20,15 @@ def validate_result(output, result):
         raise ValueError("two frames and explicit stop required")
     if not result.get("trackStates") or any(state != "ended" for state in result["trackStates"]):
         raise ValueError("all captured tracks must be ended")
-    previous = -1
+    previous = 0
     for index, frame in enumerate(frames):
-        timestamp = frame.get("mediaTime", -1)
-        if not isinstance(timestamp, (int, float)) or not math.isfinite(timestamp) or timestamp <= previous:
-            raise ValueError("video time must advance")
-        previous = timestamp
+        timestamp = frame.get("mediaTime")
+        if type(timestamp) not in (int, float) or not math.isfinite(timestamp):
+            raise ValueError("finite media time required")
+        count = frame.get("presentedFrames")
+        if type(count) is not int or not previous < count <= 9007199254740991:
+            raise ValueError("presented frame count must advance")
+        previous = count
         try:
             data = (output / f"frame-{index}.png").read_bytes()
         except FileNotFoundError as error:

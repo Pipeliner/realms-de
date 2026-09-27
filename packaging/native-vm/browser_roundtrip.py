@@ -152,7 +152,7 @@ def main():
         guest('test ! -e ' + root + '/error.json')
         capture = json.loads(guest('cat ' + root + '/result.json'))
         # The unchanged collector validates PNG payloads, dimensions and
-        # advancing media time before it atomically publishes this result.
+        # advancing presented-frame counters before atomically publishing this result.
         assert capture['stopped'] and capture['trackStates'] == ['ended'], capture
         assert len(capture['frames']) == 2, capture
         result['capture'] = capture
