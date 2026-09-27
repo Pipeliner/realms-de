@@ -350,6 +350,13 @@ budget and normal real-socket GetState/Quit receipt proof; a delayed-callback
 regression must itself finish with bounded cleanup. This is fixture behavior,
 not a production startup timeout change. The ready callback uses a rendezvous
 channel so an unobserved readiness notification cannot be queued after timeout.
+If the real-socket fixture times out under packaged-test contention, its
+bounded diagnostic must identify the last observed startup boundary: daemon
+thread entry, backend construction after endpoint/snapshot setup, or readiness
+callback after recovery, clock, and sampler setup. This is test-only evidence;
+it does not extend the two-second budget, excuse missing readiness, or replace
+the exact GetState and Quit receipt assertions. A timeout before thread entry
+must also be distinguishable from a stall inside startup.
 
 **A10 native recovery evidence (accepted refinement, 2026-09-27).** Open
 three distinguishable terminals through real keyboard bindings, alter their

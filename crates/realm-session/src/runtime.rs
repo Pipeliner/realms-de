@@ -1316,7 +1316,9 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixStream;
     use std::process::Command;
+    use std::sync::atomic::{AtomicU8, Ordering};
     use std::sync::mpsc;
+    use std::sync::Arc;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use realm_control::test_runtime_dir;
@@ -1792,22 +1794,48 @@ mod tests {
         fs::remove_dir_all(fixture).unwrap();
     }
 
+    fn startup_stage_name(stage: u8) -> &'static str {
+        match stage {
+            0 => "daemon thread not entered",
+            1 => "endpoint or snapshot startup",
+            2 => "backend construction, recovery, clock, or sampler",
+            3 => "ready callback reached",
+            _ => "invalid fixture stage",
+        }
+    }
+
     fn await_daemon_ready<T: std::fmt::Debug>(
         ready_rx: mpsc::Receiver<()>,
         daemon: std::thread::JoinHandle<T>,
         timeout: Duration,
+        stage: &AtomicU8,
     ) -> std::thread::JoinHandle<T> {
         if let Err(error) = ready_rx.recv_timeout(timeout) {
             drop(ready_rx);
+            let stage = startup_stage_name(stage.load(Ordering::SeqCst));
             if daemon.is_finished() {
                 panic!(
-                    "daemon did not become ready ({error:?}): {:?}",
+                    "daemon did not become ready ({error:?}; startup stage: {stage}): {:?}",
                     daemon.join()
                 );
             }
-            panic!("daemon did not become ready ({error:?}); daemon still running");
+            panic!(
+                "daemon did not become ready ({error:?}; startup stage: {stage}); daemon still running"
+            );
         }
         daemon
+    }
+
+    #[test]
+    fn readiness_stage_diagnostic_names_each_boundary() {
+        assert_eq!(startup_stage_name(0), "daemon thread not entered");
+        assert_eq!(startup_stage_name(1), "endpoint or snapshot startup");
+        assert_eq!(
+            startup_stage_name(2),
+            "backend construction, recovery, clock, or sampler"
+        );
+        assert_eq!(startup_stage_name(3), "ready callback reached");
+        assert_eq!(startup_stage_name(u8::MAX), "invalid fixture stage");
     }
 
     #[test]
@@ -1818,25 +1846,30 @@ mod tests {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel(1);
         let (send_result_tx, send_result_rx) = mpsc::sync_channel(1);
+        let stage = Arc::new(AtomicU8::new(2));
         let daemon = std::thread::spawn(move || {
             release_rx.recv().unwrap();
             send_result_tx.send(ready_tx.send(()).is_err()).unwrap();
         });
         let (finished_tx, finished_rx) = mpsc::sync_channel(1);
+        let observer_stage = Arc::clone(&stage);
         let observer = std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                await_daemon_ready(ready_rx, daemon, Duration::ZERO)
+                await_daemon_ready(ready_rx, daemon, Duration::ZERO, &observer_stage)
             }));
-            finished_tx.send(result.is_err()).unwrap();
+            let diagnostic = result
+                .err()
+                .and_then(|panic| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            finished_tx.send(diagnostic).unwrap();
         });
         let completed = finished_rx.recv_timeout(Duration::from_secs(1));
         // Always release the fixture before asserting, including the red path.
         release_tx.send(()).unwrap();
         observer.join().unwrap();
-        assert_eq!(
-            completed,
-            Ok(true),
-            "readiness diagnostic joined a live daemon"
+        assert!(
+            matches!(completed, Ok(ref diagnostic) if diagnostic.contains("startup stage: backend construction, recovery, clock, or sampler")),
+            "readiness diagnostic joined a live daemon or omitted its stage: {completed:?}"
         );
         assert!(
             send_result_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
@@ -1850,11 +1883,20 @@ mod tests {
         let server_runtime = test_runtime_dir(&root).unwrap();
         let client_endpoint = test_runtime_dir(&root).unwrap().client_endpoint();
         let (ready_tx, ready_rx) = mpsc::sync_channel(0);
+        let stage = Arc::new(AtomicU8::new(0));
+        let thread_stage = Arc::clone(&stage);
         let daemon = std::thread::spawn(move || {
+            thread_stage.store(1, Ordering::SeqCst);
+            let backend_stage = Arc::clone(&thread_stage);
+            let callback_stage = Arc::clone(&thread_stage);
             run_daemon_with(
                 server_runtime,
-                || Ok(DaemonBackend::new()),
-                || {
+                move || {
+                    backend_stage.store(2, Ordering::SeqCst);
+                    Ok(DaemonBackend::new())
+                },
+                move || {
+                    callback_stage.store(3, Ordering::SeqCst);
                     ready_tx.send(()).map_err(|_| {
                         std::io::Error::new(std::io::ErrorKind::BrokenPipe, "test ready receiver")
                     })
@@ -1863,7 +1905,7 @@ mod tests {
             )
         });
 
-        let daemon = await_daemon_ready(ready_rx, daemon, Duration::from_secs(2));
+        let daemon = await_daemon_ready(ready_rx, daemon, Duration::from_secs(2), &stage);
         let mut client = client_endpoint.connect("runtime-fixture").unwrap();
         let Response::State(state) = client.request(Request::GetState).unwrap() else {
             panic!("GetState did not return state");
