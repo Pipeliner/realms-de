@@ -158,8 +158,11 @@ deadlines on both guest-shell and monitor transports, independently of the
 driver's guest-side command timeout. On transport timeout it marks the guest
 channel unusable, retains bounded host console/QMP evidence, and skips further
 guest cleanup and journal calls rather than hanging again. Original socket
-timeouts are restored at the slice boundary. This is a host-observation fix,
-not evidence that the guest resumed or a relaxation of the lock assertions.
+timeouts are restored at the slice boundary.
+Any transport timeout, including a journal timeout after successful idle stop,
+must fail the slice before subsequent guest input or commands are issued.
+This is a host-observation fix, not evidence that the guest resumed or a
+relaxation of the lock assertions.
 The canonical Nix CI job SHALL explicitly set
 `timeout-minutes: 60` as the outer execution cap, covering build and VM work.
 A root-flake policy regression SHALL reject its absence or another value even

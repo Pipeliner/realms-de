@@ -43,6 +43,28 @@ cleanup_namespace = {
 exec(compile(ast.Module(body=suspend_try.finalbody, type_ignores=[]), '<suspend-cleanup>', 'exec'), cleanup_namespace)
 assert not guest_calls, 'timed-out guest transport reused during failure cleanup'
 assert 'last resume callback' in artifacts['suspend-roundtrip.json']
+cleanup_namespace['suspend_results'] = {}
+guest_calls.clear()
+def stop_then_timeout(*args, **kwargs):
+    guest_calls.append(args)
+    if len(guest_calls) == 1:
+        return (0, 'idle stopped')
+    raise TimeoutError('journal transport stalled')
+cleanup_namespace['machine'].execute = stop_then_timeout
+following_assertions = []
+for node in tree.body[tree.body.index(suspend_try) + 1:]:
+    if not isinstance(node, ast.Assert):
+        break
+    following_assertions.append(node)
+rejected = False
+try:
+    exec(compile(ast.Module(body=suspend_try.finalbody + following_assertions, type_ignores=[]),
+                 '<late-cleanup-timeout>', 'exec'), cleanup_namespace)
+except AssertionError:
+    rejected = True
+assert cleanup_namespace['suspend_results']['idle_stop_status'] == 0
+assert cleanup_namespace['suspend_results']['transport_unusable'] is True
+assert rejected, 'journal timeout after successful stop permits later guest commands'
 deadline_function = next((node for node in tree.body if isinstance(node, ast.FunctionDef)
                           and node.name == 'arm_suspend_socket_timeouts'), None)
 assert deadline_function is not None, 'suspend host transport has no independent socket deadline'

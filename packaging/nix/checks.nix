@@ -1187,6 +1187,7 @@ EOF
           write_artifact("suspend-roundtrip.json", json.dumps(suspend_results, indent=2) + "\n")
           for transport, previous_timeout in suspend_socket_timeouts:
               transport.settimeout(previous_timeout)
+      assert not suspend_results.get("transport_unusable"), suspend_results
       assert suspend_results.get("idle_stop_status") == 0, suspend_results
 
       # Also proves the default terminal binding is restored after unlock.
