@@ -54,11 +54,16 @@ install documentation and README screenshots; do not build parallel proof sets.
 2. Open terminal, browser and files; verify theme, shell and ordinary launch.
 3. Exercise focus/swap/orbits/layout, which-key and full key help.
 4. Open a real file chooser and perform a real browser screen share.
-5. Verify 5-minute dim, 10-minute lock/blank, and lock before host-policy suspend.
+5. Verify manual locking, 5-minute dim and 10-minute lock/blank.
 6. Logout/relogin; verify clean restart and next-login theme selection.
 
+Suspend/resume integration and verification are explicitly deferred until after
+MVP by the owner (2026-09-27). They do not gate this journey or idle enablement;
+lock-before-host-policy-suspend remains the intended post-MVP behavior, not a
+verified launch guarantee. Retain the failed VM evidence for that follow-up.
+
 Run the same journey on all supported distros; retain hardware-only limitations
-explicitly rather than claiming VM suspend proves laptop behavior. Begin #78's
+explicitly. Begin #78's
 real week of daily use as soon as the journey is usable; cosmetic work continues
 in parallel. A week cannot be fabricated or replaced by a green CI run.
 
