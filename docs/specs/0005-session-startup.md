@@ -536,6 +536,11 @@ start that service. The NixOS module enables it explicitly. The installed VM
 uses the production interactive output chooser, driven through real VM input;
 it does not bypass output selection with xdpw's `none` chooser.
 
+The VM pointer driver must parse a numeric relative mouse ID from QEMU's actual
+`info mice` reply before issuing selection/movement commands. Missing or
+malformed relative-device IDs fail explicitly with the retained reply; they
+must not bypass the interactive chooser or disable driver type checking.
+
 **Verification, not assumption.** A portal that answers on D-Bus is not proof
 that it works.
 

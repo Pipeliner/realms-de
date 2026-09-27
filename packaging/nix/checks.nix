@@ -553,7 +553,9 @@ EOF
           mice = machine.send_monitor_command("info mice")
           relative = [line for line in mice.splitlines() if "Mouse #" in line and "(absolute)" not in line]
           assert relative, mice
-          mouse_id = re.search(r"Mouse #(\d+)", relative[0]).group(1)
+          mouse_match = re.search(r"Mouse #(\d+)", relative[0])
+          assert mouse_match is not None, mice
+          mouse_id = mouse_match.group(1)
           machine.send_monitor_command(f"mouse_set {mouse_id}")
           machine.send_monitor_command("mouse_move -32767 -32767")
           machine.send_monitor_command("mouse_move 960 540")

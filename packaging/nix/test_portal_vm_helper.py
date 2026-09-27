@@ -2,6 +2,10 @@ import json
 import os
 import tempfile
 import unittest
+import re
+import textwrap
+import time
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -18,6 +22,38 @@ from portal_vm_helper import (
 
 
 class PortalVmHelperContract(unittest.TestCase):
+    def picker(self, reply):
+        source = Path(__file__).with_name('checks.nix').read_text()
+        body = source.split('      def select_portal_output(screenshot):', 1)[1].split('      def log_portal_diagnostics():', 1)[0]
+        function = textwrap.dedent('      def select_portal_output(screenshot):' + body)
+        machine = mock.Mock()
+        machine.send_monitor_command.return_value = reply
+        machine.execute.return_value = (1, '')
+        namespace = {'machine': machine, 're': re, 'time': time,
+                     'STATE_TIMEOUT': timedelta(seconds=1), 'DIAGNOSTIC_TIMEOUT': 1}
+        exec(compile(function, 'checks.nix:select_portal_output', 'exec'), namespace)
+        return namespace['select_portal_output'], machine
+
+    def test_actual_picker_rejects_malformed_relative_mouse_before_movement(self):
+        reply = 'Mouse #broken: QEMU PS/2 Mouse\n'
+        picker, machine = self.picker(reply)
+        with self.assertRaisesRegex(AssertionError, 'Mouse #broken'):
+            picker('fixture')
+        self.assertEqual(machine.send_monitor_command.call_args_list, [mock.call('info mice')])
+
+    def test_actual_picker_uses_numeric_relative_mouse_not_absolute_tablet(self):
+        picker, machine = self.picker('Mouse #2: QEMU USB Tablet (absolute)\nMouse #7: QEMU PS/2 Mouse\n')
+        picker('fixture')
+        self.assertEqual(machine.send_monitor_command.call_args_list, [
+            mock.call('info mice'), mock.call('mouse_set 7'),
+            mock.call('mouse_move -32767 -32767'), mock.call('mouse_move 960 540')])
+
+    def test_actual_picker_rejects_absolute_only_inventory(self):
+        picker, machine = self.picker('Mouse #2: QEMU USB Tablet (absolute)\n')
+        with self.assertRaisesRegex(AssertionError, 'absolute'):
+            picker('fixture')
+        self.assertEqual(machine.send_monitor_command.call_args_list, [mock.call('info mice')])
+
     def test_interactive_start_allows_chooser_longer_than_ten_seconds(self):
         class Selected(Exception):
             pass
