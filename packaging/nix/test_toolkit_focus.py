@@ -2,6 +2,9 @@
 
 import ast
 from pathlib import Path
+import shlex
+import subprocess
+import tempfile
 import textwrap
 import unittest
 
@@ -19,6 +22,63 @@ def toolkit_calls():
 
 
 class ToolkitFocusTests(unittest.TestCase):
+    def test_css_diagnostic_logs_offending_line_and_required_open_before_rejection(self):
+        self.assertTrue(
+            "      def assert_toolkit_diagnostics_clean(" in SOURCE,
+            "toolkit diagnostic gate must log matched stderr before rejection",
+        )
+        start = SOURCE.index("      def assert_toolkit_diagnostics_clean(")
+        end = SOURCE.index("      def exercise_toolkit(", start)
+
+        class LocalMachine:
+            def __init__(self):
+                self.logs = []
+
+            def execute(self, command, timeout):
+                completed = subprocess.run(
+                    ["/bin/sh", "-c", command], text=True, capture_output=True,
+                    timeout=timeout, check=False,
+                )
+                return completed.returncode, completed.stdout + completed.stderr
+
+            def fail(self, command):
+                status, output = self.execute(command, 5)
+                if status == 0:
+                    raise AssertionError("diagnostic grep unexpectedly succeeded")
+                return output
+
+            def log(self, message):
+                self.logs.append(message)
+
+        machine = LocalMachine()
+        namespace = {"machine": machine, "shlex": shlex, "DIAGNOSTIC_TIMEOUT": 5}
+        exec(compile(textwrap.dedent(SOURCE[start:end]), "<toolkit-diagnostics>", "exec"), namespace)
+        check = namespace["assert_toolkit_diagnostics_clean"]
+        pattern = r"(css|theme).*(error|failed|invalid|not found|unable|warning)"
+        with tempfile.TemporaryDirectory() as directory:
+            stderr = Path(directory) / "toolkit.stderr"
+            trace = Path(directory) / "toolkit.trace"
+            css = "/selected/gtk-3.0/gtk.css"
+            stderr.write_text("Gtk-WARNING: theme CSS warning in selected palette\n")
+            trace.write_text(f'openat(3, "{css}", O_RDONLY) = 7\n')
+            with self.assertRaisesRegex(AssertionError, "diagnostic grep unexpectedly succeeded"):
+                check("gtk3-toolkit", str(stderr), str(trace), [css], pattern)
+            output = "\n".join(machine.logs)
+            self.assertIn("theme CSS warning in selected palette", output)
+            self.assertIn(f'"{css}"', output)
+            machine.logs.clear()
+            stderr.write_text("Gtk-WARNING: theme CSS warning " + "x" * 20000 + "\n")
+            trace.write_text(f'openat(3, "{css}", O_RDONLY) = 7 ' + "y" * 20000 + "\n")
+            with self.assertRaisesRegex(AssertionError, "diagnostic grep unexpectedly succeeded"):
+                check("gtk3-toolkit", str(stderr), str(trace), [css], pattern)
+            self.assertEqual(len(machine.logs), 2)
+            self.assertLessEqual(len(machine.logs[0]), 8300)
+            self.assertLessEqual(len(machine.logs[1]), 8300)
+            machine.logs.clear()
+            stderr.write_text("normal toolkit startup\n")
+            check("gtk3-toolkit", str(stderr), str(trace), [css], pattern)
+            self.assertEqual(machine.logs, [])
+
     def test_source_regression_runs_in_nix_lightweight_checks(self):
         self.assertIn(
             '${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_toolkit_focus.py"}',

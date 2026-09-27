@@ -121,6 +121,13 @@ sources: [GTK3 title propagation](https://github.com/GNOME/gtk/blob/3.24.52/gtk/
 [GTK4 UI and stack switcher](https://github.com/GNOME/gtk/blob/4.22.4/demos/widget-factory/widget-factory.ui#L428),
 and [Qt6ct UI title](https://www.opencode.net/trialuser/qt6ct/-/raw/0.11/src/qt6ct/mainwindow.ui).
 
+When a packaged toolkit emits CSS/theme diagnostics, the VM must log bounded
+matching stderr and bounded openat lines for its required theme files before
+rejecting the probe. The diagnostic rejection remains strict; a grep match
+cannot be treated as a consumer success. The GTK3 diagnostic text in CI run
+36350431294 was not retained, so that run does not establish a CSS root cause
+or justify relaxing this gate.
+
 The shared Fuzzel template must parse on Ubuntu 24.04's supported Fuzzel 1.9.2
 as well as newer Fedora/Nix versions. Use the common configuration vocabulary:
 `[colors]` contains background, text, match, selection, selection-text,

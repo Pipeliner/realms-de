@@ -547,6 +547,33 @@ EOF
               and response["data"]["focused_title"] == expected_title
           )
 
+      def assert_toolkit_diagnostics_clean(name, stderr, trace, required_paths,
+                                           diagnostic_pattern):
+          # The strict gate below failed in CI without printing the matched
+          # line. Emit only bounded offending evidence before rejecting it.
+          _status, matched_stderr = machine.execute(
+              f"grep -n -E -i -m 10 {shlex.quote(diagnostic_pattern)} "
+              f"{shlex.quote(stderr)} | head -c 8192",
+              timeout=DIAGNOSTIC_TIMEOUT,
+          )
+          if matched_stderr:
+              machine.log(f"{name} matched CSS/theme stderr:\n{matched_stderr}")
+              for required_path in required_paths:
+                  quoted_match = shlex.quote(f'"{required_path}"')
+                  _status, matched_openat = machine.execute(
+                      f"grep -F -m 10 {quoted_match} {shlex.quote(trace)} "
+                      "| head -c 8192",
+                      timeout=DIAGNOSTIC_TIMEOUT,
+                  )
+                  machine.log(
+                      f"{name} openat {required_path}: "
+                      + (matched_openat or "<no matching openat line>")
+                  )
+          machine.fail(
+              f"grep -E -i -q {shlex.quote(diagnostic_pattern)} "
+              f"{shlex.quote(stderr)}"
+          )
+
       def exercise_toolkit(
           command,
           name,
@@ -639,9 +666,8 @@ EOF
               f"test -s {shlex.quote(done)}", timeout=STATE_TIMEOUT
           )
           assert machine.succeed(f"cat {shlex.quote(done)}").strip() == "0"
-          machine.fail(
-              f"grep -E -i -q {shlex.quote(diagnostic_pattern)} "
-              f"{shlex.quote(stderr)}"
+          assert_toolkit_diagnostics_clean(
+              name, stderr, trace, required_paths, diagnostic_pattern
           )
           matched_trace = []
           for required_path in required_paths:
