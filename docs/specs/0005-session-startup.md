@@ -357,6 +357,12 @@ callback after recovery, clock, and sampler setup. This is test-only evidence;
 it does not extend the two-second budget, excuse missing readiness, or replace
 the exact GetState and Quit receipt assertions. A timeout before thread entry
 must also be distinguishable from a stall inside startup.
+When that broad pre-backend stage recurs, the fixture's next bounded witness
+must distinguish completion of system-timezone discovery, endpoint binding,
+worker startup, and initial snapshot read. These marks are private to the
+fixture daemon thread so parallel tests cannot supply false progress. A mark
+is evidence of a completed boundary only; the real-socket test still uses the
+same production startup path, two-second deadline, GetState, and Quit receipt.
 
 **A10 native recovery evidence (accepted refinement, 2026-09-27).** Open
 three distinguishable terminals through real keyboard bindings, alter their

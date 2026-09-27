@@ -776,6 +776,26 @@ where
     )
 }
 
+#[cfg(test)]
+thread_local! {
+    static STARTUP_STAGE_WITNESS: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicU8>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn record_startup_stage(stage: u8) {
+    STARTUP_STAGE_WITNESS.with(|slot| {
+        if let Some(witness) = slot.borrow().as_ref() {
+            let previous = witness.swap(stage, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(
+                previous.checked_add(1),
+                Some(stage),
+                "startup witness skipped a boundary"
+            );
+        }
+    });
+}
+
 fn run_daemon_with_environment<B, F, R>(
     runtime: RuntimeDir,
     make_backend: F,
@@ -791,14 +811,24 @@ where
 {
     let started_at = Instant::now();
     let mut clock = ClockRuntime::system();
+    #[cfg(test)]
+    record_startup_stage(2);
     let snapshot_path = runtime.path().join("realm/ledger.json");
     let bound = runtime.prepare_server_endpoint()?.bind()?;
+    #[cfg(test)]
+    record_startup_stage(3);
 
     let mut worker = Worker::start_with_launch_policy(snapshot_path, environment, session_scopes)?;
+    #[cfg(test)]
+    record_startup_stage(4);
     let recovered = load_startup_snapshot(&mut worker)?;
+    #[cfg(test)]
+    record_startup_stage(5);
     let mut persistence = PersistenceCoordinator::new(recovered.clone());
 
     let backend = make_backend()?;
+    #[cfg(test)]
+    record_startup_stage(6);
     let mut session =
         Session::connect_with_snapshot_and_degraded(backend, recovered, degraded_codes)?;
     recover_until_live(&mut session, &mut persistence)?;
@@ -1797,9 +1827,13 @@ mod tests {
     fn startup_stage_name(stage: u8) -> &'static str {
         match stage {
             0 => "daemon thread not entered",
-            1 => "endpoint or snapshot startup",
-            2 => "backend construction, recovery, clock, or sampler",
-            3 => "ready callback reached",
+            1 => "system timezone discovery",
+            2 => "endpoint preparation or bind",
+            3 => "worker startup",
+            4 => "initial snapshot read",
+            5 => "backend construction",
+            6 => "backend recovery, clock, or sampler",
+            7 => "ready callback reached",
             _ => "invalid fixture stage",
         }
     }
@@ -1829,13 +1863,32 @@ mod tests {
     #[test]
     fn readiness_stage_diagnostic_names_each_boundary() {
         assert_eq!(startup_stage_name(0), "daemon thread not entered");
-        assert_eq!(startup_stage_name(1), "endpoint or snapshot startup");
-        assert_eq!(
-            startup_stage_name(2),
-            "backend construction, recovery, clock, or sampler"
-        );
-        assert_eq!(startup_stage_name(3), "ready callback reached");
+        assert_eq!(startup_stage_name(1), "system timezone discovery");
+        assert_eq!(startup_stage_name(2), "endpoint preparation or bind");
+        assert_eq!(startup_stage_name(3), "worker startup");
+        assert_eq!(startup_stage_name(4), "initial snapshot read");
+        assert_eq!(startup_stage_name(5), "backend construction");
+        assert_eq!(startup_stage_name(6), "backend recovery, clock, or sampler");
+        assert_eq!(startup_stage_name(7), "ready callback reached");
         assert_eq!(startup_stage_name(u8::MAX), "invalid fixture stage");
+    }
+
+    #[test]
+    fn readiness_stage_witness_is_private_to_its_fixture_thread() {
+        let stage = Arc::new(AtomicU8::new(1));
+        let daemon_stage = Arc::clone(&stage);
+        std::thread::spawn(move || {
+            super::STARTUP_STAGE_WITNESS.with(|slot| {
+                *slot.borrow_mut() = Some(daemon_stage);
+            });
+            super::record_startup_stage(2);
+            std::thread::spawn(|| super::record_startup_stage(3))
+                .join()
+                .unwrap();
+        })
+        .join()
+        .unwrap();
+        assert_eq!(stage.load(Ordering::SeqCst), 2);
     }
 
     #[test]
@@ -1846,7 +1899,7 @@ mod tests {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel(1);
         let (send_result_tx, send_result_rx) = mpsc::sync_channel(1);
-        let stage = Arc::new(AtomicU8::new(2));
+        let stage = Arc::new(AtomicU8::new(6));
         let daemon = std::thread::spawn(move || {
             release_rx.recv().unwrap();
             send_result_tx.send(ready_tx.send(()).is_err()).unwrap();
@@ -1868,7 +1921,7 @@ mod tests {
         release_tx.send(()).unwrap();
         observer.join().unwrap();
         assert!(
-            matches!(completed, Ok(ref diagnostic) if diagnostic.contains("startup stage: backend construction, recovery, clock, or sampler")),
+            matches!(completed, Ok(ref diagnostic) if diagnostic.contains("startup stage: backend recovery, clock, or sampler")),
             "readiness diagnostic joined a live daemon or omitted its stage: {completed:?}"
         );
         assert!(
@@ -1886,17 +1939,20 @@ mod tests {
         let stage = Arc::new(AtomicU8::new(0));
         let thread_stage = Arc::clone(&stage);
         let daemon = std::thread::spawn(move || {
+            super::STARTUP_STAGE_WITNESS.with(|slot| {
+                *slot.borrow_mut() = Some(Arc::clone(&thread_stage));
+            });
             thread_stage.store(1, Ordering::SeqCst);
-            let backend_stage = Arc::clone(&thread_stage);
+            let factory_stage = Arc::clone(&thread_stage);
             let callback_stage = Arc::clone(&thread_stage);
             run_daemon_with(
                 server_runtime,
                 move || {
-                    backend_stage.store(2, Ordering::SeqCst);
+                    assert_eq!(factory_stage.load(Ordering::SeqCst), 5);
                     Ok(DaemonBackend::new())
                 },
                 move || {
-                    callback_stage.store(3, Ordering::SeqCst);
+                    callback_stage.store(7, Ordering::SeqCst);
                     ready_tx.send(()).map_err(|_| {
                         std::io::Error::new(std::io::ErrorKind::BrokenPipe, "test ready receiver")
                     })
