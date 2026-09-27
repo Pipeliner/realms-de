@@ -3,28 +3,15 @@
 import ast
 import datetime as dt
 import json
+import os
 from pathlib import Path
 import shlex
 import textwrap
-import subprocess
 from queue import Queue
 
-# Evaluate the real fixture module with a lazy, build-free nixosTest identity.
-# No nixpkgs fetch, package derivation or production module evaluation is needed.
-checks_path = Path(__file__).with_name("checks.nix").resolve()
-expression = '''let
-  checks = import CHECKS { pkgs.testers.nixosTest = value: value;
-    lib = {}; src = ./.; realm = null; desktopAdmissionVmTest = null;
-    nixosModule = "production-module"; sourceRevision = "test";
-    vmControlHelper = null; portalVmHelper = null; };
-  node = checks.session-boots.nodes.machine { config = {}; pkgs = {}; };
-in { options = node.virtualisation.qemu.options or [];
-     params = node.boot.kernelParams;
-     imports = node.imports;
-     manager = node.systemd.settings.Manager or {}; }
-'''.replace('CHECKS', str(checks_path))
-fixture = json.loads(subprocess.check_output(
-    ['nix-instantiate', '--eval', '--strict', '--json', '--expr', expression], text=True))
+# The derivation evaluator supplies actual VM options; no nested Nix process
+# may initialize store/profile state inside this builder.
+fixture = json.loads(os.environ["REALM_SUSPEND_FIXTURE"])
 assert '-global ICH9-LPC.enable_tco=off' in fixture['options'], fixture
 assert 'initcall_debug' in fixture['params'], fixture
 assert 'no_console_suspend' in fixture['params'], fixture

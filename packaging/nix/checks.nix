@@ -19,7 +19,10 @@
   # The session wrapper is the file most likely to break a login, and the only
   # shell in the repo. Keep it clean.
   shellcheck =
-    pkgs.runCommand "realm-shellcheck" { nativeBuildInputs = [ pkgs.shellcheck pkgs.nix ]; }
+    pkgs.runCommand "realm-shellcheck" {
+      nativeBuildInputs = [ pkgs.shellcheck ];
+      REALM_SUSPEND_FIXTURE = builtins.toJSON (import ./suspend_fixture.nix);
+    }
       ''
         shellcheck --shell=bash \
           ${src + "/packaging/session/realm-session"} \
@@ -44,7 +47,7 @@
           ${src + "/packaging/debian/test-toolchain-path.sh"}
         bash ${src + "/packaging/session/test-runtime-dir-mode.sh"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_portal_vm_helper.py"}
-        ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_suspend_vm_helpers.py"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_suspend_builder.py"}
         bash ${src + "/packaging/session/test-portal-warmup.sh"}
         touch $out
       '';

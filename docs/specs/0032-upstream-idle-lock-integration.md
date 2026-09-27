@@ -197,5 +197,7 @@ observed watchdog inventory in suspend evidence. Preserve deep/logind suspend,
 lock readiness, resumed-lock suppression/password unlock, inhibitor reacquisition
 and every existing bound. A stalled resume still fails; neither this experiment
 nor removal of a reset is successful suspend evidence. Source tests evaluate the
-VM options and exercise the existing critical acceptance assertions.
+VM options and exercise the existing critical acceptance assertions. Evaluate
+the real fixture options before derivation execution and inject their JSON into
+the source test; the builder must not initialize a nested Nix store or profiles.
 The exact property is defined by [pinned QEMU's ICH9 header](https://github.com/qemu/qemu/blob/v11.1.0/include/hw/acpi/ich9.h).
