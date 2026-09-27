@@ -64,6 +64,7 @@ assert !waybarComparison || waybarFixture != null;
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_portal_vm_helper.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_browser_screencast.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_window_controls.py"}
+        ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_toolkit_focus.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/nix/test_relogin.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/native-vm/test_relogin_roundtrip.py"}
         ${pkgs.python3}/bin/python3 ${src + "/packaging/native-vm/test_window_roundtrip.py"}
@@ -540,10 +541,17 @@ EOF
               description,
           )
 
+      def toolkit_focus_matches(response, expected_title):
+          return (
+              sum(cell["windows"] for cell in response["data"]["orbits"]) == 2
+              and response["data"]["focused_title"] == expected_title
+          )
+
       def exercise_toolkit(
           command,
           name,
           required_paths,
+          expected_title,
           expected_text,
           diagnostic_pattern,
           screenshot=None,
@@ -616,12 +624,7 @@ EOF
           else:
               machine.send_chars(run_script + "\n")
           managed_raw, _managed = wait_for_state(
-              lambda response: (
-                  sum(
-                      cell["windows"] for cell in response["data"]["orbits"]
-                  ) == 2
-                  and response["data"]["focused_title"] == expected_text
-              ),
+              lambda response: toolkit_focus_matches(response, expected_title),
               f"focused {name} application window",
           )
           machine.wait_for_text(expected_text, timeout=OCR_TIMEOUT)
@@ -1679,7 +1682,8 @@ EOF
           "${pkgs.gtk3.dev}/bin/gtk3-widget-factory",
           "gtk3-toolkit",
           [gtk3_css],
-          "Widget Factory",
+          "gtk3-widget-factory",
+          "Page 1",
           r"(css|theme).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(css|theme)",
           screenshot="realm-gtk3-toolkit",
       )
@@ -1687,7 +1691,8 @@ EOF
           "${pkgs.gtk4.dev}/bin/gtk4-widget-factory",
           "gtk4-toolkit",
           [gtk4_css],
-          "Widget Factory",
+          "GTK Widget Factory",
+          "Page 1",
           r"(css|theme).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(css|theme)",
           screenshot="realm-gtk4-toolkit",
       )
@@ -1695,6 +1700,7 @@ EOF
           "${pkgs.qt6Packages.qt6ct}/bin/qt6ct",
           "qt6-toolkit",
           [qt6ct_config, qt6ct_colours],
+          "Qt6 Configuration Tool",
           "Qt6 Configuration Tool",
           r"(qt6ct|palette|colou?r.scheme|config).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(qt6ct|palette|colou?r.scheme|config)",
           screenshot="realm-qt6-toolkit",
@@ -1717,7 +1723,8 @@ EOF
           "${pkgs.gtk3.dev}/bin/gtk3-widget-factory",
           "gtk3-launcher",
           [gtk3_css],
-          "Widget Factory",
+          "gtk3-widget-factory",
+          "Page 1",
           r"(css|theme).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(css|theme)",
           screenshot="realm-gtk3-launcher",
           launcher=True,
@@ -1726,7 +1733,8 @@ EOF
           "${pkgs.gtk4.dev}/bin/gtk4-widget-factory",
           "gtk4-launcher",
           [gtk4_css],
-          "Widget Factory",
+          "GTK Widget Factory",
+          "Page 1",
           r"(css|theme).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(css|theme)",
           screenshot="realm-gtk4-launcher",
           launcher=True,
@@ -1735,6 +1743,7 @@ EOF
           "${pkgs.qt6Packages.qt6ct}/bin/qt6ct",
           "qt6-launcher",
           [qt6ct_config, qt6ct_colours],
+          "Qt6 Configuration Tool",
           "Qt6 Configuration Tool",
           r"(qt6ct|palette|colou?r.scheme|config).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(qt6ct|palette|colou?r.scheme|config)",
           screenshot="realm-qt6-launcher",
@@ -1755,6 +1764,7 @@ EOF
           "${pkgs.qt6Packages.qt6ct}/bin/qt6ct",
           "qt6-user-override",
           ["/home/alice/.config/qt6ct/qt6ct.conf"],
+          "Qt6 Configuration Tool",
           "Qt6 Configuration Tool",
           r"(qt6ct|palette|colou?r.scheme|config).*(error|failed|invalid|not found|unable|warning)|(error|failed|invalid|warning).*(qt6ct|palette|colou?r.scheme|config)",
       )

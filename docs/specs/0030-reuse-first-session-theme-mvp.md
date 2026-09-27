@@ -103,6 +103,24 @@ another desktop's defaults. A session-local config overlay may be used where a
 tool cannot import a theme. Do not claim GTK/Qt coverage without real packaged
 consumer evidence, including supported runtime/plugin versions.
 
+The packaged toolkit VM probe must distinguish compositor-reported focused
+window title from visible text. It must require exactly two managed windows
+(the terminal and launched toolkit in this fixture), focus on that toolkit's
+observed protocol title,
+and independent OCR of its visible label before screenshot, file-open trace,
+diagnostic, and clean-exit checks. On the pinned GTK3 widget factory the
+observed River title is `gtk3-widget-factory`, while its visible stack-switcher
+label is `Page 1`; both direct and launcher probes must use these distinct
+expectations. A title mismatch must not be excused by OCR, or vice versa.
+For the pinned GTK4 widget factory, the protocol title is `GTK Widget Factory`
+and visible stack-switcher text is `Page 1`; Qt6ct uses `Qt6 Configuration Tool`
+for both. These title expectations are grounded in the packaged upstream
+sources: [GTK3 title propagation](https://github.com/GNOME/gtk/blob/3.24.52/gtk/gtkwindow.c#L4199),
+[GTK3 Wayland fallback](https://github.com/GNOME/gtk/blob/3.24.52/gdk/wayland/gdkwindow-wayland.c#L484),
+[GTK3 stack-switcher label](https://github.com/GNOME/gtk/blob/3.24.52/demos/widget-factory/widget-factory.ui#L1796),
+[GTK4 UI and stack switcher](https://github.com/GNOME/gtk/blob/4.22.4/demos/widget-factory/widget-factory.ui#L428),
+and [Qt6ct UI title](https://www.opencode.net/trialuser/qt6ct/-/raw/0.11/src/qt6ct/mainwindow.ui).
+
 The shared Fuzzel template must parse on Ubuntu 24.04's supported Fuzzel 1.9.2
 as well as newer Fedora/Nix versions. Use the common configuration vocabulary:
 `[colors]` contains background, text, match, selection, selection-text,
