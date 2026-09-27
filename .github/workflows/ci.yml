@@ -48,6 +48,7 @@ jobs:
       - run: python3 packaging/session/test-browser.py
       - run: python3 packaging/session/test-idle.py
       - run: python3 packaging/session/test-idle-packaging.py
+      - run: python3 packaging/session/test-login-claim.py
 
   dependency-policy:
     name: dependency policy

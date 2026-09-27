@@ -52,6 +52,28 @@ releases an unhanded-off lease. Existing live-process identity checks protect
 the retained generation until the graphical entry exits; existing stale-lease
 reconciliation remains usable. No new lifecycle manager is required.
 
+The graphical entry publishes `realm/session-theme.json` under its existing
+per-user runtime directory before starting the compositor. The record contains
+the absolute configuration root, immutable generation ID, graphical-entry PID,
+Linux process start time and boot ID. Publication is atomic; a live existing
+owner cannot be replaced. A new login may replace a well-formed dead-owner
+record after taking the exclusive login claim. Malformed records fail with a
+diagnostic. Consumers validate the owner identity and selected generation; a
+missing or stale record is an error, never a request to select `current`.
+The helper retains the owner's process lease only after successful publication.
+WM restarts read this record instead of bootstrapping a new selection.
+The record is private runtime state, not global toolkit activation environment.
+The entry invokes the private `realm-wm --prepare-session-theme PID` command
+with its own PID; failure aborts before compositor startup. The existing
+explicit no-WM diagnostic mode remains available when the WM is absent.
+The graphical entry takes a nonblocking exclusive `flock` on
+`$XDG_RUNTIME_DIR/realm-session.lock` before compositor/PID/environment changes.
+The entry owns the descriptor directly, preserving its signal/teardown identity;
+compositor and direct-client subprocesses close their inherited copy before
+exec. Contention exits 73 without running session cleanup. The lock file is not
+unlinked on exit; entry exit releases the claim after teardown. Native packages
+declare the flock executable dependency and the Nix wrapper supplies it.
+
 ## T2 — Consumer activation
 
 Configure foot, fuzzel, Yazi, btop, zsh/Starship, GTK and Qt using their supported

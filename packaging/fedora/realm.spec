@@ -61,6 +61,7 @@ Requires:       river >= 0.4.0
 # units never start.
 Requires:       dbus-common
 Requires:       systemd
+Requires:       /usr/bin/flock
 Requires:       swayidle
 Requires:       swaylock >= 1.7
 Requires:       brightnessctl

@@ -89,6 +89,7 @@ rec {
     pkgs:
     (with pkgs; [
       coreutils # date, sleep, mkdir, timeout
+      util-linux # flock: graphical-login exclusivity
       systemd # systemctl --user
       dbus # dbus-update-activation-environment, dbus-run-session
       glib # gsettings

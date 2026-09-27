@@ -888,17 +888,17 @@ where
     F: FnOnce() -> Result<B, BackendError>,
 {
     let runtime = production_runtime_dir()?;
-    let config_root =
-        crate::consumer::config_root_from_env().map_err(RuntimeError::Configuration)?;
-    prepare_startup_theme(&config_root)?;
+    prepare_startup_theme(runtime.path())?;
     let degraded_codes = load_degraded_handoff(&runtime);
     run_daemon_with(runtime, make_backend, notify_ready, degraded_codes)
 }
 
 fn prepare_startup_theme(
-    config_root: &std::path::Path,
+    runtime_dir: &std::path::Path,
 ) -> Result<realm_theme::generation::GenerationId, RuntimeError> {
-    realm_theme::ensure_current(config_root).map_err(RuntimeError::from)
+    let selected = crate::login_theme::load(runtime_dir).map_err(RuntimeError::Configuration)?;
+    realm_theme::generation::GenerationId::parse(selected.as_str())
+        .map_err(RuntimeError::Configuration)
 }
 
 fn load_startup_snapshot(
@@ -1676,7 +1676,7 @@ mod tests {
     }
 
     #[test]
-    fn production_startup_theme_preparation_seeds_once_and_refuses_malformed_current() {
+    fn production_startup_keeps_login_theme_across_daemon_restart() {
         let output = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -1703,35 +1703,21 @@ mod tests {
         rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o022));
         let fixture = fixture_dir("startup-theme");
         let root = fixture.join("fresh-config");
-        assert!(!root.exists());
-        let first = super::prepare_startup_theme(&root).unwrap();
-        assert_eq!(
-            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-        let current = fs::read(root.join("realm/generated/current")).unwrap();
-
-        let second = super::prepare_startup_theme(&root).unwrap();
+        let runtime = fixture.join("runtime");
+        fs::create_dir(&runtime).unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        crate::login_theme::prepare(&root, &runtime, std::process::id()).unwrap();
+        let selected = crate::login_theme::load(&runtime).unwrap();
+        let first = super::prepare_startup_theme(&runtime).unwrap();
+        assert_eq!(first.as_str(), selected.as_str());
+        let next = realm_theme::apply(&root).unwrap();
+        assert_ne!(next.as_str(), first.as_str());
+        let second = super::prepare_startup_theme(&runtime).unwrap();
         assert_eq!(second, first);
-        assert_eq!(
-            fs::read(root.join("realm/generated/current")).unwrap(),
-            current
-        );
-
         fs::write(root.join("realm/generated/current"), b"malformed\n").unwrap();
-        let malformed = fs::read(root.join("realm/generated/current")).unwrap();
-        assert!(super::prepare_startup_theme(&root).is_err());
-        assert_eq!(
-            fs::read(root.join("realm/generated/current")).unwrap(),
-            malformed
-        );
-
-        let missing_parent = fixture.join("missing-parent/config");
-        assert!(super::prepare_startup_theme(&missing_parent).is_err());
-        assert!(
-            !fixture.join("missing-parent").exists(),
-            "bootstrap recursively created an absent configuration-root parent"
-        );
+        assert_eq!(super::prepare_startup_theme(&runtime).unwrap(), first);
+        fs::remove_file(runtime.join("realm/session-theme.json")).unwrap();
+        assert!(super::prepare_startup_theme(&runtime).is_err());
         fs::remove_dir_all(fixture).unwrap();
     }
 

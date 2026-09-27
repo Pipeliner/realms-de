@@ -14,3 +14,7 @@ fedora-status-projection,codex,verification,2026-09-27T12:01:50Z,2026-09-27T12:0
 #117-login-selection,codex-login-theme-review,review,2026-09-27T12:08:23Z,2026-09-27T12:08:30Z,Confirmed ordinary Drop removes matching live parent lease
 #117-login-selection,codex,implementation,2026-09-27T12:09:55Z,2026-09-27T12:14:09Z,Accepted API refinement and test-first selection/lease primitives; 242 crate tests pass with five environment-specific skips; graphical integration pending
 #117-login-selection,codex-review-login-primitives,review,2026-09-27T12:13:18Z,2026-09-27T12:13:37Z,No blocking findings; earlier unmeasured inspection excluded; full graphical acceptance explicitly out of this slice
+#117-login-integration,codex,implementation,2026-09-27T12:17:01Z,2026-09-27T12:32:36Z,Elapsed integration interval including review and test waits plus ETA interruption; login record and fixed consumers implemented; 157 realm-session tests pass; packaging and complete theme acceptance remain pending
+#117-login-integration,codex-implement-login-record,implementation,2026-09-27T12:17:50Z,2026-09-27T12:21:44Z,Agent-reported record implementation and red-green tests; runtime directory mode corrected
+#117-login-integration,codex-review-login-integration,review,2026-09-27T12:25:28Z,2026-09-27T12:26:15Z,Found flock guardian signal forwarding defect before commit
+#117-login-integration,codex-review-login-integration,review,2026-09-27T12:31:19Z,2026-09-27T12:31:52Z,Verified shell-owned claim and real compositor cleanup on TERM; no blocking findings

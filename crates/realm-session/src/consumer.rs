@@ -6,8 +6,6 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use realm_theme::generation::GenerationStore;
-
 /// The two MVP programs that consume one selected theme generation directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixedConsumer {
@@ -73,11 +71,10 @@ fn config_argument(path: &Path) -> OsString {
     argument
 }
 
-/// Lease current for this process and replace it with the fixed consumer.
+/// Lease the graphical login's selection and replace this process with its consumer.
 pub fn exec_from_env(consumer: FixedConsumer) -> Result<(), String> {
-    let root = config_root_from_env()?;
-    let store = GenerationStore::open(&root.join("realm/generated"))?;
-    let selection = store.select_current()?;
+    let runtime = realm_control::production_runtime_dir().map_err(|error| error.to_string())?;
+    let selection = crate::login_theme::load(runtime.path())?;
     selection.read_output(consumer.output())?;
     let config = config_argument(&selection.path().join(consumer.output()));
     let mut command = Command::new(consumer.executable());
