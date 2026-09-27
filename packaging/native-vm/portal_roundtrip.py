@@ -8,14 +8,7 @@ import sys
 import time
 
 from lock_roundtrip import complete_ppm, monitor_command
-
-
-def relative_mouse(reply):
-    lines = [line for line in reply.splitlines() if 'Mouse #' in line and '(absolute)' not in line]
-    assert lines, reply
-    match = re.search(r'Mouse #(\d+)', lines[0])
-    assert match is not None, reply
-    return match.group(1)
+from pointer import position_pointer, click_pointer
 
 
 def validate_result(result):
@@ -91,20 +84,13 @@ def main():
         time.sleep(0.15)
         state(0, 'portal-filechooser-closed')
         wait('pgrep -u alice -x slurp')
-        path = screenshot('portal-slurp')
-        with path.open('rb') as stream:
-            stream.readline()
-            width, height = map(int, stream.readline().split())
-        mice = monitor_command(monitor, 'info mice')
-        result['mice'] = mice
-        monitor_command(monitor, 'mouse_set ' + relative_mouse(mice))
-        monitor_command(monitor, 'mouse_move -32767 -32767')
-        monitor_command(monitor, f'mouse_move {width // 2} {height // 2}')
+        screenshot('portal-slurp')
+        position_pointer(monitor + ".qmp", result)
+        screenshot('portal-slurp-pointer')
         deadline = time.monotonic() + 20
         while guest('if pgrep -u alice -x slurp >/dev/null; then echo yes; else echo no; fi').strip() == 'yes':
             assert time.monotonic() < deadline, 'Slurp selection timed out'
-            monitor_command(monitor, 'mouse_button 1')
-            monitor_command(monitor, 'mouse_button 0')
+            click_pointer(monitor + ".qmp", result)
             time.sleep(0.5)
         wait('test -s ' + root + '/status')
         assert guest('cat ' + root + '/status').strip() == '0', guest('cat ' + root + '/stderr')

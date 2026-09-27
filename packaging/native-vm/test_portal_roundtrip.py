@@ -15,12 +15,6 @@ class PortalTests(unittest.TestCase):
         requirements = re.findall(r'^Requires:\s+(\S+)', spec.read_text(), re.MULTILINE)
         self.assertIn('pipewire', requirements)
 
-    def test_relative_mouse_rejects_absent_or_malformed_id(self):
-        self.assertEqual(probe.relative_mouse('Mouse #2: tablet (absolute)\nMouse #4: mouse\n'), '4')
-        for reply in ('Mouse #2: tablet (absolute)', 'Mouse #broken: mouse'):
-            with self.assertRaises(AssertionError):
-                probe.relative_mouse(reply)
-
     def evidence(self):
         return {'filechooser': {'elapsed_ms': 10, 'completion': 'response', 'response_code': 1},
                 'settings': {'reply_type': '(a{sa{sv}})'},

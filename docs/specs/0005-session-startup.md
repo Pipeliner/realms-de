@@ -602,6 +602,16 @@ the guest has an active absolute vmmouse and sending one huge negative delta
 does not establish a known target. The input path must not bypass the
 interactive chooser or disable driver type checking.
 
+**Accepted native pointer correction (2026-09-27).** Native portal and browser
+chooser fixtures use the same active-absolute QMP input contract. Fedora run
+36336331278 recorded active absolute vmmouse but forced PS/2 relative input,
+then timed out in Slurp. The native VM exposes a host-local QMP socket beside
+its HMP socket. Each QMP exchange validates greeting, capabilities and response,
+ignores asynchronous events, rejects errors/EOF/oversized replies, and has one
+five-second wall-clock deadline. Both fixtures share the pointer helper and
+retain inventory, target and replies; no automatic output-selection bypass is
+permitted. Runtime acceptance still requires the real chooser and captured frame.
+
 ### Native FileChooser and direct ScreenCast acceptance
 
 The Ubuntu/Fedora graphical CI journey reuses the persistent portal VM client:

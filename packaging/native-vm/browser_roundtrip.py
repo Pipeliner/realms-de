@@ -7,7 +7,7 @@ import sys
 import time
 
 from lock_roundtrip import complete_ppm, monitor_command
-from portal_roundtrip import relative_mouse
+from pointer import position_pointer, click_pointer
 
 
 def activate_share(wait_text, key):
@@ -109,20 +109,13 @@ def main():
         navigate_capture(key)
         activate_share(wait_text, key)
         wait('pgrep -u alice -x slurp')
-        path = screenshot('browser-output-chooser')
-        with path.open('rb') as stream:
-            stream.readline()
-            width, height = map(int, stream.readline().split())
-        mice = monitor_command(monitor, 'info mice')
-        result['mice'] = mice
-        monitor_command(monitor, 'mouse_set ' + relative_mouse(mice))
-        monitor_command(monitor, 'mouse_move -32767 -32767')
-        monitor_command(monitor, f'mouse_move {width // 2} {height // 2}')
+        screenshot('browser-output-chooser')
+        position_pointer(monitor + ".qmp", result)
+        screenshot('browser-output-pointer')
         deadline = time.monotonic() + 20
         while guest('if pgrep -u alice -x slurp >/dev/null; then echo yes; else echo no; fi').strip() == 'yes':
             assert time.monotonic() < deadline, 'browser Slurp selection timed out'
-            monitor_command(monitor, 'mouse_button 1')
-            monitor_command(monitor, 'mouse_button 0')
+            click_pointer(monitor + ".qmp", result)
             time.sleep(0.5)
         wait_for_capture(wait, root)
         guest('test ! -e ' + root + '/error.json')
