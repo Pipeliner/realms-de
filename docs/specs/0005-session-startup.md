@@ -857,6 +857,11 @@ register yet. They are recorded here as findings for a human to add.
 
 ## Open questions
 
+**OQ-1 is superseded by accepted [SPEC 0032](0032-upstream-idle-lock-integration.md):**
+use packaged swayidle and PAM-backed swaylock, host lid policy, dim at 300 seconds,
+lock/blank at 600 seconds and synchronous lock-before-suspend. The alternative
+recommendations below are historical only, not unresolved product decisions.
+
 - **OQ-1 — resolved for MVP.** Dim after 5 minutes and lock/blank after 10
   minutes; host lid policy remains authoritative and lock-before-suspend is
   required. Remaining locker implementation details stay below.

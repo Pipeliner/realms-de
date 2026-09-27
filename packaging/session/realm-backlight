@@ -1,0 +1,30 @@
+#!/bin/sh
+# Brightness is optional (VMs/desktop monitors); failure must not disable locking.
+set -eu
+if [ "$#" -ne 1 ]; then
+    echo 'usage: realm-backlight dim|restore' >&2
+    exit 64
+fi
+unavailable() {
+    echo 'realm: backlight adjustment unavailable; idle locking remains enabled' >&2
+}
+case "$1" in
+    dim)
+        if ! level=$(brightnessctl --class=backlight --save get); then
+            unavailable
+            exit 0
+        fi
+        case "$level" in
+            ''|*[!0-9]*) unavailable; exit 0 ;;
+        esac
+        [ "$level" -gt 1 ] || exit 0
+        brightnessctl --class=backlight set 90%- || unavailable
+        ;;
+    restore)
+        brightnessctl --class=backlight --restore || unavailable
+        ;;
+    *)
+        echo 'usage: realm-backlight dim|restore' >&2
+        exit 64
+        ;;
+esac

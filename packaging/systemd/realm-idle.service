@@ -1,0 +1,18 @@
+# SPEC 0032: dormant until package/PAM/protocol and binding-suppression evidence.
+[Unit]
+Description=Realm idle and suspend locking
+PartOf=realm-session.target graphical-session.target
+After=realm-wm.service
+Wants=realm-wm.service
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/realm-idle
+Restart=on-failure
+RestartSec=2
+Slice=app.slice
+TimeoutStopSec=5
+
+[Install]
+WantedBy=realm-session.target
