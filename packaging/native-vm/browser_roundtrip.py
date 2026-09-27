@@ -21,6 +21,32 @@ def wait_for_capture(wait, root):
     wait('test -s ' + root + '/result.json || test -s ' + root + '/error.json', seconds=35)
 
 
+def wait_visible(read_text, text, absent=None, clock=time.monotonic, sleep=time.sleep):
+    deadline = clock() + 45
+    while True:
+        output = read_text()
+        normalized = ' '.join(output.split()).casefold()
+        if text.casefold() in normalized and (absent is None or absent.casefold() not in normalized):
+            return output
+        assert clock() < deadline, (text, absent, output)
+        sleep(0.5)
+
+
+def select_source(kind, wait_text, key, select_slurp, wait_closed):
+    if kind == 'slurp':
+        select_slurp()
+    else:
+        assert kind == 'fuzzel', ('unrecognized source chooser', kind)
+        wait_text('Select a source to share', 'browser-source-menu')
+        wait_text('Monitor:', 'browser-source-monitor')
+        for character in 'monitor':
+            key(character)
+        filtered = wait_text('Monitor:', 'browser-source-filtered', absent='Window:')
+        assert 'window:' not in filtered.casefold(), ('ambiguous source menu', filtered)
+        key('ret')
+        wait_closed()
+
+
 def navigate_capture(key):
     key('ctrl-l')
     # Match the Nix driver CHAR_TO_KEY scan codes for punctuation.
@@ -64,19 +90,16 @@ def main():
             time.sleep(0.05)
         return path
 
-    def wait_text(text, name):
-        deadline = time.monotonic() + 45
-        while True:
+    def wait_text(text, name, absent=None):
+        def read_text():
             path = screenshot(name)
             # OCR is a guest-only fixture dependency; PPM travels through the
             # existing SSH channel, with no browser automation or fake input.
             output = subprocess.check_output(ssh + ['timeout 10 tesseract stdin stdout -l eng'],
                 input=path.read_bytes(), timeout=15).decode()
             (evidence / (name + '.ocr.txt')).write_text(output)
-            if text.casefold() in ' '.join(output.split()).casefold():
-                return
-            assert time.monotonic() < deadline, (text, output)
-            time.sleep(0.5)
+            return output
+        return wait_visible(read_text, text, absent)
 
     def state(count, name):
         deadline = time.monotonic() + 15
@@ -108,15 +131,23 @@ def main():
         state(1, 'browser-open')
         navigate_capture(key)
         activate_share(wait_text, key)
-        wait('pgrep -u alice -x slurp')
+        wait('pgrep -u alice -x slurp || pgrep -u alice -x fuzzel')
+        chooser = guest('if pgrep -u alice -x slurp >/dev/null; then echo slurp; '
+                        'elif pgrep -u alice -x fuzzel >/dev/null; then echo fuzzel; else echo missing; fi').strip()
+        result['source_chooser'] = chooser
         screenshot('browser-output-chooser')
-        position_pointer(monitor + ".qmp", result)
-        screenshot('browser-output-pointer')
-        deadline = time.monotonic() + 20
-        while guest('if pgrep -u alice -x slurp >/dev/null; then echo yes; else echo no; fi').strip() == 'yes':
-            assert time.monotonic() < deadline, 'browser Slurp selection timed out'
-            click_pointer(monitor + ".qmp", result)
-            time.sleep(0.5)
+
+        def select_slurp():
+            position_pointer(monitor + ".qmp", result)
+            screenshot('browser-output-pointer')
+            deadline = time.monotonic() + 20
+            while guest('if pgrep -u alice -x slurp >/dev/null; then echo yes; else echo no; fi').strip() == 'yes':
+                assert time.monotonic() < deadline, 'browser Slurp selection timed out'
+                click_pointer(monitor + ".qmp", result)
+                time.sleep(0.5)
+
+        select_source(chooser, wait_text, key, select_slurp,
+                      lambda: wait('! pgrep -u alice -x fuzzel'))
         wait_for_capture(wait, root)
         guest('test ! -e ' + root + '/error.json')
         capture = json.loads(guest('cat ' + root + '/result.json'))

@@ -724,8 +724,20 @@ Failures and timeouts are evidence, not skipped success. A local standard-librar
 HTTP collector and the existing VM keyboard/mouse driver are sufficient; fake
 media sources, permission bypasses and a new browser automation stack are not
 part of this test. Collector readiness and result/error markers are published
-atomically, so observers never accept partially written metadata. The direct
-portal helper permits up to 120 seconds for each interactive SelectSources and
+atomically, so observers never accept partially written metadata. The
+native browser fixture must recognize the installed interactive source chooser,
+not assume it is always Slurp. Fedora run 36339786482 displayed a source-list
+menu after Firefox Allow while the earlier direct portal probe used Slurp.
+The native fixture accepts either Slurp (existing real absolute-pointer input)
+or Fuzzel only after observing its visible source-selection prompt and Monitor
+choice. For Fuzzel it types a Monitor filter through the virtual keyboard,
+waits boundedly for the visible Monitor choice with no Window entry, activates
+it, and waits for the menu to
+exit. It must not blindly accept an unrecognized menu or select a Window.
+This accepted fixture refinement changes neither portal configuration nor
+Firefox permissions; the two real captured frames and track-stop proof remain
+mandatory. The differing chooser observation does not establish its cause.
+The direct portal helper permits up to 120 seconds for each interactive SelectSources and
 Start request: xdpw may run its output chooser during SelectSources, before
 Start is reached. Both failures retain their method-specific diagnosis. The VM
 bounds output-selection input retries to 60 seconds after chooser startup.
