@@ -75,6 +75,25 @@ enablement stays unchanged. Nix and native VM checks verify the installed
 helpers, resolved locker executable, units and PAM file, and absence of an idle
 wants link. These package checks do not claim password or suspend correctness.
 
+### Native manual authentication evidence
+
+The existing Ubuntu/Fedora installed graphical-session CI VMs manually start
+the unmodified dormant lock unit twice. Each cycle must retain live cgroup
+process identities, show duplicate starts preserve them, suppress the launcher
+binding, reject a wrong password, and unlock with the disposable guest's correct
+password. Unlock must leave the unit inactive and every captured identity gone.
+After each unlock, the same virtual-keyboard launcher shortcut must launch
+Fuzzel, and Escape must close it; absence while locked alone is insufficient.
+Monitor commands wait for a post-command prompt under a bounded deadline, and
+screenshot evidence requires a complete P6 pixel payload, not merely a file.
+The fixture sets a test-only guest password without enabling SSH password login,
+changing distro PAM policy, or relaxing SELinux. Record installed locker/PAM
+package ownership, versions and PAM configuration, bounded journals, structured
+results and screenshots on success or failure when guest/monitor I/O remains
+available. The idle service stays inactive and shipped wants links remain absent.
+This evidence does not satisfy native idle timing, suspend/resume, or
+real-hardware backlight/lid obligations.
+
 ### Installed NixOS lock round-trip
 
 The graphical VM uses an explicit test-only account password and manually starts

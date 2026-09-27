@@ -273,6 +273,7 @@ jobs:
           python3 packaging/native-vm/test_check_inputs.py
           python3 packaging/native-vm/test_check_workflow.py
           python3 packaging/native-vm/test_control_get_state.py
+          python3 packaging/native-vm/test_lock_roundtrip.py
           packaging/native-vm/test_run_native_session_vm.sh
           packaging/native-vm/test_guest_probe.sh
       - name: Install KVM harness prerequisites
