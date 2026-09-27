@@ -17,6 +17,9 @@
 - **Accepted browser VM refinement (2026-09-27):** A13b below supplies the
   bounded browser capture portion of SPEC 0031's acceptance journey; A15's
   physical-machine evidence remains separate.
+- **Accepted native recovery refinement (2026-09-27):** A10 and its bounded
+  native evidence paragraph below govern the installed crash-recovery probe;
+  projected-rectangle acceptance still requires inspection of retained images.
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
   [ADR 0013](../adr/0013-river-window-management-backend.md),
@@ -319,7 +322,7 @@ from a crashed session.
    no layer shell, so realm cannot draw its own error.
 3. **`realm-wm` dies later.** Supervised restart, with the ledger recovered
    rather than lost. On every ledger mutation the daemon queues a snapshot to
-   `$XDG_RUNTIME_DIR/realm/ledger.snapshot`; the write happens on a separate
+   `$XDG_RUNTIME_DIR/realm/ledger.json` (SPEC 0003); the write happens on a separate
    thread and never on the protocol input path, because under river a stall is a
    session failure and not a slow frame (ADR 0013). On restart, if the snapshot's
    compositor instance id matches the running river, the ledger is restored:
@@ -330,6 +333,21 @@ from a crashed session.
    from a previous session, or one started by hand, therefore makes the
    supervised one unstartable *forever* — and a naive `Restart=` turns that into
    a permanent restart loop. See failure mode **N2**.
+
+**A10 native recovery evidence (accepted refinement, 2026-09-27).** Open
+three distinguishable terminals through real keyboard bindings, alter their
+ledger order, and await the matching durable `ledger.json` before SIGKILL of
+the observed WM process identity. Require a different WM PID/start-time pair,
+the same login/compositor/bar identities, identical recovered ledger and stable
+compositor bindings, and a positive focus binding followed by restoration.
+The configured restart delay remains one second; a bounded twenty-second
+recovery observation records actual monotonic elapsed time, not a promise that
+readiness occurs within the restart delay. Require the bar's active state,
+activation timestamp and restart count to remain unchanged. Retain before/after
+framebuffers, state and output/scale context. Ledger equality is not geometry
+proof: projected rectangles remain pending explicit inspection of those images.
+No new product observation API is required. Failure retains partial evidence
+and bounded diagnostics; success closes all three fixture terminals normally.
 
 **Supervision policy, stated so the unit can be written from it:**
 
@@ -857,7 +875,7 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A7 | Given a booted session, when the cursor is checked, then the process and systemd environments and GSettings name the same theme and size, the theme resolves to a directory on disk, and `doctor` makes no claim to have read the D-Bus activation value | VM | |
 | A8 | Given river started, when `realm-wm` attaches, then `doctor` reports `wm/attached` and `wm/layer-shell` served, and the measured unmanaged interval is inside the cold-start budget | VM | |
 | A9 | Given `realm-wm` removed from the image, when the session starts, then the entry logs `FATAL WM-ABORT` with the "no window can be placed" message, tears river down, and exits non-zero — and the same happens when the unit is condition-skipped rather than failed | VM | |
-| A10 | Given a running session with three windows, when `realm-wm` is killed, then it is restarted within `RestartSec`, the ledger is recovered from the snapshot, the three windows return to their projected rectangles, and `realm-bar.service` never leaves `active` | VM | |
+| A10 | Given a running session with three windows, when `realm-wm` is killed, then supervised restart follows the configured `RestartSec` delay, the ledger is recovered from the snapshot, the three windows return to their projected rectangles, and `realm-bar.service` never leaves `active` | VM | |
 | A11 | Given a stale window manager already holding river's window-management global, when `realm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed; it names the holding process only if an independent observation identifies it, otherwise it states that the holder identity is unavailable | VM | |
 | A12 | Given a running session, when `realm-bar` is killed, then it is restarted, and `realm-session.target` and `realm-wm.service` both stay `active` throughout | VM | |
 | A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the effective configuration and installed `.portal` metadata name the required backends without claiming the running portal disclosed its selected backend identity | VM | |
