@@ -668,8 +668,13 @@ HTTP collector and the existing VM keyboard/mouse driver are sufficient; fake
 media sources, permission bypasses and a new browser automation stack are not
 part of this test. Collector readiness and result/error markers are published
 atomically, so observers never accept partially written metadata. The direct
-portal helper permits up to 120 seconds for interactive Start, while the VM
+portal helper permits up to 120 seconds for each interactive SelectSources and
+Start request: xdpw may run its output chooser during SelectSources, before
+Start is reached. Both failures retain their method-specific diagnosis. The VM
 bounds output-selection input retries to 60 seconds after chooser startup.
+The Nix driver records its pointer inventory and selected device and captures
+the chooser after pointer movement, so a remaining input failure is distinguishable
+from the portal client's request deadline.
 This proves browser-delivered capture from one emulated
 output, not remote conferencing, audio sharing or physical-machine capture.
 

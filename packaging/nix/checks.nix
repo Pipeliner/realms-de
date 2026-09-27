@@ -668,14 +668,17 @@ EOF
           # Select that device explicitly, clamp to the upper-left edge, then
           # move into the single 1920x1080 output before the real button event.
           mice = machine.send_monitor_command("info mice")
+          machine.log(f"portal pointer inventory: {mice}")
           relative = [line for line in mice.splitlines() if "Mouse #" in line and "(absolute)" not in line]
           assert relative, mice
           mouse_match = re.search(r"Mouse #(\d+)", relative[0])
           assert mouse_match is not None, mice
           mouse_id = mouse_match.group(1)
+          machine.log(f"portal pointer selected: Mouse #{mouse_id}")
           machine.send_monitor_command(f"mouse_set {mouse_id}")
           machine.send_monitor_command("mouse_move -32767 -32767")
           machine.send_monitor_command("mouse_move 960 540")
+          machine.screenshot(screenshot + "-pointer")
           deadline = time.monotonic() + STATE_TIMEOUT.total_seconds()
           while machine.execute("pgrep -u alice -x slurp", timeout=DIAGNOSTIC_TIMEOUT)[0] == 0:
               assert time.monotonic() < deadline, "portal output selection timed out"

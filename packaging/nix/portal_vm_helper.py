@@ -435,6 +435,7 @@ def run() -> dict[str, Any]:
         "SelectSources",
         GLib.Variant("(oa{sv})", (session_handle, select_options)),
         "realm_select",
+        timeout_ms=120_000,
     )
 
     start_options = _options(GLib, handle_token="realm_start")
