@@ -74,6 +74,7 @@ def monitor_command(monitor, command):
         connection.sendall((command + '\n').encode())
         output = read_prompt(connection, deadline).decode(errors='replace')
     assert not any(error in output.lower() for error in ('unknown command', 'invalid parameter', 'error:')), output
+    return output
 
 
 def complete_ppm(path):

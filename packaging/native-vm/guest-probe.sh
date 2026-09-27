@@ -49,6 +49,26 @@ install_guest() {
             ;;
     esac
 
+    # Capture package-only runtime state before test libraries can pull a server.
+    # Never silently repair the production dependency through fixture packages.
+    {
+        command -v pipewire
+        pipewire --version
+        test -f /usr/lib/systemd/user/pipewire.service
+        test -f /usr/lib/systemd/user/pipewire.socket
+        command -v slurp
+        cat /usr/lib/systemd/user/pipewire.service /usr/lib/systemd/user/pipewire.socket
+        case "$target" in
+            ubuntu-24.04-x86_64)
+                dpkg-query -W pipewire slurp
+                dpkg-query -S /usr/bin/pipewire /usr/lib/systemd/user/pipewire.service
+                ;;
+            fedora-44-x86_64)
+                rpm -q pipewire slurp
+                rpm -qf /usr/bin/pipewire /usr/lib/systemd/user/pipewire.service
+                ;;
+        esac
+    } > /var/tmp/realm-native-portal-runtime.txt
     test "$(stat -c '%U:%G:%a' /usr/share/wayland-sessions/realm.desktop)" = 'root:root:644'
     grep -Fxq 'Name=realm' /usr/share/wayland-sessions/realm.desktop
     grep -Fxq 'Exec=/usr/bin/realm-session' /usr/share/wayland-sessions/realm.desktop
@@ -78,6 +98,40 @@ install_guest() {
 
 session_property() {
     loginctl show-session "$1" -p "$2" --value
+}
+
+require_portal_socket() {
+    local runtime_dir uid socket_status
+    uid=$(id -u alice)
+    runtime_dir="/run/user/$uid"
+    # The first package-only graphical login has already happened. Capture
+    # status without repairing presets or starting the socket manually.
+    {
+        user_command timeout 10 systemctl --user status pipewire.socket --no-pager || true
+        if user_command timeout 10 systemctl --user is-active --quiet pipewire.socket; then
+            socket_status=0
+        else
+            socket_status=$?
+        fi
+        printf 'package-only socket status: %s\n' "$socket_status"
+    } >> /var/tmp/realm-native-portal-runtime.txt 2>&1
+    return "$socket_status"
+}
+
+install_portal_test_clients() {
+    require_portal_socket || return $?
+    case "$target" in
+        ubuntu-24.04-x86_64)
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get install --yes python3-gi gir1.2-gst-plugins-base-1.0 \
+                gstreamer1.0-plugins-base gstreamer1.0-pipewire
+            ;;
+        fedora-44-x86_64)
+            dnf -y install python3-gobject-base gstreamer1-plugins-base pipewire-gstreamer
+            ;;
+        *) fail "unknown portal fixture target: $target" ;;
+    esac
+    python3 "$probe_input_dir/portal_vm_helper.py" --check-imports
 }
 
 find_realm_session() {
@@ -175,6 +229,7 @@ probe_guest() {
         "$evidence/realmctl-doctor.json"
 
     cp /var/tmp/realm-native-packages.txt "$evidence/packages.txt"
+    cp /var/tmp/realm-native-portal-runtime.txt "$evidence/portal-package-runtime.txt"
     cp /var/tmp/realm-native-session-owner.txt "$evidence/session-entry-owner.txt"
     cp /usr/share/wayland-sessions/realm.desktop "$evidence/realm.desktop"
     cp /etc/sddm.conf.d/realm-native-vm.conf "$evidence/sddm-autologin.conf"
@@ -197,8 +252,11 @@ main() {
         probe)
             probe_guest
             ;;
+        portal-clients)
+            install_portal_test_clients
+            ;;
         *)
-            fail 'usage: guest-probe.sh {install TARGET PACKAGE_DIR|probe TARGET EVIDENCE_DIR}'
+            fail 'usage: guest-probe.sh {install TARGET PACKAGE_DIR|probe TARGET EVIDENCE_DIR|portal-clients TARGET}'
             ;;
     esac
 }

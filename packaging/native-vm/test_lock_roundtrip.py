@@ -54,7 +54,7 @@ class RoundtripTests(unittest.TestCase):
                             with self.assertRaisesRegex(RuntimeError, 'before command completion'):
                                 probe.monitor_command(path, 'sendkey ret')
                         else:
-                            probe.monitor_command(path, 'sendkey ret')
+                            self.assertIn('sendkey ret', probe.monitor_command(path, 'sendkey ret'))
                     finally:
                         thread.join(timeout=3)
                     self.assertFalse(thread.is_alive(), 'fake monitor did not terminate')

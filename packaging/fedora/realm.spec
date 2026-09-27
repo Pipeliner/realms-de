@@ -91,6 +91,8 @@ Requires:       /usr/bin/gtk-launch
 Requires:       xdg-desktop-portal
 Requires:       xdg-desktop-portal-gtk
 Requires:       xdg-desktop-portal-wlr
+# Fedora portal dependencies supply pipewire-libs, not its user server/socket.
+Requires:       pipewire
 # xdg-desktop-portal-wlr's default `simple` chooser shells out to slurp for
 # output selection.
 Recommends:     slurp

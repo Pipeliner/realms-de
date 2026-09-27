@@ -541,6 +541,31 @@ The VM pointer driver must parse a numeric relative mouse ID from QEMU's actual
 malformed relative-device IDs fail explicitly with the retained reply; they
 must not bypass the interactive chooser or disable driver type checking.
 
+### Native FileChooser and direct ScreenCast acceptance
+
+The Ubuntu/Fedora graphical CI journey reuses the persistent portal VM client:
+observe the real managed GTK file chooser, cancel through virtual keyboard input
+and require its exact cancellation response; select the real Slurp output through
+virtual pointer input and consume/hash a nonempty PipeWire frame. Retain request,
+response, frame metadata, screenshots and bounded diagnostics on failure as well
+as success where guest/monitor I/O remains available. A failed portal is never
+skipped. This does not substitute for SPEC 0031's separate browser-share journey.
+
+Before installing test-only Python GI/GStreamer clients, native CI records and
+requires the package-only PipeWire executable/user service/socket and Slurp.
+Test-client installation occurs only after the package-only reboot and graphical
+probe. Immediately before that installation, record and require Alice's actual
+user PipeWire socket to be active, retaining status on failure. This permits
+normal first-login preset activation without assuming an SSH user manager that
+predates package installation has already started new units. The fixture does
+not start or enable the socket to hide a missing production startup contract.
+Fedora Realm explicitly depends on `pipewire`: Fedora 44's portal proxy/wlr
+packages require `pipewire-libs`, not the server (official manifests:
+https://packages.fedoraproject.org/pkgs/xdg-desktop-portal/xdg-desktop-portal/fedora-44.html
+and https://packages.fedoraproject.org/pkgs/xdg-desktop-portal-wlr/xdg-desktop-portal-wlr/fedora-44.html).
+Ubuntu's wlr package already requires the server. GI typelibs and the GStreamer
+PipeWire plugin are fixture clients, not additional Realm runtime requirements.
+
 **Verification, not assumption.** A portal that answers on D-Bus is not proof
 that it works.
 
