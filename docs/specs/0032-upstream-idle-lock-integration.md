@@ -72,3 +72,14 @@ shipped wants link, preventing Debian helper auto-enablement. Existing WM/bar
 enablement stays unchanged. Nix and native VM checks verify the installed
 helpers, resolved locker executable, units and PAM file, and absence of an idle
 wants link. These package checks do not claim password or suspend correctness.
+
+### Installed NixOS lock round-trip
+
+The graphical VM uses an explicit test-only account password and manually starts
+the shipped lock service, without enabling idle timers. Two lock/unlock cycles
+must prove synchronous start, a live swaylock MainPID, unchanged MainPID after
+a duplicate start, PAM password unlock through the virtual keyboard, and a clean
+inactive service afterward. While locked, the launcher shortcut must not launch
+the launcher; after unlock the same shortcut must work. Retain lock screenshots
+and structured results. This does not replace idle timing, wrong-password,
+suspend, native-distro or hardware acceptance.

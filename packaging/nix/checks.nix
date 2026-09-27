@@ -253,6 +253,8 @@ EOF
         };
         users.users.alice = {
           isNormalUser = true;
+          # Public fixture credential, used only inside this disposable VM.
+          password = "realmtest";
         };
         services.dbus.packages = [ xwaylandProbeService ];
         environment.systemPackages = [
@@ -792,6 +794,56 @@ EOF
           f"--config={generation_root}/foot/foot.ini"
       )
 
+      # SPEC 0032: real installed locker/PAM, not a command stub. Keep the
+      # idle timer dormant until the separate timing/suspend checks pass.
+      lock_results = []
+      lock_unit = "realm-lock.service"
+      def lock_systemctl(*args):
+          return machine.succeed(as_alice(
+              "timeout", "30", "systemctl", "--user", *args, lock_unit
+          )).strip()
+
+      try:
+          for cycle in range(2):
+              lock_systemctl("start")
+              assert lock_systemctl("is-active") == "active"
+              locker_pid = lock_systemctl("show", "--property=MainPID", "--value")
+              assert locker_pid.isdigit() and int(locker_pid) > 0, locker_pid
+              locker_exe = machine.succeed(f"readlink /proc/{locker_pid}/exe").strip()
+              assert "swaylock" in Path(locker_exe).name, locker_exe
+              lock_systemctl("start")
+              assert lock_systemctl("show", "--property=MainPID", "--value") == locker_pid
+              machine.screenshot(f"realm-locked-{cycle}")
+
+              machine.send_key("meta_l-d")
+              # Observe a bounded interval: a deferred launch is also a failure.
+              machine.succeed(
+                  "for attempt in $(seq 1 20); do "
+                  "if pgrep -u alice -x fuzzel; then exit 1; fi; sleep 0.1; done"
+              )
+              # Clear any characters delivered to the locker by the shortcut.
+              machine.send_key("ctrl-u")
+              machine.send_chars("realmtest")
+              machine.send_key("ret")
+              machine.wait_until_succeeds(
+                  as_alice("systemctl", "--user", "show", "--property=ActiveState",
+                           "--value", lock_unit) + " | grep -qx inactive",
+                  timeout=STATE_TIMEOUT,
+              )
+              machine.succeed(f"test ! -d /proc/{locker_pid}")
+              lock_results.append({
+                  "cycle": cycle, "main_pid": int(locker_pid), "executable": locker_exe,
+                  "duplicate_start_same_pid": True, "launcher_binding_suppressed": True,
+                  "password_unlock": True,
+              })
+      finally:
+          status, journal = machine.execute(
+              "journalctl --no-pager -b _SYSTEMD_USER_UNIT=realm-lock.service"
+          )
+          write_artifact("lock-journal.txt", journal)
+          write_artifact("lock-roundtrip.json", json.dumps(lock_results, indent=2) + "\n")
+
+      # Also proves the default terminal binding is restored after unlock.
       machine.send_key("meta_l-ret")
       terminal_pid = wait_for_single_user_process("foot")
       _terminal_raw, terminal_state = wait_for_state(
