@@ -145,7 +145,8 @@ cache, next-login theme selection, and WM crash recovery with preserved windows.
 Portal Settings, chooser cancellation and capture passed; Firefox delivered two
 live PNG frames and ended its capture track. Recovery screenshots were visually
 checked at 1280×800. This does not prove native GTK/Qt CSS consumption or hardware
-support; the overall run failed its Nix GTK check. It does not upgrade the older
+support; the overall run failed its Nix GTK check and Ubuntu partial idle-lock rendering.
+It does not upgrade the older
 Ubuntu trial below or certify the full MVP.
 
 Native private tools live under `/usr/lib/realm/bin/` without replacing system

@@ -89,7 +89,8 @@ generation A-to-B relogin, WM crash recovery, portal Settings/cancel/capture,
 and Firefox two delivered PNG frames with advancing presentedFrames and ended
 track. Recovery screenshots were visually checked at 1280x800. It does not
 prove native GTK/Qt CSS consumption, physical backlight/hardware or full MVP;
-the overall run failed its Nix GTK check. Suspend remains post-MVP. Keep these
+the overall run failed its Nix GTK check and Ubuntu partial idle-lock rendering.
+The README must name both failures. Suspend remains post-MVP. Keep these
 limits explicit rather than presenting the newer Fedora evidence as Ubuntu or
 all-platform verification. Preserve all historical screenshot provenance.
 

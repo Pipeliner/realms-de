@@ -110,6 +110,11 @@ expect_fail() {
 fixture_root=$(make_fixture canonical)
 expect_pass canonical-snapshot "$fixture_root"
 
+fixture_root=$(make_fixture missing-ubuntu-idle-failure)
+sed 's/Ubuntu partial idle-lock rendering/Ubuntu acceptance passed/g' "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail missing-ubuntu-idle-failure "$fixture_root" 'README must retain the Ubuntu idle-lock failure boundary'
+
 fixture_root=$(make_fixture missing-new-fedora-package)
 sed 's@artifacts/10944903392@artifacts/1@g' "$fixture_root/README.md" >"$fixture_root/README.next"
 mv "$fixture_root/README.next" "$fixture_root/README.md"

@@ -209,6 +209,8 @@ require_section "$status_section" 'https://github.com/Pipeliner/realms-de/action
     'README must link newer Fedora runtime evidence'
 require_section "$status_section" 'the overall run failed its Nix GTK check' \
     'README must retain the newer Fedora run failure boundary'
+require_section "$status_section" 'Ubuntu partial idle-lock rendering' \
+    'README must retain the Ubuntu idle-lock failure boundary'
 for stale_claim in \
     'There is no desktop environment here yet' \
     'live compositor verification pending' \
