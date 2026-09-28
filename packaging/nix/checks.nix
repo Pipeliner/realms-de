@@ -316,7 +316,6 @@ EOF
           pkgs.btop
           pkgs.gtk3.dev
           pkgs.gtk4.dev
-          pkgs.qt6Packages.qt6ct
           pkgs.strace
           pkgs.firefox
           (pkgs.makeDesktopItem {
@@ -993,6 +992,13 @@ EOF
       assert '${realmYazi}/bin' in daemon_path, daemon_path
       assert '${pkgs.btop}/bin' in daemon_path, daemon_path
       wm_environment = process_environment(wm_pid)
+      qt6_plugin_root = "${pkgs.qt6Packages.qt6ct}/${pkgs.qt6Packages.qtbase.qtPluginPrefix}"
+      assert qt6_plugin_root in wm_environment["QT_PLUGIN_PATH"].split(":"), (
+          wm_environment.get("QT_PLUGIN_PATH"), qt6_plugin_root
+      )
+      machine.succeed(
+          f"test -f {shlex.quote(qt6_plugin_root + '/platformthemes/libqt6ct.so')}"
+      )
       svg_loader_cache = wm_environment["GDK_PIXBUF_MODULE_FILE"]
       assert svg_loader_cache
       machine.succeed(f"test -f {shlex.quote(svg_loader_cache)}")
@@ -1708,6 +1714,9 @@ EOF
       )
       zsh_pid = wait_for_single_user_process("zsh")
       zsh_environment = process_environment(zsh_pid)
+      assert qt6_plugin_root in zsh_environment["QT_PLUGIN_PATH"].split(":"), (
+          zsh_environment.get("QT_PLUGIN_PATH"), qt6_plugin_root
+      )
       assert zsh_environment["GDK_PIXBUF_MODULE_FILE"] == svg_loader_cache, (
           zsh_environment.get("GDK_PIXBUF_MODULE_FILE"), svg_loader_cache
       )

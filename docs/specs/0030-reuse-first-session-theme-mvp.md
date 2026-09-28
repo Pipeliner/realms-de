@@ -349,6 +349,34 @@ Write failing tests for changed behavior before implementation. Packages,
 installed-consumer tests and VM verification run in CI only. This spec update
 does not make current code conformant or mark any of V1–V6 passed.
 
+## Qt6 runtime delivery
+
+The selected `QT_QPA_PLATFORMTHEME=qt6ct` requires its platform-theme plugin
+in the shipped runtime, not a later test dependency. Debian/Ubuntu `Depends`
+and Fedora `Requires` must include `qt6ct`. Official inventories confirm
+[Ubuntu 24.04's executable and Qt6 plugin](https://packages.ubuntu.com/noble/amd64/qt6ct/filelist)
+and [Fedora 44's executable and Qt6 plugin](https://packages.fedoraproject.org/pkgs/qt6ct/qt6ct/fedora-44-updates.html).
+Native acceptance must check plugin ownership/presence before installing any
+toolkit test applications; installing qt6ct in that step would conceal a
+broken production dependency.
+
+The NixOS module installs `qt6Packages.qt6ct` and provides its plugin root via
+the Realm WM service's `QT_PLUGIN_PATH`, inherited by launched consumers.
+Use the package's `qtbase.qtPluginPrefix`, not a guessed store layout; keep
+normal Nix module override semantics. Do not select a global Qt platform theme
+or expand the shared session-import allowlist. The pinned
+[qt6ct recipe](https://github.com/NixOS/nixpkgs/blob/9fbb54b33e91ee4ca368e35a78e0613c720600b3/pkgs/tools/misc/qt6ct/default.nix)
+installs into that prefix; the pinned
+[Qt wrapper hook](https://github.com/NixOS/nixpkgs/blob/9fbb54b33e91ee4ca368e35a78e0613c720600b3/pkgs/development/libraries/qt-6/hooks/wrap-qt-apps-hook.sh)
+prefixes `QT_PLUGIN_PATH` rather than replacing inherited entries. The VM must
+not supply qt6ct only as a fixture package: require its real plugin file and
+plugin-root inheritance in the live WM and terminal, while retaining actual
+Qt configuration/colour-file opens and explicit platform-selector checks.
+Package presence alone is not plugin-consumption evidence.
+The supported Home Manager module must supply the same package and scoped
+plugin-root environment in its own WM unit, preserving its existing PATH:
+that user-level unit takes precedence over the NixOS-generated unit.
+
 ## Queue disposition
 
 - Keep lock/idle (#79), portals (#69/#102), login/session (#68/#70), XWayland

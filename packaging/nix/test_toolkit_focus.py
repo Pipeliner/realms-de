@@ -23,6 +23,29 @@ def toolkit_calls():
 
 
 class ToolkitFocusTests(unittest.TestCase):
+    def test_home_manager_unit_delivers_qt6_plugin_and_preserves_path(self):
+        module = Path(__file__).with_name("home-manager-module.nix").read_text()
+        self.assertRegex(module, r"home\.packages\s*=\s*\[[^\]]*pkgs\.qt6Packages\.qt6ct")
+        self.assertRegex(module, r'Environment\s*=\s*\[\s*"PATH=')
+        self.assertIn('"QT_PLUGIN_PATH=${pkgs.qt6Packages.qt6ct}/${pkgs.qt6Packages.qtbase.qtPluginPrefix}"', module)
+
+    def test_qt6_plugin_is_a_native_runtime_dependency(self):
+        root = Path(__file__).resolve().parents[2]
+        control = (root / "packaging/debian/control").read_text()
+        depends = control.split("\nDepends:", 1)[1].split("\n#", 1)[0]
+        self.assertIn("qt6ct", [part.strip() for part in depends.split(",")])
+        spec = (root / "packaging/fedora/realm.spec").read_text()
+        self.assertRegex(spec, r"(?m)^Requires:\s+qt6ct\s*$")
+
+    def test_nix_module_delivers_discoverable_qt6_plugin_without_fixture_install(self):
+        self.assertIn("pkgs.qt6Packages.qt6ct", MODULE)
+        self.assertRegex(MODULE, r"realm-wm\.environment\.QT_PLUGIN_PATH\s*=\s*"
+                         r'"\$\{pkgs.qt6Packages.qt6ct\}/\$\{pkgs.qt6Packages.qtbase.qtPluginPrefix\}";')
+        self.assertNotIn("          pkgs.qt6Packages.qt6ct\n", SOURCE)
+        self.assertIn('wm_environment["QT_PLUGIN_PATH"]', SOURCE)
+        self.assertIn('zsh_environment["QT_PLUGIN_PATH"]', SOURCE)
+        self.assertIn("/platformthemes/libqt6ct.so", SOURCE)
+
     def test_svg_loader_is_registered_and_scoped_to_realm_wm(self):
         self.assertIn("programs.gdk-pixbuf.modulePackages = [ pkgs.librsvg ];", MODULE)
         self.assertRegex(

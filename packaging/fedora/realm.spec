@@ -82,6 +82,7 @@ Requires:       swaylock >= 1.7
 Requires:       brightnessctl
 Requires:       /usr/bin/xdg-settings
 Requires:       /usr/bin/gtk-launch
+Requires:       qt6ct
 # A portal backend, or "Open File" silently does nothing in Firefox
 # (docs/PITFALLS.md, "No portal backend installed").
 # Named backends, not a disjunction: a solver may satisfy `gtk or wlr or gnome`

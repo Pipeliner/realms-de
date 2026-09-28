@@ -97,6 +97,7 @@ in
       sessionPackage
       pkgs.adwaita-icon-theme
       pkgs.gsettings-desktop-schemas
+      pkgs.qt6Packages.qt6ct
     ]
     ++ [ pkgs.slurp ] # xdg-desktop-portal-wlr's default output chooser
     ++ support.reusedTools pkgs;
@@ -122,6 +123,11 @@ in
     programs.gdk-pixbuf.modulePackages = [ pkgs.librsvg ];
     systemd.user.services.realm-wm.environment.GDK_PIXBUF_MODULE_FILE =
       config.environment.sessionVariables.GDK_PIXBUF_MODULE_FILE;
+    # Qt wrappers prefix their own plugin paths, retaining this inherited root.
+    # Scope discovery to Realm-launched clients without changing other desktops'
+    # platform theme or the session-import allowlist (SPEC 0030).
+    systemd.user.services.realm-wm.environment.QT_PLUGIN_PATH =
+      "${pkgs.qt6Packages.qt6ct}/${pkgs.qt6Packages.qtbase.qtPluginPrefix}";
     systemd.user.services.realm-bar.wantedBy = [ "realm-session.target" ];
     systemd.user.services.realm-idle.wantedBy = [ "realm-session.target" ];
 
