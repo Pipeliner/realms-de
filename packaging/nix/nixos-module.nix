@@ -114,6 +114,14 @@ in
     systemd.packages = [ cfg.package ];
     systemd.user.services.realm-wm.wantedBy = [ "realm-session.target" ];
     systemd.user.services.realm-wm.path = [ cfg.package ] ++ support.reusedTools pkgs;
+    # GTK3's bundled Adwaita assets include SVG resources. The bare Realm
+    # session has no GNOME module to register librsvg's GdkPixbuf loader.
+    # Feed the generated cache to the WM service: its spawned terminal and
+    # toolkit clients inherit it without changing the shared user-manager
+    # import allowlist from SPEC 0005.
+    programs.gdk-pixbuf.modulePackages = [ pkgs.librsvg ];
+    systemd.user.services.realm-wm.environment.GDK_PIXBUF_MODULE_FILE =
+      config.environment.sessionVariables.GDK_PIXBUF_MODULE_FILE;
     systemd.user.services.realm-bar.wantedBy = [ "realm-session.target" ];
     systemd.user.services.realm-idle.wantedBy = [ "realm-session.target" ];
 

@@ -142,6 +142,21 @@ cannot be treated as a consumer success. The GTK3 diagnostic text in CI run
 36350431294 was not retained, so that run does not establish a CSS root cause
 or justify relaxing this gate.
 
+On the bare NixOS Realm session, GTK3's bundled Adwaita assets require an SVG
+GdkPixbuf loader even when Realm's own CSS parses. CI run 36358017601 emitted
+`Could not load a pixbuf from /org/gtk/libgtk/theme/Adwaita/assets/bullet-symbolic.svg`.
+Register the pinned librsvg loader through NixOS's gdk-pixbuf module and pass
+its generated loader-cache path to the Realm WM service, which launches the
+terminal and toolkit consumers. The running WM and selected terminal must
+inherit the same cache path, and that cache must actually list the SVG loader;
+an environment variable alone is insufficient. Do not expand SPEC 0005's
+shared systemd/D-Bus session-import allowlist or silently drop the real GTK3
+warning check. The toolkit VM must continue to prove an actual open of the
+selected generation CSS and log bounded relevant trace and selected GTK
+environment evidence before a diagnostic failure so an absent open can be
+distinguished from a loader failure. The missing selected CSS open in that CI
+run remains unproven until the next runtime trace.
+
 The shared Fuzzel template must parse on Ubuntu 24.04's supported Fuzzel 1.9.2
 as well as newer Fedora/Nix versions. Use the common configuration vocabulary:
 `[colors]` contains background, text, match, selection, selection-text,

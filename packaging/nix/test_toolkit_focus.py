@@ -10,6 +10,7 @@ import unittest
 
 
 SOURCE = Path(__file__).with_name("checks.nix").read_text()
+MODULE = Path(__file__).with_name("nixos-module.nix").read_text()
 
 
 def toolkit_calls():
@@ -22,6 +23,24 @@ def toolkit_calls():
 
 
 class ToolkitFocusTests(unittest.TestCase):
+    def test_svg_loader_is_registered_and_scoped_to_realm_wm(self):
+        self.assertIn("programs.gdk-pixbuf.modulePackages = [ pkgs.librsvg ];", MODULE)
+        self.assertRegex(
+            MODULE,
+            r"systemd\.user\.services\.realm-wm\.environment\.GDK_PIXBUF_MODULE_FILE"
+            r"\s*=\s*config\.environment\.sessionVariables\.GDK_PIXBUF_MODULE_FILE;",
+        )
+
+    def test_vm_requires_live_wm_and_terminal_svg_loader_cache(self):
+        self.assertIn('wm_environment["GDK_PIXBUF_MODULE_FILE"]', SOURCE)
+        self.assertIn('zsh_environment["GDK_PIXBUF_MODULE_FILE"]', SOURCE)
+        self.assertIn("libpixbufloader-svg.so", SOURCE)
+
+    def test_toolkit_failure_logs_bounded_related_trace_and_child_selectors(self):
+        self.assertIn("relevant GTK openat", SOURCE)
+        self.assertIn("GTK_THEME", SOURCE)
+        self.assertIn("GDK_PIXBUF_MODULE_FILE", SOURCE)
+
     def test_css_diagnostic_logs_offending_line_and_required_open_before_rejection(self):
         self.assertTrue(
             "      def assert_toolkit_diagnostics_clean(" in SOURCE,
@@ -60,24 +79,41 @@ class ToolkitFocusTests(unittest.TestCase):
             trace = Path(directory) / "toolkit.trace"
             css = "/selected/gtk-3.0/gtk.css"
             stderr.write_text("Gtk-WARNING: theme CSS warning in selected palette\n")
-            trace.write_text(f'openat(3, "{css}", O_RDONLY) = 7\n')
+            trace.write_text(
+                f'openat(3, "{css}", O_RDONLY) = 7\n'
+                'openat(3, "/nix/store/example-gdk-pixbuf/loaders.cache", O_RDONLY) = 8\n'
+            )
             with self.assertRaisesRegex(AssertionError, "diagnostic grep unexpectedly succeeded"):
                 check("gtk3-toolkit", str(stderr), str(trace), [css], pattern)
             output = "\n".join(machine.logs)
             self.assertIn("theme CSS warning in selected palette", output)
             self.assertIn(f'"{css}"', output)
+            self.assertIn("loaders.cache", output)
             machine.logs.clear()
             stderr.write_text("Gtk-WARNING: theme CSS warning " + "x" * 20000 + "\n")
-            trace.write_text(f'openat(3, "{css}", O_RDONLY) = 7 ' + "y" * 20000 + "\n")
+            trace.write_text(
+                f'openat(3, "{css}", O_RDONLY) = 7\n' + "y" * 20000 + "\n"
+            )
             with self.assertRaisesRegex(AssertionError, "diagnostic grep unexpectedly succeeded"):
                 check("gtk3-toolkit", str(stderr), str(trace), [css], pattern)
-            self.assertEqual(len(machine.logs), 2)
+            self.assertEqual(len(machine.logs), 4)
             self.assertLessEqual(len(machine.logs[0]), 8300)
             self.assertLessEqual(len(machine.logs[1]), 8300)
+            self.assertLessEqual(len(machine.logs[2]), 8300)
+            self.assertLessEqual(len(machine.logs[3]), 8300)
             machine.logs.clear()
             stderr.write_text("normal toolkit startup\n")
             check("gtk3-toolkit", str(stderr), str(trace), [css], pattern)
             self.assertEqual(machine.logs, [])
+            trace.write_text(
+                'openat(3, "/other/theme/gtk.css", O_RDONLY) = 9\n'
+                'openat(3, "/nix/store/example-gdk-pixbuf/loaders.cache", O_RDONLY) = 8\n'
+            )
+            check("gtk3-toolkit", str(stderr), str(trace), [css], pattern)
+            missing_output = "\n".join(machine.logs)
+            self.assertIn("<no matching openat line>", missing_output)
+            self.assertIn("/other/theme/gtk.css", missing_output)
+            self.assertIn("loaders.cache", missing_output)
 
     def test_source_regression_runs_in_nix_lightweight_checks(self):
         self.assertIn(

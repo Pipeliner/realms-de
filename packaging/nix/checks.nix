@@ -556,8 +556,19 @@ EOF
               f"{shlex.quote(stderr)} | head -c 8192",
               timeout=DIAGNOSTIC_TIMEOUT,
           )
-          if matched_stderr:
-              machine.log(f"{name} matched CSS/theme stderr:\n{matched_stderr}")
+          missing_open = []
+          for required_path in required_paths:
+              quoted_match = shlex.quote(f'"{required_path}"')
+              open_status, _open_output = machine.execute(
+                  f"grep -F {quoted_match} {shlex.quote(trace)} "
+                  "| grep -E -q '= [0-9]+$'",
+                  timeout=DIAGNOSTIC_TIMEOUT,
+              )
+              if open_status != 0:
+                  missing_open.append(required_path)
+          if matched_stderr or missing_open:
+              if matched_stderr:
+                  machine.log(f"{name} matched CSS/theme stderr:\n{matched_stderr}")
               for required_path in required_paths:
                   quoted_match = shlex.quote(f'"{required_path}"')
                   _status, matched_openat = machine.execute(
@@ -569,6 +580,26 @@ EOF
                       f"{name} openat {required_path}: "
                       + (matched_openat or "<no matching openat line>")
                   )
+              _status, css_openat = machine.execute(
+                  "grep -E -i -m 20 "
+                  + shlex.quote(r"(gtk[.]css|realm/gtk-3)")
+                  + f" {shlex.quote(trace)} | head -c 8192",
+                  timeout=DIAGNOSTIC_TIMEOUT,
+              )
+              machine.log(
+                  f"{name} relevant GTK openat: "
+                  + (css_openat or "<no relevant openat line>")
+              )
+              _status, loader_openat = machine.execute(
+                  "grep -E -i -m 20 "
+                  + shlex.quote(r"(gdk-pixbuf|loaders[.]cache|mime)")
+                  + f" {shlex.quote(trace)} | head -c 8192",
+                  timeout=DIAGNOSTIC_TIMEOUT,
+              )
+              machine.log(
+                  f"{name} loader openat: "
+                  + (loader_openat or "<no loader openat line>")
+              )
           machine.fail(
               f"grep -E -i -q {shlex.quote(diagnostic_pattern)} "
               f"{shlex.quote(stderr)}"
@@ -654,6 +685,24 @@ EOF
               lambda response: toolkit_focus_matches(response, expected_title),
               f"focused {name} application window",
           )
+          if name.startswith("gtk3-"):
+              # Inspect the real demo process, not the launching shell/strace.
+              # This is bounded diagnostic evidence; title/window/trace gates
+              # remain the acceptance conditions below.
+              _status, child_selectors = machine.execute(
+                  "for pid in $(pgrep -u alice -f gtk3-widget-factory); do "
+                  "exe=$(readlink /proc/$pid/exe 2>/dev/null || true); "
+                  "case \"$exe\" in */gtk3-widget-factory|*/.gtk3-widget-factory-wrapped) "
+                  "printf 'pid=%s exe=%s\\n' \"$pid\" \"$exe\"; "
+                  "tr '\\0' '\\n' < /proc/$pid/environ | "
+                  "grep -E '^(GTK_THEME|XDG_DATA_DIRS|GDK_PIXBUF_MODULE_FILE)=' "
+                  "| head -c 4096;; esac; done",
+                  timeout=DIAGNOSTIC_TIMEOUT,
+              )
+              machine.log(
+                  f"{name} selected GTK child environment: "
+                  + (child_selectors[:8192] or "<unavailable>")
+              )
           machine.wait_for_text(expected_text, timeout=OCR_TIMEOUT)
           if screenshot is not None:
               write_artifact(f"control-{name}-state.json", managed_raw)
@@ -928,6 +977,13 @@ EOF
       assert '${pkgs.starship}/bin' in daemon_path, daemon_path
       assert '${realmYazi}/bin' in daemon_path, daemon_path
       assert '${pkgs.btop}/bin' in daemon_path, daemon_path
+      wm_environment = process_environment(wm_pid)
+      svg_loader_cache = wm_environment["GDK_PIXBUF_MODULE_FILE"]
+      assert svg_loader_cache
+      machine.succeed(f"test -f {shlex.quote(svg_loader_cache)}")
+      machine.succeed(
+          f"grep -F -q libpixbufloader-svg.so {shlex.quote(svg_loader_cache)}"
+      )
 
       # Check the user-manager publication against the installed daemon that
       # inherited it. A client started without this value cannot map a surface.
@@ -1631,6 +1687,9 @@ EOF
       )
       zsh_pid = wait_for_single_user_process("zsh")
       zsh_environment = process_environment(zsh_pid)
+      assert zsh_environment["GDK_PIXBUF_MODULE_FILE"] == svg_loader_cache, (
+          zsh_environment.get("GDK_PIXBUF_MODULE_FILE"), svg_loader_cache
+      )
       assert (
           zsh_environment["REALM_GENERATION"] == generation_root
       ), zsh_environment
