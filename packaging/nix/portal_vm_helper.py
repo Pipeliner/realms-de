@@ -11,12 +11,14 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 
 PORTAL_BUS = "org.freedesktop.portal.Desktop"
 PORTAL_PATH = "/org/freedesktop/portal/desktop"
 REQUEST_INTERFACE = "org.freedesktop.portal.Request"
 SESSION_INTERFACE = "org.freedesktop.portal.Session"
+SELECTION_CONTENT = b"Realm portal selection proof\n"
 
 
 def request_path(unique_name: str, token: str) -> str:
@@ -191,8 +193,9 @@ class PortalClient:
         ready_path: Path,
         open_timeout_ms: int = 2_000,
         response_timeout_ms: int = 120_000,
+        expected_file: Path | None = None,
     ) -> dict[str, Any]:
-        """Publish a valid handle, then require the UI-driven cancel response."""
+        """Require UI cancellation, or exact selected URI and caller readback."""
         expected_path = request_path(self.unique_name, token)
         response: dict[str, Any] = {}
         response_wait_loop = self.glib.MainLoop()
@@ -272,15 +275,28 @@ class PortalClient:
                     "FileChooser ended without an exact-path Response"
                 )
             code = response.get("code")
-            if code != 1:
+            expected_code = 1 if expected_file is None else 0
+            if code != expected_code:
                 raise RuntimeError(
-                    f"FileChooser expected user-cancel response 1, got {code!r}"
+                    f"FileChooser expected {'user-cancel' if expected_file is None else 'selection'} "
+                    f"response {expected_code}, got {code!r}"
                 )
+            selected = {}
+            if expected_file is not None:
+                uris = response['results'].get('uris')
+                if uris != [expected_file.as_uri()]:
+                    raise RuntimeError(f"FileChooser returned unexpected selected URIs: {uris!r}")
+                content = Path(unquote(urlsplit(uris[0]).path)).read_bytes()
+                if content != SELECTION_CONTENT:
+                    raise RuntimeError('FileChooser selected contents differ from the fixture')
+                selected = {'uri': uris[0], 'bytes': len(content),
+                            'sha256': hashlib.sha256(content).hexdigest()}
             return {
                 "handle": expected_path,
                 "elapsed_ms": elapsed_ms,
                 "completion": "response",
                 "response_code": code,
+                **selected,
             }
         finally:
             self.connection.signal_unsubscribe(subscription)
@@ -380,21 +396,39 @@ def load_namespaces() -> tuple[Any, Any, Any, Any]:
     return Gio, GLib, Gst, GstApp
 
 
+def filechooser_journey(portal, glib, ready_path, selected_path=Path('/tmp/realmfile'),
+                        monotonic=time.monotonic, sleep=time.sleep):
+    cancelled = portal.filechooser_roundtrip(
+        glib.Variant('(ssa{sv})', ('', 'Realm portal VM', _options(glib, handle_token='realm_file'))),
+        'realm_file', ready_path=ready_path)
+    # Do not race a new dialog against the driver's cancelled-window assertion.
+    deadline = monotonic() + 30
+    while not Path(str(ready_path) + '.continue').exists():
+        if monotonic() >= deadline:
+            raise TimeoutError('driver did not acknowledge cancelled chooser closure')
+        sleep(0.1)
+    with selected_path.open('xb') as stream:
+        stream.write(SELECTION_CONTENT)
+    try:
+        selected = portal.filechooser_roundtrip(
+            glib.Variant('(ssa{sv})', ('', 'Realm file selection',
+                _options(glib, handle_token='realm_select', multiple=False))),
+            'realm_select', ready_path=Path(str(ready_path) + '.selection'),
+            expected_file=selected_path)
+    finally:
+        selected_path.unlink(missing_ok=True)
+    return cancelled, selected
+
+
 def run() -> dict[str, Any]:
     Gio, GLib, Gst, _gst_app = load_namespaces()
     connection = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     portal = PortalClient(connection, Gio, GLib)
 
-    file_token = "realm_file"
     ready_value = os.environ.get("REALM_PORTAL_FILECHOOSER_READY")
     if not ready_value:
         raise RuntimeError("REALM_PORTAL_FILECHOOSER_READY is required")
-    file_options = _options(GLib, handle_token=file_token)
-    filechooser = portal.filechooser_roundtrip(
-        GLib.Variant("(ssa{sv})", ("", "Realm portal VM", file_options)),
-        file_token,
-        ready_path=Path(ready_value),
-    )
+    filechooser, file_selection = filechooser_journey(portal, GLib, Path(ready_value))
 
     settings_reply = portal.call(
         "org.freedesktop.portal.Settings",
@@ -474,6 +508,7 @@ def run() -> dict[str, Any]:
 
     return {
         "filechooser": filechooser,
+        "file_selection": file_selection,
         "settings": {
             "reply_type": settings_reply.get_type_string(),
             "namespaces": sorted(settings),

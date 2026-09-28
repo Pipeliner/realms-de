@@ -810,6 +810,21 @@ EOF
               ]})
               time.sleep(0.5)
 
+      def select_portal_file():
+          machine.succeed(f"touch {portal_ready_path}.continue")
+          machine.wait_until_succeeds(f"test -s {portal_ready_path}.selection", timeout=STATE_TIMEOUT)
+          ready = json.loads(machine.succeed(f"cat {portal_ready_path}.selection"))
+          assert ready["elapsed_ms"] <= 2000 and ready["handle"].endswith("/realm_select"), ready
+          wait_for_state(lambda response: sum(cell["windows"] for cell in response["data"]["orbits"]) == 1,
+                         "managed file selection chooser")
+          machine.wait_for_text("Realm file selection", timeout=OCR_TIMEOUT)
+          machine.screenshot("realm-portal-file-selection")
+          machine.send_key("ctrl-l")
+          machine.send_chars("/tmp/realmfile")
+          machine.send_key("alt-o")
+          wait_for_state(lambda response: sum(cell["windows"] for cell in response["data"]["orbits"]) == 0,
+                         "file selection chooser closed")
+
       def log_portal_diagnostics():
           commands = [
               (
@@ -1204,6 +1219,7 @@ EOF
               "portal file chooser close after explicit Cancel",
           )
 
+          select_portal_file()
           select_portal_output("realm-portal-output-chooser")
           machine.wait_until_succeeds(
               f"test -s {portal_status_path}", timeout=OCR_TIMEOUT
@@ -1218,6 +1234,11 @@ EOF
           assert portal["filechooser"]["elapsed_ms"] <= 2000, portal
           assert portal["filechooser"]["completion"] == "response", portal
           assert portal["filechooser"]["response_code"] == 1, portal
+          selected = portal["file_selection"]
+          assert selected["elapsed_ms"] <= 2000 and selected["completion"] == "response", selected
+          assert selected["response_code"] == 0 and selected["uri"] == "file:///tmp/realmfile", selected
+          assert selected["bytes"] == 29, selected
+          assert selected["sha256"] == hashlib.sha256(b"Realm portal selection proof\n").hexdigest(), selected
           assert portal["settings"]["reply_type"] == "(a{sa{sv}})", portal
           assert portal["screencast"]["node_id"] > 0, portal
           assert portal["screencast"]["buffer_bytes"] > 0, portal

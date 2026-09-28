@@ -659,7 +659,21 @@ permitted. Runtime acceptance still requires the real chooser and captured frame
 
 The Ubuntu/Fedora graphical CI journey reuses the persistent portal VM client:
 observe the real managed GTK file chooser, cancel through virtual keyboard input
-and require its exact cancellation response; select the real Slurp output through
+and require its exact cancellation response. Then, on the same persistent D-Bus
+connection, issue a distinct `OpenFile` request titled `Realm file selection`.
+The driver acknowledges that the cancelled window closed before this request
+starts (bounded 30-second marker wait), observes the second chooser, and uses
+real Ctrl+L, `/tmp/realmfile`, and the Open action to select a controlled plaintext
+file. Require the exact request-path response code 0, exactly the expected file
+URI, and caller readback matching the fixture bytes; retain URI, byte count and
+SHA-256 alongside the unchanged cancellation evidence. Cancellation, another
+URI, missing/multiple URIs, unreadable or altered contents must fail selection.
+Both native and Nix journeys use real VM keyboard input; source doubles only
+test decisions and do not establish installed UI success. Preserve the existing
+two-second handle and 120-second response bounds and overall fixture deadlines.
+The two-second measurement is handle latency, not user interaction duration.
+This refines A13a and SPEC0031's real chooser journey without changing doctor,
+the shipped backend or application semantics. Select the real Slurp output through
 virtual pointer input and consume/hash a nonempty PipeWire frame. Retain request,
 response, frame metadata, screenshots and bounded diagnostics on failure as well
 as success where guest/monitor I/O remains available. A failed portal is never

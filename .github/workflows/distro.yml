@@ -525,6 +525,7 @@ jobs:
             ${{ runner.temp }}/realm-session-boots/control-grimoire-state.json
             ${{ runner.temp }}/realm-session-boots/control-quit.json
             ${{ runner.temp }}/realm-session-boots/portal-roundtrip.json
+            ${{ runner.temp }}/realm-session-boots/realm-portal-file-selection.png
             ${{ runner.temp }}/realm-session-boots/realm-portal-output-chooser.png
             ${{ runner.temp }}/realm-session-boots/realm-portal-output-chooser-pointer.png
             ${{ runner.temp }}/realm-session-boots/realm-browser-permission.png

@@ -1,5 +1,6 @@
 """CI-only native chooser/capture orchestration; reuse the persistent client."""
 import json
+import hashlib
 from pathlib import Path
 import re
 import shlex
@@ -15,10 +16,22 @@ def validate_result(result):
     chooser = result['filechooser']
     assert chooser['elapsed_ms'] <= 2000, chooser
     assert chooser['completion'] == 'response' and chooser['response_code'] == 1, chooser
+    selected = result['file_selection']
+    assert selected['elapsed_ms'] <= 2000 and selected['completion'] == 'response', selected
+    assert selected['response_code'] == 0 and selected['uri'] == 'file:///tmp/realmfile', selected
+    assert selected['bytes'] == 29, selected
+    assert selected['sha256'] == hashlib.sha256(b'Realm portal selection proof\n').hexdigest(), selected
     assert result['settings']['reply_type'] == '(a{sa{sv}})', result
     frame = result['screencast']
     assert all(frame[key] > 0 for key in ('node_id', 'buffer_bytes', 'width', 'height')), frame
     assert re.fullmatch(r'[0-9a-f]{64}', frame['sha256']), frame
+
+
+def select_file(key):
+    key('ctrl-l')
+    for character in '/tmp/realmfile':
+        key({'/': 'slash'}.get(character, character))
+    key('alt-o')
 
 
 def main():
@@ -83,6 +96,18 @@ def main():
         monitor_command(monitor, 'sendkey alt-c')
         time.sleep(0.15)
         state(0, 'portal-filechooser-closed')
+        guest(user + ' touch ' + root + '/ready.json.continue')
+        wait('test -s ' + root + '/ready.json.selection')
+        selection_ready = json.loads(guest('cat ' + root + '/ready.json.selection'))
+        assert selection_ready['elapsed_ms'] <= 2000 and selection_ready['handle'].endswith('/realm_select'), selection_ready
+        result['selection_ready'] = selection_ready
+        state(1, 'portal-file-selection')
+        screenshot('portal-file-selection')
+        def selection_key(value):
+            monitor_command(monitor, 'sendkey ' + value)
+            time.sleep(0.15)
+        select_file(selection_key)
+        state(0, 'portal-file-selection-closed')
         wait('pgrep -u alice -x slurp')
         screenshot('portal-slurp')
         position_pointer(monitor + ".qmp", result)

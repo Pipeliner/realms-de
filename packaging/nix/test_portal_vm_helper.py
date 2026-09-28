@@ -5,6 +5,7 @@ import unittest
 import re
 import textwrap
 import time
+import inspect
 from datetime import timedelta
 from pathlib import Path
 from unittest import mock
@@ -22,6 +23,70 @@ from portal_vm_helper import (
 
 
 class PortalVmHelperContract(unittest.TestCase):
+    def test_nix_selection_uses_visible_real_dialog_and_explicit_open(self):
+        source = Path(__file__).with_name('checks.nix').read_text()
+        self.assertIn('      def select_portal_file():', source, 'Nix selection driver missing')
+        body = source.split('      def select_portal_file():', 1)[1].split('      def log_portal_diagnostics():', 1)[0]
+        machine = mock.Mock()
+        machine.succeed.return_value = json.dumps({'elapsed_ms': 3, 'handle': '/request/1_42/realm_select'})
+        states = []
+        def wait_for_state(predicate, label):
+            count = 0 if 'closed' in label else 1
+            self.assertTrue(predicate({'data': {'orbits': [{'windows': count}]}}))
+            self.assertFalse(predicate({'data': {'orbits': [{'windows': 1 - count}]}}))
+            states.append(label)
+        namespace = {'machine': machine, 'json': json, 'portal_ready_path': '/tmp/ready',
+                     'STATE_TIMEOUT': 15, 'OCR_TIMEOUT': 30, 'wait_for_state': wait_for_state}
+        exec(textwrap.dedent('      def select_portal_file():' + body), namespace)
+        namespace['select_portal_file']()
+        self.assertEqual(machine.send_key.call_args_list, [mock.call('ctrl-l'), mock.call('alt-o')])
+        machine.send_chars.assert_called_once_with('/tmp/realmfile')
+        machine.wait_for_text.assert_called_once_with('Realm file selection', timeout=30)
+        self.assertEqual(len(states), 2)
+
+    def test_second_chooser_waits_for_driver_ack_and_cleans_fixture(self):
+        import portal_vm_helper as helper
+        self.assertTrue(hasattr(helper, 'filechooser_journey'), 'selection journey missing')
+        for acknowledge in (False, True, 'error', 'existing'):
+            with tempfile.TemporaryDirectory() as directory:
+                ready = Path(directory) / 'ready'
+                selected = Path(directory) / 'realmfile'
+                calls = []
+                def request(parameters, token, **options):
+                    calls.append((token, options['ready_path']))
+                    if token == 'realm_file':
+                        if acknowledge:
+                            Path(str(ready) + '.continue').touch()
+                        return {'response_code': 1}
+                    self.assertEqual(token, 'realm_select')
+                    self.assertEqual(selected.read_bytes(), b'Realm portal selection proof\n')
+                    self.assertEqual(options['expected_file'], selected)
+                    if acknowledge == 'error':
+                        raise RuntimeError('selection request failed')
+                    return {'response_code': 0}
+                portal = mock.Mock(filechooser_roundtrip=request)
+                glib = mock.Mock(Variant=lambda *_args: None)
+                if acknowledge == 'existing':
+                    selected.write_bytes(b'pre-existing contents')
+                    with self.assertRaises(FileExistsError):
+                        helper.filechooser_journey(portal, glib, ready, selected)
+                    self.assertEqual(selected.read_bytes(), b'pre-existing contents')
+                    self.assertEqual(len(calls), 1)
+                    continue
+                if acknowledge == 'error':
+                    with self.assertRaisesRegex(RuntimeError, 'selection request failed'):
+                        helper.filechooser_journey(portal, glib, ready, selected)
+                elif acknowledge:
+                    result = helper.filechooser_journey(portal, glib, ready, selected)
+                    self.assertEqual(result, ({'response_code': 1}, {'response_code': 0}))
+                    self.assertEqual(calls, [('realm_file', ready), ('realm_select', Path(str(ready) + '.selection'))])
+                else:
+                    with self.assertRaisesRegex(TimeoutError, 'cancelled chooser closure'):
+                        helper.filechooser_journey(portal, glib, ready, selected,
+                            monotonic=mock.Mock(side_effect=[0, 31]), sleep=lambda _: None)
+                    self.assertEqual(len(calls), 1)
+                self.assertFalse(selected.exists())
+
     def picker(self, mice, results=None):
         source = Path(__file__).with_name('checks.nix').read_text()
         body = source.split('      def select_portal_output(screenshot):', 1)[1].split('      def log_portal_diagnostics():', 1)[0]
@@ -110,7 +175,7 @@ class PortalVmHelperContract(unittest.TestCase):
         portal.begin_request.side_effect = request
         portal.call.return_value = ({},)
         for interactive_method in ("SelectSources", "Start"):
-            with self.subTest(method=interactive_method), mock.patch("portal_vm_helper.load_namespaces", return_value=(mock.Mock(), mock.Mock(), mock.Mock(), mock.Mock())), mock.patch("portal_vm_helper.PortalClient", return_value=portal), mock.patch.dict(os.environ, REALM_PORTAL_FILECHOOSER_READY="/tmp/test-ready"):
+            with self.subTest(method=interactive_method), mock.patch("portal_vm_helper.filechooser_journey", return_value=({}, {})), mock.patch("portal_vm_helper.load_namespaces", return_value=(mock.Mock(), mock.Mock(), mock.Mock(), mock.Mock())), mock.patch("portal_vm_helper.PortalClient", return_value=portal), mock.patch.dict(os.environ, REALM_PORTAL_FILECHOOSER_READY="/tmp/test-ready"):
                 with self.assertRaises(Selected):
                     run()
 
@@ -255,11 +320,12 @@ class PortalVmHelperContract(unittest.TestCase):
                 return self.value
 
         class Response:
-            def __init__(self, code):
+            def __init__(self, code, results):
                 self.code = code
+                self.results = results
 
             def get_child_value(self, index):
-                return Child(self.code if index == 0 else {})
+                return Child(self.code if index == 0 else self.results)
 
         class Connection:
             def __init__(self, response_code, returned_path=expected):
@@ -267,6 +333,7 @@ class PortalVmHelperContract(unittest.TestCase):
                 self.returned_path = returned_path
                 self.callback = None
                 self.unsubscribed = None
+                self.results = {}
 
             def get_unique_name(self):
                 return ":1.42"
@@ -307,7 +374,7 @@ class PortalVmHelperContract(unittest.TestCase):
                         expected,
                         REQUEST_INTERFACE,
                         "Response",
-                        Response(self.connection.response_code),
+                        Response(self.connection.response_code, self.connection.results),
                     )
 
         class VariantType:
@@ -413,6 +480,40 @@ class PortalVmHelperContract(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "expected"):
                 portal.filechooser_roundtrip(None, "realm_file", ready_path=ready_path)
             self.assertFalse(ready_path.exists())
+
+            selected = Path(directory) / 'realmfile'
+            self.assertIn('expected_file', inspect.signature(portal.filechooser_roundtrip).parameters,
+                          'real selected-file validation is missing')
+            selected.write_bytes(b'Realm portal selection proof\n')
+            for code, uris, content, succeeds in [
+                (0, [selected.as_uri()], b'Realm portal selection proof\n', True),
+                (1, [selected.as_uri()], b'Realm portal selection proof\n', False),
+                (0, ['file:///tmp/wrong'], b'Realm portal selection proof\n', False),
+                (0, [], b'Realm portal selection proof\n', False),
+                (0, [selected.as_uri(), selected.as_uri()], b'Realm portal selection proof\n', False),
+                (0, [selected.as_uri()], b'changed', False),
+                (0, [selected.as_uri()], None, False),
+                (None, [selected.as_uri()], b'Realm portal selection proof\n', False),
+            ]:
+                with self.subTest(code=code, uris=uris, content=content):
+                    if content is None:
+                        selected.unlink(missing_ok=True)
+                    else:
+                        selected.write_bytes(content)
+                    connection = Connection(code)
+                    connection.results = {'uris': uris}
+                    GLib.connection = connection
+                    portal = PortalClient(connection, Gio, GLib)
+                    if succeeds:
+                        result = portal.filechooser_roundtrip(None, 'realm_file',
+                            ready_path=ready_path, expected_file=selected)
+                        self.assertEqual(result['uri'], selected.as_uri())
+                        self.assertEqual(result['bytes'], 29)
+                    else:
+                        with self.assertRaises((RuntimeError, TimeoutError, OSError)):
+                            portal.filechooser_roundtrip(None, 'realm_file',
+                                ready_path=ready_path, expected_file=selected)
+                    self.assertEqual(connection.unsubscribed, 7)
 
 
 if __name__ == "__main__":
