@@ -157,6 +157,15 @@ environment evidence before a diagnostic failure so an absent open can be
 distinguished from a loader failure. The missing selected CSS open in that CI
 run remains unproven until the next runtime trace.
 
+For pinned librsvg 2.62.3, the loader-cache assertion must match the actual
+`libpixbufloader_svg.so` output of its
+[Meson target](https://github.com/GNOME/librsvg/blob/2.62.3/gdk-pixbuf-loader/meson.build#L8-L14),
+not the older hyphenated filename. If that exact entry is absent, retain a
+bounded excerpt of the cache before failing; neither cache existence nor an
+environment variable alone proves SVG support. CI run 36361669976 stopped at
+the obsolete filename assertion before GTK launched, so GTK warning removal
+and selected-CSS consumption remain unverified until another VM run.
+
 The shared Fuzzel template must parse on Ubuntu 24.04's supported Fuzzel 1.9.2
 as well as newer Fedora/Nix versions. Use the common configuration vocabulary:
 `[colors]` contains background, text, match, selection, selection-text,

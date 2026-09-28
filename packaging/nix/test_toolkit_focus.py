@@ -57,7 +57,60 @@ class ToolkitFocusTests(unittest.TestCase):
     def test_vm_requires_live_wm_and_terminal_svg_loader_cache(self):
         self.assertIn('wm_environment["GDK_PIXBUF_MODULE_FILE"]', SOURCE)
         self.assertIn('zsh_environment["GDK_PIXBUF_MODULE_FILE"]', SOURCE)
-        self.assertIn("libpixbufloader-svg.so", SOURCE)
+
+    def test_vm_accepts_pinned_librsvg_svg_entry_and_logs_bounded_absence(self):
+        start = SOURCE.index('      svg_loader_cache = wm_environment["GDK_PIXBUF_MODULE_FILE"]')
+        end = SOURCE.index('      # Check the user-manager publication', start)
+        source = textwrap.dedent(SOURCE[start:end])
+
+        class LocalMachine:
+            def __init__(self):
+                self.logs = []
+
+            def execute(self, command, timeout):
+                completed = subprocess.run(
+                    ["/bin/sh", "-c", command], text=True, capture_output=True,
+                    timeout=timeout, check=False,
+                )
+                return completed.returncode, completed.stdout + completed.stderr
+
+            def succeed(self, command):
+                status, output = self.execute(command, 5)
+                if status != 0:
+                    raise AssertionError(f"SVG cache command failed: {command}")
+                return output
+
+            def log(self, message):
+                self.logs.append(message)
+
+        machine = LocalMachine()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "loaders.cache"
+            namespace = {
+                "machine": machine, "wm_environment": {"GDK_PIXBUF_MODULE_FILE": str(path)},
+                "shlex": shlex, "DIAGNOSTIC_TIMEOUT": 5,
+            }
+            path.write_text(
+                '"/nix/store/librsvg/lib/gdk-pixbuf-2.0/loaders/libpixbufloader_svg.so"\n'
+                '"svg" 2 "gdk-pixbuf" "Scalable Vector Graphics"\n'
+            )
+            exec(compile(source, "<svg-loader-cache>", "exec"), namespace)
+            self.assertEqual(machine.logs, [])
+
+            path.write_text(
+                '"/nix/store/old/lib/gdk-pixbuf-2.0/loaders/libpixbufloader-svg.so"\n'
+                + "x" * 12000
+            )
+            with self.assertRaisesRegex(AssertionError, "SVG cache command failed"):
+                exec(compile(source, "<svg-loader-cache>", "exec"), namespace)
+            self.assertEqual(len(machine.logs), 1)
+            self.assertIn("libpixbufloader-svg.so", machine.logs[0])
+            self.assertLessEqual(len(machine.logs[0]), 4300)
+            machine.logs.clear()
+            path.write_text('"/nix/store/incorrect/libpixbufloader_svg.so.backup"\n')
+            with self.assertRaisesRegex(AssertionError, "SVG cache command failed"):
+                exec(compile(source, "<svg-loader-cache>", "exec"), namespace)
+            self.assertIn("libpixbufloader_svg.so.backup", machine.logs[0])
 
     def test_toolkit_failure_logs_bounded_related_trace_and_child_selectors(self):
         self.assertIn("relevant GTK openat", SOURCE)

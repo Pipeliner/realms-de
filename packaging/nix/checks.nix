@@ -1002,9 +1002,22 @@ EOF
       svg_loader_cache = wm_environment["GDK_PIXBUF_MODULE_FILE"]
       assert svg_loader_cache
       machine.succeed(f"test -f {shlex.quote(svg_loader_cache)}")
-      machine.succeed(
-          f"grep -F -q libpixbufloader-svg.so {shlex.quote(svg_loader_cache)}"
+      # librsvg 2.62.3 installs libpixbufloader_svg.so (underscore). Require
+      # the complete quoted filename in GdkPixbuf's generated cache, not merely
+      # an inherited environment variable or an obsolete loader name.
+      svg_loader_query = (
+          "grep -F -q 'libpixbufloader_svg.so\"' " + shlex.quote(svg_loader_cache)
       )
+      svg_loader_status, _ = machine.execute(
+          svg_loader_query, timeout=DIAGNOSTIC_TIMEOUT
+      )
+      if svg_loader_status != 0:
+          _, cache_excerpt = machine.execute(
+              f"head -c 4096 {shlex.quote(svg_loader_cache)}",
+              timeout=DIAGNOSTIC_TIMEOUT,
+          )
+          machine.log(f"SVG loader cache missing pinned module (bounded):\n{cache_excerpt[:4096]}")
+      machine.succeed(svg_loader_query)
 
       # Check the user-manager publication against the installed daemon that
       # inherited it. A client started without this value cannot map a surface.
