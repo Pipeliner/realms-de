@@ -110,6 +110,16 @@ expect_fail() {
 fixture_root=$(make_fixture canonical)
 expect_pass canonical-snapshot "$fixture_root"
 
+fixture_root=$(make_fixture missing-new-fedora-package)
+sed 's@artifacts/10944903392@artifacts/1@g' "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail missing-new-fedora-package "$fixture_root" 'README trial must link its verified Fedora package artifact'
+
+fixture_root=$(make_fixture missing-fedora-runtime-boundary)
+sed 's/native GTK\/Qt CSS consumption/complete toolkit verification/g' "$fixture_root/README.md" >"$fixture_root/README.next"
+mv "$fixture_root/README.next" "$fixture_root/README.md"
+expect_fail missing-fedora-runtime-boundary "$fixture_root" 'README must retain the Fedora toolkit verification boundary'
+
 fixture_root=$(make_fixture missing-bar-entrypoint)
 rm "$fixture_root/crates/realm-bar/src/main.rs"
 expect_fail missing-bar-entrypoint "$fixture_root" \

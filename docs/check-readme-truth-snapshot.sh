@@ -197,10 +197,18 @@ require_section "$try_section" '2026-12-26' \
     'README trial must disclose artifact expiry'
 require_section "$try_section" 'desktop and display manager installed' \
     'README trial must preserve the existing desktop'
-for artifact in 10935181555 10935057867; do
-    require_section "$try_section" "https://github.com/Pipeliner/realms-de/actions/runs/36327811527/artifacts/$artifact" \
-        'README trial must link its verified package artifact'
-done
+require_section "$try_section" 'https://github.com/Pipeliner/realms-de/actions/runs/36327811527/artifacts/10935181555' \
+    'README trial must link its verified package artifact'
+require_section "$try_section" 'https://github.com/Pipeliner/realms-de/actions/runs/36358017601/artifacts/10944903392' \
+    'README trial must link its verified Fedora package artifact'
+require_section "$status_section" 'native GTK/Qt CSS consumption' \
+    'README must retain the Fedora toolkit verification boundary'
+require_section "$status_section" '11538ab5bd05a1018f48216f661990987c259ce2' \
+    'README must bind newer Fedora evidence to its tested merge'
+require_section "$status_section" 'https://github.com/Pipeliner/realms-de/actions/runs/36358017601/artifacts/10945836471' \
+    'README must link newer Fedora runtime evidence'
+require_section "$status_section" 'the overall run failed its Nix GTK check' \
+    'README must retain the newer Fedora run failure boundary'
 for stale_claim in \
     'There is no desktop environment here yet' \
     'live compositor verification pending' \

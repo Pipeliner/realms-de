@@ -135,11 +135,21 @@ What exists, honestly:
 | Package/session/portal assets | **Tracked pre-alpha contract; installed NixOS reference path verified in a VM and the exact Fedora RPM verified in an empty installroot.** Ubuntu 24.04 and Fedora native-package graphical VM jobs passed for merge `29e69684d1ff1d45629d7cdcc0b3d8b8ae6996dc` in [run 36327811527](https://github.com/Pipeliner/realms-de/actions/runs/36327811527), checked 2026-09-27; the overall run failed (Fedora contract guard and Nix X11 activation check). Physical hardware and full MVP acceptance remain pending. These artifacts do not include every newer theme/locking fix. |
 | Images | **Two real VM screenshots, plus design assets.** The PNGs above are unchanged compositor-framebuffer captures; the hand-drawn SVGs and design handoff's HTML prototypes remain diagrams and concepts. |
 
-The current native recipes include Realm-owned Yazi, `ya`, and Starship under
-`/usr/lib/realm/bin/`; they do not replace system commands. This private-tool
-packaging and its Realm-scoped consumer PATH are newer than the dated trial
-artifacts below. Their presence in the recipes is not evidence that the older
-trial contains them or that graphical consumer activation has been verified.
+**Newer Fedora-only evidence:** the installed Fedora 44 graphical journey passed
+in [run 36358017601](https://github.com/Pipeliner/realms-de/actions/runs/36358017601/job/108735431595)
+at merge `11538ab5bd05a1018f48216f661990987c259ce2` (source `9f0aa56`),
+verified **2026-09-28**. The [retained evidence](https://github.com/Pipeliner/realms-de/actions/runs/36358017601/artifacts/10945836471)
+proves manual locking and real 300/600-second idle/PAM unlock, focus/swap/orbits/
+layouts and help, Foot/Zsh with private Yazi/Starship and an external completion
+cache, next-login theme selection, and WM crash recovery with preserved windows.
+Portal Settings, chooser cancellation and capture passed; Firefox delivered two
+live PNG frames and ended its capture track. Recovery screenshots were visually
+checked at 1280×800. This does not prove native GTK/Qt CSS consumption or hardware
+support; the overall run failed its Nix GTK check. It does not upgrade the older
+Ubuntu trial below or certify the full MVP.
+
+Native private tools live under `/usr/lib/realm/bin/` without replacing system
+commands; their graphical activation is verified for this newer Fedora trial.
 
 Crates join the Cargo workspace only when they gain a real implementation, so a
 fresh clone always builds. If a crate is not in
@@ -152,26 +162,23 @@ is in [docs/ROADMAP.md](docs/ROADMAP.md). **M3 is the MVP.**
 
 **A runnable pre-alpha trial is available, not a finished MVP.** Keep your current
 desktop and display manager installed; try a VM or a secondary machine first.
-Laptop suspend/locking, the complete portal journey and final application theming
-are not certified by these builds. In particular, this Ubuntu build's Fuzzel
+Physical hardware and final application theming are not certified by these
+builds. In particular, this Ubuntu build's Fuzzel
 configuration may prevent the launcher opening; its compatibility fix is newer.
-Do not rely on this trial for locking or suspend protection.
+Do not rely on the older Ubuntu trial for locking, or either trial for suspend
+protection. Fedora's lock evidence is VM-only, not a hardware guarantee.
 
 Suspend/resume support and verification are deferred until after MVP. Manual
-locking and idle dim after 5 minutes / lock-blank after 10 minutes remain planned
-MVP requirements; this scope change does not certify the trial builds above.
-
-Fresh-login idle activation is prepared as a CI candidate: package links start
-the installed idle service with the session. Default integration/release
-requires reviewed PAM, binding-suppression and real timing evidence. NixOS and
-native Ubuntu/Fedora fixtures check unchanged 300/600-second timing; adding
-the native probe does not supply its still-missing runtime evidence. Candidate
-publication is allowed to obtain that evidence. This preparation does not
-change the dated trial's verified capabilities.
+locking and idle dim after 5 minutes / lock-blank after 10 minutes remain
+MVP requirements. The newer Fedora VM passed fresh-login activation, both real
+timers, wrong-password rejection, correct unlock and restored bindings. Its
+no-backlight path is verified, not physical brightness adjustment. This evidence
+does not certify Ubuntu or NixOS idle behavior, or a completed MVP.
 
 ### Download a CI-built package
 
-Verified **2026-09-27** against the exact run/revision in the status table above.
+Ubuntu verified **2026-09-27**; Fedora verified **2026-09-28**, against their
+separate exact run/revision evidence above.
 Sign in to GitHub to download the ZIP, then extract it into an empty directory.
 These are retained CI artifacts, not release assets; they currently expire
 **2026-12-26** and may be removed sooner. If unavailable, check the
@@ -181,7 +188,7 @@ for a newer explicitly verified trial; do not assume any green build is equivale
 | Laptop system | Download | Contents |
 | --- | --- | --- |
 | Ubuntu **24.04**, **x86-64/amd64** | [Ubuntu trial ZIP](https://github.com/Pipeliner/realms-de/actions/runs/36327811527/artifacts/10935181555) | `realm_0.1.0_amd64.deb` and `realm-river_0.4.8-1_amd64.deb` |
-| Fedora **44**, **x86-64** | [Fedora trial ZIP](https://github.com/Pipeliner/realms-de/actions/runs/36327811527/artifacts/10935057867) | `realm-0.1.0-1.fc44.x86_64.rpm` |
+| Fedora **44**, **x86-64** | [Fedora trial ZIP](https://github.com/Pipeliner/realms-de/actions/runs/36358017601/artifacts/10944903392) | `realm-0.1.0-1.fc44.x86_64.rpm` |
 
 Check your system with `cat /etc/os-release` and `uname -m`. Do not install these
 on another distro/version or ARM laptop. NixOS configuration is documented in

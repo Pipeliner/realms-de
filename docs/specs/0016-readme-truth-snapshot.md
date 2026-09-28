@@ -1,6 +1,6 @@
 # SPEC 0016 — README truthfulness snapshot
 
-- **Status:** Accepted (2026-08-30; live-VM evidence amendment 2026-09-13; native-VM and snapshot refresh 2026-09-27)
+- **Status:** Accepted (2026-08-30; live-VM evidence amendment 2026-09-13; native-VM snapshot 2026-09-27; Fedora journey refresh 2026-09-28)
 - **Milestone:** M0
 - **Issue:** [#8](https://github.com/Pipeliner/realms-de/issues/8)
 - **Decisions:** Standing orders S3, S10 and S15
@@ -78,6 +78,21 @@ jobs from the overall failed run (Fedora source guard and Nix X11 checks).
 Physical hardware and full MVP acceptance remain pending; do not claim later
 browser, window-control or relogin probes passed from this earlier evidence.
 
+Fedora-only refresh, verified 2026-09-28: run 36358017601 job 108735431595
+passed the installed Fedora 44 native journey at tested merge
+`11538ab5bd05a1018f48216f661990987c259ce2` (source `9f0aa56`). Replace only
+the Fedora trial with package artifact 10944903392; retain Ubuntu artifact
+10935181555 from the older run. Link runtime evidence artifact 10945836471.
+The Fedora proof covers manual locking, real 300/600-second idle timing and
+PAM unlock, controls/help, Foot/Zsh/private-tool activation and completion cache,
+generation A-to-B relogin, WM crash recovery, portal Settings/cancel/capture,
+and Firefox two delivered PNG frames with advancing presentedFrames and ended
+track. Recovery screenshots were visually checked at 1280x800. It does not
+prove native GTK/Qt CSS consumption, physical backlight/hardware or full MVP;
+the overall run failed its Nix GTK check. Suspend remains post-MVP. Keep these
+limits explicit rather than presenting the newer Fedora evidence as Ubuntu or
+all-platform verification. Preserve all historical screenshot provenance.
+
 For this pre-alpha snapshot, the `crates/realm-session` manifest, library and
 backend contract, runtime owner, production `src/bin/realm-wm.rs` entrypoint,
 real-socket runtime fixture, and installed NixOS QEMU capture are checked
@@ -130,8 +145,8 @@ Keep README current whenever shipped behavior, try-out instructions or verified
 delivery evidence changes. Refresh the README, this dated evidence contract and
 its fixtures together when their claims change; retain explicit limitations and
 do not present a successful job as a successful whole run.
-The current try-out instructions link the exact Ubuntu/Fedora artifacts from
-that verified run, disclose their 2026-12-26 expiry and possible earlier removal,
+The current try-out instructions link the exact per-platform artifacts above,
+disclose their 2026-12-26 expiry and possible earlier removal,
 and warn readers to preserve their existing desktop/display manager. These are
 CI trial artifacts, not releases or a completed MVP certification.
 
