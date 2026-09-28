@@ -946,6 +946,11 @@ impl<B: WmBackend> Session<B> {
         self.backend.poll_interest()
     }
 
+    /// Read compositor-private binding suppression before its policy boundary arrives.
+    pub(crate) fn backend_binding_input_suspended(&self) -> bool {
+        self.backend.binding_input_suspended()
+    }
+
     pub(crate) fn complete_expected_exit(&mut self) -> Result<(), SessionEventError> {
         if self.phase != RecoveryPhase::Exiting {
             return Err(SessionEventError::InvalidLifecycleOperation {

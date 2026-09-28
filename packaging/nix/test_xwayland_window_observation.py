@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import json
+import ast
+import shlex
 import shutil
 import subprocess
 import sys
@@ -8,6 +10,7 @@ import textwrap
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import xwayland_window_observation as observation
 
@@ -16,6 +19,43 @@ TITLE = "Realm X11 Probe A17-[4242].*"
 
 
 class ObservationTests(unittest.TestCase):
+    def test_vm_protocol_diagnostics_are_bounded_and_do_not_mask_failure(self):
+        source = Path(__file__).with_name("checks.nix").read_text()
+        start = source.find("      def log_x11_protocol_diagnostics():")
+        self.assertNotEqual(start, -1, "mapped X11 projection failure has no protocol evidence")
+        end = source.index("\n      def ", start + 1)
+        script = textwrap.dedent(source[start:end])
+        tree = ast.parse(script)
+        helper = next((node for node in tree.body if isinstance(node, ast.FunctionDef)
+                       and node.name == "log_x11_protocol_diagnostics"), None)
+        self.assertIsNotNone(helper, "mapped X11 projection failure has no protocol evidence")
+        calls, logs = [], []
+        def execute(command, **kwargs):
+            calls.append((command, kwargs))
+            return 0, "trace" * 20000
+        machine = SimpleNamespace(execute=execute, log=logs.append)
+        namespace = {"machine": machine, "shlex": shlex, "DIAGNOSTIC_TIMEOUT": 10}
+        exec(compile(ast.Module(body=[helper], type_ignores=[]), "<VM diagnostic>", "exec"), namespace)
+        namespace["log_x11_protocol_diagnostics"]()
+        self.assertIn("timeout --kill-after=1 5", calls[0][0])
+        self.assertIn("_SYSTEMD_USER_UNIT=realm-wm.service", calls[0][0])
+        self.assertIn("-n 200", calls[0][0])
+        self.assertLessEqual(len(logs[0]), 65700)
+        def stalled(*args, **kwargs):
+            raise TimeoutError("protocol journal stalled")
+        machine.execute = stalled
+        namespace["log_x11_protocol_diagnostics"]()
+        self.assertIn("protocol journal stalled", logs[-1])
+        # Execute the real A17 failure collector, so dropping its call to the
+        # bounded protocol helper cannot leave this regression green.
+        failure_end = source.index("\n      def ", end + 1)
+        failure_collector = ast.parse(textwrap.dedent(source[end:failure_end]))
+        exec(compile(failure_collector, "<A17 failure collector>", "exec"), namespace)
+        machine.execute = execute
+        calls.clear()
+        namespace["log_x11_diagnostics"]({"tree": {"status": 0, "output": ""}, "stats": []}, "42")
+        self.assertIn("_SYSTEMD_USER_UNIT=realm-wm.service", calls[0][0])
+
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tempdir.cleanup)

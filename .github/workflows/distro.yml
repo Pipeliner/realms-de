@@ -15,6 +15,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      waybar_comparison:
+        description: Run the one-off CI-only Waybar comparison VM
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: distro-${{ github.workflow }}-${{ github.ref }}
@@ -275,6 +281,12 @@ jobs:
           python3 packaging/native-vm/test_check_inputs.py
           python3 packaging/native-vm/test_check_workflow.py
           python3 packaging/native-vm/test_control_get_state.py
+          python3 packaging/native-vm/test_lock_roundtrip.py
+          python3 packaging/native-vm/test_browser_roundtrip.py
+          python3 packaging/native-vm/test_consumer_roundtrip.py
+          python3 packaging/native-vm/test_toolkit_roundtrip.py
+          python3 packaging/native-vm/test_portal_roundtrip.py
+          python3 packaging/native-vm/test_idle_roundtrip.py
           packaging/native-vm/test_run_native_session_vm.sh
           packaging/native-vm/test_guest_probe.sh
       - name: Install KVM harness prerequisites
@@ -295,6 +307,7 @@ jobs:
           printf '%s\n' '${{ matrix.target }}' \
             > "$RUNNER_TEMP/realm-native-vm-evidence/target.txt"
       - name: Download exact Ubuntu producer artifact
+        id: ubuntu-packages
         if: matrix.target == 'ubuntu-24.04-x86_64'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -307,6 +320,7 @@ jobs:
           name: realm-native-fedora-${{ github.sha }}
           path: ${{ runner.temp }}/realm-native-packages
       - name: Boot installed Realm graphical session
+        id: native-acceptance
         run: |
           set -euo pipefail
           id
@@ -325,6 +339,26 @@ jobs:
           name: realm-native-session-${{ matrix.target }}-${{ github.sha }}
           if-no-files-found: error
           path: ${{ runner.temp }}/realm-native-vm-evidence/
+
+      - name: Diagnose Ubuntu llvmpipe synchronization (not acceptance)
+        id: sync-diagnostic
+        if: always() && matrix.target == 'ubuntu-24.04-x86_64' && steps.native-acceptance.outcome == 'failure' && steps.ubuntu-packages.outcome == 'success'
+        timeout-minutes: 25
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          packaging/native-vm/run-native-session-vm.sh \
+            'ubuntu-24.04-x86_64' \
+            "$RUNNER_TEMP/realm-native-packages" \
+            "$RUNNER_TEMP/realm-native-sync-diagnostic" \
+            --llvmpipe-sync-diagnostic
+      - name: Upload Ubuntu synchronization diagnostic (not acceptance)
+        if: always() && steps.sync-diagnostic.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: realm-native-sync-diagnostic-ubuntu-${{ github.sha }}
+          if-no-files-found: error
+          path: ${{ runner.temp }}/realm-native-sync-diagnostic/
 
   fedora-baseline-contract:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
@@ -419,6 +453,7 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: nix flake check
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/prepare-realm-source
@@ -475,6 +510,15 @@ jobs:
           path: |
             ${{ runner.temp }}/realm-session-boots/realm-tiled-desktop.png
             ${{ runner.temp }}/realm-session-boots/realm-grimoire.png
+            ${{ runner.temp }}/realm-session-boots/realm-terminal-prompt.png
+            ${{ runner.temp }}/realm-session-boots/realm-gtk*-*.png
+            ${{ runner.temp }}/realm-session-boots/realm-qt6-*.png
+            ${{ runner.temp }}/realm-session-boots/control-gtk*-state.json
+            ${{ runner.temp }}/realm-session-boots/control-qt6-*-state.json
+            ${{ runner.temp }}/realm-session-boots/consumer-versions.json
+            ${{ runner.temp }}/realm-session-boots/*-launcher-environment.json
+            ${{ runner.temp }}/realm-session-boots/*-openat.log
+            ${{ runner.temp }}/realm-session-boots/*-stderr.log
             ${{ runner.temp }}/realm-session-boots/capture-provenance.json
             ${{ runner.temp }}/realm-session-boots/realmctl-doctor.json
             ${{ runner.temp }}/realm-session-boots/control-get-state.json
@@ -482,3 +526,44 @@ jobs:
             ${{ runner.temp }}/realm-session-boots/control-grimoire-state.json
             ${{ runner.temp }}/realm-session-boots/control-quit.json
             ${{ runner.temp }}/realm-session-boots/portal-roundtrip.json
+            ${{ runner.temp }}/realm-session-boots/realm-portal-file-selection.png
+            ${{ runner.temp }}/realm-session-boots/realm-portal-output-chooser.png
+            ${{ runner.temp }}/realm-session-boots/realm-portal-output-chooser-pointer.png
+            ${{ runner.temp }}/realm-session-boots/realm-browser-permission.png
+            ${{ runner.temp }}/realm-session-boots/realm-browser-output-chooser.png
+            ${{ runner.temp }}/realm-session-boots/realm-browser-output-chooser-pointer.png
+            ${{ runner.temp }}/realm-session-boots/realm-browser-capture-stopped.png
+            ${{ runner.temp }}/realm-session-boots/browser-screencast/realm-browser-screencast/
+            ${{ runner.temp }}/realm-session-boots/realm-locked-0.png
+            ${{ runner.temp }}/realm-session-boots/realm-locked-1.png
+            ${{ runner.temp }}/realm-session-boots/lock-roundtrip.json
+            ${{ runner.temp }}/realm-session-boots/lock-journal.txt
+            ${{ runner.temp }}/realm-session-boots/idle-journal.jsonl
+            ${{ runner.temp }}/realm-session-boots/idle-roundtrip.json
+            ${{ runner.temp }}/realm-session-boots/idle-login.txt
+            ${{ runner.temp }}/realm-session-boots/realm-idle-locked.png
+            ${{ runner.temp }}/realm-session-boots/realm-idle-wrong-password.png
+            ${{ runner.temp }}/realm-session-boots/suspend-roundtrip.json
+            ${{ runner.temp }}/realm-session-boots/suspend-journal.jsonl
+            ${{ runner.temp }}/realm-session-boots/suspend-kernel-journal.jsonl
+            ${{ runner.temp }}/realm-session-boots/realm-suspend-resumed-locked.png
+
+      - name: Run explicit Waybar comparison VM
+        if: github.event_name == 'workflow_dispatch' && inputs.waybar_comparison
+        run: |
+          set -euo pipefail
+          test -e /dev/kvm || { echo '::error::Waybar comparison requires KVM'; exit 1; }
+          system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+          mkdir -p "$RUNNER_TEMP/waybar-comparison"
+          nix build --print-build-logs ".#legacyPackages.$system.waybar-comparison-vm.driver" \
+            --out-link result-waybar-comparison-driver
+          result-waybar-comparison-driver/bin/nixos-test-driver \
+            --no-interactive --output_directory "$RUNNER_TEMP/waybar-comparison"
+
+      - name: Upload Waybar comparison evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.waybar_comparison
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: realm-waybar-comparison-${{ github.sha }}
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/waybar-comparison/waybar-comparison/

@@ -1,0 +1,96 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Realm browser capture acceptance</title>
+<style>
+body { font: 32px sans-serif; padding: 40px; }
+button { font: inherit; padding: 20px; }
+video { width: 480px; max-height: 270px; }
+</style>
+<h1>Realm browser capture ready</h1>
+<button id="share" autofocus>Share screen</button>
+<p id="status">Select Share screen, allow Firefox, then select the output.</p>
+<video id="video" autoplay muted playsinline></video>
+<script>
+const status = document.getElementById("status");
+const video = document.getElementById("video");
+async function post(path, body) {
+  const response = await fetch(path, {method: "POST", body});
+  if (!response.ok) throw new Error(`collector ${path}: ${response.status}`);
+}
+document.getElementById("share").onclick = async () => {
+  let stream;
+  let timer;
+  let expired = false;
+  let cancelPending = () => {};
+  const callbacks = [];
+  const frames = [];
+  const active = () => {
+    if (expired) throw new Error("frame delivery timeout");
+  };
+  function advancingFrame(previous) {
+    return new Promise((resolve, reject) => {
+      let callback;
+      cancelPending = () => {
+        video.cancelVideoFrameCallback(callback);
+        reject(new Error("frame delivery timeout"));
+      };
+      function observe(_, metadata) {
+        if (expired) return;
+        if (callbacks.length < 32) callbacks.push({mediaTime: metadata.mediaTime,
+          presentedFrames: metadata.presentedFrames});
+        if (Number.isFinite(metadata.mediaTime) &&
+            Number.isSafeInteger(metadata.presentedFrames) &&
+            metadata.presentedFrames > previous) {
+          cancelPending = () => {};
+          resolve(metadata);
+        } else {
+          callback = video.requestVideoFrameCallback(observe);
+        }
+      }
+      callback = video.requestVideoFrameCallback(observe);
+    });
+  }
+  try {
+    // This call stays in the real click handler: no synthetic user activation.
+    stream = await navigator.mediaDevices.getDisplayMedia({video: true, audio: false});
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        expired = true;
+        cancelPending();
+        reject(new Error("frame delivery timeout"));
+      }, 30000);
+    });
+    await Promise.race([deadline, (async () => {
+      video.srcObject = stream;
+      await video.play();
+      active();
+      for (let index = 0; index < 2; index++) {
+        const metadata = await advancingFrame(index ? frames[0].presentedFrames : 0);
+        active();
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext("2d").drawImage(video, 0, 0);
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+        active();
+        await post(`/frame-${index}.png`, blob);
+        active();
+        frames.push({mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames,
+          width: canvas.width, height: canvas.height});
+        status.textContent = "Realm browser delivered frame " + (index + 1);
+      }
+    })()]);
+    stream.getTracks().forEach(track => track.stop());
+    clearTimeout(timer);
+    await post("/result", JSON.stringify({frames, stopped: true,
+      trackStates: stream.getTracks().map(track => track.readyState), callbacks,
+      userAgent: navigator.userAgent}));
+    status.textContent = "Realm capture passed and stopped";
+  } catch (error) {
+    clearTimeout(timer);
+    if (stream) stream.getTracks().forEach(track => track.stop());
+    status.textContent = "Realm capture failed: " + error;
+    await post("/error", JSON.stringify({error: String(error), frames, callbacks}));
+  }
+};
+</script>

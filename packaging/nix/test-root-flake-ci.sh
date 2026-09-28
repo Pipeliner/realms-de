@@ -69,6 +69,20 @@ expect_fail() {
 fixture_root=$(make_fixture canonical)
 expect_pass canonical-root-flake-contract "$fixture_root"
 
+fixture_root=$(make_fixture missing-nix-job-timeout)
+sed '/^  nix:/,$ { /^    timeout-minutes:/d; }' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail missing-nix-job-timeout "$fixture_root" \
+    'Nix CI job must have an explicit sixty-minute timeout'
+
+fixture_root=$(make_fixture wrong-nix-job-timeout)
+sed '/^  nix:/,$ s/^    timeout-minutes: .*/    timeout-minutes: 120/' \
+    "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+expect_fail wrong-nix-job-timeout "$fixture_root" \
+    'Nix CI job must have an explicit sixty-minute timeout'
+
 fixture_root=$(make_fixture missing-flake)
 rm -f "$fixture_root/flake.nix"
 expect_fail missing-flake "$fixture_root" 'root flake.nix is required'
@@ -109,6 +123,14 @@ sed '/realm-session-boots\/portal-roundtrip\.json/d' \
 mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
 expect_fail missing-portal-evidence-upload "$fixture_root" \
     'live VM evidence upload must retain portal-roundtrip.json'
+
+for pointer in realm-portal-output-chooser-pointer.png realm-browser-output-chooser-pointer.png idle-login.txt; do
+    fixture_root=$(make_fixture "missing-$pointer")
+    sed "/$pointer/d" "$fixture_root/.github/workflows/distro.yml" >"$fixture_root/workflow.yml"
+    mv "$fixture_root/workflow.yml" "$fixture_root/.github/workflows/distro.yml"
+    expect_fail "missing-$pointer" "$fixture_root" \
+        "live VM evidence upload must retain $pointer"
+done
 
 fixture_root=$(make_fixture portal-window-delete-instead-of-cancel)
 sed 's/machine.send_key("alt-c")/machine.send_key("esc")/' \

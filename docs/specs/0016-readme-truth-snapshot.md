@@ -1,6 +1,6 @@
 # SPEC 0016 — README truthfulness snapshot
 
-- **Status:** Accepted (2026-08-30; live-VM evidence amendment 2026-09-13; native-VM and snapshot refresh 2026-09-27)
+- **Status:** Accepted (2026-08-30; live-VM evidence amendment 2026-09-13; native-VM snapshot 2026-09-27; Fedora journey refresh 2026-09-28)
 - **Milestone:** M0
 - **Issue:** [#8](https://github.com/Pipeliner/realms-de/issues/8)
 - **Decisions:** Standing orders S3, S10 and S15
@@ -78,6 +78,22 @@ jobs from the overall failed run (Fedora source guard and Nix X11 checks).
 Physical hardware and full MVP acceptance remain pending; do not claim later
 browser, window-control or relogin probes passed from this earlier evidence.
 
+Fedora-only refresh, verified 2026-09-28: run 36358017601 job 108735431595
+passed the installed Fedora 44 native journey at tested merge
+`11538ab5bd05a1018f48216f661990987c259ce2` (source `9f0aa56`). Replace only
+the Fedora trial with package artifact 10944903392; retain Ubuntu artifact
+10935181555 from the older run. Link runtime evidence artifact 10945836471.
+The Fedora proof covers manual locking, real 300/600-second idle timing and
+PAM unlock, controls/help, Foot/Zsh/private-tool activation and completion cache,
+generation A-to-B relogin, WM crash recovery, portal Settings/cancel/capture,
+and Firefox two delivered PNG frames with advancing presentedFrames and ended
+track. Recovery screenshots were visually checked at 1280x800. It does not
+prove native GTK/Qt CSS consumption, physical backlight/hardware or full MVP;
+the overall run failed its Nix GTK check and Ubuntu partial idle-lock rendering.
+The README must name both failures. Suspend remains post-MVP. Keep these
+limits explicit rather than presenting the newer Fedora evidence as Ubuntu or
+all-platform verification. Preserve all historical screenshot provenance.
+
 For this pre-alpha snapshot, the `crates/realm-session` manifest, library and
 backend contract, runtime owner, production `src/bin/realm-wm.rs` entrypoint,
 real-socket runtime fixture, and installed NixOS QEMU capture are checked
@@ -105,16 +121,16 @@ these checked-in paths:
 ### 3. `needs-human` snapshot
 
 The `Needs a human` section is a dated snapshot of this GitHub query at
-`2026-09-27`:
+`2026-09-28`:
 
 ```text
 repo:Pipeliner/realms-de is:issue is:open label:needs-human
 ```
 
-It contains exactly one Markdown table row per snapshot issue. Each row has
-the structure `| [#number — exact GitHub title](exact issue URL) | factual,
-nonempty blocker |`, for exactly issue `#25`, titled
-`Template: GTK 3, GTK 4 and libadwaita stylesheets`.
+It reports no open `needs-human` issues. Issue #25's GTK target-location
+decision is resolved by Accepted SPEC 0030's named generation profiles; its
+remaining toolkit runtime and fidelity checks stay open, not human-blocked.
+The section must not retain an issue table or imply those checks passed.
 
 Every blocker is a short consequence already stated by the linked issue. It
 does not invent an option, recommendation, priority, owner or deadline. Closed
@@ -130,8 +146,8 @@ Keep README current whenever shipped behavior, try-out instructions or verified
 delivery evidence changes. Refresh the README, this dated evidence contract and
 its fixtures together when their claims change; retain explicit limitations and
 do not present a successful job as a successful whole run.
-The current try-out instructions link the exact Ubuntu/Fedora artifacts from
-that verified run, disclose their 2026-12-26 expiry and possible earlier removal,
+The current try-out instructions link the exact per-platform artifacts above,
+disclose their 2026-12-26 expiry and possible earlier removal,
 and warn readers to preserve their existing desktop/display manager. These are
 CI trial artifacts, not releases or a completed MVP certification.
 
@@ -141,14 +157,14 @@ CI trial artifacts, not releases or a completed MVP certification.
 |---|---|---|
 | A1 | Given the README before its first divider, when a visitor reads it, then it contains the five-part identity and both inspected VM captures; their caption identifies NixOS QEMU and River 0.4.8, links the original provenance and explicit review correction, reports the PNG-IHDR-derived 1280x800 dimensions, and makes no hardware or final-theme claim; given the rule section, it contains the three exact headings with ADR 0001/0005/0009 links. | `docs/test-readme-truth-snapshot.sh` — `intro-and-rules`, `capture-evidence` |
 | A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, installed-NixOS-VM-verified `realm-wm` and `realm-bar`, separately linked native VM jobs and tested revision, failed overall-run boundary, remaining hardware/full-MVP boundary, present pre-alpha assets, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
-| A3 | Given the `2026-09-27` snapshot, when each `Needs a human` table row is checked, then it binds exact issue #25, URL and title to a nonempty factual blocker; exactly this one accepted row exists and obsolete rows do not. | `docs/test-readme-truth-snapshot.sh` — `needs-human-snapshot` |
+| A3 | Given the `2026-09-28` snapshot, when `Needs a human` is checked, then it states no open human-decision issues, links the live label, retains the unresolved runtime/fidelity boundary and has no obsolete issue rows. | `docs/test-readme-truth-snapshot.sh` — `needs-human-snapshot` |
 | A4 | Given the documentation CI job, when it runs on a pull request or push, then uncommented fixture and production-check commands run in the `docs` job without a network call. | `docs/test-readme-truth-snapshot.sh` — `workflow-invocation` |
 
 ## Failure modes
 
 Stale README claims violate standing order S15. The local check fails before
 documentation CI if the identity/rules leave their required sections, an
-accepted snapshot row is omitted or malformed, #34 is presented as unresolved,
+obsolete human-decision row returns or the unresolved runtime boundary is lost,
 a required artifact/map path is denied or missing, or a check command is not
 load-bearing in the docs job.
 

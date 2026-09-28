@@ -28,6 +28,18 @@ checks="$root/packaging/nix/checks.nix"
 workflow="$root/.github/workflows/distro.yml"
 [ -f "$workflow" ] || fail 'distro workflow is required'
 
+if ! awk '
+    /^  nix:$/ { in_nix = 1; next }
+    /^  [A-Za-z0-9_-]+:/ { in_nix = 0 }
+    in_nix && /^    timeout-minutes:/ {
+        count++
+        valid = ($0 == "    timeout-minutes: 60")
+    }
+    END { exit !(count == 1 && valid) }
+' "$workflow"; then
+    fail 'Nix CI job must have an explicit sixty-minute timeout'
+fi
+
 if grep -F -q -e 'steps.flake.outputs.present' "$workflow"; then
     fail 'Nix CI must not condition on flake presence'
 fi
@@ -47,6 +59,12 @@ fi
 if ! grep -F -q -e "\${{ runner.temp }}/realm-session-boots/portal-roundtrip.json" "$workflow"; then
     fail 'live VM evidence upload must retain portal-roundtrip.json'
 fi
+
+for pointer in realm-portal-output-chooser-pointer.png realm-browser-output-chooser-pointer.png idle-login.txt; do
+    if ! grep -F -q -e "\${{ runner.temp }}/realm-session-boots/$pointer" "$workflow"; then
+        fail "live VM evidence upload must retain $pointer"
+    fi
+done
 
 if ! grep -F -q -e 'machine.send_key("alt-c")' "$checks"; then
     fail 'portal VM must activate the explicit GTK Cancel response'

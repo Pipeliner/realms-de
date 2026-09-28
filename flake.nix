@@ -98,6 +98,28 @@
         default = realm;
       });
 
+      # Comparison work is explicit: it is outside packages and checks, so
+      # ordinary flake checks and production package builds do not run it.
+      legacyPackages = forAllSystems (pkgs: {
+        waybar-comparison-fixture = import ./packaging/nix/waybar-comparison.nix {
+          inherit pkgs;
+          src = self;
+        };
+        waybar-comparison-vm = (import ./packaging/nix/checks.nix {
+          inherit pkgs lib nixosModule sourceRevision support;
+          src = self;
+          realm = realmPackage pkgs;
+          desktopAdmissionVmTest = desktopAdmissionVmTest pkgs;
+          vmControlHelper = vmControlHelper pkgs;
+          portalVmHelper = portalVmHelper pkgs;
+          waybarComparison = true;
+          waybarFixture = import ./packaging/nix/waybar-comparison.nix {
+            inherit pkgs;
+            src = self;
+          };
+        }).session-boots;
+      });
+
       apps = forAllSystems (pkgs: rec {
         realm-session = {
           type = "app";
@@ -170,7 +192,7 @@
       checks = forAllSystems (
         pkgs:
         import ./packaging/nix/checks.nix {
-          inherit pkgs lib nixosModule sourceRevision;
+          inherit pkgs lib nixosModule sourceRevision support;
           src = self;
           realm = realmPackage pkgs;
           desktopAdmissionVmTest = desktopAdmissionVmTest pkgs;

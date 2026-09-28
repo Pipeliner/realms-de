@@ -1,5 +1,6 @@
 //! Concrete request and poll-loop adapter for the Realm session daemon.
 
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read;
 use std::os::fd::AsFd;
@@ -20,7 +21,8 @@ use crate::consumer::FixedConsumer;
 use crate::modules::{ClockModule, ModuleSampler, ModuleSnapshot};
 use crate::persistence::{PersistCompletion, PersistCompletionError, PersistenceCoordinator};
 use crate::session::{
-    QuitAfter, Session, SessionActionError, SessionEffect, SessionEventError, SessionUpdate,
+    QuitAfter, RepeatTimerDirective, Session, SessionActionError, SessionEffect, SessionEventError,
+    SessionUpdate,
 };
 use crate::timers::SessionTimers;
 use crate::turn::{backend_turn, BackendTurn};
@@ -308,7 +310,11 @@ impl<B: WmBackend> RuntimeOwners<B> {
         ) {
             return Ok(false);
         }
-        match backend_turn(&mut self.session, ready, now)? {
+        let turn = backend_turn(&mut self.session, ready, now)?;
+        if self.session.backend_binding_input_suspended() {
+            self.timers.apply_repeat(&RepeatTimerDirective::Disarm)?;
+        }
+        match turn {
             BackendTurn::Idle | BackendTurn::Progressed => Ok(false),
             BackendTurn::Updated(update) => {
                 self.handle_session_update(now, update)?;
@@ -595,7 +601,12 @@ impl<B: WmBackend> RuntimeOwners<B> {
 
     /// Consume one coalesced repeat expiry.
     pub fn service_repeat(&mut self, now: Instant) -> Result<(), RuntimeError> {
-        if self.timers.consume_repeat()? {
+        let expired = self.timers.consume_repeat()?;
+        if self.session.backend_binding_input_suspended() {
+            self.timers.apply_repeat(&RepeatTimerDirective::Disarm)?;
+            return Ok(());
+        }
+        if expired {
             let update = self.session.fire_key_repeat()?;
             self.handle_session_update(now, update)?;
         }
@@ -755,16 +766,69 @@ where
     F: FnOnce() -> Result<B, BackendError>,
     R: FnOnce() -> std::io::Result<()>,
 {
+    run_daemon_with_environment(
+        runtime,
+        make_backend,
+        ready,
+        degraded_codes,
+        Vec::new(),
+        false,
+    )
+}
+
+#[cfg(test)]
+thread_local! {
+    static STARTUP_STAGE_WITNESS: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicU8>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn record_startup_stage(stage: u8) {
+    STARTUP_STAGE_WITNESS.with(|slot| {
+        if let Some(witness) = slot.borrow().as_ref() {
+            let previous = witness.swap(stage, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(
+                previous.checked_add(1),
+                Some(stage),
+                "startup witness skipped a boundary"
+            );
+        }
+    });
+}
+
+fn run_daemon_with_environment<B, F, R>(
+    runtime: RuntimeDir,
+    make_backend: F,
+    ready: R,
+    degraded_codes: Option<Vec<String>>,
+    environment: Vec<(OsString, OsString)>,
+    session_scopes: bool,
+) -> Result<(), RuntimeError>
+where
+    B: WmBackend,
+    F: FnOnce() -> Result<B, BackendError>,
+    R: FnOnce() -> std::io::Result<()>,
+{
     let started_at = Instant::now();
     let mut clock = ClockRuntime::system();
+    #[cfg(test)]
+    record_startup_stage(2);
     let snapshot_path = runtime.path().join("realm/ledger.json");
     let bound = runtime.prepare_server_endpoint()?.bind()?;
+    #[cfg(test)]
+    record_startup_stage(3);
 
-    let mut worker = Worker::start(snapshot_path)?;
+    let mut worker = Worker::start_with_launch_policy(snapshot_path, environment, session_scopes)?;
+    #[cfg(test)]
+    record_startup_stage(4);
     let recovered = load_startup_snapshot(&mut worker)?;
+    #[cfg(test)]
+    record_startup_stage(5);
     let mut persistence = PersistenceCoordinator::new(recovered.clone());
 
     let backend = make_backend()?;
+    #[cfg(test)]
+    record_startup_stage(6);
     let mut session =
         Session::connect_with_snapshot_and_degraded(backend, recovered, degraded_codes)?;
     recover_until_live(&mut session, &mut persistence)?;
@@ -888,17 +952,23 @@ where
     F: FnOnce() -> Result<B, BackendError>,
 {
     let runtime = production_runtime_dir()?;
-    let config_root =
-        crate::consumer::config_root_from_env().map_err(RuntimeError::Configuration)?;
-    prepare_startup_theme(&config_root)?;
+    let environment = prepare_startup_theme(runtime.path())?;
     let degraded_codes = load_degraded_handoff(&runtime);
-    run_daemon_with(runtime, make_backend, notify_ready, degraded_codes)
+    run_daemon_with_environment(
+        runtime,
+        make_backend,
+        notify_ready,
+        degraded_codes,
+        environment,
+        true,
+    )
 }
 
 fn prepare_startup_theme(
-    config_root: &std::path::Path,
-) -> Result<realm_theme::generation::GenerationId, RuntimeError> {
-    realm_theme::ensure_current(config_root).map_err(RuntimeError::from)
+    runtime_dir: &std::path::Path,
+) -> Result<Vec<(OsString, OsString)>, RuntimeError> {
+    let selected = crate::login_theme::load(runtime_dir).map_err(RuntimeError::Configuration)?;
+    crate::consumer::session_environment(&selected).map_err(RuntimeError::Configuration)
 }
 
 fn load_startup_snapshot(
@@ -1276,7 +1346,9 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixStream;
     use std::process::Command;
+    use std::sync::atomic::{AtomicU8, Ordering};
     use std::sync::mpsc;
+    use std::sync::Arc;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use realm_control::test_runtime_dir;
@@ -1284,8 +1356,11 @@ mod tests {
     use realm_core::layout::Workarea;
     use realm_core::ledger::Dir;
     use realm_core::WinId;
+    use rustix::time::timerfd_gettime;
 
-    use super::{dispatch_request, run_daemon_with, ClockRuntime, RequestDispatch};
+    use super::{
+        dispatch_request, run_daemon_with, ClockRuntime, RepeatTimerDirective, RequestDispatch,
+    };
     use crate::backend::{
         BackendBindingSpec, BackendConnection, BackendContractError, BackendEvent,
         BackendExitPolicy, BackendPolicyEvent, BackendPolicyResponse, BackendPolicyTurn,
@@ -1298,11 +1373,26 @@ mod tests {
     use crate::timers::SessionTimers;
     use crate::worker::Worker;
 
-    struct FakeBackend(File);
+    struct FakeBackend {
+        event_fd: File,
+        suspend_on_service: bool,
+        input_suspended: bool,
+    }
 
     impl FakeBackend {
         fn new() -> Self {
-            Self(File::open("/dev/null").unwrap())
+            Self {
+                event_fd: File::open("/dev/null").unwrap(),
+                suspend_on_service: false,
+                input_suspended: false,
+            }
+        }
+
+        fn locking() -> Self {
+            Self {
+                suspend_on_service: true,
+                ..Self::new()
+            }
         }
     }
 
@@ -1359,15 +1449,19 @@ mod tests {
         }
 
         fn event_fd(&self) -> BorrowedFd<'_> {
-            self.0.as_fd()
+            self.event_fd.as_fd()
         }
 
         fn poll_interest(&self) -> BackendPollInterest {
             BackendPollInterest {
-                immediate: false,
+                immediate: self.suspend_on_service,
                 readable: true,
                 writable: false,
             }
+        }
+
+        fn binding_input_suspended(&self) -> bool {
+            self.input_suspended
         }
 
         fn service(
@@ -1375,12 +1469,19 @@ mod tests {
             _ready: BackendReady,
             _now: Instant,
         ) -> BackendResult<Option<BackendEvent>> {
+            if self.suspend_on_service {
+                self.input_suspended = true;
+            }
             Ok(None)
         }
     }
 
     fn live_session() -> Session<FakeBackend> {
-        let mut session = Session::connect(FakeBackend::new()).unwrap();
+        live_session_with(FakeBackend::new())
+    }
+
+    fn live_session_with(backend: FakeBackend) -> Session<FakeBackend> {
+        let mut session = Session::connect(backend).unwrap();
         session
             .handle_backend_event(BackendEvent::PolicyTurn(BackendPolicyTurn {
                 id: BackendPolicyTurnId::new(1).unwrap(),
@@ -1676,7 +1777,7 @@ mod tests {
     }
 
     #[test]
-    fn production_startup_theme_preparation_seeds_once_and_refuses_malformed_current() {
+    fn production_startup_keeps_login_theme_across_daemon_restart() {
         let output = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -1703,36 +1804,130 @@ mod tests {
         rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o022));
         let fixture = fixture_dir("startup-theme");
         let root = fixture.join("fresh-config");
-        assert!(!root.exists());
-        let first = super::prepare_startup_theme(&root).unwrap();
-        assert_eq!(
-            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-        let current = fs::read(root.join("realm/generated/current")).unwrap();
-
-        let second = super::prepare_startup_theme(&root).unwrap();
+        let runtime = fixture.join("runtime");
+        fs::create_dir(&runtime).unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        crate::login_theme::prepare(&root, &runtime, std::process::id()).unwrap();
+        let selected = crate::login_theme::load(&runtime).unwrap();
+        let first = super::prepare_startup_theme(&runtime).unwrap();
+        assert!(first
+            .iter()
+            .any(|(key, value)| key == "REALM_GENERATION" && value == selected.path().as_os_str()));
+        let next = realm_theme::apply(&root).unwrap();
+        assert_ne!(next.as_str(), selected.as_str());
+        let second = super::prepare_startup_theme(&runtime).unwrap();
         assert_eq!(second, first);
-        assert_eq!(
-            fs::read(root.join("realm/generated/current")).unwrap(),
-            current
-        );
-
         fs::write(root.join("realm/generated/current"), b"malformed\n").unwrap();
-        let malformed = fs::read(root.join("realm/generated/current")).unwrap();
-        assert!(super::prepare_startup_theme(&root).is_err());
-        assert_eq!(
-            fs::read(root.join("realm/generated/current")).unwrap(),
-            malformed
-        );
-
-        let missing_parent = fixture.join("missing-parent/config");
-        assert!(super::prepare_startup_theme(&missing_parent).is_err());
-        assert!(
-            !fixture.join("missing-parent").exists(),
-            "bootstrap recursively created an absent configuration-root parent"
-        );
+        assert_eq!(super::prepare_startup_theme(&runtime).unwrap(), first);
+        fs::remove_file(runtime.join("realm/session-theme.json")).unwrap();
+        assert!(super::prepare_startup_theme(&runtime).is_err());
         fs::remove_dir_all(fixture).unwrap();
+    }
+
+    fn startup_stage_name(stage: u8) -> &'static str {
+        match stage {
+            0 => "daemon thread not entered",
+            1 => "system timezone discovery",
+            2 => "endpoint preparation or bind",
+            3 => "worker startup",
+            4 => "initial snapshot read",
+            5 => "backend construction",
+            6 => "backend recovery, clock, or sampler",
+            7 => "ready callback reached",
+            _ => "invalid fixture stage",
+        }
+    }
+
+    fn await_daemon_ready<T: std::fmt::Debug>(
+        ready_rx: mpsc::Receiver<()>,
+        daemon: std::thread::JoinHandle<T>,
+        timeout: Duration,
+        stage: &AtomicU8,
+    ) -> std::thread::JoinHandle<T> {
+        if let Err(error) = ready_rx.recv_timeout(timeout) {
+            drop(ready_rx);
+            let stage = startup_stage_name(stage.load(Ordering::SeqCst));
+            if daemon.is_finished() {
+                panic!(
+                    "daemon did not become ready ({error:?}; startup stage: {stage}): {:?}",
+                    daemon.join()
+                );
+            }
+            panic!(
+                "daemon did not become ready ({error:?}; startup stage: {stage}); daemon still running"
+            );
+        }
+        daemon
+    }
+
+    #[test]
+    fn readiness_stage_diagnostic_names_each_boundary() {
+        assert_eq!(startup_stage_name(0), "daemon thread not entered");
+        assert_eq!(startup_stage_name(1), "system timezone discovery");
+        assert_eq!(startup_stage_name(2), "endpoint preparation or bind");
+        assert_eq!(startup_stage_name(3), "worker startup");
+        assert_eq!(startup_stage_name(4), "initial snapshot read");
+        assert_eq!(startup_stage_name(5), "backend construction");
+        assert_eq!(startup_stage_name(6), "backend recovery, clock, or sampler");
+        assert_eq!(startup_stage_name(7), "ready callback reached");
+        assert_eq!(startup_stage_name(u8::MAX), "invalid fixture stage");
+    }
+
+    #[test]
+    fn readiness_stage_witness_is_private_to_its_fixture_thread() {
+        let stage = Arc::new(AtomicU8::new(1));
+        let daemon_stage = Arc::clone(&stage);
+        std::thread::spawn(move || {
+            super::STARTUP_STAGE_WITNESS.with(|slot| {
+                *slot.borrow_mut() = Some(daemon_stage);
+            });
+            super::record_startup_stage(2);
+            std::thread::spawn(|| super::record_startup_stage(3))
+                .join()
+                .unwrap();
+        })
+        .join()
+        .unwrap();
+        assert_eq!(stage.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn readiness_timeout_does_not_join_a_delayed_live_daemon() {
+        // Buffer this negative fixture so restoring the bad join still permits
+        // its cleanup after the assertion deadline; the live fixture rendezvous
+        // below separately prevents a late notification being queued.
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let (send_result_tx, send_result_rx) = mpsc::sync_channel(1);
+        let stage = Arc::new(AtomicU8::new(6));
+        let daemon = std::thread::spawn(move || {
+            release_rx.recv().unwrap();
+            send_result_tx.send(ready_tx.send(()).is_err()).unwrap();
+        });
+        let (finished_tx, finished_rx) = mpsc::sync_channel(1);
+        let observer_stage = Arc::clone(&stage);
+        let observer = std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                await_daemon_ready(ready_rx, daemon, Duration::ZERO, &observer_stage)
+            }));
+            let diagnostic = result
+                .err()
+                .and_then(|panic| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            finished_tx.send(diagnostic).unwrap();
+        });
+        let completed = finished_rx.recv_timeout(Duration::from_secs(1));
+        // Always release the fixture before asserting, including the red path.
+        release_tx.send(()).unwrap();
+        observer.join().unwrap();
+        assert!(
+            matches!(completed, Ok(ref diagnostic) if diagnostic.contains("startup stage: backend recovery, clock, or sampler")),
+            "readiness diagnostic joined a live daemon or omitted its stage: {completed:?}"
+        );
+        assert!(
+            send_result_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "timed-out receiver admitted the delayed readiness callback"
+        );
     }
 
     #[test]
@@ -1740,12 +1935,24 @@ mod tests {
         let root = endpoint_fixture_dir("get-state-quit");
         let server_runtime = test_runtime_dir(&root).unwrap();
         let client_endpoint = test_runtime_dir(&root).unwrap().client_endpoint();
-        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (ready_tx, ready_rx) = mpsc::sync_channel(0);
+        let stage = Arc::new(AtomicU8::new(0));
+        let thread_stage = Arc::clone(&stage);
         let daemon = std::thread::spawn(move || {
+            super::STARTUP_STAGE_WITNESS.with(|slot| {
+                *slot.borrow_mut() = Some(Arc::clone(&thread_stage));
+            });
+            thread_stage.store(1, Ordering::SeqCst);
+            let factory_stage = Arc::clone(&thread_stage);
+            let callback_stage = Arc::clone(&thread_stage);
             run_daemon_with(
                 server_runtime,
-                || Ok(DaemonBackend::new()),
-                || {
+                move || {
+                    assert_eq!(factory_stage.load(Ordering::SeqCst), 5);
+                    Ok(DaemonBackend::new())
+                },
+                move || {
+                    callback_stage.store(7, Ordering::SeqCst);
                     ready_tx.send(()).map_err(|_| {
                         std::io::Error::new(std::io::ErrorKind::BrokenPipe, "test ready receiver")
                     })
@@ -1754,12 +1961,7 @@ mod tests {
             )
         });
 
-        if let Err(error) = ready_rx.recv_timeout(Duration::from_secs(2)) {
-            panic!(
-                "daemon did not become ready ({error:?}): {:?}",
-                daemon.join()
-            );
-        }
+        let daemon = await_daemon_ready(ready_rx, daemon, Duration::from_secs(2), &stage);
         let mut client = client_endpoint.connect("runtime-fixture").unwrap();
         let Response::State(state) = client.request(Request::GetState).unwrap() else {
             panic!("GetState did not return state");
@@ -1832,6 +2034,69 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("retained backend immediate interest starved shutdown")
             .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn backend_observed_lock_disarms_repeat_before_delayed_policy_boundary() {
+        let root = endpoint_fixture_dir("lock-repeat-gap");
+        let runtime = test_runtime_dir(&root).unwrap();
+        let snapshot_path = runtime.path().join("realm/ledger.json");
+        let bound = runtime.prepare_server_endpoint().unwrap().bind().unwrap();
+        let worker = Worker::start(snapshot_path).unwrap();
+        let mut session = live_session_with(FakeBackend::locking());
+        let focus = session
+            .keymap()
+            .bindings
+            .iter()
+            .position(|binding| binding.key == "j")
+            .and_then(|index| crate::backend::BackendBindingId::new(index as u32 + 1))
+            .expect("default repeatable focus binding");
+        let armed = session
+            .handle_backend_event(BackendEvent::PolicyTurn(BackendPolicyTurn {
+                id: BackendPolicyTurnId::new(3).unwrap(),
+                drains: None,
+                events: vec![BackendPolicyEvent::BindingPressed(focus)],
+            }))
+            .unwrap();
+        let persistence = PersistenceCoordinator::new(None);
+        let control = bound.activate().unwrap().into_server(Instant::now());
+        let timers = SessionTimers::new().unwrap();
+        let clock = ClockRuntime::utc();
+        let sampler = ModuleSampler::fixture().unwrap();
+        let mut owners = super::RuntimeOwners::new(
+            session,
+            control,
+            worker,
+            timers,
+            clock,
+            sampler,
+            persistence,
+            Instant::now(),
+        );
+        owners.handle_session_update(Instant::now(), armed).unwrap();
+        let before = timerfd_gettime(owners.timers.repeat_fd()).unwrap();
+        assert!(before.it_value.tv_sec != 0 || before.it_value.tv_nsec != 0);
+        owners
+            .timers
+            .apply_repeat(&RepeatTimerDirective::Arm {
+                delay: Duration::from_millis(1),
+                interval: Duration::from_millis(40),
+            })
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(3));
+
+        owners
+            .service_backend(Instant::now(), super::NOT_READY)
+            .unwrap();
+
+        assert!(owners.session.backend_binding_input_suspended());
+        let after = timerfd_gettime(owners.timers.repeat_fd()).unwrap();
+        assert_eq!(after.it_value.tv_sec, 0);
+        assert_eq!(after.it_value.tv_nsec, 0);
+        owners.service_repeat(Instant::now()).unwrap();
+        assert!(!owners.session.has_active_backend_transaction());
+        assert!(!owners.timers.consume_repeat().unwrap());
         fs::remove_dir_all(root).unwrap();
     }
 

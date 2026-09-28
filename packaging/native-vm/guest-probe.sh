@@ -13,6 +13,53 @@ fail() {
     exit 1
 }
 
+write_sync_diagnostic() {
+    local directory=$1 session_command=$2 river_command=$3
+    install -d -m 0755 "$directory"
+    {
+        printf '%s\n' '#!/usr/bin/env bash'
+        printf 'exec env LP_NUM_THREADS=0 %q "$@"\n' "$river_command"
+    } > "$directory/river"
+    {
+        printf '%s\n' '#!/usr/bin/env bash'
+        printf 'export REALM_COMPOSITOR=%q\n' "$directory/river"
+        printf 'exec %q "$@"\n' "$session_command"
+    } > "$directory/session"
+    chmod 0755 "$directory/river" "$directory/session"
+    printf '[Wayland]\nSessionCommand=%s/session\n' "$directory" > "$directory/sddm.conf"
+}
+
+configure_sync_diagnostic() {
+    test "$target" = ubuntu-24.04-x86_64 || fail 'sync diagnostic is Ubuntu-only'
+    local session_command
+    session_command=$(sddm --example-config | awk '
+        /^\[/ { wayland = ($0 == "[Wayland]") }
+        wayland && /^SessionCommand=/ { sub(/^SessionCommand=/, ""); print; exit }')
+    test -x "$session_command" || fail 'SDDM default Wayland session command unavailable'
+    write_sync_diagnostic /var/tmp/realm-native-sync-diagnostic "$session_command" /usr/bin/river
+    install -m 0644 /var/tmp/realm-native-sync-diagnostic/sddm.conf \
+        /etc/sddm.conf.d/realm-native-sync-diagnostic.conf
+}
+
+probe_sync_diagnostic() {
+    test "$target" = ubuntu-24.04-x86_64 || fail 'sync diagnostic is Ubuntu-only'
+    python3 -c 'import json, pathlib, pwd
+uid = pwd.getpwnam("alice").pw_uid
+pid = pathlib.Path(f"/run/user/{uid}/realm/session.pid").read_text().strip()
+assert pid.isdigit(), pid
+parent = pathlib.Path("/proc") / pid
+children = parent.joinpath("task", pid, "children").read_text().split()
+compositors = [pathlib.Path("/proc") / child for child in children
+              if (pathlib.Path("/proc") / child / "exe").resolve().name == "river"]
+assert len(compositors) == 1, compositors
+p = compositors[0]
+env = p.joinpath("environ").read_bytes().split(b"\0")
+assert b"LP_NUM_THREADS=0" in env, "compositor sync override missing"
+print(json.dumps({"diagnostic_only": True, "LP_NUM_THREADS": "0", "pid": int(p.name),
+ "executable": str(p.joinpath("exe").resolve()),
+ "threads": [t.joinpath("comm").read_text().strip() for t in p.joinpath("task").iterdir()]}))'
+}
+
 install_guest() {
     case "$target" in
         ubuntu-24.04-x86_64)
@@ -43,27 +90,71 @@ install_guest() {
                 /var/tmp/realm-native-packages.txt
             rpm -qf /usr/share/wayland-sessions/realm.desktop \
                 > /var/tmp/realm-native-session-owner.txt
+            test -x /usr/bin/dbus-update-activation-environment || \
+                fail 'Fedora package omitted the D-Bus activation helper'
+            rpm -qf --queryformat '%{NAME}\n' \
+                /usr/bin/dbus-update-activation-environment \
+                > /var/tmp/realm-native-activation-owner.txt
+            grep -Fxq dbus-tools /var/tmp/realm-native-activation-owner.txt || \
+                fail 'unexpected Fedora D-Bus activation helper owner'
             ;;
         *)
             fail "unknown native VM target: $target"
             ;;
     esac
 
+    # Capture package-only runtime state before test libraries can pull a server.
+    # Never silently repair the production dependency through fixture packages.
+    {
+        command -v pipewire
+        pipewire --version
+        test -f /usr/lib/systemd/user/pipewire.service
+        test -f /usr/lib/systemd/user/pipewire.socket
+        command -v slurp
+        cat /usr/lib/systemd/user/pipewire.service /usr/lib/systemd/user/pipewire.socket
+        case "$target" in
+            ubuntu-24.04-x86_64)
+                dpkg-query -W pipewire slurp
+                dpkg-query -S /usr/bin/pipewire /usr/lib/systemd/user/pipewire.service
+                ;;
+            fedora-44-x86_64)
+                rpm -q pipewire slurp
+                rpm -qf /usr/bin/pipewire /usr/lib/systemd/user/pipewire.service
+                ;;
+        esac
+    } > /var/tmp/realm-native-portal-runtime.txt
     test "$(stat -c '%U:%G:%a' /usr/share/wayland-sessions/realm.desktop)" = 'root:root:644'
     grep -Fxq 'Name=realm' /usr/share/wayland-sessions/realm.desktop
     grep -Fxq 'Exec=/usr/bin/realm-session' /usr/share/wayland-sessions/realm.desktop
     grep -Fxq 'TryExec=/usr/bin/realm-session' /usr/share/wayland-sessions/realm.desktop
 
-    # SPEC 0032 package staging is deliberately not automatic idle enablement.
+    # SPEC 0032 requires packaged fresh-login idle activation.
     for helper in realm-idle realm-backlight swayidle swaylock brightnessctl; do
         test -x "/usr/bin/$helper" || fail "missing idle/lock helper: $helper"
     done
     test -f /etc/pam.d/swaylock
     test -f /usr/lib/systemd/user/realm-idle.service
     grep -Fxq 'ExecStart=/usr/bin/swaylock -f -C /dev/null' /usr/lib/systemd/user/realm-lock.service
-    test ! -e /usr/lib/systemd/user/realm-session.target.wants/realm-idle.service
-    test ! -e /etc/systemd/user/realm-session.target.wants/realm-idle.service
+    test "$(readlink /usr/lib/systemd/user/realm-session.target.wants/realm-idle.service)" = ../realm-idle.service
     swaylock --version
+
+    # Disposable CI guest only. SSH remains key-only; use the distro PAM stack.
+    printf '%s\n' 'alice:realmtest' | chpasswd
+    {
+        swaylock --version
+        case "$target" in
+            ubuntu-24.04-x86_64)
+                dpkg-query -W swaylock swayidle brightnessctl libpam0g libpam-modules
+                dpkg-query -S /usr/bin/swaylock /etc/pam.d/swaylock
+                ;;
+            fedora-44-x86_64)
+                rpm -q swaylock swayidle brightnessctl pam
+                rpm -qf /usr/bin/swaylock /etc/pam.d/swaylock
+                ;;
+        esac
+        # Preserve the small distro PAM configuration, including include targets.
+        find -L /etc/pam.d -maxdepth 1 -type f -print -exec head -c 16384 {} \;
+    } > /var/tmp/realm-native-lock-packages-pam.txt
 
     install -d -m 0755 /etc/sddm.conf.d
     printf '%s\n' \
@@ -78,6 +169,194 @@ install_guest() {
 
 session_property() {
     loginctl show-session "$1" -p "$2" --value
+}
+
+require_portal_socket() {
+    local runtime_dir uid socket_status
+    uid=$(id -u alice)
+    runtime_dir="/run/user/$uid"
+    # The first package-only graphical login has already happened. Capture
+    # status without repairing presets or starting the socket manually.
+    {
+        user_command timeout 10 systemctl --user status pipewire.socket --no-pager || true
+        if user_command timeout 10 systemctl --user is-active --quiet pipewire.socket; then
+            socket_status=0
+        else
+            socket_status=$?
+        fi
+        printf 'package-only socket status: %s\n' "$socket_status"
+    } >> /var/tmp/realm-native-portal-runtime.txt 2>&1
+    return "$socket_status"
+}
+
+install_portal_test_clients() {
+    require_portal_socket || return $?
+    case "$target" in
+        ubuntu-24.04-x86_64)
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get install --yes python3-gi gir1.2-gst-plugins-base-1.0 \
+                gstreamer1.0-plugins-base gstreamer1.0-pipewire
+            ;;
+        fedora-44-x86_64)
+            dnf -y install python3-gobject-base gstreamer1-plugins-base pipewire-gstreamer
+            ;;
+        *) fail "unknown portal fixture target: $target" ;;
+    esac
+    python3 "$probe_input_dir/portal_vm_helper.py" --check-imports
+}
+
+install_browser_test_client() {
+    # CI-only; this action is after package-only and direct portal acceptance.
+    case "$target" in
+        ubuntu-24.04-x86_64)
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get install --yes ca-certificates curl gnupg
+            install -d -m 0755 /etc/apt/keyrings
+            curl --fail --location --connect-timeout 15 --max-time 60 \
+                https://packages.mozilla.org/apt/repo-signing-key.gpg \
+                -o /etc/apt/keyrings/packages.mozilla.org.asc
+            local fingerprint
+            fingerprint=$(gpg --batch --show-keys --with-colons \
+                /etc/apt/keyrings/packages.mozilla.org.asc | awk -F: '$1 == "fpr" { print $10; exit }')
+            test "$fingerprint" = 35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3
+            printf '%s\n' \
+                'deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main' \
+                > /etc/apt/sources.list.d/mozilla.list
+            printf '%s\n' 'Package: firefox*' 'Pin: origin packages.mozilla.org' \
+                'Pin-Priority: 1000' '' 'Package: firefox' 'Pin: release o=Ubuntu' \
+                'Pin-Priority: -1' > /etc/apt/preferences.d/realm-browser-fixture
+            apt-get update
+            apt-get install --yes firefox tesseract-ocr tesseract-ocr-eng
+            {
+                printf 'Mozilla signing-key fingerprint: %s\n' "$fingerprint"
+                cat /etc/apt/sources.list.d/mozilla.list /etc/apt/preferences.d/realm-browser-fixture
+                apt-cache policy firefox
+                dpkg-query -W firefox tesseract-ocr tesseract-ocr-eng
+                dpkg-query -S /usr/bin/firefox
+            } > /var/tmp/realm-native-browser-packages.txt
+            if dpkg-query -W -f='${Version}' firefox | grep -q snap; then
+                fail 'browser fixture installed the Ubuntu Snap transition instead of Mozilla DEB'
+            fi
+            ;;
+        fedora-44-x86_64)
+            dnf -y install firefox tesseract tesseract-langpack-eng
+            {
+                rpm -q firefox tesseract tesseract-langpack-eng
+                rpm -qf /usr/bin/firefox
+                dnf info --installed firefox
+            } > /var/tmp/realm-native-browser-packages.txt
+            ;;
+        *) fail "unknown browser fixture target: $target" ;;
+    esac
+    firefox --version >> /var/tmp/realm-native-browser-packages.txt
+    tesseract --list-langs 2>&1 | tee -a /var/tmp/realm-native-browser-packages.txt | grep -Fxq eng
+    install -d -m 0755 /usr/share/applications /etc/xdg
+    printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Realm Browser Test' \
+        'Exec=/usr/bin/firefox --no-remote http://127.0.0.1:8765/' \
+        'MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;' \
+        > /usr/share/applications/realm-browser-test.desktop
+    printf '%s\n' '[Default Applications]' \
+        'text/html=realm-browser-test.desktop' \
+        'x-scheme-handler/http=realm-browser-test.desktop' \
+        'x-scheme-handler/https=realm-browser-test.desktop' \
+        > /etc/xdg/mimeapps.list
+}
+
+toolkit_fixture_packages() {
+    case "$1" in
+        ubuntu-24.04-x86_64)
+            printf '%s\n' gtk-3-examples gtk-4-examples strace
+            ;;
+        fedora-44-x86_64)
+            printf '%s\n' gtk3-devel gtk4-devel-tools strace
+            ;;
+        *) fail "unknown toolkit fixture target: $1" ;;
+    esac
+}
+
+require_packaged_qt6ct() {
+    local plugin owner
+    test -x /usr/bin/qt6ct || fail 'shipped qt6ct executable missing before fixture install'
+    case "$target" in
+        ubuntu-24.04-x86_64)
+            plugin=/usr/lib/x86_64-linux-gnu/qt6/plugins/platformthemes/libqt6ct.so
+            test -f "$plugin" || fail 'shipped qt6ct platform plugin missing before fixture install'
+            owner=$(dpkg-query -S /usr/bin/qt6ct)
+            [[ $owner =~ ^qt6ct(:amd64)?:[[:space:]] ]] || fail "wrong shipped qt6ct owner: $owner"
+            owner=$(dpkg-query -S "$plugin")
+            [[ $owner =~ ^qt6ct(:amd64)?:[[:space:]] ]] || fail "wrong shipped Qt plugin owner: $owner"
+            dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' qt6ct
+            ;;
+        fedora-44-x86_64)
+            plugin=/usr/lib64/qt6/plugins/platformthemes/libqt6ct.so
+            test -f "$plugin" || fail 'shipped qt6ct platform plugin missing before fixture install'
+            test "$(rpm -qf --qf '%{NAME}' /usr/bin/qt6ct)" = qt6ct ||
+                fail 'wrong shipped qt6ct executable owner'
+            test "$(rpm -qf --qf '%{NAME}' "$plugin")" = qt6ct ||
+                fail 'wrong shipped qt6ct platform plugin owner'
+            rpm -q qt6ct
+            ;;
+        *) fail "unknown toolkit fixture target: $target" ;;
+    esac
+}
+
+install_toolkit_test_clients() {
+    local -a packages
+    local executable expected owner plugin
+    # The production package must make Qt usable; installing qt6ct here would
+    # mask a missing native dependency behind disposable VM test scaffolding.
+    require_packaged_qt6ct || return $?
+    mapfile -t packages < <(toolkit_fixture_packages "$target")
+    case "$target" in
+        ubuntu-24.04-x86_64)
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get install --yes "${packages[@]}"
+            plugin=/usr/lib/x86_64-linux-gnu/qt6/plugins/platformthemes/libqt6ct.so
+            {
+                dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' qt6ct
+                dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' "${packages[@]}"
+                for executable in gtk3-widget-factory gtk4-widget-factory qt6ct; do
+                    case "$executable" in
+                        gtk3-*) expected=gtk-3-examples ;;
+                        gtk4-*) expected=gtk-4-examples ;;
+                        qt6ct) expected=qt6ct ;;
+                    esac
+                    test -x "/usr/bin/$executable" || fail "missing toolkit executable: $executable"
+                    owner=$(dpkg-query -S "/usr/bin/$executable")
+                    [[ $owner =~ ^${expected}(:amd64)?:[[:space:]] ]] ||
+                        fail "wrong toolkit owner for $executable: $owner"
+                    printf '%s\n' "$owner"
+                done
+                test -f "$plugin" || fail "missing qt6ct platform plugin: $plugin"
+                dpkg-query -S "$plugin" | grep -E '^qt6ct(:amd64)?:[[:space:]]'
+            } > /var/tmp/realm-native-toolkit-packages.txt
+            ;;
+        fedora-44-x86_64)
+            dnf -y install "${packages[@]}"
+            plugin=/usr/lib64/qt6/plugins/platformthemes/libqt6ct.so
+            {
+                rpm -q qt6ct
+                rpm -q "${packages[@]}"
+                for executable in gtk3-widget-factory gtk4-widget-factory qt6ct; do
+                    case "$executable" in
+                        gtk3-*) expected=gtk3-devel ;;
+                        gtk4-*) expected=gtk4-devel-tools ;;
+                        qt6ct) expected=qt6ct ;;
+                    esac
+                    test -x "/usr/bin/$executable" || fail "missing toolkit executable: $executable"
+                    owner=$(rpm -qf --qf '%{NAME}\n' "/usr/bin/$executable")
+                    test "$owner" = "$expected" ||
+                        fail "wrong toolkit owner for $executable: $owner"
+                    rpm -qf "/usr/bin/$executable"
+                done
+                test -f "$plugin" || fail "missing qt6ct platform plugin: $plugin"
+                test "$(rpm -qf --qf '%{NAME}' "$plugin")" = qt6ct ||
+                    fail "wrong qt6ct platform plugin owner: $plugin"
+                rpm -qf "$plugin"
+            } > /var/tmp/realm-native-toolkit-packages.txt
+            ;;
+        *) fail "unknown toolkit fixture target: $target" ;;
+    esac
 }
 
 find_realm_session() {
@@ -139,10 +418,18 @@ probe_guest() {
     test "$(session_property "$session" Type)" = wayland
     test "$(session_property "$session" Remote)" = no
 
-    for unit in realm-session.target realm-wm.service realm-bar.service; do
+    for unit in realm-session.target realm-wm.service realm-bar.service realm-idle.service; do
         wait_user_unit "$unit" 30
         user_command systemctl --user is-active "$unit" >> "$evidence/units.txt"
     done
+
+    # Observe automatic login activation before controlling the long fixture.
+    # Timing acceptance is separate; this does not certify the 300/600 timers.
+    user_command systemctl --user show realm-idle.service \
+        -p ActiveState -p MainPID -p ActiveEnterTimestampMonotonic \
+        > "$evidence/idle-login.txt"
+    user_command systemctl --user stop realm-idle.service
+    test "$(user_command systemctl --user show realm-idle.service -p ActiveState --value)" = inactive
 
     river_pid=$(one_user_pid river)
     wm_pid=$(one_user_pid realm-wm)
@@ -175,7 +462,13 @@ probe_guest() {
         "$evidence/realmctl-doctor.json"
 
     cp /var/tmp/realm-native-packages.txt "$evidence/packages.txt"
+    cp /var/tmp/realm-native-portal-runtime.txt "$evidence/portal-package-runtime.txt"
+    cp /var/tmp/realm-native-lock-packages-pam.txt "$evidence/lock-packages-pam.txt"
     cp /var/tmp/realm-native-session-owner.txt "$evidence/session-entry-owner.txt"
+    if [[ "$target" == fedora-44-x86_64 ]]; then
+        cp /var/tmp/realm-native-activation-owner.txt \
+            "$evidence/dbus-activation-owner.txt"
+    fi
     cp /usr/share/wayland-sessions/realm.desktop "$evidence/realm.desktop"
     cp /etc/sddm.conf.d/realm-native-vm.conf "$evidence/sddm-autologin.conf"
     systemctl status display-manager.service --no-pager \
@@ -191,14 +484,29 @@ probe_guest() {
 
 main() {
     case ${1:-} in
+        configure-sync-diagnostic)
+            configure_sync_diagnostic
+            ;;
+        probe-sync-diagnostic)
+            probe_sync_diagnostic
+            ;;
         install)
             install_guest
             ;;
         probe)
             probe_guest
             ;;
+        portal-clients)
+            install_portal_test_clients
+            ;;
+        browser-client)
+            install_browser_test_client
+            ;;
+        toolkit-clients)
+            install_toolkit_test_clients
+            ;;
         *)
-            fail 'usage: guest-probe.sh {install TARGET PACKAGE_DIR|probe TARGET EVIDENCE_DIR}'
+            fail 'usage: guest-probe.sh {install TARGET PACKAGE_DIR|probe TARGET EVIDENCE_DIR|portal-clients TARGET|browser-client TARGET|toolkit-clients TARGET}'
             ;;
     esac
 }

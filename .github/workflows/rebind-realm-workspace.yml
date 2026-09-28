@@ -14,6 +14,11 @@ on:
         description: Exact 40-character source commit to bind
         required: true
         type: string
+      refresh_workspace_lock:
+        description: Refresh workspace dependency edges only; external closure must remain unchanged
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: realm-workspace-rebind-${{ inputs.source_commit || github.event.pull_request.head.sha }}
@@ -28,6 +33,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       SOURCE_COMMIT: ${{ inputs.source_commit || github.event.pull_request.head.sha }}
+      REFRESH_WORKSPACE_LOCK: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_workspace_lock || false }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,10 +46,14 @@ jobs:
       - name: Produce candidate in runner-local storage
         run: |
           set -euo pipefail
+          refresh_args=()
+          if [ "$REFRESH_WORKSPACE_LOCK" = true ]; then
+            refresh_args+=(--refresh-workspace-lock)
+          fi
           python3 tooling/packaging/tool-sources/ci_rebind_realm_workspace.py \
             --repo "$GITHUB_WORKSPACE/source" \
             --commit "$SOURCE_COMMIT" \
-            --output "$RUNNER_TEMP/realm-workspace-rebind"
+            --output "$RUNNER_TEMP/realm-workspace-rebind" "${refresh_args[@]}"
       - name: Validate complete candidate bundle
         run: |
           set -euo pipefail
@@ -59,3 +69,4 @@ jobs:
             ${{ runner.temp }}/realm-workspace-rebind/source.tar.gz
             ${{ runner.temp }}/realm-workspace-rebind/bundle.toml
             ${{ runner.temp }}/realm-workspace-rebind/provenance.md
+            ${{ inputs.refresh_workspace_lock && format('{0}/realm-workspace-rebind/Cargo.lock', runner.temp) || '' }}

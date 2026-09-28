@@ -163,6 +163,8 @@ override_dh_auto_install:
 		debian/realm/usr/lib/systemd/user/realm-session.target.wants/realm-wm.service
 	ln -sf ../realm-bar.service \
 		debian/realm/usr/lib/systemd/user/realm-session.target.wants/realm-bar.service
+	ln -sf ../realm-idle.service \
+		debian/realm/usr/lib/systemd/user/realm-session.target.wants/realm-idle.service
 	# The runtime payload is indivisible: a successful package contains all three
 	# settled binary names, and a missing build output fails packaging here.
 	set -e; \

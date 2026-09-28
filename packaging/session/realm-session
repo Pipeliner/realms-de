@@ -160,6 +160,28 @@ fatal() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+login_claim_fd=''
+# Keep the display manager's entry PID as teardown owner. A flock supervisor
+# would release the claim on TERM without forwarding it to the desktop.
+claim_login() {
+	have flock || fatal NO-SESSION-CLAIM "flock is required to exclude a competing Realm login"
+	exec {login_claim_fd}>"$XDG_RUNTIME_DIR/realm-session.lock"
+	flock --exclusive --nonblock "$login_claim_fd" || exit 73
+}
+
+close_login_claim_for_child() {
+	[[ -z "$login_claim_fd" ]] || exec {login_claim_fd}>&-
+}
+
+prepare_login_theme() {
+	if ! have "$REALM_WM"; then
+		((REALM_ALLOW_NO_WM && !REALM_STRICT)) && return 0
+		fatal WM-ABORT "window manager '$REALM_WM' is missing; cannot prepare the login theme"
+	fi
+	"$REALM_WM" --prepare-session-theme "$MAIN_PID" {login_claim_fd}>&- ||
+		fatal THEME-SELECTION "could not prepare a complete theme selection for this login"
+}
+
 # ------------------------------------------------------------ session bus ---
 # NO-SESSION-BUS. Without a session bus there is no activation environment to
 # publish into, so portals, file dialogs and screen sharing cannot work at all.
@@ -290,7 +312,7 @@ start_compositor() {
 	# arguments and no compositor-side startup hook — a hook would launch the
 	# window manager before step 4, which is the bug this ordering prevents.
 	log "starting compositor: $REALM_COMPOSITOR ${args[*]:-}"
-	"$REALM_COMPOSITOR" "${args[@]}" &
+	(close_login_claim_for_child; exec "$REALM_COMPOSITOR" "${args[@]}") &
 	compositor_pid=$!
 
 	# The abort path (realm-session --abort, run by realm-session-abort.service)
@@ -625,7 +647,7 @@ spawn_supervised() {
 		log "$bin is not installed — skipping (pre-alpha: realm's own binaries are not built yet)"
 		return 0
 	fi
-	supervise "$bin" "$essential" &
+	(close_login_claim_for_child; supervise "$bin" "$essential") &
 	direct_pids+=("$!")
 	log "started $bin under a bounded respawn loop (pid ${direct_pids[-1]})"
 	return 0
@@ -850,6 +872,8 @@ main() {
 
 	set_identity
 	ensure_session_bus "$@"
+	claim_login "$@"
+	prepare_login_theme
 	detect_session_services
 	trap on_abort_signal USR1
 	start_compositor

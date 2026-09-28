@@ -1,4 +1,4 @@
-# SPEC 0032: dormant until package/PAM/protocol and binding-suppression evidence.
+# SPEC 0032: integrate activation only after prerequisite CI evidence review.
 [Unit]
 Description=Realm idle and suspend locking
 PartOf=realm-session.target graphical-session.target
@@ -14,4 +14,5 @@ RestartSec=2
 Slice=app.slice
 TimeoutStopSec=5
 
-# No install target while staged: package helpers must not auto-enable this.
+[Install]
+WantedBy=realm-session.target

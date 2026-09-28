@@ -46,6 +46,8 @@ assert lib.assertMsg (lib.versionAtLeast pkgs.swaylock.version "1.7")
     pkgs.makeWrapper
     pkgs.git
   ];
+  # Completion fixtures execute Bash through PATH, never a host /bin/bash.
+  nativeCheckInputs = [ pkgs.bash ];
 
   # realm-core's tests include the palette lint, so a palette that fails its
   # WCAG floors fails the build. That is the intended behaviour (ADR 0005).
@@ -95,6 +97,8 @@ assert lib.assertMsg (lib.versionAtLeast pkgs.swaylock.version "1.7")
       $out/lib/systemd/user/realm-session.target.wants/realm-wm.service
     ln -s ../realm-bar.service \
       $out/lib/systemd/user/realm-session.target.wants/realm-bar.service
+    ln -s ../realm-idle.service \
+      $out/lib/systemd/user/realm-session.target.wants/realm-idle.service
 
     # The portal backend policy. On NixOS the module's xdg.portal.config says
     # the same thing; this copy is what makes the package correct on

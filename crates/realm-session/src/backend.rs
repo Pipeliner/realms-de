@@ -502,6 +502,11 @@ pub trait WmBackend: Send {
     /// Return queued-work and dynamic descriptor interest without side effects.
     fn poll_interest(&self) -> BackendPollInterest;
 
+    /// Return whether compositor-private lock state currently suppresses binding input.
+    fn binding_input_suspended(&self) -> bool {
+        false
+    }
+
     /// Perform one bounded nonblocking protocol quantum and expose at most one event.
     fn service(&mut self, ready: BackendReady, now: Instant)
         -> BackendResult<Option<BackendEvent>>;

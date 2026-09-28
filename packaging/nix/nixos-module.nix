@@ -89,7 +89,7 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    # SPEC 0032: upstream authentication, but no idle wantedBy until VM proof.
+    # SPEC 0032: upstream authentication and fresh-login idle activation.
     security.pam.services.swaylock = { };
     environment.systemPackages = [
       cfg.package
@@ -97,6 +97,7 @@ in
       sessionPackage
       pkgs.adwaita-icon-theme
       pkgs.gsettings-desktop-schemas
+      pkgs.qt6Packages.qt6ct
     ]
     ++ [ pkgs.slurp ] # xdg-desktop-portal-wlr's default output chooser
     ++ support.reusedTools pkgs;
@@ -114,7 +115,21 @@ in
     systemd.packages = [ cfg.package ];
     systemd.user.services.realm-wm.wantedBy = [ "realm-session.target" ];
     systemd.user.services.realm-wm.path = [ cfg.package ] ++ support.reusedTools pkgs;
+    # GTK3's bundled Adwaita assets include SVG resources. The bare Realm
+    # session has no GNOME module to register librsvg's GdkPixbuf loader.
+    # Feed the generated cache to the WM service: its spawned terminal and
+    # toolkit clients inherit it without changing the shared user-manager
+    # import allowlist from SPEC 0005.
+    programs.gdk-pixbuf.modulePackages = [ pkgs.librsvg ];
+    systemd.user.services.realm-wm.environment.GDK_PIXBUF_MODULE_FILE =
+      config.environment.sessionVariables.GDK_PIXBUF_MODULE_FILE;
+    # Qt wrappers prefix their own plugin paths, retaining this inherited root.
+    # Scope discovery to Realm-launched clients without changing other desktops'
+    # platform theme or the session-import allowlist (SPEC 0030).
+    systemd.user.services.realm-wm.environment.QT_PLUGIN_PATH =
+      "${pkgs.qt6Packages.qt6ct}/${pkgs.qt6Packages.qtbase.qtPluginPrefix}";
     systemd.user.services.realm-bar.wantedBy = [ "realm-session.target" ];
+    systemd.user.services.realm-idle.wantedBy = [ "realm-session.target" ];
 
     environment.etc."realm/palette.toml".source = cfg.paletteFile;
 
@@ -158,9 +173,9 @@ in
     # left to the default it offers no sources and reports no error.
     #
     # The installed-desktop VM exercises xdpw through a real restricted
-    # PipeWire frame. Browser picker behaviour and physical-machine capture
-    # remain hardware acceptance (SPEC 0005 A15), so docs/INSTALL.md keeps that
-    # boundary explicit. slurp is xdpw's default interactive output chooser.
+    # PipeWire frame and real Firefox getDisplayMedia with interactive output
+    # selection. Physical-machine capture remains hardware acceptance
+    # (SPEC 0005 A15). slurp is xdpw's default interactive output chooser.
     xdg.portal = {
       enable = true;
       extraPortals = [ pkgs.xdg-desktop-portal-gtk ];

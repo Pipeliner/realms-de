@@ -197,10 +197,20 @@ require_section "$try_section" '2026-12-26' \
     'README trial must disclose artifact expiry'
 require_section "$try_section" 'desktop and display manager installed' \
     'README trial must preserve the existing desktop'
-for artifact in 10935181555 10935057867; do
-    require_section "$try_section" "https://github.com/Pipeliner/realms-de/actions/runs/36327811527/artifacts/$artifact" \
-        'README trial must link its verified package artifact'
-done
+require_section "$try_section" 'https://github.com/Pipeliner/realms-de/actions/runs/36327811527/artifacts/10935181555' \
+    'README trial must link its verified package artifact'
+require_section "$try_section" 'https://github.com/Pipeliner/realms-de/actions/runs/36358017601/artifacts/10944903392' \
+    'README trial must link its verified Fedora package artifact'
+require_section "$status_section" 'native GTK/Qt CSS consumption' \
+    'README must retain the Fedora toolkit verification boundary'
+require_section "$status_section" '11538ab5bd05a1018f48216f661990987c259ce2' \
+    'README must bind newer Fedora evidence to its tested merge'
+require_section "$status_section" 'https://github.com/Pipeliner/realms-de/actions/runs/36358017601/artifacts/10945836471' \
+    'README must link newer Fedora runtime evidence'
+require_section "$status_section" 'the overall run failed its Nix GTK check' \
+    'README must retain the newer Fedora run failure boundary'
+require_section "$status_section" 'Ubuntu partial idle-lock rendering' \
+    'README must retain the Ubuntu idle-lock failure boundary'
 for stale_claim in \
     'There is no desktop environment here yet' \
     'live compositor verification pending' \
@@ -246,25 +256,13 @@ require_section "$map_section" 'root Nix reference-build entry point' \
 
 needs_section=$(sed -n '/^## Needs a human$/,/^## Repo map$/p' "$readme")
 [ -n "$needs_section" ] || fail 'README needs-human section is required'
-require_section "$needs_section" '2026-09-27' \
+require_section "$needs_section" '2026-09-28' \
     'README needs-human snapshot timestamp differs from the accepted snapshot'
 
-expected_count=0
-while IFS='|' read -r issue title; do
-    [ -n "$issue" ] || continue
-    expected_count=$((expected_count + 1))
-    issue_url="https://github.com/Pipeliner/realms-de/issues/$issue"
-    url_count=$(printf '%s\n' "$needs_section" | grep -F -c -e "$issue_url)" || true)
-    [ "$url_count" -eq 1 ] || fail "missing needs-human snapshot issue #$issue"
-    row_prefix="| [#$issue — $title]($issue_url) |"
-    row_count=$(printf '%s\n' "$needs_section" | grep -F -c -e "$row_prefix" || true)
-    [ "$row_count" -eq 1 ] || fail 'needs-human snapshot title differs from GitHub'
-    row=$(printf '%s\n' "$needs_section" | grep -F -e "$row_prefix")
-    printf '%s\n' "$row" | awk -F '|' 'NF == 4 && $3 ~ /[^[:space:]]/ { ok = 1 } END { exit(ok ? 0 : 1) }' \
-        || fail 'needs-human snapshot blocker is empty'
-done <<'EOF'
-25|Template: GTK 3, GTK 4 and libadwaita stylesheets
-EOF
+require_section "$needs_section" 'no open issues require a human decision' \
+    'README must state the empty human-decision snapshot'
+require_section "$needs_section" 'and fidelity checks remain open' \
+    'README must preserve unresolved toolkit verification'
 
 if printf '%s\n' "$needs_section" \
     | grep -F -q -e 'https://github.com/Pipeliner/realms-de/issues/34'; then
@@ -273,8 +271,8 @@ fi
 
 actual_count=$(printf '%s\n' "$needs_section" \
     | grep -E -c 'https://github\.com/Pipeliner/realms-de/issues/[0-9]+' || true)
-[ "$actual_count" -eq "$expected_count" ] \
-    || fail 'needs-human snapshot must contain exactly the accepted issue set'
+[ "$actual_count" -eq 0 ] \
+    || fail 'needs-human snapshot must contain no issue rows'
 
 docs_job=$(sed -n '/^  docs:/,/^  msrv:/p' "$workflow")
 for command in \

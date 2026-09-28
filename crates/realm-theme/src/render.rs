@@ -108,6 +108,23 @@ fn expand(p: &Palette, id: &str, body: &str) -> Result<String> {
     Ok(value.render())
 }
 
+fn css_string(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' | '\\' => {
+                quoted.push('\\');
+                quoted.push(ch);
+            }
+            ch if ch.is_control() => quoted.push_str(&format!("\\{:x} ", ch as u32)),
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
 fn is_transform(segment: &str) -> bool {
     segment == "bare" || segment.starts_with("rgba(") || segment.starts_with("over(")
 }
@@ -185,7 +202,14 @@ fn resolve(p: &Palette, path: &str) -> Option<Value> {
         },
         ("typography", f) => match f {
             "family" => Value::Text(p.typography.family.clone()),
-            "fallback" => Value::Text(p.typography.fallback.join(", ")),
+            "fallback" => Value::Text(
+                p.typography
+                    .fallback
+                    .iter()
+                    .map(|family| css_string(family))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
             "weight_regular" => Value::Number(p.typography.weight_regular as f32),
             "weight_medium" => Value::Number(p.typography.weight_medium as f32),
             "weight_bold" => Value::Number(p.typography.weight_bold as f32),
@@ -301,6 +325,77 @@ mod tests {
         for (src, want) in cases {
             assert_eq!(render(&p, "t", src).unwrap(), want, "{src}");
         }
+    }
+
+    #[test]
+    fn gtk_font_family_serializes_each_fallback_as_a_css_string() {
+        let shipped_palette = shipped();
+        let shipped_declaration = r#"font-family: "IBM Plex Mono", "Symbols Nerd Font Mono", "Noto Sans Symbols 2", "Noto Sans Egyptian Hieroglyphs", "Symbola", "DejaVu Sans Mono";"#;
+        for id in ["gtk3", "gtk4"] {
+            let template = templates().into_iter().find(|t| t.id == id).unwrap();
+            let css = render(&shipped_palette, id, template.source).unwrap();
+            assert!(css.contains(shipped_declaration), "{id}: shipped font list");
+        }
+
+        let mut palette = shipped();
+        palette.typography.fallback = [
+            "IBM Plex Mono",
+            "Noto Sans Symbols 2",
+            "Comma, Family",
+            "Quoted \"Family\"",
+            "Slash\\Family",
+            "Control\nFamily",
+            "Tabbed\tFamily",
+            "Carriage\rFamily",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let expected = r#"font-family: "IBM Plex Mono", "Noto Sans Symbols 2", "Comma, Family", "Quoted \"Family\"", "Slash\\Family", "Control\a Family", "Tabbed\9 Family", "Carriage\d Family";"#;
+        for id in ["gtk3", "gtk4", "gtk3-profile", "gtk4-profile"] {
+            let template = templates().into_iter().find(|t| t.id == id).unwrap();
+            let css = render(&palette, id, template.source).unwrap();
+            assert!(css.contains(expected), "{id}: missing quoted CSS font list");
+        }
+    }
+
+    #[test]
+    fn fuzzel_rendered_colors_use_supported_1_9_2_vocabulary() {
+        let p = shipped();
+        let template = templates()
+            .into_iter()
+            .find(|template| template.id == "fuzzel")
+            .unwrap();
+        let output = render(&p, template.id, template.source).unwrap();
+        // Ubuntu Noble's installed Fuzzel 1.9.2 rejects unknown keys, rather
+        // than ignoring newer optional color controls. Validate rendered INI.
+        let supported = [
+            "background",
+            "text",
+            "match",
+            "selection",
+            "selection-text",
+            "selection-match",
+            "border",
+        ];
+        let mut section = "";
+        let mut keys = Vec::new();
+        for line in output.lines().map(str::trim) {
+            if line.starts_with('[') {
+                section = line;
+            } else if section == "[colors]" && !line.is_empty() && !line.starts_with('#') {
+                let (key, value) = line.split_once('=').expect("INI assignment");
+                assert!(
+                    supported.contains(&key),
+                    "Fuzzel 1.9.2 rejects [colors].{key}"
+                );
+                assert_eq!(value.len(), 8, "RGBA color: {line}");
+                assert!(value.bytes().all(|byte| byte.is_ascii_hexdigit()), "{line}");
+                keys.push(key);
+            }
+        }
+        assert_eq!(keys, supported);
+        assert!(output.contains(&format!("prompt={}\n", p.glyphs.prompt_sigil)));
     }
 
     #[test]

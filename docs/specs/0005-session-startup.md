@@ -9,11 +9,18 @@
 
 - **Status:** Draft — the NixOS session-discovery contract, startup step 3,
   XWayland display discovery and publication, and current-incarnation
-  doctor-health handoff are accepted; §4's systemd startup ordering and dual
+  doctor-health handoff and distro-native swayidle/swaylock selection are
+  accepted; §4's systemd startup ordering and dual
   teardown anchors, host-policy/lock-before-suspend boundary, and 5-minute
   dim/10-minute lock defaults are accepted; SPEC 0029 separately accepts the
   bounded native x86_64 graphical-login proof. Open questions below remain
   unresolved where noted (`needs-human`)
+- **Accepted browser VM refinement (2026-09-27):** A13b below supplies the
+  bounded browser capture portion of SPEC 0031's acceptance journey; A15's
+  physical-machine evidence remains separate.
+- **Accepted native recovery refinement (2026-09-27):** A10 and its bounded
+  native evidence paragraph below govern the installed crash-recovery probe;
+  projected-rectangle acceptance still requires inspection of retained images.
 - **Milestone:** M3
 - **Decisions:** [ADR 0011](../adr/0011-session-integration-contract.md),
   [ADR 0013](../adr/0013-river-window-management-backend.md),
@@ -90,8 +97,8 @@ the session through NixOS display-manager session data, and assert both the
 `realm.desktop` identity and its rewritten `Exec` target. A test that uses no
 display manager may test package contents directly, but must not claim to test
 NixOS session discovery.
-- The 5-minute dim and 10-minute lock/blank defaults are accepted. Remaining
-  locker implementation details are tracked separately in **Open questions**.
+- The locker, idle client, host-policy/lock-before-suspend lid boundary, and
+  5-minute dim/10-minute lock defaults are accepted below.
 
 ## Behaviour
 
@@ -217,6 +224,12 @@ services inherit. A desktop that does only the first still has hanging portals.
 `dbus-update-activation-environment --systemd` also forwards to the systemd user
 manager, so on a healthy box the two calls overlap. That redundancy is
 deliberate: either binary can be absent, and the failure modes are different.
+The Fedora 44 native package therefore requires [`dbus-tools`](https://packages.fedoraproject.org/pkgs/dbus/dbus-tools/fedora-44.html),
+the published owner of `/usr/bin/dbus-update-activation-environment`;
+[`dbus-common`](https://packages.fedoraproject.org/pkgs/dbus/dbus-common/fedora-44.html)
+alone supplies bus configuration but not that executable. A fresh installed
+session must not report `NO-DBUS-ACTIVATION` because its package omitted the
+tool.
 On a box with no systemd user manager the call must be made **without**
 `--systemd`, or it fails trying to reach `org.freedesktop.systemd1` and masks
 whether the D-Bus half succeeded.
@@ -316,7 +329,7 @@ from a crashed session.
    no layer shell, so realm cannot draw its own error.
 3. **`realm-wm` dies later.** Supervised restart, with the ledger recovered
    rather than lost. On every ledger mutation the daemon queues a snapshot to
-   `$XDG_RUNTIME_DIR/realm/ledger.snapshot`; the write happens on a separate
+   `$XDG_RUNTIME_DIR/realm/ledger.json` (SPEC 0003); the write happens on a separate
    thread and never on the protocol input path, because under river a stall is a
    session failure and not a slow frame (ADR 0013). On restart, if the snapshot's
    compositor instance id matches the running river, the ledger is restored:
@@ -328,15 +341,77 @@ from a crashed session.
    supervised one unstartable *forever* — and a naive `Restart=` turns that into
    a permanent restart loop. See failure mode **N2**.
 
+Before installed-session verification, source-level daemon readiness fixtures
+must report readiness timeout without joining a still-running daemon. Drop
+the readiness receiver on timeout so a delayed ready callback fails instead
+of entering an unobserved live loop. Joining an already-finished daemon for
+its diagnostic result is allowed. Keep the existing two-second readiness
+budget and normal real-socket GetState/Quit receipt proof; a delayed-callback
+regression must itself finish with bounded cleanup. This is fixture behavior,
+not a production startup timeout change. The ready callback uses a rendezvous
+channel so an unobserved readiness notification cannot be queued after timeout.
+If the real-socket fixture times out under packaged-test contention, its
+bounded diagnostic must identify the last observed startup boundary: daemon
+thread entry, backend construction after endpoint/snapshot setup, or readiness
+callback after recovery, clock, and sampler setup. This is test-only evidence;
+it does not extend the two-second budget, excuse missing readiness, or replace
+the exact GetState and Quit receipt assertions. A timeout before thread entry
+must also be distinguishable from a stall inside startup.
+When that broad pre-backend stage recurs, the fixture's next bounded witness
+must distinguish completion of system-timezone discovery, endpoint binding,
+worker startup, and initial snapshot read. These marks are private to the
+fixture daemon thread so parallel tests cannot supply false progress. A mark
+is evidence of a completed boundary only; the real-socket test still uses the
+same production startup path, two-second deadline, GetState, and Quit receipt.
+
+**A10 native recovery evidence (accepted refinement, 2026-09-27).** Open
+three distinguishable terminals through real keyboard bindings, alter their
+ledger order, and await the matching durable `ledger.json` before SIGKILL of
+the observed WM process identity. Require a different WM PID/start-time pair,
+the same login/compositor/bar identities, identical recovered ledger and stable
+compositor bindings, and a positive focus binding followed by restoration.
+The configured restart delay remains one second; a bounded twenty-second
+recovery observation records actual monotonic elapsed time, not a promise that
+readiness occurs within the restart delay. Require the bar's active state,
+activation timestamp and restart count to remain unchanged. Retain before/after
+framebuffers, state and output/scale context. Ledger equality is not geometry
+proof: projected rectangles remain pending explicit inspection of those images.
+No new product observation API is required. Failure retains partial evidence
+and bounded diagnostics; success closes all three fixture terminals normally.
+
 **Supervision policy, stated so the unit can be written from it:**
+
+**Accepted crash ownership correction (2026-09-27).** Automatic WM restarts
+use `RestartMode=direct` (systemd 254+, within the supported distribution
+floor), so a transient failure does not invoke the abort dependency. Terminal
+restart-prevented failures and exhausted start limits still invoke abort.
+Ordinary launched applications, including fixed-consumer helpers and direct
+argv/browser launches, run in transient user `app.slice` scopes with
+`PartOf=realm-session.target` and `BindsTo=realm-session.target`. They remain
+outside the WM service cgroup; its ordinary control-group kill policy remains.
+Stopping the session stops these scopes. Scope creation must precede application
+exec, preserve argv literally (environment expansion disabled), inherited cwd
+and child-only theme selectors, and must never fall back to an unscoped launch.
+The existing asynchronous launch response admits the helper, not application
+readiness; scope/exec failure remains nonzero with a diagnostic in the journal.
+The fixed-consumer helper retains its existing generation lease and argv logic.
+Native recovery records three distinct application scopes and their target
+dependencies before and after the crash. Native relogin deliberately leaves a
+terminal and its shell open at Quit and rejects surviving PID/start-time pairs
+after the next login, as well as requiring an initially empty next-login ledger.
+The recovery fixture identifies exactly its three Realm-launched terminals by
+the selected-login Foot config argument when recording scopes and checking
+closure. A distribution-owned Foot server is outside that set and may remain
+running; missing, extra, or replaced matching terminals still fail recovery.
 
 | Property | Value | Reason |
 |---|---|---|
 | `Restart=` | `always` | Quit is expressed through river's `exit_session`, not through the daemon exiting (see below), so a clean exit on its own is not a normal path and must not leave river unmanaged. |
+| `RestartMode=` | `direct` | Skip transient failed-state notifications during automatic restart; reserve abort for terminal failure. |
 | `RestartSec=` | `1s` | Every second here is a second the user cannot move a window. |
 | `RestartPreventExitStatus=` | `69 78` | `69` = river answered `unavailable`; `78` = protocol version mismatch against the pinned river. Restarting cannot help with either, and looping hides the message. |
 | `StartLimitIntervalSec=` / `StartLimitBurst=` | `30` / `5` | Five failures in thirty seconds is a real bug. It must surface as a dead unit, not a hot laptop. |
-| `OnFailure=` | `realm-session-abort.service` | Fires when the unit enters `failed`, which with `Restart=always` means *after* the start limit is hit — exactly once, at the right moment. That unit runs `realm-session --abort`, which reads `$XDG_RUNTIME_DIR/realm/session.pid` and signals the entry to tear down (requirement 2). |
+| `OnFailure=` | `realm-session-abort.service` | With `RestartMode=direct`, fires for terminal failure (restart-prevented exit or exhausted start limit), not an ordinary auto-restart. That unit runs `realm-session --abort`, which reads `$XDG_RUNTIME_DIR/realm/session.pid` and signals the entry to tear down (requirement 2). |
 | `TimeoutStopSec=` | `10s` | Bounded, so teardown cannot hang on it. |
 | `Slice=` | `session.slice` | The window manager is essential to the session; under memory pressure it must not be the first thing killed. |
 
@@ -417,6 +492,15 @@ with a two-second termination deadline and a one-second forced-kill grace; the
 driver command is also capped by the shared remaining time. An unresponsive X
 server cannot extend the observation wait without bound. A live child pid alone
 is not evidence that an X11 window mapped.
+CI run 36339786482 mapped the non-override-redirect X11 child while Realm's
+managed-window count stayed zero. The synthetic Nix VM SHALL enable the
+existing client protocol trace for `realm-wm` only and retain a bounded excerpt
+of its window-management protocol journal on A17 failure: at most 200 matching
+entries and 65536 output characters, with a five-second command timeout and
+one-second kill grace. Trace collection failure remains diagnostic and must
+not replace the original assertion failure. Installed production units SHALL
+not enable this trace. The managed-window assertion and shared sixty-second
+activation/mapping/observation deadline remain unchanged.
 
 `doctor` must not shell out to `xlsclients` or `xdpyinfo` to check this: neither
 is guaranteed installed on any of the three targets. It connects to
@@ -450,7 +534,7 @@ and Home Manager copies to represent the same graph.
 | Unit | `[Unit]` | `[Service]` | `[Install]` |
 |---|---|---|---|
 | `realm-session.target` | `BindsTo=graphical-session.target`, `Before=graphical-session.target`, `Wants=graphical-session-pre.target`, `After=graphical-session-pre.target` | — | **none** |
-| `realm-wm.service` | `PartOf=realm-session.target graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=realm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=realm-session.target` |
+| `realm-wm.service` | `PartOf=realm-session.target graphical-session.target`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5`, `OnFailure=realm-session-abort.service` | `Type=notify`, `Restart=always`, `RestartMode=direct`, `RestartSec=1`, `RestartPreventExitStatus=69 78`, `TimeoutStopSec=10`, `Slice=session.slice` | `WantedBy=realm-session.target` |
 | `realm-bar.service` | `PartOf=realm-session.target graphical-session.target`, `After=realm-wm.service`, `Wants=realm-wm.service`, `ConditionEnvironment=WAYLAND_DISPLAY`, `StartLimitIntervalSec=30`, `StartLimitBurst=5` | `Type=exec`, `Restart=on-failure`, `RestartSec=1`, `TimeoutStopSec=5`, `Slice=app.slice` | `WantedBy=realm-session.target` |
 
 The reasoning behind each relationship, because these are easy to copy wrongly:
@@ -545,10 +629,72 @@ nothing in Firefox", with no error anywhere.
 `wlr-screencopy-unstable-v1`** and, for output selection, a chooser
 (`slurp` for the default `simple` chooser), plus a live per-user PipeWire
 service. Merely installing the PipeWire client library linked by xdpw does not
-start that service. The NixOS module enables it explicitly. The VM guard may
-select xdpw's `none` chooser only in its node configuration so one emulated
-output is selected without synthetic pointer input; the shipped chooser policy
-remains unchanged.
+start that service. The NixOS module enables it explicitly. The installed VM
+uses the production interactive output chooser, driven through real VM input;
+it does not bypass output selection with xdpw's `none` chooser.
+
+The VM pointer driver SHALL query QEMU's mouse inventory through the pinned
+test driver's QMP connection, require exactly one active absolute-capable
+pointer, and send 0–0x7fff absolute X/Y midpoint events followed by real
+left-button down/up events through QMP. Every QMP result must be checked; a
+missing or non-absolute active device, failed command, or unchanged chooser
+fails with the inventory, selected pointer, target coordinates, and command
+results in diagnostics. Retain a framebuffer after movement. HMP's relative
+`mouse_move` is not an absolute coordinate set: forcing its PS/2 device while
+the guest has an active absolute vmmouse and sending one huge negative delta
+does not establish a known target. The input path must not bypass the
+interactive chooser or disable driver type checking.
+
+**Accepted native pointer correction (2026-09-27).** Native portal and browser
+chooser fixtures use the same active-absolute QMP input contract. Fedora run
+36336331278 recorded active absolute vmmouse but forced PS/2 relative input,
+then timed out in Slurp. The native VM exposes a host-local QMP socket beside
+its HMP socket. Each QMP exchange validates greeting, capabilities and response,
+ignores asynchronous events, rejects errors/EOF/oversized replies, and has one
+five-second wall-clock deadline. Both fixtures share the pointer helper and
+retain inventory, target and replies; no automatic output-selection bypass is
+permitted. Runtime acceptance still requires the real chooser and captured frame.
+
+### Native FileChooser and direct ScreenCast acceptance
+
+The Ubuntu/Fedora graphical CI journey reuses the persistent portal VM client:
+observe the real managed GTK file chooser, cancel through virtual keyboard input
+and require its exact cancellation response. Then, on the same persistent D-Bus
+connection, issue a distinct `OpenFile` request titled `Realm file selection`.
+The driver acknowledges that the cancelled window closed before this request
+starts (bounded 30-second marker wait), observes the second chooser, and uses
+real Ctrl+L, `/tmp/realmfile`, and the Open action to select a controlled plaintext
+file. Require the exact request-path response code 0, exactly the expected file
+URI, and caller readback matching the fixture bytes; retain URI, byte count and
+SHA-256 alongside the unchanged cancellation evidence. Cancellation, another
+URI, missing/multiple URIs, unreadable or altered contents must fail selection.
+Both native and Nix journeys use real VM keyboard input; source doubles only
+test decisions and do not establish installed UI success. Preserve the existing
+two-second handle and 120-second response bounds and overall fixture deadlines.
+The two-second measurement is handle latency, not user interaction duration.
+This refines A13a and SPEC0031's real chooser journey without changing doctor,
+the shipped backend or application semantics. Select the real Slurp output through
+virtual pointer input and consume/hash a nonempty PipeWire frame. Retain request,
+response, frame metadata, screenshots and bounded diagnostics on failure as well
+as success where guest/monitor I/O remains available. A failed portal is never
+skipped. This does not substitute for SPEC 0031's separate browser-share journey.
+Failure cleanup collects labelled package-runtime evidence and the journal in
+one shared bounded SSH operation, preserving the original failing status.
+
+Before installing test-only Python GI/GStreamer clients, native CI records and
+requires the package-only PipeWire executable/user service/socket and Slurp.
+Test-client installation occurs only after the package-only reboot and graphical
+probe. Immediately before that installation, record and require Alice's actual
+user PipeWire socket to be active, retaining status on failure. This permits
+normal first-login preset activation without assuming an SSH user manager that
+predates package installation has already started new units. The fixture does
+not start or enable the socket to hide a missing production startup contract.
+Fedora Realm explicitly depends on `pipewire`: Fedora 44's portal proxy/wlr
+packages require `pipewire-libs`, not the server (official manifests:
+https://packages.fedoraproject.org/pkgs/xdg-desktop-portal/xdg-desktop-portal/fedora-44.html
+and https://packages.fedoraproject.org/pkgs/xdg-desktop-portal-wlr/xdg-desktop-portal-wlr/fedora-44.html).
+Ubuntu's wlr package already requires the server. GI typelibs and the GStreamer
+PipeWire plugin are fixture clients, not additional Realm runtime requirements.
 
 **Verification, not assumption.** A portal that answers on D-Bus is not proof
 that it works.
@@ -598,6 +744,82 @@ that it works.
   namespaces to load; source presence is not sufficient. It does **not** prove
   a real browser exposes the chooser or that a physical machine captures a
   useful stream; A15 remains hardware-only.
+
+The capture fixture uses browser-default colors, with changing status text as
+its visible progress marker; it does not introduce a second hard-coded palette
+or require an exception to the palette guard. Actual frame delivery and media
+timestamps remain the acceptance evidence, not a custom background color.
+
+The accepted A13b browser refinement serves a controlled loopback page to the
+installed Firefox started by the normal browser binding. A real user-input
+event invokes `getDisplayMedia`; Firefox permissions and the real portal output
+chooser remain enabled. The page must deliver two nonempty PNG frames with
+positive dimensions from its returned video stream, prove strictly increasing
+positive integer `presentedFrames` counters, and explicitly stop its tracks.
+Retain finite `mediaTime` values as diagnostic metadata, including zero.
+The [rVFC API definition](https://wicg.github.io/video-rvfc/#dom-videoframecallbackmetadata-mediatime)
+permits zero media time for live streams; its `presentedFrames` field counts
+frames submitted for composition and must increase monotonically. Fedora
+Firefox 156.0.1 in run 36354366061 reported zero media time while that counter
+advanced from 2 to 34; rejecting it solely for zero time is a fixture error.
+The VM retains the frame bytes and
+digests, result metadata, chooser/capture screenshots and browser version.
+Callback arrival alone is not proof of another presented frame. The page must
+ignore invalid or non-advancing counters and non-finite media time while waiting within
+the original shared 30-second frame-delivery deadline; it must never replace
+the browser counter or media time with wall time. Timeout still stops every track and fails. Retain
+up to 32 callback observations and rejected frame metadata for diagnosis, and
+preserve the first collector error when the page subsequently reports an HTTP
+failure. The collector independently requires two frames with strictly
+increasing positive integer counters and finite media time; missing counters,
+booleans, fractions, repeats and decreases fail. Real PNG delivery, dimensions,
+track-stop and the unchanged 30-second deadline remain mandatory.
+Failures and timeouts are evidence, not skipped success. A local standard-library
+HTTP collector and the existing VM keyboard/mouse driver are sufficient; fake
+media sources, permission bypasses and a new browser automation stack are not
+part of this test. Collector readiness and result/error markers are published
+atomically, so observers never accept partially written metadata. The
+native browser fixture must recognize the installed interactive source chooser,
+not assume it is always Slurp. Fedora run 36339786482 displayed a source-list
+menu after Firefox Allow while the earlier direct portal probe used Slurp.
+The native fixture accepts either Slurp (existing real absolute-pointer input)
+or Fuzzel only after observing its visible source-selection prompt and Monitor
+choice. For Fuzzel it types a Monitor filter through the virtual keyboard,
+waits boundedly for the visible Monitor choice with no Window entry, activates
+it, and waits for the menu to
+exit. It must not blindly accept an unrecognized menu or select a Window.
+This accepted fixture refinement changes neither portal configuration nor
+Firefox permissions; the two real captured frames and track-stop proof remain
+mandatory. The differing chooser observation does not establish its cause.
+The direct portal helper permits up to 120 seconds for each interactive SelectSources and
+Start request: xdpw may run its output chooser during SelectSources, before
+Start is reached. Both failures retain their method-specific diagnosis. The VM
+bounds output-selection input retries to 60 seconds after chooser startup.
+The Nix driver records its pointer inventory and selected device and captures
+the chooser after pointer movement, so a remaining input failure is distinguishable
+from the portal client's request deadline.
+The ordinary successful-build artifact explicitly includes both
+`realm-portal-output-chooser-pointer.png` and
+`realm-browser-output-chooser-pointer.png`. A failed ordinary Nix derivation
+currently retains textual diagnostics in the job log, but does not publish its
+VM screenshot output; screenshot recovery from failed builds is not claimed.
+This proves browser-delivered capture from one emulated
+output, not remote conferencing, audio sharing or physical-machine capture.
+
+Native Ubuntu/Fedora CI applies the same A13b browser proof after its package-only
+and direct-portal checks. Fedora uses distro Firefox; Ubuntu uses Mozilla's
+official signed APT DEB repository (not Ubuntu's transitional Snap package),
+retaining repository/package/version evidence. This does not claim Snap coverage
+or make Firefox a Realm runtime dependency. A disposable default-browser desktop
+entry launches the installed browser through Super+B. Bounded screenshot/OCR
+waits must observe the capture page and ordinary permission prompt before Enter
+and Alt+A; timeouts fail rather than sending permission input blindly. Browser
+result polling allows at least 35 seconds, covering the page's own 30-second
+frame-delivery deadline; the native browser action remains capped at 300 seconds.
+Firefox and English OCR packages are guest-only test dependencies. The existing collector
+and page remain unchanged; retain actual PNG frame bytes, hashes, result/error
+metadata and permission/picker/completion screenshots, then stop the collector
+and close the browser. No permission/sandbox bypass or fake media is allowed.
 
 ### 6. Non-systemd and non-D-Bus paths
 
@@ -741,7 +963,7 @@ gate (ADR 0011's guard).
 | `units/wm` | `realm-wm.service` `ActiveState=active`; `ConditionResult` reported separately | **N1** — a condition-skipped unit read as success | VM |
 | `units/bar` | `realm-bar.service` active or cleanly restarting | Bar gone unnoticed | VM |
 | `units/restart-policy` | The shipped units carry the policy in §4 | A crashed bar taking the session down | **CI** |
-| `units/idle-lock` | An idle and a lock unit are part of `graphical-session.target` | Lid closes, session stays unlocked | VM *(blocked on OQ-1)* |
+| `units/idle-lock` | An idle and a lock unit are part of `graphical-session.target`; dim occurs after 5 minutes, lock/blank after 10 minutes, and host suspend follows the before-sleep lock path | Host-initiated suspend reaches sleep before lock readiness or idle defaults drift | VM |
 | `wm/attached` | realm holds river's window-management global; on refusal reports a possible foreign holder, and names it only when independent evidence identifies it | **N2** — inert compositor, or a restart loop against a stale holder | VM |
 | `wm/layer-shell` | realm is serving `river-layer-shell-v1` | The bar never appears, and it looks like the bar's fault | VM |
 | `wm/capabilities` | `Capabilities`, including `unsupported` ([INTERFACES.md §1](../INTERFACES.md)) | A backend gap that looks like a bug | VM |
@@ -749,7 +971,7 @@ gate (ADR 0011's guard).
 | `portal/answers` | `org.freedesktop.portal.Desktop` responds without a pause | The 25 s hang | VM |
 | `portal/config` | A `realm-portals.conf` is found and names a backend per interface | Behaviour that changes with what is installed | **CI** (file) / VM (effect) |
 | `portal/filechooser` | `--portal-roundtrip`: a handle within 2 s | "Open File does nothing" | VM |
-| `portal/screencast` | The interface/configured implementation checks pass and the installed VM consumes a nonempty buffer from the restricted PipeWire node returned by a complete ScreenCast request sequence | Screen share silently produces nothing | VM; the browser picker and physical-machine capture remain **HARDWARE** |
+| `portal/screencast` | The interface/configured implementation checks pass and the installed VM consumes a nonempty buffer from the restricted PipeWire node returned by a complete ScreenCast request sequence | Screen share silently produces nothing | VM including real Firefox capture (A13b); physical-machine capture remains **HARDWARE** |
 | `session/socket` | `$XDG_RUNTIME_DIR/realm/ctl.sock` answers `Hello` | — | VM |
 | `session/protocol-version` | Matches `realm_core::ipc::PROTOCOL_VERSION` | Bar and session disagree | **CI** |
 | `session/degraded` | Reports each `DEGRADED` code in this incarnation from the bounded handoff above, never by scanning historical logs | A degraded session pretending to be healthy | **CI** (degraded paths) |
@@ -786,14 +1008,15 @@ carry `needs-human` under standing order S3 and must not be assumed to pass.
 | A7 | Given a booted session, when the cursor is checked, then the process and systemd environments and GSettings name the same theme and size, the theme resolves to a directory on disk, and `doctor` makes no claim to have read the D-Bus activation value | VM | |
 | A8 | Given river started, when `realm-wm` attaches, then `doctor` reports `wm/attached` and `wm/layer-shell` served, and the measured unmanaged interval is inside the cold-start budget | VM | |
 | A9 | Given `realm-wm` removed from the image, when the session starts, then the entry logs `FATAL WM-ABORT` with the "no window can be placed" message, tears river down, and exits non-zero — and the same happens when the unit is condition-skipped rather than failed | VM | |
-| A10 | Given a running session with three windows, when `realm-wm` is killed, then it is restarted within `RestartSec`, the ledger is recovered from the snapshot, the three windows return to their projected rectangles, and `realm-bar.service` never leaves `active` | VM | |
+| A10 | Given a running session with three windows, when `realm-wm` is killed, then supervised restart follows the configured `RestartSec` delay, the ledger is recovered from the snapshot, the three windows return to their projected rectangles, and `realm-bar.service` never leaves `active` | VM | |
 | A11 | Given a stale window manager already holding river's window-management global, when `realm-wm.service` starts, then it exits 69, is not restarted, and `doctor` reports `wm/attached` as failed; it names the holding process only if an independent observation identifies it, otherwise it states that the holder identity is unavailable | VM | |
 | A12 | Given a running session, when `realm-bar` is killed, then it is restarted, and `realm-session.target` and `realm-wm.service` both stay `active` throughout | VM | |
 | A13 | Given a booted session, when `doctor --portal-roundtrip` issues a `FileChooser.OpenFile`, then a request handle is returned within 2 s, and `portal/config` confirms the effective configuration and installed `.portal` metadata name the required backends without claiming the running portal disclosed its selected backend identity | VM | |
-| A13a | Given the installed graphical VM with its test-only noninteractive ScreenCast chooser and per-user PipeWire service, when the pre-VM packaged-helper import check loads Gio, GStreamer, and GstApp and one persistent portal client subscribes on the exact token-derived FileChooser request path before `OpenFile`, publishes a VM-only readiness marker only after that exact handle returns within 2 s, and keeps waiting while the driver observes the actual managed and rendered chooser and activates its explicit `_Cancel` action through the real `Alt+C` GTK mnemonic, then the exact request emits user-cancel response code 1 within the finite VM state/UI deadlines; the same client reads `Settings.ReadAll`, completes the ScreenCast request/session sequence, and opens the restricted PipeWire remote; a missing, success, or catch-all FileChooser response is rejected, the Settings reply has its specified map type, one nonempty video buffer is consumed from the returned node, and the uploaded VM evidence retains the FileChooser response plus the node id, mapped byte count, dimensions, and digest in `portal-roundtrip.json`; this does not replace A13's separate `realmctl doctor --portal-roundtrip` Close probe and does not satisfy A15 | VM | `packaging/nix/test_portal_vm_helper.py` — `import-only`, `filechooser-rendered-cancel-response`; `packaging/nix/test-root-flake-ci.sh` — `portal-helper-imports`, `portal-evidence-upload` |
+| A13a | Given the installed graphical VM with its production interactive ScreenCast chooser driven by real VM pointer input and per-user PipeWire service, when the pre-VM packaged-helper import check loads Gio, GStreamer, and GstApp and one persistent portal client subscribes on the exact token-derived FileChooser request path before `OpenFile`, publishes a VM-only readiness marker only after that exact handle returns within 2 s, and keeps waiting while the driver observes the actual managed and rendered chooser and activates its explicit `_Cancel` action through the real `Alt+C` GTK mnemonic, then the exact request emits user-cancel response code 1 within the finite VM state/UI deadlines; the same client reads `Settings.ReadAll`, completes the ScreenCast request/session sequence, and opens the restricted PipeWire remote; a missing, success, or catch-all FileChooser response is rejected, the Settings reply has its specified map type, one nonempty video buffer is consumed from the returned node, and the uploaded VM evidence retains the FileChooser response plus the node id, mapped byte count, dimensions, and digest in `portal-roundtrip.json`; this does not replace A13's separate `realmctl doctor --portal-roundtrip` Close probe and does not satisfy A15 | VM | `packaging/nix/test_portal_vm_helper.py` — `import-only`, `filechooser-rendered-cancel-response`; `packaging/nix/test-root-flake-ci.sh` — `portal-helper-imports`, `portal-evidence-upload` |
+| A13b | Given the installed Firefox opened through the default browser binding and a controlled loopback page, when real keyboard input activates getDisplayMedia, accepts Firefox's ordinary permission prompt and selects the output through the production portal chooser, then two positive-dimension browser-delivered PNG frames have strictly increasing positive integer presentedFrames counters, finite mediaTime metadata (zero allowed), and retained byte counts/digests; the page explicitly stops every track and the collector records ended state. Bounded readiness/UI deadlines fail on permission rejection, absent frames or missing stop. Evidence includes raw frames, result/error metadata, browser version and permission/chooser/completion screenshots. Fake media and permission bypasses are prohibited; this does not satisfy A15. | VM | `packaging/nix/test_browser_screencast.py`; installed `session-boots` browser capture |
 | A14 | Given a session that is ending, when teardown runs, then admission freezes first; the executable unit graph proves all target-owned helpers stop in inverse order before environment cleanup while independent profile scopes remain untouched; the whole entry teardown returns within 15 s without deleting live/uncertain SPEC 0012 records or leases; and a later successful login gets a fresh `WAYLAND_DISPLAY` rather than the previous session's | VM | |
 | A15 | Given a browser on a real machine, when the user starts a screen share, then a source list appears and the captured stream shows the desktop | **HARDWARE** | |
-| A16 | Given a real laptop, when the lid is closed, then the session locks within the configured delay and the screen is blank on reopen until authentication | **HARDWARE** *(blocked on OQ-1)* | |
+| A16 | Given a real laptop whose host lid policy initiates suspend, or an equivalent host-initiated suspend, when logind announces before-sleep, then Realm completes lock readiness before suspend proceeds and the session remains compositor-locked on resume until authentication. Given a host policy that ignores the lid, Realm neither suspends nor locks solely because the lid closed | **HARDWARE** (post-MVP; SPEC 0032) | |
 | A17 | Given an installed NixOS VM session running the pinned XWayland-enabled River, when a purpose-built session-bus service is activated and acquires its configured bus name, then the non-empty `DISPLAY` inherited by `realm-wm`, the systemd user manager and that D-Bus-activated service is identical; the service invokes the pinned xmessage package's public `bin/xmessage` wrapper and the child executable resolves to that same package's exact `bin/.xmessage-wrapped` payload selected by locked nixpkgs' X file-search wrapper hook; the X server's root tree identifies exactly one window with that child's unique test title and its X attributes report `Map State: IsViewable` before Realm reports one additional managed X11 window; and the test reaps the client. This proves discovery, both publication paths and XWayland window management, attributes a pre-map failure separately from a River/Realm observation failure, but does not claim Xresources or scaling behaviour. | VM | |
 
 **Split: 17 criteria — 4 CI, 11 VM, 2 HARDWARE.**
@@ -832,7 +1055,7 @@ Rows this component is responsible for not causing, from
 | `XDG_CURRENT_DESKTOP` unset | Session integration | Step 1; `env/desktop/*`; A5 |
 | No portal backend installed | Session integration | §5 named dependencies and `realm-portals.conf`; `portal/config`; A13 |
 | Session dies with a client | Session integration | §4 `PartOf`/`Wants`, never `BindsTo`/`Requires`; A12 |
-| No lock/idle handling | Session integration | §4 `realm-idle.service`; `units/idle-lock`; A16 — **blocked on OQ-1** |
+| No lock/idle handling | Session integration | §4 `realm-idle.service`; `units/idle-lock`; A16 |
 | XWayland apps unstyled or scaled wrong | Session integration | §3 XWayland; `env/xwayland` |
 | Cursor theme unset | Session integration | Steps 1 and 5; `env/cursor`; A7 |
 | `realm-session` dies | river | §2 supervision policy and ledger recovery; A10 |
@@ -876,37 +1099,44 @@ register yet. They are recorded here as findings for a human to add.
 **OQ-1 is superseded by accepted [SPEC 0032](0032-upstream-idle-lock-integration.md):**
 use packaged swayidle and PAM-backed swaylock, host lid policy, dim at 300 seconds,
 lock/blank at 600 seconds and synchronous lock-before-suspend. The alternative
-recommendations below are historical only, not unresolved product decisions.
+clients discussed below are historical alternatives, not unresolved product decisions.
 
 - **OQ-1 — resolved for MVP.** Dim after 5 minutes and lock/blank after 10
   minutes; host lid policy remains authoritative and lock-before-suspend is
   required. Remaining locker implementation details stay below.
 
-  *Locker.* river 0.4 implements `ext-session-lock-v1` and reports
+  *Locker (resolved).* river 0.4 implements `ext-session-lock-v1` and reports
   `session_locked`/`session_unlocked` to the window manager, so realm can disable
   every non-lock binding while locked. That makes an `ext-session-lock-v1`
   client a hard requirement rather than a preference: a locker that draws a
   layer-shell overlay instead depends on realm serving `river-layer-shell-v1` and
   on realm granting it exclusive focus, so a crash in *realm* would expose the
-  desktop. Options: **gtklock** (proper `ext-session-lock-v1`; GTK, which we
-  already theme); **waylock** (same protocol, minimal, but Zig — a toolchain we
-  otherwise removed from the workspace by ADR 0013); **swaylock**, only in
-  versions that speak `ext-session-lock-v1`, older ones must be excluded;
-  **`realm-ward`**, our own, which is the worst class of bug to get wrong and is
-  not before M6. *Recommendation: gtklock for M3*, per ADR 0011, with waylock as
-  the minimalist alternative if the Zig dependency is acceptable to packaging.
+  desktop. Realm selects distro-native swaylock 1.7 or newer for M3:
+  Ubuntu 24.04 supplies 1.7.2, Fedora 44 supplies 1.8.5 and locked nixpkgs
+  supplies 1.8.6. All three use the supported protocol line without a private
+  tool build. NixOS must explicitly enable the `swaylock` PAM service; every
+  target must use a PAM-backed build. Swayidle is the matching idle client and
+  uses its documented `-w` plus `swaylock -f` readiness pairing.
 
-  *Idle.* Also unverified: whether river 0.4.8 implements `ext-idle-notify-v1`.
-  If it does not, no idle daemon works at all and this is blocking rather than
-  merely undecided.
+  Other considered clients remain documented for reversal: **gtklock**
+  (proper `ext-session-lock-v1`; GTK, which Realm already themes), **waylock**
+  (same protocol, minimal, but Zig — a toolchain otherwise removed by ADR
+  0013), and **`realm-ward`**, Realm's own locker, which is the worst class of
+  bug to get wrong and is not before M6.
 
-  *Defaults.* Candidates: (a) no idle action by default; (b) blank at 5 min,
-  lock at 10 min, lid-close always locks; (c) lock at 15 min, lid-close locks
-  unless on external power. A proposal, not a decision: (b). **These are
-  user-visible security defaults and must not be guessed.** A laptop that does
-  not lock on lid-close is a security failure; a laptop that locks after 60
-  seconds is one whose owner disables locking entirely, which is worse than
-  either. A human decides, and A16 stays unproven until they do.
+  *Idle client (resolved).* river 0.4.8's input manager creates wlroots'
+  idle-notifier global, and swayidle consumes that compositor idle protocol.
+  This settles tool compatibility, not the policy below.
+
+  *Lid and suspend boundary (resolved).* Realm follows host lid policy. It does
+  not install an independent lid listener or force a suspend decision. Swayidle
+  must use logind's before-sleep path and wait for `swaylock -f` readiness before
+  releasing the delay path, whether suspend was caused by the lid or another
+  host policy. If the host ignores the lid, Realm does too. On resume the
+  compositor-owned lock remains until authentication.
+
+  *Idle defaults (resolved).* Dim after 5 minutes of inactivity and lock/blank
+  after 10 minutes. This does not reopen A16's suspend-order contract.
 
 - **OQ-2 — ScreenCast under river 0.4.** Does river 0.4.8 still export
   `wlr-screencopy-unstable-v1`, and does `xdg-desktop-portal-wlr` work when

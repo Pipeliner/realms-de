@@ -74,12 +74,15 @@ Requires:       river >= 0.4.0
 # environment cannot be updated and portals hang; without systemd the user
 # units never start.
 Requires:       dbus-common
+Requires:       dbus-tools
 Requires:       systemd
+Requires:       /usr/bin/flock
 Requires:       swayidle
 Requires:       swaylock >= 1.7
 Requires:       brightnessctl
 Requires:       /usr/bin/xdg-settings
 Requires:       /usr/bin/gtk-launch
+Requires:       qt6ct
 # A portal backend, or "Open File" silently does nothing in Firefox
 # (docs/PITFALLS.md, "No portal backend installed").
 # Named backends, not a disjunction: a solver may satisfy `gtk or wlr or gnome`
@@ -90,6 +93,8 @@ Requires:       /usr/bin/gtk-launch
 Requires:       xdg-desktop-portal
 Requires:       xdg-desktop-portal-gtk
 Requires:       xdg-desktop-portal-wlr
+# Fedora portal dependencies supply pipewire-libs, not its user server/socket.
+Requires:       pipewire
 # xdg-desktop-portal-wlr's default `simple` chooser shells out to slurp for
 # output selection.
 Recommends:     slurp
@@ -179,6 +184,7 @@ install -Dpm0644 configs/portal/realm-portals.conf %{buildroot}%{_datadir}/xdg-d
 install -dm0755 %{buildroot}%{_userunitdir}/realm-session.target.wants
 ln -sf ../realm-wm.service %{buildroot}%{_userunitdir}/realm-session.target.wants/realm-wm.service
 ln -sf ../realm-bar.service %{buildroot}%{_userunitdir}/realm-session.target.wants/realm-bar.service
+ln -sf ../realm-idle.service %{buildroot}%{_userunitdir}/realm-session.target.wants/realm-idle.service
 
 # Install the complete runtime payload and record it in the RPM file list. A
 # missing output makes install fail rather than producing a partial package.
@@ -241,6 +247,7 @@ python3 %{tool_runtime} \
 %dir %{_userunitdir}/realm-session.target.wants
 %{_userunitdir}/realm-session.target.wants/realm-wm.service
 %{_userunitdir}/realm-session.target.wants/realm-bar.service
+%{_userunitdir}/realm-session.target.wants/realm-idle.service
 %dir %{_datadir}/xdg-desktop-portal
 %{_datadir}/xdg-desktop-portal/realm-portals.conf
 %dir %{_datadir}/realm

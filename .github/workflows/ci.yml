@@ -39,6 +39,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 -m pip install 'PyYAML==6.0.2'
       - run: python3 scripts/test-launch-ci-policy.py
+      - run: python3 scripts/test-ci-monitor.py
 
   browser-dispatch:
     name: browser dispatch
@@ -48,6 +49,7 @@ jobs:
       - run: python3 packaging/session/test-browser.py
       - run: python3 packaging/session/test-idle.py
       - run: python3 packaging/session/test-idle-packaging.py
+      - run: python3 packaging/session/test-login-claim.py
 
   dependency-policy:
     name: dependency policy
@@ -198,12 +200,14 @@ jobs:
           ./packaging/tool-sources/test-bundle-linkage.sh
           ./packaging/tool-sources/test-no-live-fetch.sh
           ./packaging/tool-sources/test-native-source-kits.sh
+          python3 packaging/tool-sources/test-native-evidence.py
           ./packaging/tool-sources/test-native-cargo-wrapper.sh
           ./packaging/tool-sources/test-native-command-sentinel.sh
           sh packaging/tool-sources/test-native-version-check.sh
           python3 packaging/tool-sources/test-yazi-reproducibility.py
           python3 packaging/tool-sources/test-native-fixture-routing.py
           python3 packaging/tool-sources/test-stage-tool-bundle.py
+          python3 packaging/tool-sources/test-tool-runtime-receipt.py
           python3 packaging/fedora/test-source-modes.py
       - name: Prepare lifecycle-capable native package temporary directory
         id: native-temp

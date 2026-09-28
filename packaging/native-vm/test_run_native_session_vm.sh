@@ -6,6 +6,13 @@ fixture_script_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd)
 # shellcheck source=packaging/native-vm/run-native-session-vm.sh
 source "$fixture_script_dir/run-native-session-vm.sh"
 
+declare -F validate_native_mode >/dev/null || { echo 'diagnostic mode validator missing' >&2; exit 1; }
+validate_native_mode ubuntu-24.04-x86_64 ''
+validate_native_mode fedora-44-x86_64 ''
+validate_native_mode ubuntu-24.04-x86_64 --llvmpipe-sync-diagnostic
+if validate_native_mode fedora-44-x86_64 --llvmpipe-sync-diagnostic; then exit 1; fi
+if validate_native_mode ubuntu-24.04-x86_64 --unknown; then exit 1; fi
+
 fail() {
     printf 'FAIL: %s\n' "$*" >&2
     exit 1
@@ -22,6 +29,29 @@ if require_kvm "$case_root/missing-kvm" 2>"$case_root/missing.err"; then
     fail 'missing KVM was accepted'
 fi
 grep -Fq 'KVM is required' "$case_root/missing.err" || fail 'missing KVM diagnostic was lost'
+
+declare -F prepare_kvm >/dev/null || fail 'per-invocation KVM preparation missing'
+if prepare_kvm "$case_root/preflight-missing" "$case_root/missing-kvm"; then
+    fail 'missing KVM passed preflight'
+fi
+grep -Fq 'before' "$case_root/preflight-missing/kvm-preflight.log" || fail 'preflight evidence missing'
+(
+    admitted=false
+    require_kvm() { "$admitted"; }
+    timeout() {
+        test "$*" = "10 sudo -n setfacl -m u:$(id -u):rw /dev/null" || exit 91
+        admitted=true
+    }
+    prepare_kvm "$case_root/preflight-repair" /dev/null
+    admitted=false
+    prepare_kvm "$case_root/preflight-repeat" /dev/null
+) || fail 'subsequent invocation did not restore scoped access'
+(
+    require_kvm() { return 1; }
+    timeout() { return 17; }
+    if prepare_kvm "$case_root/preflight-denied" /dev/null; then exit 92; fi
+    grep -Fq 'after' "$case_root/preflight-denied/kvm-preflight.log"
+) || fail 'failed admission lost failure or after evidence'
 
 if grep -Fq 'local-hostname:' "$fixture_script_dir/run-native-session-vm.sh"; then
     fail 'NoCloud seed still requests a cosmetic hostname'
@@ -303,6 +333,8 @@ failure_start=$SECONDS
 fixture_status=$?
 set -e
 test "$fixture_status" = 124 || fail "failure-path fixture returned $fixture_status"
+test "$(<"$ssh_count")" = 4 \
+    || fail 'failure cleanup must collect evidence in one bounded SSH operation'
 ((SECONDS - failure_start < 4)) \
     || fail 'remote command or cleanup exceeded its outer deadline'
 test -s "$fixture_evidence/framebuffer.ppm" \

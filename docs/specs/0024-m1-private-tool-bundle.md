@@ -112,7 +112,19 @@ temporary storage, generates `source.tar.gz`, updates only the bound commit,
 commit timestamp, source digest, and provenance digest fields, and runs the
 normal bundle-linkage validator over the complete candidate bundle.
 
-Successful CI publishes an artifact containing exactly the candidate
+An explicit `refresh_workspace_lock` workflow-dispatch opt-in is the controlled
+refresh path for workspace dependency edges only. It SHALL require unchanged
+external package records, unchanged workspace package identities and all other
+workspace fields, and permit only workspace dependency-list changes. Unsupported
+lockfile syntax fails closed. The exact committed lockfile replaces the candidate
+lockfile in CI, updating its digest and recording the refresh in provenance.
+Vendor, Cargo configuration and license-report bytes and their bound hashes
+SHALL remain unchanged and verified. The full candidate passes normal linkage
+validation before upload. This mode additionally uploads `Cargo.lock`; it does
+not vendor, build or install anything, and remains CI-only. Ordinary automatic
+source preparation retains its strict byte-for-byte lockfile restriction.
+
+Successful ordinary rebinding publishes an artifact containing exactly the candidate
 `source.tar.gz`, `bundle.toml`, and `provenance.md`. The workflow has read-only
 repository permission and SHALL NOT commit or push the result. A maintainer may
 place those exact three CI-produced files in the source change; the ordinary
@@ -422,6 +434,14 @@ and `retained:starship@1.23.0` for Debian and Fedora; Nix continues to use its
 locked nixpkgs inputs.
 
 ## Executable ownership and session scope
+
+Native fixture evidence SHALL live under the dedicated `/tmp` build parent,
+not runner-private home ancestors. Before package work, CI SHALL prove file
+creation and append from the same root-mapped user/network namespace as the
+driver. Host-root write access alone is insufficient: child-namespace
+capabilities do not bypass host-owned private ancestor permissions. Probe
+failure reports ancestor permissions and stops before package work. Artifact
+upload SHALL read the same evidence directory; existing bounds remain.
 
 Native packages SHALL install only these Realm-owned executables:
 

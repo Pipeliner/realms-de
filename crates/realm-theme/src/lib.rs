@@ -36,6 +36,7 @@
 #![warn(missing_docs)]
 
 pub mod generation;
+pub mod login_theme;
 pub mod reload;
 pub mod render;
 pub mod template;

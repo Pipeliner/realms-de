@@ -5,6 +5,12 @@
 > MVP requires actionable session/backend, executable, theme and portal checks.
 > Keep existing truthful bounded diagnostics and JSON compatibility; actual
 > application behavior is verified by the shared launch acceptance journey.
+> On native installed packages, the required Realm-owned Yazi and Starship
+> probes use their private `/usr/lib/realm/bin` executables even when doctor is
+> launched by a user unit whose PATH intentionally omits that directory. A
+> distro executable on PATH cannot hide a missing private tool. Nix keeps its
+> package-provided tool lookup. Observed versions remain an unresolved-floor
+> `skip`, not an invented compatibility `ok`; actual absence remains `warn`.
 
 > **MVP scope override (Accepted 2026-09-27):** [ADR 0023](../adr/0023-reuse-first-session-theme-mvp.md)
 > and [SPEC 0030](0030-reuse-first-session-theme-mvp.md) supersede conflicting
@@ -254,8 +260,8 @@ probe `current`, recover, retry, or translate an ambiguous result into success:
 
 | Outcome | Human stdout | Human stderr | Exit |
 |---|---|---|---|
-| `Committed(generation)` | `generation <id> selected for future launches` | empty | 0 |
-| `CommittedWithCleanupPending { generation, cause }` | `generation <id> selected for future launches` | `warning: generation <id> is durably selected for future launches; committed cleanup is pending: <cause>` | 0 |
+| `Committed(generation)` | `generation <id> prepared for next graphical login` | empty | 0 |
+| `CommittedWithCleanupPending { generation, cause }` | `generation <id> prepared for next graphical login` | `warning: generation <id> is durably prepared for next graphical login; committed cleanup is pending: <cause>` | 0 |
 | `OutcomeAmbiguous { candidate, cause }` | empty | `theme apply failed: activation is unconfirmed for candidate <id>; inspect generation state before retrying: <cause>` | 6 |
 
 `<id>` is the validated lowercase generation identifier. In human output,
@@ -311,6 +317,11 @@ affect the exit code. `skip` means the check could not be run and says why.
 Every probe has one, and the largest is 2 s. A diagnostic that hangs *is* the
 bug it is diagnosing: the 25-second portal hang would otherwise be reproduced
 faithfully inside `doctor`. No blocking read is issued without a timeout.
+Font and executable observations SHALL publish independently under the same
+aggregate deadline. A completed font coverage/attribution result (including
+palette-unavailable skips) survives a hung tool probe, and completed tool
+findings survive a hung font scan. Only the unfinished observation receives a
+timeout warning; check IDs, ordering and JSON shape remain unchanged.
 
 #### The checks
 
@@ -360,7 +371,7 @@ shim as a malformed copy of the source.
 | `units/wm` | the window manager's unit is `ActiveState=active`, with `ConditionResult` reported **separately** | both properties | an unmet `ConditionEnvironment=` leaves a unit `inactive (dead)` with `ConditionResult=no`, and `systemctl start` still exits 0 with nothing in `--failed`. *"Nothing started and nothing complained."* Prints the condition that was not met |
 | `units/bar` | `realm-bar.service` is active or cleanly restarting | `ActiveState`, `NRestarts` | *"The bar is gone and nothing said so."* |
 | `units/restart-policy` | the shipped units carry SPEC 0005 §4's policy | the unit files; a **CI** check | *"A crashed bar takes the session with it."* |
-| `units/idle-lock` | an idle and a lock unit are part of `graphical-session.target` | the dependency list over D-Bus | `skip` until the lock-screen `needs-human` question in ADR 0011 is answered, and says so. *"The lid closes and the session stays unlocked."* |
+| `units/idle-lock` | swayidle/swaylock are selected under SPEC 0032 | runtime readiness is not probed by this doctor slice | `skip`: swayidle/swaylock are selected; runtime readiness is not probed. Do not infer whether automatic enablement is packaged, describe the locker choice as unresolved, or claim observed lock readiness. |
 | `wm/attached` | a live health response proves realm holds river's window-management global; a refusal reports a possible foreign holder without inventing its identity | `GetHealth`; outside a live session, exit 69 and independently available process evidence. River's `unavailable` response does not identify the holder, so a pid or command line is printed only when a separate observation proves it | river answers `unavailable` to a second window-management client, so the supervised window manager never starts and a naive restart policy loops forever, burying the message. Without independent holder evidence, prints *"another window manager may hold river's global; holder identity unavailable"*. *"An inert compositor: windows are never placed."* |
 | `wm/layer-shell` | realm is serving `river-layer-shell-v1` | `GetHealth`'s flag, plus `units/bar` | *"The bar never appears, and it looks like the bar's fault rather than the window manager's."* Points at ADR 0013 |
 | `wm/capabilities` | the backend's name and the `Capabilities` it reports, `unsupported` included | `GetHealth` | any `unsupported` entry — `"unclipped-dimension-quantisation"` is the one river can produce — is a `warn` naming the realm behaviour that will not work. *"A backend gap that looks like a bug."* |
@@ -542,8 +553,9 @@ SSH into a machine that will not start, or from a TTY after a failed session.
   that predict whether the *next* login will work.
 - **`theme apply`** is session-independent. It publishes a sealed generation,
   reports its `GenerationPublicationOutcome`, and sends no notification whether
-  or not a session is running. A committed pointer affects future launches
-  only; existing processes remain pinned to their selected generation.
+  or not a session is running. A committed pointer affects the next graphical
+  login only; existing sessions and their newly launched clients remain pinned
+  to the login's selected generation (SPEC 0030).
 
 A missing session is never spelled as a crash. `realmctl orbit switch` with no
 session prints the socket path it tried and how to start a session, and exits
@@ -573,8 +585,8 @@ Each row is one happy path and becomes one test.
 | B14a | Given no runtime directory or no `realm` entry, a retained endpoint that remains refused, an unsafe endpoint, and a version-mismatched live endpoint, when `doctor` runs each case, then only the first case is the no-session `skip`; refused and unsafe endpoints fail `session/socket`; and the mismatched endpoint passes `session/socket`, fails `session/protocol-version` with both versions, sends no `GetHealth`, and never exits 3 | |
 | B14b | Given the fixed result set completes in a different order and the portal proxy reaches its 2 s deadline, when human and JSON reports are emitted, then both contain the exact same 32 ids in the specified order, every shared portal-derived check uses that one bounded observation, and the command completes in under 3 s | `realmctl::doctor::tests::{human_and_json_reports_preserve_the_exact_32_check_order,portal_result_is_not_blocked_by_a_hung_systemd_probe,bus_deadline_is_absolute_from_probe_start,exited_probe_with_inherited_open_pipe_still_obeys_deadline}`; `doctor_cli::no_session_report_is_ordered_bounded_and_keeps_independent_warnings` |
 | B14c | Given all three reused tools answer with parseable versions but no cross-target floors have been accepted, when `doctor` runs, then `tools/floors` reports the observed versions and an explicit unresolved-floor `skip`, never `ok`; absence or malformed version remains `warn`, and the acceptance row stays open until package/template compatibility establishes real minima | `realmctl::doctor::tests::observed_tool_versions_never_claim_unresolved_floors_pass` (floor acceptance remains open) |
-| B15 | Given `theme apply` returns `Committed(generation)`, when the CLI reports it, then it exits 0 and reports exactly that generation as selected for future launches | `theme_cli::apply_reports_selected_future_generation_without_reload_or_session` |
-| B16 | Given `theme apply` returns `CommittedWithCleanupPending { generation, cause }`, when the CLI reports it, then it exits 0, reports exactly that generation as selected for future launches, and emits the safely escaped committed-cleanup warning | `realmctl::tests::cleanup_pending_reports_selected_generation_with_escaped_warning` |
+| B15 | Given `theme apply` returns `Committed(generation)`, when the CLI reports it, then it exits 0 and reports exactly that generation as prepared for next graphical login (SPEC 0030) | `theme_cli::apply_reports_next_graphical_login_without_reload_or_session` |
+| B16 | Given `theme apply` returns `CommittedWithCleanupPending { generation, cause }`, when the CLI reports it, then it exits 0, reports exactly that generation as prepared for next graphical login, and emits the safely escaped committed-cleanup warning | `realmctl::tests::cleanup_pending_reports_selected_generation_with_escaped_warning` |
 | B17 | Given `theme apply` returns `OutcomeAmbiguous { candidate, cause }`, when the CLI reports it, then it exits 6, emits no human stdout, safely reports the candidate and unconfirmed activation, claims no success, and performs no recovery or retry | `realmctl::tests::ambiguous_reports_no_success_stdout_and_escaped_cause` |
 
 ## Budgets
@@ -589,7 +601,11 @@ Two budgets belong to this component alone:
 
 - **`doctor` completes in under 3 s wall clock**, with every probe individually
   bounded and the largest deadline 2 s. A diagnostic that hangs is the bug it
-  is diagnosing.
+  is diagnosing. The aggregate observation deadline is 2.5 s from collection
+  start, reserving 0.5 s of the command budget for startup, report assembly and
+  output. Waiting for observations until the full 3 s wall-clock limit and
+  only then formatting the report cannot satisfy the contract. This reserve
+  does not claim hard-real-time scheduling on an arbitrarily stalled host.
 - **No `realmctl` invocation may stall `realm-session`.** Under river a stalled
   window manager is a dead session, not a slow frame (ADR 0013). A CLI that
   stops reading its side of the socket must not block the daemon; the session

@@ -12,6 +12,34 @@ require_kvm() {
     fi
 }
 
+prepare_kvm() {
+    local evidence_dir=$1 device=${2:-/dev/kvm} status=0
+    mkdir -p "$evidence_dir"
+    {
+        printf 'before KVM admission\n'
+        id
+        ls -l "$device" || true
+        getfacl -p "$device" || true
+        printf 'character=%s readable=%s writable=%s\n' \
+            "$(test -c "$device" && echo yes || echo no)" \
+            "$(test -r "$device" && echo yes || echo no)" \
+            "$(test -w "$device" && echo yes || echo no)"
+        if [[ -c "$device" ]] && ! require_kvm "$device"; then
+            timeout 10 sudo -n setfacl -m "u:$(id -u):rw" "$device" || status=$?
+        fi
+        printf 'after KVM admission (command status %s)\n' "$status"
+        ls -l "$device" || true
+        getfacl -p "$device" || true
+        printf 'character=%s readable=%s writable=%s\n' \
+            "$(test -c "$device" && echo yes || echo no)" \
+            "$(test -r "$device" && echo yes || echo no)" \
+            "$(test -w "$device" && echo yes || echo no)"
+        require_kvm "$device" || status=1
+    } > "$evidence_dir/kvm-preflight.log" 2>&1
+    cat "$evidence_dir/kvm-preflight.log"
+    return "$status"
+}
+
 wait_for_ssh() {
     local qemu_pid=$1
     local timeout_seconds=$2
@@ -162,13 +190,21 @@ wait_for_visible_frame() {
     return 1
 }
 
+validate_native_mode() {
+    case "$1:${2:-}" in
+        ubuntu-24.04-x86_64:|fedora-44-x86_64:|ubuntu-24.04-x86_64:--llvmpipe-sync-diagnostic) return 0 ;;
+        *) printf 'unsupported native target/diagnostic mode\n' >&2; return 2 ;;
+    esac
+}
+
 run_native_session_vm() (
     set -euo pipefail
-    if (($# != 3)); then
-        printf 'usage: run-native-session-vm.sh TARGET PACKAGE_DIR EVIDENCE_DIR\n' >&2
+    if (($# < 3 || $# > 4)); then
+        printf 'usage: run-native-session-vm.sh TARGET PACKAGE_DIR EVIDENCE_DIR [--llvmpipe-sync-diagnostic]\n' >&2
         return 2
     fi
-    local target=$1 package_dir=$2 evidence_dir=$3
+    local target=$1 package_dir=$2 evidence_dir=$3 diagnostic=${4:-}
+    validate_native_mode "$target" "$diagnostic"
     local script_dir check_inputs guest_probe control_probe image_url image
     local run_root overlay seed user_data meta_data public_key monitor serial_log
     local qemu_pid='' ssh_port=2222 serial_log='' probe_status=0
@@ -180,13 +216,16 @@ run_native_session_vm() (
     check_inputs="$script_dir/check_inputs.py"
     guest_probe="$script_dir/guest-probe.sh"
     control_probe="$script_dir/control_get_state.py"
+    mkdir -p "$evidence_dir"
+    if [[ -n "$diagnostic" ]]; then
+        printf '%s\n' '{"diagnostic_only":true,"override":"compositor LP_NUM_THREADS=0","acceptance":false}' \
+            > "$evidence_dir/diagnostic-only.json"
+    fi
+    prepare_kvm "$evidence_dir" /dev/kvm || return $?
     for command in cloud-localds curl qemu-img qemu-system-x86_64 \
         scp socat ssh ssh-keygen python3 timeout; do
         require_command "$command"
     done
-    require_kvm /dev/kvm
-
-    mkdir -p "$evidence_dir"
     mapfile -t packages < <(python3 "$check_inputs" packages "$target" "$package_dir")
     case "$target" in
         ubuntu-24.04-x86_64)
@@ -206,7 +245,7 @@ run_native_session_vm() (
         if [[ -n "$qemu_pid" ]] && kill -0 "$qemu_pid" 2>/dev/null; then
             capture_framebuffer_if_absent "$evidence_dir/framebuffer.ppm" || true
             timeout "$cleanup_timeout" ssh "${ssh_options[@]}" alice@127.0.0.1 \
-                'sudo journalctl -b --no-pager' \
+                'sudo head -v -c 65536 /var/tmp/realm-native-portal-runtime.txt; sudo journalctl -b --no-pager' \
                 > "$evidence_dir/cleanup-journal.txt" 2>&1 || true
         fi
         [[ -f "$serial_log" ]] && cp "$serial_log" "$evidence_dir/qemu-serial.log"
@@ -313,6 +352,7 @@ run_native_session_vm() (
         -display none
         -vnc 127.0.0.1:1
         -monitor "unix:$monitor,server=on,wait=off"
+        -qmp "unix:${monitor}.qmp,server=on,wait=off"
         -serial "file:$serial_log"
     )
     qemu-system-x86_64 "${qemu_options[@]}" &
@@ -326,10 +366,19 @@ run_native_session_vm() (
         alice@127.0.0.1:/tmp/realm-native-packages/
     timeout 60 scp "${scp_options[@]}" \
         "$guest_probe" "$control_probe" "$check_inputs" \
+        "$script_dir/consumer_process.py" \
+        "$script_dir/../nix/portal_vm_helper.py" \
+        "$script_dir/../nix/browser_screencast.py" \
+        "$script_dir/../nix/browser_screencast.html" \
         "alice@127.0.0.1:$realm_native_vm_guest_probe_dir/"
     timeout "$install_timeout" ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
         "$realm_native_vm_guest_probe_dir/guest-probe.sh" install "$target" \
         /tmp/realm-native-packages
+
+    if [[ -n "$diagnostic" ]]; then
+        timeout 30 ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
+            "$realm_native_vm_guest_probe_dir/guest-probe.sh" configure-sync-diagnostic "$target"
+    fi
 
     timeout 30 ssh "${ssh_options[@]}" alice@127.0.0.1 \
         'sudo systemctl reboot' || true
@@ -347,12 +396,63 @@ run_native_session_vm() (
             "$probe_status" >&2
         return "$probe_status"
     fi
+    if [[ -n "$diagnostic" ]]; then
+        timeout 30 ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
+            "$realm_native_vm_guest_probe_dir/guest-probe.sh" probe-sync-diagnostic "$target" \
+            > "$evidence_dir/diagnostic-renderer.json"
+        timeout 15 ssh "${ssh_options[@]}" alice@127.0.0.1 \
+            'sudo head -c 65536 /home/alice/.local/share/sddm/wayland-session.log' \
+            > "$evidence_dir/diagnostic-compositor-stderr.txt"
+    fi
 
     wait_for_visible_frame \
         "$evidence_dir/framebuffer.ppm" \
         "$evidence_dir/framebuffer-validation.txt" \
         15
     printf '%s\n' "$target" > "$evidence_dir/target.txt"
+
+    # Reuse this VM's SSH transport and QEMU input for manual and real idle proof.
+    timeout 240 python3 "$script_dir/lock_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+
+    timeout 900 python3 "$script_dir/lock_roundtrip.py" --idle \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+
+    # A separate diagnostic pass is never ordinary acceptance. EXIT trap still
+    # retains compositor journal/framebuffer and shuts down this disposable VM.
+    if [[ -n "$diagnostic" ]]; then
+        return 0
+    fi
+
+    timeout 240 python3 "$script_dir/consumer_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+    timeout 300 python3 "$script_dir/window_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+    timeout 300 python3 "$script_dir/recovery_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+
+    timeout "$install_timeout" ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
+        "$realm_native_vm_guest_probe_dir/guest-probe.sh" portal-clients "$target"
+    timeout 15 ssh "${ssh_options[@]}" alice@127.0.0.1 \
+        'sudo cat /var/tmp/realm-native-portal-runtime.txt' \
+        > "$evidence_dir/portal-package-runtime.txt"
+    timeout 240 python3 "$script_dir/portal_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+
+    timeout "$install_timeout" ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
+        "$realm_native_vm_guest_probe_dir/guest-probe.sh" browser-client "$target"
+    timeout 300 python3 "$script_dir/browser_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+
+    # Native toolkit clients use this VM's installed OCR/monitor transport and
+    # the A selection retained after consumer_roundtrip prepared generation B.
+    timeout "$install_timeout" ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
+        "$realm_native_vm_guest_probe_dir/guest-probe.sh" toolkit-clients "$target"
+    timeout 480 python3 "$script_dir/toolkit_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+
+    timeout 240 python3 "$script_dir/relogin_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
 
     stop_qemu "$qemu_pid"
     qemu_pid=''

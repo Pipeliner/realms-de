@@ -15,6 +15,7 @@ calloop-wayland-source = { workspace = true }
 cosmic-text = { workspace = true }
 realm-control = { workspace = true }
 realm-core = { workspace = true }
+realm-theme = { workspace = true }
 rustix = { workspace = true }
 smithay-client-toolkit = { workspace = true }
 tiny-skia = { workspace = true }
@@ -26,3 +27,4 @@ wayland-client = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+tempfile = "3"
