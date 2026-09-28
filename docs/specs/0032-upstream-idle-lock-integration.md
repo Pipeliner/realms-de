@@ -120,6 +120,27 @@ No injected timers, clocks or replacement locker are allowed in the VM.
 The no-backlight VM must log the real dim no-op, still lock, show an opaque
 uniform frame before password input, reject a wrong password, suppress the
 launcher, accept the correct password and restore the launcher binding.
+CI-only synchronization discriminator after run 36358017601: the trace proves
+full initial background commit and lock acknowledgement; a later indicator-only
+commit completes the background but leaves the indicator partially painted.
+The actual renderer is Mesa 25.2.8 llvmpipe through GLES2/kms_swrast. Run one
+separately labelled Ubuntu diagnostic only after ordinary Ubuntu acceptance
+fails and its exact producer artifacts were downloaded. Upload ordinary evidence
+first; its failure remains required and cannot be overridden by diagnostic
+success. Reuse those built packages in a fresh VM with compositor-only
+`LP_NUM_THREADS=0`, using a disposable CI session/compositor wrapper without
+changing installed desktop entries, units, renderer selection or versions.
+Mesa's [zero-thread path](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-25.2.8/src/gallium/drivers/llvmpipe/lp_rast.c#L1108)
+rasterizes synchronously instead of queuing worker threads; its
+[screen initialization](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-25.2.8/src/gallium/drivers/llvmpipe/lp_screen.c#L992)
+reads the override. Verify the running compositor received the variable, retain separate
+`diagnostic_only` metadata/artifacts, and run the unchanged manual and real
+300/600-second idle probes. Stop the diagnostic before unrelated application
+probes; the normal harness must retain every existing acceptance step. Bound
+this separate step to 25 minutes within the existing 60-minute job. A diagnostic
+pass isolates a synchronization dependency; it is not ordinary Ubuntu or MVP
+acceptance and does not authorize shipping this environment override.
+
 CI-only discriminator after run 36354366061: Ubuntu retained 25 identical fresh
 partial frames across five seconds, excluding reused capture files. Retain up
 to 128 KiB of SDDM compositor/session stderr and 64 KiB of lock journal evidence.

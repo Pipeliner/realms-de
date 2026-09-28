@@ -6,6 +6,24 @@ script_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd)
 # shellcheck source=packaging/native-vm/guest-probe.sh
 source "$script_dir/guest-probe.sh"
 
+# The diagnostic wrapper changes only the compositor environment, retaining
+# the normal session-command argv and the installed entry itself.
+declare -F write_sync_diagnostic >/dev/null || fail 'sync diagnostic writer missing'
+sync_fixture=$(mktemp -d)
+trap 'rm -rf -- "$sync_fixture"' EXIT
+# Expand these variables in the executed fixture, not its generator.
+# shellcheck disable=SC2016
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s|%s|%s\\n" "${LP_NUM_THREADS-unset}" "$#" "$1"' > "$sync_fixture/river"
+# shellcheck disable=SC2016
+printf '%s\n' '#!/usr/bin/env bash' 'test -z "${LP_NUM_THREADS+x}"' 'exec "$REALM_COMPOSITOR" "$@"' > "$sync_fixture/session"
+chmod +x "$sync_fixture/river" "$sync_fixture/session"
+write_sync_diagnostic "$sync_fixture/output" "$sync_fixture/session" "$sync_fixture/river"
+test "$("$sync_fixture/output/session" 'argument with spaces')" = '0|1|argument with spaces'
+test -z "${LP_NUM_THREADS+x}"
+grep -Fxq "SessionCommand=$sync_fixture/output/session" "$sync_fixture/output/sddm.conf"
+rm -rf -- "$sync_fixture"
+trap - EXIT
+
 # Fedora must declare the exact owner of the activation helper needed by the
 # production login; a fixture-side install must not hide an omitted dependency.
 grep -Eq '^Requires:[[:space:]]+dbus-tools([[:space:]]|$)' \

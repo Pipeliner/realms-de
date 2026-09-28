@@ -306,6 +306,7 @@ jobs:
           printf '%s\n' '${{ matrix.target }}' \
             > "$RUNNER_TEMP/realm-native-vm-evidence/target.txt"
       - name: Download exact Ubuntu producer artifact
+        id: ubuntu-packages
         if: matrix.target == 'ubuntu-24.04-x86_64'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -318,6 +319,7 @@ jobs:
           name: realm-native-fedora-${{ github.sha }}
           path: ${{ runner.temp }}/realm-native-packages
       - name: Boot installed Realm graphical session
+        id: native-acceptance
         run: |
           set -euo pipefail
           id
@@ -336,6 +338,26 @@ jobs:
           name: realm-native-session-${{ matrix.target }}-${{ github.sha }}
           if-no-files-found: error
           path: ${{ runner.temp }}/realm-native-vm-evidence/
+
+      - name: Diagnose Ubuntu llvmpipe synchronization (not acceptance)
+        id: sync-diagnostic
+        if: always() && matrix.target == 'ubuntu-24.04-x86_64' && steps.native-acceptance.outcome == 'failure' && steps.ubuntu-packages.outcome == 'success'
+        timeout-minutes: 25
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          packaging/native-vm/run-native-session-vm.sh \
+            'ubuntu-24.04-x86_64' \
+            "$RUNNER_TEMP/realm-native-packages" \
+            "$RUNNER_TEMP/realm-native-sync-diagnostic" \
+            --llvmpipe-sync-diagnostic
+      - name: Upload Ubuntu synchronization diagnostic (not acceptance)
+        if: always() && steps.sync-diagnostic.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: realm-native-sync-diagnostic-ubuntu-${{ github.sha }}
+          if-no-files-found: error
+          path: ${{ runner.temp }}/realm-native-sync-diagnostic/
 
   fedora-baseline-contract:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft

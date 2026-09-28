@@ -13,6 +13,53 @@ fail() {
     exit 1
 }
 
+write_sync_diagnostic() {
+    local directory=$1 session_command=$2 river_command=$3
+    install -d -m 0755 "$directory"
+    {
+        printf '%s\n' '#!/usr/bin/env bash'
+        printf 'exec env LP_NUM_THREADS=0 %q "$@"\n' "$river_command"
+    } > "$directory/river"
+    {
+        printf '%s\n' '#!/usr/bin/env bash'
+        printf 'export REALM_COMPOSITOR=%q\n' "$directory/river"
+        printf 'exec %q "$@"\n' "$session_command"
+    } > "$directory/session"
+    chmod 0755 "$directory/river" "$directory/session"
+    printf '[Wayland]\nSessionCommand=%s/session\n' "$directory" > "$directory/sddm.conf"
+}
+
+configure_sync_diagnostic() {
+    test "$target" = ubuntu-24.04-x86_64 || fail 'sync diagnostic is Ubuntu-only'
+    local session_command
+    session_command=$(sddm --example-config | awk '
+        /^\[/ { wayland = ($0 == "[Wayland]") }
+        wayland && /^SessionCommand=/ { sub(/^SessionCommand=/, ""); print; exit }')
+    test -x "$session_command" || fail 'SDDM default Wayland session command unavailable'
+    write_sync_diagnostic /var/tmp/realm-native-sync-diagnostic "$session_command" /usr/bin/river
+    install -m 0644 /var/tmp/realm-native-sync-diagnostic/sddm.conf \
+        /etc/sddm.conf.d/realm-native-sync-diagnostic.conf
+}
+
+probe_sync_diagnostic() {
+    test "$target" = ubuntu-24.04-x86_64 || fail 'sync diagnostic is Ubuntu-only'
+    python3 -c 'import json, pathlib, pwd
+uid = pwd.getpwnam("alice").pw_uid
+pid = pathlib.Path(f"/run/user/{uid}/realm/session.pid").read_text().strip()
+assert pid.isdigit(), pid
+parent = pathlib.Path("/proc") / pid
+children = parent.joinpath("task", pid, "children").read_text().split()
+compositors = [pathlib.Path("/proc") / child for child in children
+              if (pathlib.Path("/proc") / child / "exe").resolve().name == "river"]
+assert len(compositors) == 1, compositors
+p = compositors[0]
+env = p.joinpath("environ").read_bytes().split(b"\0")
+assert b"LP_NUM_THREADS=0" in env, "compositor sync override missing"
+print(json.dumps({"diagnostic_only": True, "LP_NUM_THREADS": "0", "pid": int(p.name),
+ "executable": str(p.joinpath("exe").resolve()),
+ "threads": [t.joinpath("comm").read_text().strip() for t in p.joinpath("task").iterdir()]}))'
+}
+
 install_guest() {
     case "$target" in
         ubuntu-24.04-x86_64)
@@ -340,6 +387,12 @@ probe_guest() {
 
 main() {
     case ${1:-} in
+        configure-sync-diagnostic)
+            configure_sync_diagnostic
+            ;;
+        probe-sync-diagnostic)
+            probe_sync_diagnostic
+            ;;
         install)
             install_guest
             ;;

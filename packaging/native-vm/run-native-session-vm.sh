@@ -162,13 +162,21 @@ wait_for_visible_frame() {
     return 1
 }
 
+validate_native_mode() {
+    case "$1:${2:-}" in
+        ubuntu-24.04-x86_64:|fedora-44-x86_64:|ubuntu-24.04-x86_64:--llvmpipe-sync-diagnostic) return 0 ;;
+        *) printf 'unsupported native target/diagnostic mode\n' >&2; return 2 ;;
+    esac
+}
+
 run_native_session_vm() (
     set -euo pipefail
-    if (($# != 3)); then
-        printf 'usage: run-native-session-vm.sh TARGET PACKAGE_DIR EVIDENCE_DIR\n' >&2
+    if (($# < 3 || $# > 4)); then
+        printf 'usage: run-native-session-vm.sh TARGET PACKAGE_DIR EVIDENCE_DIR [--llvmpipe-sync-diagnostic]\n' >&2
         return 2
     fi
-    local target=$1 package_dir=$2 evidence_dir=$3
+    local target=$1 package_dir=$2 evidence_dir=$3 diagnostic=${4:-}
+    validate_native_mode "$target" "$diagnostic"
     local script_dir check_inputs guest_probe control_probe image_url image
     local run_root overlay seed user_data meta_data public_key monitor serial_log
     local qemu_pid='' ssh_port=2222 serial_log='' probe_status=0
@@ -187,6 +195,10 @@ run_native_session_vm() (
     require_kvm /dev/kvm
 
     mkdir -p "$evidence_dir"
+    if [[ -n "$diagnostic" ]]; then
+        printf '%s\n' '{"diagnostic_only":true,"override":"compositor LP_NUM_THREADS=0","acceptance":false}' \
+            > "$evidence_dir/diagnostic-only.json"
+    fi
     mapfile -t packages < <(python3 "$check_inputs" packages "$target" "$package_dir")
     case "$target" in
         ubuntu-24.04-x86_64)
@@ -336,6 +348,11 @@ run_native_session_vm() (
         "$realm_native_vm_guest_probe_dir/guest-probe.sh" install "$target" \
         /tmp/realm-native-packages
 
+    if [[ -n "$diagnostic" ]]; then
+        timeout 30 ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
+            "$realm_native_vm_guest_probe_dir/guest-probe.sh" configure-sync-diagnostic "$target"
+    fi
+
     timeout 30 ssh "${ssh_options[@]}" alice@127.0.0.1 \
         'sudo systemctl reboot' || true
     wait_for_ssh_down "$qemu_pid" 30 timeout 5 \
@@ -352,6 +369,14 @@ run_native_session_vm() (
             "$probe_status" >&2
         return "$probe_status"
     fi
+    if [[ -n "$diagnostic" ]]; then
+        timeout 30 ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
+            "$realm_native_vm_guest_probe_dir/guest-probe.sh" probe-sync-diagnostic "$target" \
+            > "$evidence_dir/diagnostic-renderer.json"
+        timeout 15 ssh "${ssh_options[@]}" alice@127.0.0.1 \
+            'sudo head -c 65536 /home/alice/.local/share/sddm/wayland-session.log' \
+            > "$evidence_dir/diagnostic-compositor-stderr.txt"
+    fi
 
     wait_for_visible_frame \
         "$evidence_dir/framebuffer.ppm" \
@@ -365,6 +390,12 @@ run_native_session_vm() (
 
     timeout 900 python3 "$script_dir/lock_roundtrip.py" --idle \
         "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+
+    # A separate diagnostic pass is never ordinary acceptance. EXIT trap still
+    # retains compositor journal/framebuffer and shuts down this disposable VM.
+    if [[ -n "$diagnostic" ]]; then
+        return 0
+    fi
 
     timeout 240 python3 "$script_dir/consumer_roundtrip.py" \
         "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1

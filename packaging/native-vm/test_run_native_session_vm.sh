@@ -6,6 +6,13 @@ fixture_script_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd)
 # shellcheck source=packaging/native-vm/run-native-session-vm.sh
 source "$fixture_script_dir/run-native-session-vm.sh"
 
+declare -F validate_native_mode >/dev/null || { echo 'diagnostic mode validator missing' >&2; exit 1; }
+validate_native_mode ubuntu-24.04-x86_64 ''
+validate_native_mode fedora-44-x86_64 ''
+validate_native_mode ubuntu-24.04-x86_64 --llvmpipe-sync-diagnostic
+if validate_native_mode fedora-44-x86_64 --llvmpipe-sync-diagnostic; then exit 1; fi
+if validate_native_mode ubuntu-24.04-x86_64 --unknown; then exit 1; fi
+
 fail() {
     printf 'FAIL: %s\n' "$*" >&2
     exit 1

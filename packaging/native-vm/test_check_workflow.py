@@ -28,6 +28,23 @@ def run_checker(workflow: Path) -> subprocess.CompletedProcess[str]:
 
 
 class NativeVmWorkflowTests(unittest.TestCase):
+    def test_sync_diagnostic_cannot_replace_or_rescue_ordinary_acceptance(self):
+        source = WORKFLOW.read_text()
+        diagnostic = '      - name: Diagnose Ubuntu llvmpipe synchronization (not acceptance)\n'
+        self.assertIn(diagnostic, source)
+        ordinary, extra = source.split(diagnostic, 1)
+        self.assertIn('id: native-acceptance', ordinary)
+        self.assertIn('id: ubuntu-packages', ordinary)
+        self.assertIn('name: realm-native-session-${{ matrix.target }}-${{ github.sha }}', ordinary)
+        self.assertNotIn('continue-on-error: true', ordinary.split('      - name: Boot installed Realm graphical session', 1)[1])
+        step = extra.split('      - name:', 1)[0]
+        self.assertIn("if: always() && matrix.target == 'ubuntu-24.04-x86_64' && steps.native-acceptance.outcome == 'failure' && steps.ubuntu-packages.outcome == 'success'", step)
+        self.assertIn('timeout-minutes: 25', step)
+        self.assertIn('continue-on-error: true', step)
+        self.assertIn('"$RUNNER_TEMP/realm-native-packages"', step)
+        self.assertIn('--llvmpipe-sync-diagnostic', step)
+        self.assertIn('realm-native-sync-diagnostic-ubuntu-${{ github.sha }}', extra)
+
     def test_checked_in_workflow_consumes_exact_producer_artifacts_without_rebuild(self):
         completed = run_checker(WORKFLOW)
         self.assertEqual(completed.returncode, 0, completed.stderr)
