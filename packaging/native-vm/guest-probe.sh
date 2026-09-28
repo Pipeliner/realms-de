@@ -274,6 +274,30 @@ toolkit_fixture_packages() {
     esac
 }
 
+require_packaged_btop() {
+    test -x /usr/bin/btop || fail 'shipped btop missing before tracing fixture install'
+    local owner
+    case "$target" in
+        ubuntu-24.04-x86_64)
+            owner=$(dpkg-query -S /usr/bin/btop)
+            [[ $owner =~ ^btop(:amd64)?:[[:space:]] ]] || fail "wrong shipped btop owner: $owner"
+            ;;
+        fedora-44-x86_64)
+            test "$(rpm -qf --qf '%{NAME}' /usr/bin/btop)" = btop || fail 'wrong shipped btop owner'
+            ;;
+        *) fail "unknown consumer fixture target: $target" ;;
+    esac
+}
+
+install_consumer_trace() {
+    require_packaged_btop || return $?
+    require_packaged_qt6ct || return $?
+    case "$target" in
+        ubuntu-24.04-x86_64) DEBIAN_FRONTEND=noninteractive apt-get install --yes strace ;;
+        fedora-44-x86_64) dnf -y install strace ;;
+    esac
+}
+
 require_packaged_qt6ct() {
     local plugin owner
     test -x /usr/bin/qt6ct || fail 'shipped qt6ct executable missing before fixture install'
@@ -484,6 +508,9 @@ probe_guest() {
 
 main() {
     case ${1:-} in
+        consumer-trace)
+            install_consumer_trace
+            ;;
         configure-sync-diagnostic)
             configure_sync_diagnostic
             ;;

@@ -11,6 +11,24 @@ spec.loader.exec_module(probe)
 
 
 class ConsumerTests(unittest.TestCase):
+    def test_trace_fixture_follows_package_only_probe_and_precedes_consumers(self):
+        host = Path(__file__).with_name('run-native-session-vm.sh').read_text()
+        self.assertIn('consumer-trace "$target"', host)
+        self.assertLess(host.index('guest-probe.sh" probe "$target"'), host.index('consumer-trace "$target"'))
+        self.assertLess(host.index('consumer-trace "$target"'), host.index('"$script_dir/consumer_roundtrip.py"'))
+
+    def test_btop_requires_successful_own_pid_opens_of_both_selected_files(self):
+        self.assertTrue(callable(getattr(probe, 'btop_file_reads', None)),
+                        'native consumer must validate real btop file reads')
+        trace = ('42 openat(AT_FDCWD, "/A/btop/btop.conf", O_RDONLY) = 4\n'
+                 '[pid 42] openat(AT_FDCWD, "/A/btop/themes/realm.theme", O_RDONLY) = 5\n')
+        self.assertEqual(len(probe.btop_file_reads(trace, 42, '/A')), 2)
+        for bad in (trace.replace('42', '43'), trace.replace('/A/', '/B/'),
+                    trace.replace('= 5', '= -1 ENOENT'), trace.splitlines()[0],
+                    trace.replace('realm.theme"', 'realm.theme.backup"')):
+            with self.subTest(trace=bad), self.assertRaises(AssertionError):
+                probe.btop_file_reads(bad, 42, '/A')
+
     def test_yazi_exec_is_barrier_before_reading_sequential_proofs(self):
         started = False
         def process(name):

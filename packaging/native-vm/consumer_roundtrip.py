@@ -1,5 +1,6 @@
-"""CI-only native Foot/Zsh/Yazi selected-login consumption evidence."""
+"""CI-only native Foot/Zsh/Yazi/btop selected-login consumption evidence."""
 import json
+import re
 from pathlib import Path
 import shlex
 import subprocess
@@ -7,6 +8,18 @@ import sys
 import time
 
 from lock_roundtrip import complete_ppm, monitor_command
+
+
+def btop_file_reads(trace, pid, root):
+    matched = []
+    for path in (root + '/btop/btop.conf', root + '/btop/themes/realm.theme'):
+        pattern = (r'^\s*(?:' + str(pid) + r'\s+|\[pid\s+' + str(pid)
+                   + r'\]\s+)openat\([^,\n]+, "' + re.escape(path)
+                   + r'", [^\n]*\)\s+=\s+[0-9]+\s*$')
+        lines = re.findall(pattern, trace, re.MULTILINE)
+        assert lines, ('btop did not open selected file', pid, path, trace[-8192:])
+        matched.append(lines[0])
+    return matched
 
 
 def select_foot_config(root, check):
@@ -183,6 +196,60 @@ printf '%s\\n' "$?" > /tmp/realm-native-yazi-exit
         key('q')
         wait('test -s /tmp/realm-native-yazi-exit && ! pgrep -u alice -x yazi')
         assert guest('cat /tmp/realm-native-yazi-exit').strip() == '0'
+        # Observe the ordinary generated shell function, not an SSH-launched or
+        # replacement btop command. Root tracing is disposable CI scaffolding.
+        config = root + '/btop/btop.conf'
+        theme = root + '/btop/themes/realm.theme'
+        before_digest = guest('sha256sum ' + shlex.join([config, theme]))
+        guest(user + ' test ! -w ' + shlex.quote(config))
+        result['btop_version'] = guest('/usr/bin/btop --version').strip()
+        guest('sudo tee /tmp/btopproof >/dev/null',
+              'btop\nprintf \'%s\\n\' "$?" > /tmp/realm-native-btop-exit\n')
+        trace = '/tmp/realm-native-btop.trace'
+        trace_error = '/tmp/realm-native-btop.trace-error'
+        tracer = guest('sudo sh -c ' + shlex.quote(
+            'timeout --signal=INT --kill-after=2 45 strace -f -s 4096 -e trace=openat '
+            + '-o ' + trace + ' -p ' + str(shell['pid'])
+            + ' </dev/null >/dev/null 2>' + trace_error + ' & echo $!')).strip()
+        assert tracer.isdigit(), tracer
+        try:
+            wait("grep -Eq '^TracerPid:[[:space:]]+[1-9][0-9]*$' /proc/"
+                 + str(shell['pid']) + '/status')
+            for character in 'source /tmp/btopproof':
+                key({' ': 'spc', '/': 'slash'}.get(character, character))
+            key('ret')
+            monitor_process = process('btop')
+            assert_consumer(monitor_process, root, '/usr/bin/btop')
+            assert monitor_process['parent_pid'] == shell['pid'], monitor_process
+            assert monitor_process['arguments'] == [
+                'btop', '--config', config, '--themes-dir', root + '/btop/themes'
+            ], monitor_process
+            deadline = time.monotonic() + 10
+            while True:
+                trace_text = guest('sudo cat ' + trace)
+                try:
+                    result['btop_file_reads'] = btop_file_reads(trace_text, monitor_process['pid'], root)
+                    break
+                except AssertionError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.1)
+            state(1, 'consumer-btop')
+            screenshot('consumer-btop-after-apply-b')
+            key('q')
+            wait('test -s /tmp/realm-native-btop-exit && ! pgrep -u alice -x btop')
+            assert guest('cat /tmp/realm-native-btop-exit').strip() == '0'
+            assert guest('sha256sum ' + shlex.join([config, theme])) == before_digest
+            result['btop_selected_files_unchanged'] = True
+        finally:
+            # The tracer has its own hard lifetime even if SSH cleanup fails.
+            try:
+                guest('sudo kill -TERM ' + tracer + ' 2>/dev/null || true')
+                for remote, name in ((trace, 'consumer-btop.trace'),
+                                     (trace_error, 'consumer-btop-trace.stderr')):
+                    (evidence / name).write_text(guest('sudo cat ' + remote))
+            except Exception as error:
+                print(f'btop trace cleanup failed: {error}', file=sys.stderr)
         key('meta_l-q')
         selected_foot_absent = consumer_process_command('foot', selected_config, 'absent')
         wait(selected_foot_absent + ' && ! pgrep -u alice -x zsh')

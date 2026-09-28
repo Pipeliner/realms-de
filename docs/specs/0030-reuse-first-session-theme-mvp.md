@@ -314,6 +314,19 @@ a completion barrier. Record executable identities, shell execution evidence,
 compositor state and complete framebuffers;
 quit Yazi and the terminal and verify clean process/window closure. Missing
 private Yazi/Starship is a failure, not a skipped acceptance. This CI slice
+also launches installed btop by keyboard through that same retained Zsh's
+generated adapter after apply B. Require the actual btop executable, A-selected
+environment and separate config/themes-directory arguments, successful traced
+opens by that btop PID of A's config and theme, and a complete framebuffer of
+the managed terminal. Retain the trace and screenshot for visual review; argv
+alone is not file-consumption evidence. Quit normally and require zero exit,
+unchanged selected config/theme hashes and process closure before closing Foot.
+Install only the CI strace fixture after the package-only graphical probe;
+first require shipped btop and qt6ct so fixture installation cannot mask missing
+runtime tools. Attach tracing to the real shell with a bounded lifetime and
+observe its actual TracerPid before input; tracing must not replace the normal
+shell function or app launch. Failed read/config/process evidence remains fatal.
+This CI slice
 depends on SPEC 0024's native tool delivery (#236); it does not add distro tool
 substitutes, enable live theme changes, or claim GTK/Qt, portal/browser or
 next-login/relogin acceptance.

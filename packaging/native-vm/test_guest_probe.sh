@@ -85,6 +85,21 @@ test "$preflight_seen" = true
 test "$packages_called" = false
 
 # Run the browser input-order regression through this existing CI entry point.
+declare -F install_consumer_trace >/dev/null || fail 'consumer tracing fixture missing'
+packages_called=false
+require_packaged_btop() { return 1; }
+require_packaged_qt6ct() { return 0; }
+if install_consumer_trace; then fail 'tracing fixture hid missing installed btop'; fi
+test "$packages_called" = false
+require_packaged_btop() { return 0; }
+require_packaged_qt6ct() { return 1; }
+if install_consumer_trace; then fail 'tracing fixture hid missing installed Qt plugin'; fi
+test "$packages_called" = false
+require_packaged_qt6ct() { return 0; }
+apt-get() { test "$*" = 'install --yes strace'; packages_called=true; }
+install_consumer_trace
+test "$packages_called" = true
+
 unset -f python3
 python3 "$script_dir/test_browser_roundtrip.py"
 python3 "$script_dir/test_relogin_roundtrip.py"
