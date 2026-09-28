@@ -12,6 +12,34 @@ require_kvm() {
     fi
 }
 
+prepare_kvm() {
+    local evidence_dir=$1 device=${2:-/dev/kvm} status=0
+    mkdir -p "$evidence_dir"
+    {
+        printf 'before KVM admission\n'
+        id
+        ls -l "$device" || true
+        getfacl -p "$device" || true
+        printf 'character=%s readable=%s writable=%s\n' \
+            "$(test -c "$device" && echo yes || echo no)" \
+            "$(test -r "$device" && echo yes || echo no)" \
+            "$(test -w "$device" && echo yes || echo no)"
+        if [[ -c "$device" ]] && ! require_kvm "$device"; then
+            timeout 10 sudo -n setfacl -m "u:$(id -u):rw" "$device" || status=$?
+        fi
+        printf 'after KVM admission (command status %s)\n' "$status"
+        ls -l "$device" || true
+        getfacl -p "$device" || true
+        printf 'character=%s readable=%s writable=%s\n' \
+            "$(test -c "$device" && echo yes || echo no)" \
+            "$(test -r "$device" && echo yes || echo no)" \
+            "$(test -w "$device" && echo yes || echo no)"
+        require_kvm "$device" || status=1
+    } > "$evidence_dir/kvm-preflight.log" 2>&1
+    cat "$evidence_dir/kvm-preflight.log"
+    return "$status"
+}
+
 wait_for_ssh() {
     local qemu_pid=$1
     local timeout_seconds=$2
@@ -188,17 +216,16 @@ run_native_session_vm() (
     check_inputs="$script_dir/check_inputs.py"
     guest_probe="$script_dir/guest-probe.sh"
     control_probe="$script_dir/control_get_state.py"
-    for command in cloud-localds curl qemu-img qemu-system-x86_64 \
-        scp socat ssh ssh-keygen python3 timeout; do
-        require_command "$command"
-    done
-    require_kvm /dev/kvm
-
     mkdir -p "$evidence_dir"
     if [[ -n "$diagnostic" ]]; then
         printf '%s\n' '{"diagnostic_only":true,"override":"compositor LP_NUM_THREADS=0","acceptance":false}' \
             > "$evidence_dir/diagnostic-only.json"
     fi
+    prepare_kvm "$evidence_dir" /dev/kvm || return $?
+    for command in cloud-localds curl qemu-img qemu-system-x86_64 \
+        scp socat ssh ssh-keygen python3 timeout; do
+        require_command "$command"
+    done
     mapfile -t packages < <(python3 "$check_inputs" packages "$target" "$package_dir")
     case "$target" in
         ubuntu-24.04-x86_64)

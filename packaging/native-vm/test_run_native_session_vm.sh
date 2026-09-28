@@ -30,6 +30,29 @@ if require_kvm "$case_root/missing-kvm" 2>"$case_root/missing.err"; then
 fi
 grep -Fq 'KVM is required' "$case_root/missing.err" || fail 'missing KVM diagnostic was lost'
 
+declare -F prepare_kvm >/dev/null || fail 'per-invocation KVM preparation missing'
+if prepare_kvm "$case_root/preflight-missing" "$case_root/missing-kvm"; then
+    fail 'missing KVM passed preflight'
+fi
+grep -Fq 'before' "$case_root/preflight-missing/kvm-preflight.log" || fail 'preflight evidence missing'
+(
+    admitted=false
+    require_kvm() { "$admitted"; }
+    timeout() {
+        test "$*" = "10 sudo -n setfacl -m u:$(id -u):rw /dev/null" || exit 91
+        admitted=true
+    }
+    prepare_kvm "$case_root/preflight-repair" /dev/null
+    admitted=false
+    prepare_kvm "$case_root/preflight-repeat" /dev/null
+) || fail 'subsequent invocation did not restore scoped access'
+(
+    require_kvm() { return 1; }
+    timeout() { return 17; }
+    if prepare_kvm "$case_root/preflight-denied" /dev/null; then exit 92; fi
+    grep -Fq 'after' "$case_root/preflight-denied/kvm-preflight.log"
+) || fail 'failed admission lost failure or after evidence'
+
 if grep -Fq 'local-hostname:' "$fixture_script_dir/run-native-session-vm.sh"; then
     fail 'NoCloud seed still requests a cosmetic hostname'
 fi

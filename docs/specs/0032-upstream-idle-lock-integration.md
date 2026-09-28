@@ -141,6 +141,15 @@ this separate step to 25 minutes within the existing 60-minute job. A diagnostic
 pass isolates a synchronization dependency; it is not ordinary Ubuntu or MVP
 acceptance and does not authorize shipping this environment override.
 
+Each native harness invocation, including the separate diagnostic, must check
+KVM access afresh and, for an existing character device lacking access, grant
+only the current runner UID read/write ACL through a bounded noninteractive
+sudo command. Keep QEMU unprivileged. Retain identity, device metadata, ACL and
+read/write observations before and after preparation in that invocation's
+evidence directory, created before preflight. Missing devices or unsuccessful
+admission remain failures with retained evidence; do not infer missing hardware
+from an access failure or treat a preflight failure as renderer evidence.
+
 CI-only discriminator after run 36354366061: Ubuntu retained 25 identical fresh
 partial frames across five seconds, excluding reused capture files. Retain up
 to 128 KiB of SDDM compositor/session stderr and 64 KiB of lock journal evidence.
