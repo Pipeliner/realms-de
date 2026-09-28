@@ -121,16 +121,16 @@ these checked-in paths:
 ### 3. `needs-human` snapshot
 
 The `Needs a human` section is a dated snapshot of this GitHub query at
-`2026-09-27`:
+`2026-09-28`:
 
 ```text
 repo:Pipeliner/realms-de is:issue is:open label:needs-human
 ```
 
-It contains exactly one Markdown table row per snapshot issue. Each row has
-the structure `| [#number — exact GitHub title](exact issue URL) | factual,
-nonempty blocker |`, for exactly issue `#25`, titled
-`Template: GTK 3, GTK 4 and libadwaita stylesheets`.
+It reports no open `needs-human` issues. Issue #25's GTK target-location
+decision is resolved by Accepted SPEC 0030's named generation profiles; its
+remaining toolkit runtime and fidelity checks stay open, not human-blocked.
+The section must not retain an issue table or imply those checks passed.
 
 Every blocker is a short consequence already stated by the linked issue. It
 does not invent an option, recommendation, priority, owner or deadline. Closed
@@ -157,14 +157,14 @@ CI trial artifacts, not releases or a completed MVP certification.
 |---|---|---|
 | A1 | Given the README before its first divider, when a visitor reads it, then it contains the five-part identity and both inspected VM captures; their caption identifies NixOS QEMU and River 0.4.8, links the original provenance and explicit review correction, reports the PNG-IHDR-derived 1280x800 dimensions, and makes no hardware or final-theme claim; given the rule section, it contains the three exact headings with ADR 0001/0005/0009 links. | `docs/test-readme-truth-snapshot.sh` — `intro-and-rules`, `capture-evidence` |
 | A2 | Given README status and map sections, when checked against tracked paths and `docs/ROADMAP.md`, then the M0-in-progress/M3-MVP wording, installed-NixOS-VM-verified `realm-wm` and `realm-bar`, separately linked native VM jobs and tested revision, failed overall-run boundary, remaining hardware/full-MVP boundary, present pre-alpha assets, and all named map paths are truthful. | `docs/test-readme-truth-snapshot.sh` — `artifact-truth` |
-| A3 | Given the `2026-09-27` snapshot, when each `Needs a human` table row is checked, then it binds exact issue #25, URL and title to a nonempty factual blocker; exactly this one accepted row exists and obsolete rows do not. | `docs/test-readme-truth-snapshot.sh` — `needs-human-snapshot` |
+| A3 | Given the `2026-09-28` snapshot, when `Needs a human` is checked, then it states no open human-decision issues, links the live label, retains the unresolved runtime/fidelity boundary and has no obsolete issue rows. | `docs/test-readme-truth-snapshot.sh` — `needs-human-snapshot` |
 | A4 | Given the documentation CI job, when it runs on a pull request or push, then uncommented fixture and production-check commands run in the `docs` job without a network call. | `docs/test-readme-truth-snapshot.sh` — `workflow-invocation` |
 
 ## Failure modes
 
 Stale README claims violate standing order S15. The local check fails before
 documentation CI if the identity/rules leave their required sections, an
-accepted snapshot row is omitted or malformed, #34 is presented as unresolved,
+obsolete human-decision row returns or the unresolved runtime boundary is lost,
 a required artifact/map path is denied or missing, or a check command is not
 load-bearing in the docs job.
 

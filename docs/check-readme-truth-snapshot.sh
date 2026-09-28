@@ -256,25 +256,13 @@ require_section "$map_section" 'root Nix reference-build entry point' \
 
 needs_section=$(sed -n '/^## Needs a human$/,/^## Repo map$/p' "$readme")
 [ -n "$needs_section" ] || fail 'README needs-human section is required'
-require_section "$needs_section" '2026-09-27' \
+require_section "$needs_section" '2026-09-28' \
     'README needs-human snapshot timestamp differs from the accepted snapshot'
 
-expected_count=0
-while IFS='|' read -r issue title; do
-    [ -n "$issue" ] || continue
-    expected_count=$((expected_count + 1))
-    issue_url="https://github.com/Pipeliner/realms-de/issues/$issue"
-    url_count=$(printf '%s\n' "$needs_section" | grep -F -c -e "$issue_url)" || true)
-    [ "$url_count" -eq 1 ] || fail "missing needs-human snapshot issue #$issue"
-    row_prefix="| [#$issue — $title]($issue_url) |"
-    row_count=$(printf '%s\n' "$needs_section" | grep -F -c -e "$row_prefix" || true)
-    [ "$row_count" -eq 1 ] || fail 'needs-human snapshot title differs from GitHub'
-    row=$(printf '%s\n' "$needs_section" | grep -F -e "$row_prefix")
-    printf '%s\n' "$row" | awk -F '|' 'NF == 4 && $3 ~ /[^[:space:]]/ { ok = 1 } END { exit(ok ? 0 : 1) }' \
-        || fail 'needs-human snapshot blocker is empty'
-done <<'EOF'
-25|Template: GTK 3, GTK 4 and libadwaita stylesheets
-EOF
+require_section "$needs_section" 'no open issues require a human decision' \
+    'README must state the empty human-decision snapshot'
+require_section "$needs_section" 'and fidelity checks remain open' \
+    'README must preserve unresolved toolkit verification'
 
 if printf '%s\n' "$needs_section" \
     | grep -F -q -e 'https://github.com/Pipeliner/realms-de/issues/34'; then
@@ -283,8 +271,8 @@ fi
 
 actual_count=$(printf '%s\n' "$needs_section" \
     | grep -E -c 'https://github\.com/Pipeliner/realms-de/issues/[0-9]+' || true)
-[ "$actual_count" -eq "$expected_count" ] \
-    || fail 'needs-human snapshot must contain exactly the accepted issue set'
+[ "$actual_count" -eq 0 ] \
+    || fail 'needs-human snapshot must contain no issue rows'
 
 docs_job=$(sed -n '/^  docs:/,/^  msrv:/p' "$workflow")
 for command in \

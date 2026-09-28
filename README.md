@@ -256,13 +256,12 @@ package or a successful VM login.
 ## Needs a human
 
 Standing order S3: decisions requiring human judgment stay visible here.
-Checked **2026-09-27**: the current open
+Checked **2026-09-28**: no open issues require a human decision under the
 [`needs-human` label](https://github.com/Pipeliner/realms-de/labels/needs-human)
-contains the following issue. Follow the label for live state.
+snapshot. Follow the label for live state.
 
-| Issue | What it blocks |
-|---|---|
-| [#25 — Template: GTK 3, GTK 4 and libadwaita stylesheets](https://github.com/Pipeliner/realms-de/issues/25) | Completion of the GTK styling acceptance tracked in this issue. |
+Accepted SPEC 0030 resolves the GTK target-location decision. Toolkit runtime
+and fidelity checks remain open; this is not acceptance or MVP completion.
 
 ---
 
