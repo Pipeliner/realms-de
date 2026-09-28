@@ -1929,13 +1929,14 @@ EOF
       btop_args = machine.succeed(
           f"tr '\\0' '\\n' < /proc/{btop_pid}/cmdline"
       ).splitlines()
-      assert btop_args == [
-          "btop",
-          "--config",
-          f"{generation_root}/btop/btop.conf",
-          "--themes-dir",
-          f"{generation_root}/btop/themes",
-      ], btop_args
+      assert btop_args == ["btop"], btop_args
+      btop_environment = process_environment(btop_pid)
+      btop_view = btop_environment["XDG_CONFIG_HOME"]
+      assert btop_view.startswith(btop_environment["XDG_RUNTIME_DIR"] + "/realm-btop.")
+      for suffix in ("btop.conf", "themes"):
+          assert machine.succeed(
+              "readlink -f " + shlex.quote(f"{btop_view}/btop/{suffix}")
+          ).strip() == f"{generation_root}/btop/{suffix}"
       machine.wait_for_text("CPU", timeout=OCR_TIMEOUT)
       machine.fail(
           as_alice("sh", "-c", f"printf x >> {shlex.quote(btop_config)}")
@@ -1946,6 +1947,9 @@ EOF
       machine.send_key("q")
       machine.wait_until_succeeds(
           f"test ! -d /proc/{btop_pid}", timeout=STATE_TIMEOUT
+      )
+      machine.wait_until_succeeds(
+          "test ! -e " + shlex.quote(btop_view), timeout=STATE_TIMEOUT
       )
       assert machine.succeed(
           f"sha256sum {shlex.quote(btop_config)}"

@@ -150,6 +150,12 @@ pub fn templates() -> Vec<Template> {
             reload: Reload::None,
         },
         Template {
+            id: "btop-launcher",
+            source: ::core::include_str!("../../../configs/templates/btop-launch.sh"),
+            target: PathBuf::from("btop/launch.sh"),
+            reload: Reload::None,
+        },
+        Template {
             id: "btop-config",
             source: ::core::include_str!("../../../configs/templates/btop.conf"),
             target: PathBuf::from("btop/btop.conf"),
@@ -310,8 +316,7 @@ mod tests {
                         "\n",
                         "eval \"$(starship init zsh)\"\n",
                         "btop() {\n",
-                        "  command btop --config \"$REALM_GENERATION/btop/btop.conf\" \\\n",
-                        "    --themes-dir \"$REALM_GENERATION/btop/themes\" \"$@\"\n",
+                        "  command sh \"$REALM_GENERATION/btop/launch.sh\" \"$@\"\n",
                         "}\n",
                     )
                     .to_owned(),
@@ -324,7 +329,7 @@ mod tests {
                 (
                     "yazi-keymap",
                     "yazi/keymap.toml".into(),
-                    "[manager]\nprepend_keymap = [\n  { on = \"<C-p>\", run = \"shell 'btop --config \\\"$REALM_GENERATION/btop/btop.conf\\\" --themes-dir \\\"$REALM_GENERATION/btop/themes\\\"' --block\", desc = \"Open Realm system monitor\" },\n]\n".to_owned(),
+                    "[manager]\nprepend_keymap = [\n  { on = \"<C-p>\", run = \"shell 'sh \\\"$REALM_GENERATION/btop/launch.sh\\\"' --block\", desc = \"Open Realm system monitor\" },\n]\n".to_owned(),
                 ),
                 (
                     "btop-config",
@@ -527,12 +532,78 @@ test ! -e "$ZDOTDIR/.zcompdump"
     }
 
     #[test]
-    fn rendered_btop_launchers_pass_separate_pinned_cli_arguments() {
+    fn btop_runtime_view_keeps_logs_outside_selected_generation() {
+        let adapter = templates()
+            .into_iter()
+            .find(|t| t.id == "btop-launcher")
+            .expect("shared btop runtime adapter missing");
+        let temp = tempfile::tempdir().unwrap();
+        let generation = temp.path().join("generation with spaces");
+        let runtime = temp.path().join("runtime");
+        let bin = temp.path().join("bin");
+        fs::create_dir_all(generation.join("btop/themes")).unwrap();
+        fs::create_dir(&runtime).unwrap();
+        fs::create_dir(&bin).unwrap();
+        fs::write(generation.join("btop/btop.conf"), "color_theme = realm\n").unwrap();
+        fs::write(generation.join("btop/themes/realm.theme"), "theme\n").unwrap();
+        let executable = bin.join("btop");
+        fs::write(&executable, concat!(
+            "#!/bin/sh\nset -eu\n",
+            "test \"$#\" = 1 && test \"$1\" = 'caller argument'\n",
+            "test \"$(readlink \"$XDG_CONFIG_HOME/btop/btop.conf\")\" = \"$REALM_GENERATION/btop/btop.conf\"\n",
+            "test \"$(readlink \"$XDG_CONFIG_HOME/btop/themes\")\" = \"$REALM_GENERATION/btop/themes\"\n",
+            "printf log > \"$XDG_CONFIG_HOME/btop/btop.log\"\n",
+            "printf '%s' \"$XDG_CONFIG_HOME\"\nexit 7\n",
+        )).unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let script = temp.path().join("adapter.sh");
+        fs::write(&script, adapter.source).unwrap();
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        let output = Command::new("sh")
+            .arg(&script)
+            .arg("caller argument")
+            .env("PATH", path)
+            .env("REALM_GENERATION", &generation)
+            .env("XDG_RUNTIME_DIR", &runtime)
+            .env("XDG_CONFIG_HOME", "/unrelated")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(7), "{output:?}");
+        let view = PathBuf::from(String::from_utf8(output.stdout).unwrap());
+        assert!(view.starts_with(&runtime));
+        assert!(!view.exists(), "runtime view was not cleaned");
+        assert!(!generation.join("btop/btop.log").exists());
+        assert_eq!(
+            fs::read_to_string(generation.join("btop/btop.conf")).unwrap(),
+            "color_theme = realm\n"
+        );
+        let missing = Command::new("sh")
+            .arg(&script)
+            .env_remove("XDG_RUNTIME_DIR")
+            .env("REALM_GENERATION", &generation)
+            .output()
+            .unwrap();
+        assert!(!missing.status.success());
+    }
+
+    #[test]
+    fn rendered_btop_launchers_preserve_caller_arguments() {
         let root = tempfile::tempdir().unwrap();
         let bin = root.path().join("bin");
         fs::create_dir(&bin).unwrap();
         let argv_file = root.path().join("argv");
         let generation = root.path().join("generation with spaces");
+        fs::create_dir_all(generation.join("btop/themes")).unwrap();
+        fs::write(generation.join("btop/btop.conf"), "config").unwrap();
+        fs::write(
+            generation.join("btop/launch.sh"),
+            templates()
+                .into_iter()
+                .find(|t| t.id == "btop-launcher")
+                .unwrap()
+                .source,
+        )
+        .unwrap();
 
         let btop = bin.join("btop");
         fs::write(
@@ -545,13 +616,7 @@ test ! -e "$ZDOTDIR/.zcompdump"
         fs::write(&starship, "#!/bin/sh\nexit 0\n").unwrap();
         fs::set_permissions(&starship, fs::Permissions::from_mode(0o700)).unwrap();
 
-        let expected = [
-            "btop".to_owned(),
-            "--config".to_owned(),
-            generation.join("btop/btop.conf").display().to_string(),
-            "--themes-dir".to_owned(),
-            generation.join("btop/themes").display().to_string(),
-        ];
+        let expected = ["btop".to_owned()];
         let run = |script: &str, caller_args: &[&str]| {
             if argv_file.exists() {
                 fs::remove_file(&argv_file).unwrap();
@@ -559,7 +624,11 @@ test ! -e "$ZDOTDIR/.zcompdump"
             let status = Command::new("/bin/sh")
                 .arg("-c")
                 .arg(script)
-                .env("PATH", &bin)
+                .env(
+                    "PATH",
+                    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+                )
+                .env("XDG_RUNTIME_DIR", root.path())
                 .env("REALM_GENERATION", &generation)
                 .env("REALM_BTOP_ARGV_OUT", &argv_file)
                 .status()
@@ -662,6 +731,10 @@ test ! -e "$ZDOTDIR/.zcompdump"
                 (
                     "yazi",
                     ::core::include_str!("../../../configs/templates/yazi-theme.toml")
+                ),
+                (
+                    "btop-launcher",
+                    ::core::include_str!("../../../configs/templates/btop-launch.sh")
                 ),
                 (
                     "btop-config",

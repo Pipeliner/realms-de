@@ -220,15 +220,22 @@ printf '%s\\n' "$?" > /tmp/realm-native-yazi-exit
             key('ret')
             monitor_process = process('btop')
             assert_consumer(monitor_process, root, '/usr/bin/btop')
-            assert monitor_process['parent_pid'] == shell['pid'], monitor_process
-            assert monitor_process['arguments'] == [
-                'btop', '--config', config, '--themes-dir', root + '/btop/themes'
-            ], monitor_process
+            adapter_pid = monitor_process['parent_pid']
+            assert int(guest(f'ps -o ppid= -p {adapter_pid}')) == shell['pid']
+            assert guest(f"tr '\\0' '\\n' < /proc/{adapter_pid}/cmdline").splitlines() == [
+                'sh', root + '/btop/launch.sh'
+            ]
+            assert monitor_process['arguments'] == ['btop'], monitor_process
+            view = monitor_process['environment']['XDG_CONFIG_HOME']
+            assert view.startswith(monitor_process['environment']['XDG_RUNTIME_DIR'] + '/realm-btop.')
+            for suffix in ('btop.conf', 'themes'):
+                assert guest('readlink -f ' + shlex.quote(view + '/btop/' + suffix)).strip() == root + '/btop/' + suffix
+            result['btop_runtime_view'] = view
             deadline = time.monotonic() + 10
             while True:
                 trace_text = guest('sudo cat ' + trace)
                 try:
-                    result['btop_file_reads'] = btop_file_reads(trace_text, monitor_process['pid'], root)
+                    result['btop_file_reads'] = btop_file_reads(trace_text, monitor_process['pid'], view)
                     break
                 except AssertionError:
                     if time.monotonic() >= deadline:
@@ -239,6 +246,7 @@ printf '%s\\n' "$?" > /tmp/realm-native-yazi-exit
             key('q')
             wait('test -s /tmp/realm-native-btop-exit && ! pgrep -u alice -x btop')
             assert guest('cat /tmp/realm-native-btop-exit').strip() == '0'
+            guest('test ! -e ' + shlex.quote(view))
             assert guest('sha256sum ' + shlex.join([config, theme])) == before_digest
             result['btop_selected_files_unchanged'] = True
         finally:

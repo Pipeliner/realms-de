@@ -1,6 +1,11 @@
 """Native selected-theme acceptance must reject wrong real consumer evidence."""
 import importlib.util
+import os
 from pathlib import Path
+import signal
+import subprocess
+import tempfile
+import time
 import unittest
 
 from consumer_process import require_one, selected_pids
@@ -11,6 +16,43 @@ spec.loader.exec_module(probe)
 
 
 class ConsumerTests(unittest.TestCase):
+    def test_btop_concurrent_runtime_views_cleanup_on_terminal_group_termination(self):
+        adapter = Path(__file__).resolve().parents[2] / 'configs/templates/btop-launch.sh'
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            generation = root / 'generation with spaces'
+            (generation / 'btop/themes').mkdir(parents=True)
+            (generation / 'btop/btop.conf').write_text('selected config')
+            binary = root / 'btop'
+            binary.write_text('#!/bin/sh\nset -eu\n'
+                              'printf "%s" "$XDG_CONFIG_HOME" > "$1"\n'
+                              'trap "exit 0" TERM\nwhile :; do sleep 1; done\n')
+            binary.chmod(0o700)
+            children = []
+            try:
+                for index in range(2):
+                    children.append(subprocess.Popen(
+                        ['sh', str(adapter), str(root / f'proof{index}')],
+                        env={**os.environ, 'PATH': str(root) + ':' + os.environ['PATH'],
+                             'REALM_GENERATION': str(generation), 'XDG_RUNTIME_DIR': str(root)},
+                        start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+                deadline = time.monotonic() + 3
+                while not all((root / f'proof{i}').exists() and (root / f'proof{i}').stat().st_size for i in range(2)):
+                    self.assertLess(time.monotonic(), deadline, 'btop adapter did not become ready')
+                    time.sleep(.01)
+                views = [(root / f'proof{i}').read_text() for i in range(2)]
+                self.assertNotEqual(*views)
+                for child in children:
+                    os.killpg(child.pid, signal.SIGTERM)
+                    child.wait(timeout=3)
+                self.assertTrue(all(not Path(view).exists() for view in views))
+                self.assertEqual((generation / 'btop/btop.conf').read_text(), 'selected config')
+            finally:
+                for child in children:
+                    if child.poll() is None:
+                        os.killpg(child.pid, signal.SIGKILL)
+                        child.wait(timeout=3)
+
     def test_trace_fixture_follows_package_only_probe_and_precedes_consumers(self):
         host = Path(__file__).with_name('run-native-session-vm.sh').read_text()
         self.assertIn('consumer-trace "$target"', host)

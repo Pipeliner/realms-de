@@ -192,10 +192,24 @@ UWSM is an optional implementation evaluation, not a new prerequisite.
 
 Reuse the terminal/toolkit assets and probes from PRs #240/#241, but select the
 login record rather than `current`. The terminal executes zsh with the generated
-profile, Starship configuration and Yazi configuration/keymap. Its btop adapter
-passes the separate supported config and themes-directory arguments; the
-published btop config is read-only so ordinary writeback cannot alter the
-session snapshot. No additional garbage-collection policy is introduced.
+profile, Starship configuration and Yazi configuration/keymap. Its shared btop
+adapter uses a unique per-invocation directory under the required
+`XDG_RUNTIME_DIR`, containing `btop/btop.conf` and `btop/themes` symlinks to the
+selected generation. Only the btop child receives this `XDG_CONFIG_HOME`; caller
+arguments are preserved. Logs and mutable state stay outside the sealed tree;
+the selected config remains read-only. Setup failure is a launch error, never
+a fallback to mutable user configuration. The adapter removes only its own
+runtime view on ordinary exit or terminal process-group termination; abrupt session termination leaves
+any remainder to the existing runtime-directory lifecycle. Concurrent launches
+have separate views. No additional garbage-collection policy is introduced.
+
+Ubuntu 24.04 installs btop 1.3.0-1 (native CI run 36361669976, job
+108747052894), whose parser does not support `--config` or `--themes-dir`.
+Its [upstream configuration lookup](https://github.com/aristocratos/btop/blob/v1.3.0/src/btop_config.cpp)
+uses `XDG_CONFIG_HOME/btop`, and its
+[startup](https://github.com/aristocratos/btop/blob/v1.3.0/src/btop.cpp)
+places the log and theme directory alongside that config. The runtime view is
+therefore required even when the installed version supports newer CLI flags.
 
 Foot configuration selection probes the generated modern and legacy section
 variants with `--check-config` under one shared one-second deadline. It never
@@ -316,8 +330,8 @@ quit Yazi and the terminal and verify clean process/window closure. Missing
 private Yazi/Starship is a failure, not a skipped acceptance. This CI slice
 also launches installed btop by keyboard through that same retained Zsh's
 generated adapter after apply B. Require the actual btop executable, A-selected
-environment and separate config/themes-directory arguments, successful traced
-opens by that btop PID of A's config and theme, and a complete framebuffer of
+environment, unchanged caller arguments and runtime-view links resolving to A,
+successful traced opens by that btop PID of the view's config and theme, and a complete framebuffer of
 the managed terminal. Retain the trace and screenshot for visual review; argv
 alone is not file-consumption evidence. Quit normally and require zero exit,
 unchanged selected config/theme hashes and process closure before closing Foot.

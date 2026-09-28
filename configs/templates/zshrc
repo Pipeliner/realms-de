@@ -11,6 +11,5 @@ unset realm_compdump_dir
 
 eval "$(starship init zsh)"
 btop() {
-  command btop --config "$REALM_GENERATION/btop/btop.conf" \
-    --themes-dir "$REALM_GENERATION/btop/themes" "$@"
+  command sh "$REALM_GENERATION/btop/launch.sh" "$@"
 }
