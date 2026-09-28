@@ -262,6 +262,103 @@ install_browser_test_client() {
         > /etc/xdg/mimeapps.list
 }
 
+toolkit_fixture_packages() {
+    case "$1" in
+        ubuntu-24.04-x86_64)
+            printf '%s\n' gtk-3-examples gtk-4-examples strace
+            ;;
+        fedora-44-x86_64)
+            printf '%s\n' gtk3-devel gtk4-devel-tools strace
+            ;;
+        *) fail "unknown toolkit fixture target: $1" ;;
+    esac
+}
+
+require_packaged_qt6ct() {
+    local plugin owner
+    test -x /usr/bin/qt6ct || fail 'shipped qt6ct executable missing before fixture install'
+    case "$target" in
+        ubuntu-24.04-x86_64)
+            plugin=/usr/lib/x86_64-linux-gnu/qt6/plugins/platformthemes/libqt6ct.so
+            test -f "$plugin" || fail 'shipped qt6ct platform plugin missing before fixture install'
+            owner=$(dpkg-query -S /usr/bin/qt6ct)
+            [[ $owner =~ ^qt6ct(:amd64)?:[[:space:]] ]] || fail "wrong shipped qt6ct owner: $owner"
+            owner=$(dpkg-query -S "$plugin")
+            [[ $owner =~ ^qt6ct(:amd64)?:[[:space:]] ]] || fail "wrong shipped Qt plugin owner: $owner"
+            dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' qt6ct
+            ;;
+        fedora-44-x86_64)
+            plugin=/usr/lib64/qt6/plugins/platformthemes/libqt6ct.so
+            test -f "$plugin" || fail 'shipped qt6ct platform plugin missing before fixture install'
+            test "$(rpm -qf --qf '%{NAME}' /usr/bin/qt6ct)" = qt6ct ||
+                fail 'wrong shipped qt6ct executable owner'
+            test "$(rpm -qf --qf '%{NAME}' "$plugin")" = qt6ct ||
+                fail 'wrong shipped qt6ct platform plugin owner'
+            rpm -q qt6ct
+            ;;
+        *) fail "unknown toolkit fixture target: $target" ;;
+    esac
+}
+
+install_toolkit_test_clients() {
+    local -a packages
+    local executable expected owner plugin
+    # The production package must make Qt usable; installing qt6ct here would
+    # mask a missing native dependency behind disposable VM test scaffolding.
+    require_packaged_qt6ct || return $?
+    mapfile -t packages < <(toolkit_fixture_packages "$target")
+    case "$target" in
+        ubuntu-24.04-x86_64)
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get install --yes "${packages[@]}"
+            plugin=/usr/lib/x86_64-linux-gnu/qt6/plugins/platformthemes/libqt6ct.so
+            {
+                dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' qt6ct
+                dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' "${packages[@]}"
+                for executable in gtk3-widget-factory gtk4-widget-factory qt6ct; do
+                    case "$executable" in
+                        gtk3-*) expected=gtk-3-examples ;;
+                        gtk4-*) expected=gtk-4-examples ;;
+                        qt6ct) expected=qt6ct ;;
+                    esac
+                    test -x "/usr/bin/$executable" || fail "missing toolkit executable: $executable"
+                    owner=$(dpkg-query -S "/usr/bin/$executable")
+                    [[ $owner =~ ^${expected}(:amd64)?:[[:space:]] ]] ||
+                        fail "wrong toolkit owner for $executable: $owner"
+                    printf '%s\n' "$owner"
+                done
+                test -f "$plugin" || fail "missing qt6ct platform plugin: $plugin"
+                dpkg-query -S "$plugin" | grep -E '^qt6ct(:amd64)?:[[:space:]]'
+            } > /var/tmp/realm-native-toolkit-packages.txt
+            ;;
+        fedora-44-x86_64)
+            dnf -y install "${packages[@]}"
+            plugin=/usr/lib64/qt6/plugins/platformthemes/libqt6ct.so
+            {
+                rpm -q qt6ct
+                rpm -q "${packages[@]}"
+                for executable in gtk3-widget-factory gtk4-widget-factory qt6ct; do
+                    case "$executable" in
+                        gtk3-*) expected=gtk3-devel ;;
+                        gtk4-*) expected=gtk4-devel-tools ;;
+                        qt6ct) expected=qt6ct ;;
+                    esac
+                    test -x "/usr/bin/$executable" || fail "missing toolkit executable: $executable"
+                    owner=$(rpm -qf --qf '%{NAME}\n' "/usr/bin/$executable")
+                    test "$owner" = "$expected" ||
+                        fail "wrong toolkit owner for $executable: $owner"
+                    rpm -qf "/usr/bin/$executable"
+                done
+                test -f "$plugin" || fail "missing qt6ct platform plugin: $plugin"
+                test "$(rpm -qf --qf '%{NAME}' "$plugin")" = qt6ct ||
+                    fail "wrong qt6ct platform plugin owner: $plugin"
+                rpm -qf "$plugin"
+            } > /var/tmp/realm-native-toolkit-packages.txt
+            ;;
+        *) fail "unknown toolkit fixture target: $target" ;;
+    esac
+}
+
 find_realm_session() {
     local deadline=$((SECONDS + 90)) session name type remote
     while ((SECONDS < deadline)); do
@@ -405,8 +502,11 @@ main() {
         browser-client)
             install_browser_test_client
             ;;
+        toolkit-clients)
+            install_toolkit_test_clients
+            ;;
         *)
-            fail 'usage: guest-probe.sh {install TARGET PACKAGE_DIR|probe TARGET EVIDENCE_DIR|portal-clients TARGET|browser-client TARGET}'
+            fail 'usage: guest-probe.sh {install TARGET PACKAGE_DIR|probe TARGET EVIDENCE_DIR|portal-clients TARGET|browser-client TARGET|toolkit-clients TARGET}'
             ;;
     esac
 }

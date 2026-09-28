@@ -309,6 +309,30 @@ depends on SPEC 0024's native tool delivery (#236); it does not add distro tool
 substitutes, enable live theme changes, or claim GTK/Qt, portal/browser or
 next-login/relogin acceptance.
 
+The separate installed Ubuntu 24.04 and Fedora 44 toolkit slice must close
+that GTK/Qt claim with real distro-packaged GTK3 widget factory, GTK4 widget
+factory and qt6ct clients. Install only the GTK example and tracing CI fixture
+packages. The native Realm package dependency must already supply qt6ct and
+its platform-theme plugin before any fixture installation, because the session
+selects `QT_QPA_PLATFORMTHEME=qt6ct`; installing that plugin as a test fixture
+would mask a broken user installation. Record each actual package owner and
+version, and fail when a required executable or plugin is missing. After the
+earlier native consumer slice has
+prepared generation B while login A stays selected, start each toolkit through
+the shipped launcher binding and a fixture desktop entry; do not launch it from
+SSH or count a shared portal service as the selected client. For each client,
+require its real managed focused window and a toolkit-specific visible control
+label independent of the window title (`togglebutton` for GTK3, `Page 1` for
+GTK4, and `Appearance` for qt6ct),
+retain a complete framebuffer, prove a successful open of A's GTK3/GTK4 named
+theme CSS or both A's qt6ct configuration and colour file, reject relevant
+theme/configuration diagnostics, and require a clean exit after normal close.
+Also record the launched process's selected environment, exact observed title,
+stderr and relevant file-open trace on failure. A simple inherited GTK_THEME or
+QT_QPA_PLATFORMTHEME value on Foot, Zsh or Yazi does not prove toolkit use.
+The CI-only probe runs after browser OCR dependencies are present and before
+normal relogin; diagnostic-only VM runs must retain their existing early exit.
+
 The separate native relogin slice requests normal session quit and observes the
 fixture's existing SDDM automatic relogin, without restarting the display manager
 or manually removing login state. It requires the prior graphical logind session,

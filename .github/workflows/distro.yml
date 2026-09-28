@@ -284,6 +284,7 @@ jobs:
           python3 packaging/native-vm/test_lock_roundtrip.py
           python3 packaging/native-vm/test_browser_roundtrip.py
           python3 packaging/native-vm/test_consumer_roundtrip.py
+          python3 packaging/native-vm/test_toolkit_roundtrip.py
           python3 packaging/native-vm/test_portal_roundtrip.py
           python3 packaging/native-vm/test_idle_roundtrip.py
           packaging/native-vm/test_run_native_session_vm.sh

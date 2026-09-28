@@ -417,6 +417,13 @@ run_native_session_vm() (
     timeout 300 python3 "$script_dir/browser_roundtrip.py" \
         "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
 
+    # Native toolkit clients use this VM's installed OCR/monitor transport and
+    # the A selection retained after consumer_roundtrip prepared generation B.
+    timeout "$install_timeout" ssh "${ssh_options[@]}" alice@127.0.0.1 sudo bash \
+        "$realm_native_vm_guest_probe_dir/guest-probe.sh" toolkit-clients "$target"
+    timeout 480 python3 "$script_dir/toolkit_roundtrip.py" \
+        "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
+
     timeout 240 python3 "$script_dir/relogin_roundtrip.py" \
         "$monitor" "$evidence_dir" ssh "${ssh_options[@]}" alice@127.0.0.1
 

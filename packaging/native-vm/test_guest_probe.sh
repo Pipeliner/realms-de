@@ -61,6 +61,29 @@ preflight_seen=false
 install_portal_test_clients
 printf 'native VM portal provisioning order fixture passed\n'
 
+# The two target repositories package the same three real toolkit executables
+# under different GTK development/example names; no alternate app may silently
+# replace the installed consumer in the VM.
+declare -F toolkit_fixture_packages >/dev/null || fail 'toolkit package map missing'
+test "$(toolkit_fixture_packages ubuntu-24.04-x86_64 | tr '\n' ' ')" = \
+    'gtk-3-examples gtk-4-examples strace '
+test "$(toolkit_fixture_packages fedora-44-x86_64 | tr '\n' ' ')" = \
+    'gtk3-devel gtk4-devel-tools strace '
+if (toolkit_fixture_packages unknown-target) >/dev/null 2>&1; then
+    fail 'unknown toolkit fixture target accepted'
+fi
+declare -F require_packaged_qt6ct >/dev/null || fail 'qt6ct package preflight missing'
+preflight_seen=false
+packages_called=false
+require_packaged_qt6ct() { preflight_seen=true; return 1; }
+apt-get() { packages_called=true; return 99; }
+target=ubuntu-24.04-x86_64
+if install_toolkit_test_clients; then
+    fail 'toolkit fixture accepted missing shipped qt6ct'
+fi
+test "$preflight_seen" = true
+test "$packages_called" = false
+
 # Run the browser input-order regression through this existing CI entry point.
 unset -f python3
 python3 "$script_dir/test_browser_roundtrip.py"
