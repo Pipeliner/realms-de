@@ -27,6 +27,11 @@ hardware/PAM verification limits until tested.
 2. Launch Sway with the adjacent explicit config; preserve caller arguments and
    set session desktop identity to Sway for upstream desktop integration.
    Missing required commands produce a useful error before starting Sway.
+   The first prototype starts from a TTY: reject inherited nonempty `DISPLAY`
+   or `WAYLAND_DISPLAY` with a useful TTY instruction before launching or
+   changing D-Bus activation state. Nested desktops are outside this scope;
+   their session variables must not overwrite the host desktop's activation
+   environment. Headless CI clears both inherited display variables.
 3. Provide terminal, launcher, files, browser, close, focus/move, six workspaces,
    fullscreen, floating, reload, lock and exit bindings, documented in README.
    Existing application settings are not rewritten. A neutral static config
@@ -48,6 +53,7 @@ hardware/PAM verification limits until tested.
 
 Before implementation, behavioral launcher tests fail on missing files; then
 prove config selection, missing-dependency errors and argument preservation.
+Prove inherited X11/Wayland displays are rejected before compositor startup.
 Remote Sway validation and rendered-session tests are required before claiming
 the prototype works. A screenshot must be inspected, with exact run/revision
 and limitations in README. Fast configuration checks are separate from the

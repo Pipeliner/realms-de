@@ -1,4 +1,62 @@
-<h1 align="center">✦ realm</h1>
+# Realm: first functional prototype
+
+The active prototype is a small configuration for **packaged Sway**, using
+Foot, Fuzzel, Thunar, swaybar/i3status, swayidle and swaylock. No Realm binary,
+palette generator, private compositor or custom bar is required.
+
+The previous Rust/River implementation is preserved below as a historical
+experiment. Its palette, ledger, custom WM/bar and private-tool packaging are
+shelved from the first-prototype path. [SPEC 0033](docs/specs/0033-sway-functional-prototype.md)
+defines the current scope.
+
+## Run the prototype
+
+Use a Linux machine with the upstream programs already installed. Package
+installation and bundle creation in this project are performed in CI. To
+provision your own Ubuntu or Fedora machine, the upstream packages are:
+
+```sh
+# Ubuntu 24.04
+sudo apt install sway foot fuzzel thunar i3status swayidle swaylock brightnessctl xdg-utils xdg-desktop-portal-wlr xdg-desktop-portal-gtk
+# Fedora: use dnf install with the same package names.
+```
+
+Keep your current desktop installed. From a checkout, log out to a text console,
+log in as your ordinary user, then run:
+
+```sh
+./prototype/realm-prototype
+```
+
+It uses the adjacent config without overwriting your existing application or
+Sway settings. Launch from a text console; launching inside an existing desktop
+is rejected to preserve that desktop's D-Bus activation environment.
+A browser must already be configured
+as the default handler for HTTP URLs. Portals require the distribution's Sway
+integration, wlr backend and GTK fallback; their functionality is unverified.
+
+The keys use Super: Return opens a terminal; D opens the launcher; E opens files;
+B opens the browser; Shift+Q closes a window; H/J/K/L focus; Shift+H/J/K/L move;
+1–6 select workspaces; Shift+1–6 move a window; F toggles fullscreen;
+Shift+Space toggles floating; Shift+C reloads; Ctrl+L locks; Shift+E exits.
+
+CI validates the config and runs a real headless graphical session with window,
+workspace and screenshot evidence. **Runtime verification is pending for this
+new prototype.** Headless proof does not verify physical hardware, PAM unlock,
+screen sharing or suspend/resume. Suspend remains post-MVP. Idle dim at five
+minutes and lock/blank at ten are configured; brightness needs an accessible
+backlight and packaged brightnessctl.
+
+[Prototype CI](https://github.com/Pipeliner/realms-de/actions/workflows/prototype.yml)
+retains the runnable configuration bundle and graphical evidence. Check its
+exact revision and result before downloading; a bundle is not a release.
+
+## Historical Rust/River experiment
+
+The remainder records the earlier design and its evidence, not the current
+prototype's requirements or verified behavior.
+
+<h1 align="center">✦ realm — historical design</h1>
 
 <p align="center">
   <strong>a keyboard-first, gapless-tiling, Rust-first Wayland desktop environment</strong><br>

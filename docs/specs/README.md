@@ -6,7 +6,11 @@ come from this directory before the code does.
 
 ## What belongs where
 
-**Current MVP scope:** [SPEC 0030](0030-reuse-first-session-theme-mvp.md)
+**Current first-prototype scope:** [SPEC 0033](0033-sway-functional-prototype.md)
+uses stock Sway and applications; custom palette/WM/bar/tool packaging is shelved.
+The owner changed the delivery priority on 2026-10-02.
+
+**Historical Rust/River MVP scope:** [SPEC 0030](0030-reuse-first-session-theme-mvp.md)
 governs session-scoped theme selection and the Waybar comparison. Its authority
 section identifies the historical clauses it supersedes; implementation is pending.
 
