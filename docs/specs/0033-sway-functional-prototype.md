@@ -55,6 +55,12 @@ hardware/PAM verification limits until tested.
    accept only that documented missing-response condition, and require the
    actual compositor process to exit with status zero within a bounded wait.
    Other IPC errors and nonzero compositor exit status remain test failures.
+   Exercise configured Mod4+D to launch Fuzzel and Escape to dismiss it, and
+   Mod4+E to map a real Thunar window followed by Mod4+Shift+Q to close it.
+   Identify exact application processes and match Thunar's mapped window PID;
+   retain process/tree evidence and application screenshots before restoring
+   the final two-terminal desktop. Browser/network and PAM tests remain outside
+   this bounded headless proof.
 
 ## Verification and delivery
 

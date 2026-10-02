@@ -52,7 +52,9 @@ jobs:
         run: |
           mkdir -p prototype-delivery
           tar -czf prototype-delivery/realm-sway-prototype.tar.gz \
-            prototype/realm-prototype prototype/sway.conf README.md
+            prototype/realm-prototype prototype/sway.conf README.md \
+            docs/specs/0033-sway-functional-prototype.md \
+            docs/assets/sway-prototype.png docs/assets/sway-prototype-proof.json
           sha256sum prototype-delivery/realm-sway-prototype.tar.gz \
             > prototype-delivery/SHA256SUMS
           printf '%s\n' "$GITHUB_SHA" > prototype-delivery/REVISION

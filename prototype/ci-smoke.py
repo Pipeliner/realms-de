@@ -27,6 +27,17 @@ def workspace_terminals(tree, number):
                                          if node.get("app_id") == "foot"]
 
 
+def process_ids(processes, name):
+    return {int(fields[0]) for line in processes.splitlines()
+            if len(fields := line.split()) >= 3 and fields[0].isdigit()
+            and fields[2].casefold() == name.casefold()}
+
+
+def process_windows(tree, pids):
+    return [node for node in walk(tree) if node.get("pid") in pids
+            and (node.get("app_id") or node.get("window"))]
+
+
 def shutdown(session, run):
     reply = run(["swaymsg", "-r", "-t", "command", "exit"], check=False)
     if reply.returncode:
@@ -120,6 +131,9 @@ def main():
         def workspace():
             return next(item["num"] for item in ipc("get_workspaces") if item["focused"])
 
+        def process_list():
+            return run(["ps", "-eo", "pid,ppid,comm,args"]).stdout
+
         run([str(launcher), "--validate"])
         with (evidence / "sway.log").open("w") as log:
             session = subprocess.Popen([str(launcher), "--debug"], env=env,
@@ -170,6 +184,39 @@ def main():
                 wait_for(lambda: workspace() == 1 and
                          len(workspace_terminals(ipc("get_tree"), 1)) == 2,
                          "return both Foot windows to workspace 1")
+
+                assert not process_ids(process_list(), "fuzzel"), "Fuzzel existed before its binding"
+                key("d")
+                fuzzel_pids = wait_for(lambda: process_ids(process_list(), "fuzzel"),
+                                       "configured launcher binding starting Fuzzel")
+                (evidence / "launcher-processes.txt").write_text(process_list())
+                time.sleep(0.25)
+                run(["grim", "-o", active["name"], str(evidence / "launcher.png")])
+                run(["wtype", "-s", "100", "-P", "Escape", "-p", "Escape"])
+                wait_for(lambda: not process_ids(process_list(), "fuzzel"),
+                         "Escape dismissing Fuzzel")
+
+                assert not process_ids(process_list(), "thunar"), "Thunar existed before its binding"
+                key("e")
+                thunar_pids = wait_for(lambda: process_ids(process_list(), "thunar"),
+                                       "configured files binding starting Thunar")
+                thunar_windows = wait_for(lambda: process_windows(ipc("get_tree"), thunar_pids),
+                                          "real mapped Thunar window matching its process PID")
+                thunar_id = thunar_windows[0]["id"]
+                wait_for(lambda: any(node.get("focused") for node in
+                                     process_windows(ipc("get_tree"), thunar_pids)),
+                         "Thunar receiving focus before close binding")
+                (evidence / "files-processes.txt").write_text(process_list())
+                (evidence / "files-tree.json").write_text(json.dumps(ipc("get_tree"), indent=2))
+                time.sleep(0.25)
+                run(["grim", "-o", active["name"], str(evidence / "files.png")])
+                key("q", shift=True)
+                wait_for(lambda: not process_windows(ipc("get_tree"), thunar_pids),
+                         "configured close binding unmapping Thunar")
+                wait_for(lambda: focused() is not None and workspace() == 1 and
+                         len(workspace_terminals(ipc("get_tree"), 1)) == 2,
+                         "restoring the two-terminal desktop after application checks")
+
                 bars = ipc("get_bar_config")
                 assert bars, "No configured Sway bar"
                 bar_configs = [ipc("get_bar_config", bar) for bar in bars]
@@ -197,6 +244,11 @@ def main():
                     "terminal_launch": "Mod4+Return virtual keyboard binding twice",
                     "foot_window_ids": [left, right], "focus_bindings": ["Mod4+Left", "Mod4+Right"],
                     "workspace_bindings": ["Mod4+Shift+2", "Mod4+2", "Mod4+Shift+1", "Mod4+1"],
+                    "launcher_binding": "Mod4+d launched Fuzzel; Escape dismissed it",
+                    "fuzzel_process_ids": sorted(fuzzel_pids),
+                    "files_binding": "Mod4+e mapped Thunar; Mod4+Shift+q closed it",
+                    "thunar_process_ids": sorted(thunar_pids), "thunar_window_id": thunar_id,
+                    "application_screenshots": ["launcher.png", "files.png"],
                     "screenshot": "desktop.png", "bar": "swaybar + i3status processes observed",
                     "limits": "No hardware, PAM, backlight, portals or suspend verification",
                 }

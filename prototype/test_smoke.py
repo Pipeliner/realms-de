@@ -12,6 +12,28 @@ spec.loader.exec_module(smoke)
 
 
 class SmokeTests(unittest.TestCase):
+    def test_application_process_match_uses_exact_comm_not_arguments(self):
+        self.assertTrue(callable(getattr(smoke, "process_ids", None)),
+                        "exact application process evidence is missing")
+        processes = ("PID PPID COMMAND COMMAND\n"
+                     "10 1 sway sway --debug\n"
+                     "20 10 fuzzel fuzzel\n"
+                     "30 10 foot foot -T fuzzel\n"
+                     "40 10 thunar thunar\n")
+        self.assertEqual(smoke.process_ids(processes, "fuzzel"), {20})
+        self.assertEqual(smoke.process_ids(processes, "thunar"), {40})
+
+    def test_application_window_match_requires_process_pid_and_mapped_window(self):
+        self.assertTrue(callable(getattr(smoke, "process_windows", None)),
+                        "mapped application PID evidence is missing")
+        tree = {"pid": 40, "nodes": [
+            {"id": 5, "pid": 30, "app_id": "foot", "name": "Thunar"},
+            {"id": 6, "pid": 40, "app_id": "thunar", "name": "Home"},
+        ], "floating_nodes": [
+            {"id": 7, "pid": 40, "window": 100, "window_properties": {"class": "Thunar"}},
+        ]}
+        self.assertEqual([node["id"] for node in smoke.process_windows(tree, {40})], [6, 7])
+
     def shutdown(self, client_error, compositor_status):
         self.assertTrue(callable(getattr(smoke, "shutdown", None)), "shutdown contract is missing")
         session = subprocess.Popen([sys.executable, "-c",

@@ -1,5 +1,12 @@
 # Remaining MVP assessment — 2026-09-27
 
+Historical assessment. On 2026-10-02 the owner directed a stock-tool first
+prototype under [SPEC 0033](specs/0033-sway-functional-prototype.md), tracked in
+[#259](https://github.com/Pipeliner/realms-de/issues/259) and
+[#258](https://github.com/Pipeliner/realms-de/pull/258). The execution order
+below is not the current first-prototype critical path. Preserve this snapshot
+as evidence of the earlier Rust/River delivery approach.
+
 Snapshot of main `e0b5d61`, the 75 open GitHub issues and 11 open PRs inspected
 today. This is an assessment, not a release certification. Accepted authority:
 [MVP](MVP.md), [SPEC 0030](specs/0030-reuse-first-session-theme-mvp.md),
