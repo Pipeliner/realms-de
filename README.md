@@ -17,7 +17,7 @@ provision your own Ubuntu or Fedora machine, the upstream packages are:
 
 ```sh
 # Ubuntu 24.04
-sudo apt install sway foot fuzzel thunar i3status swayidle swaylock brightnessctl xdg-utils xdg-desktop-portal-wlr xdg-desktop-portal-gtk
+sudo apt install sway foot fuzzel thunar i3status swayidle swaylock brightnessctl xdg-utils xwayland xdg-desktop-portal-wlr xdg-desktop-portal-gtk
 # Fedora: use dnf install with the same package names.
 ```
 

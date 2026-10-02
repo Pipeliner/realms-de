@@ -48,6 +48,13 @@ hardware/PAM verification limits until tested.
    exercises focus/workspaces and captures a real screenshot. CI retains the
    relocatable launcher/config artifact and runtime evidence. KVM is unnecessary
    for this proof; actual laptop testing remains a separate observation.
+   Workspace-return verification counts both Foot windows within workspace 1,
+   rather than across the whole compositor tree. Wait for terminal input before
+   typing screenshot labels so the image shows readable successful commands.
+   The terminal `exit` IPC command may close Sway's socket before its reply;
+   accept only that documented missing-response condition, and require the
+   actual compositor process to exit with status zero within a bounded wait.
+   Other IPC errors and nonzero compositor exit status remain test failures.
 
 ## Verification and delivery
 

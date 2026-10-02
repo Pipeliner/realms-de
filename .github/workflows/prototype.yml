@@ -30,11 +30,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            sway foot fuzzel thunar i3status swaylock swayidle \
+            sway xwayland foot fuzzel thunar i3status swaylock swayidle \
             brightnessctl xdg-utils xdg-desktop-portal-wlr xdg-desktop-portal-gtk \
             grim wtype dbus dbus-x11 dbus-user-session fonts-dejavu-core python3-pil
           mkdir -p prototype-evidence
-          dpkg-query -W sway foot fuzzel thunar i3status swaylock swayidle \
+          dpkg-query -W sway xwayland foot fuzzel thunar i3status swaylock swayidle \
             brightnessctl xdg-utils xdg-desktop-portal-wlr xdg-desktop-portal-gtk grim wtype \
             dbus dbus-x11 dbus-user-session fonts-dejavu-core python3-pil \
             > prototype-evidence/packages.txt

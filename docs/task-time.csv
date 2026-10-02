@@ -30,3 +30,6 @@ SPEC0033,root,implementation,2026-10-02T21:21:52Z,2026-10-02T21:28:37Z,405 secon
 SPEC0033-launcher,sway_session,implementation,2026-10-02T21:24:00Z,2026-10-02T21:27:31Z,211 seconds measured launcher and config; seven behavioral tests red then green; no package operations
 SPEC0033-nested-activation,sway_session,implementation,2026-10-02T21:28:10Z,2026-10-02T21:28:44Z,34 seconds measured text-console guard; eight behavioral tests pass; shellcheck passes
 SPEC0033,sway_review,review,2026-10-02T21:24:07Z,2026-10-02T21:26:29Z,142 seconds measured component assessment; packaged Sway chosen; nested activation risk identified
+SPEC0033,sway_ci,implementation,2026-10-02T21:24:52Z,2026-10-02T21:29:02Z,250 seconds measured stock-package workflow and real keyboard screenshot smoke; lightweight checks pass; remote runtime pending
+SPEC0033,sway_review,review,2026-10-02T21:27:29Z,2026-10-02T21:29:42Z,133 seconds measured independent launcher config and CI review; eight tests pass; workspace subtree assertion correction requested
+SPEC0033-runtime,sway_ci,implementation,2026-10-02T21:32:35Z,2026-10-02T21:34:22Z,107 seconds measured shutdown response and screenshot readiness corrections; four regressions red then green; 12 tests pass; real rerun pending

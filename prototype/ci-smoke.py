@@ -20,6 +20,26 @@ def walk(node):
         yield from walk(child)
 
 
+def workspace_terminals(tree, number):
+    workspace = next((node for node in walk(tree)
+                      if node.get("type") == "workspace" and node.get("num") == number), None)
+    return [] if workspace is None else [node for node in walk(workspace)
+                                         if node.get("app_id") == "foot"]
+
+
+def shutdown(session, run):
+    reply = run(["swaymsg", "-r", "-t", "command", "exit"], check=False)
+    if reply.returncode:
+        if reply.returncode != 1 or "Unable to receive IPC response" not in reply.stderr:
+            raise RuntimeError(f"Sway exit IPC failed: {reply.stderr}")
+    elif not all(item.get("success") for item in json.loads(reply.stdout)):
+        raise RuntimeError(f"Sway rejected exit: {reply.stdout}")
+    status = session.wait(timeout=10)
+    if status != 0:
+        raise RuntimeError(f"Sway exited with status {status}")
+    return status
+
+
 def main():
     prototype = Path(__file__).resolve().parent
     launcher = prototype / "realm-prototype"
@@ -86,6 +106,14 @@ def main():
         def terminals():
             return [node for node in walk(ipc("get_tree")) if node.get("app_id") == "foot"]
 
+        def label_terminal(title, text):
+            # Mapping a Foot window precedes shell readiness. Allow input setup,
+            # then require the shell's OSC-title feedback before continuing.
+            run(["wtype", "-s", "250", "-d", "5",
+                 f"PS1='$ '; clear; printf '\\033]0;{title}\\007{text}'\n"])
+            wait_for(lambda: any(node.get("name") == title for node in terminals()),
+                     f"terminal successfully printing {title}")
+
         def focused():
             return next((node["id"] for node in terminals() if node.get("focused")), None)
 
@@ -118,10 +146,13 @@ def main():
                 wait_for(lambda: workspace() == 1, "workspace 1 binding")
                 key("Return")
                 wait_for(lambda: len(terminals()) == 1, "first Foot window from Mod+Return")
-                run(["wtype", "printf 'REALM / SWAY PROTOTYPE\\nTerminal opened by Mod+Return\\n'\n"])
+                label_terminal("REALM-FIRST-READY",
+                               "REALM / SWAY PROTOTYPE\\nTerminal opened by Mod+Return\\n")
                 key("Return")
                 wait_for(lambda: len(terminals()) == 2, "second Foot window from Mod+Return")
-                run(["wtype", "printf 'SECOND TERMINAL\\nTwo real Wayland windows\\nFocus and workspaces tested by keyboard\\n'\n"])
+                label_terminal("REALM-SECOND-READY",
+                               "SECOND TERMINAL\\nTwo real Wayland windows\\n"
+                               "Focus and workspaces tested by keyboard\\n")
 
                 right = focused()
                 key("Left")
@@ -136,7 +167,8 @@ def main():
                          "move-to-workspace and workspace-2 bindings")
                 key("1", shift=True)
                 key("1")
-                wait_for(lambda: workspace() == 1 and len(terminals()) == 2,
+                wait_for(lambda: workspace() == 1 and
+                         len(workspace_terminals(ipc("get_tree"), 1)) == 2,
                          "return both Foot windows to workspace 1")
                 bars = ipc("get_bar_config")
                 assert bars, "No configured Sway bar"
@@ -168,10 +200,9 @@ def main():
                     "screenshot": "desktop.png", "bar": "swaybar + i3status processes observed",
                     "limits": "No hardware, PAM, backlight, portals or suspend verification",
                 }
+                summary["compositor_exit_status"] = shutdown(session, run)
                 (evidence / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
                 print(json.dumps(summary, indent=2))
-                command("exit")
-                session.wait(timeout=10)
             finally:
                 if session.poll() is None:
                     os.killpg(session.pid, signal.SIGTERM)
