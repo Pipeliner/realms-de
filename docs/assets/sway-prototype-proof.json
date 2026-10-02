@@ -1,14 +1,14 @@
 {
-  "revision": "cb8fb37319d05e02d90e6463af459c7a5616d665",
-  "run_id": 37067712117,
-  "job_id": 111039539275,
-  "bundle_artifact_id": 11253302040,
-  "evidence_artifact_id": 11252997420,
-  "verified_at": "2026-10-02T21:37:19Z",
-  "expires_at": "2026-10-16T21:36:05Z",
+  "revision": "e69ac6ffd4b7a74555f16ebe6d913445ab05a225",
+  "run_id": 37068346758,
+  "job_id": 111041615776,
+  "bundle_artifact_id": 11252849746,
+  "evidence_artifact_id": 11252869673,
+  "verified_at": "2026-10-02T21:44:43Z",
+  "expires_at": "2026-10-16T21:42:33Z",
   "environment": "Ubuntu 24.04 GitHub Actions; packaged Sway; headless backend; pixman renderer",
   "dimensions": [1280, 800],
-  "screenshot_sha256": "bd15ab51bda340e2a1c15b34f2ea06e675e4ad63a0abaaa228f5eb58a610968c",
-  "review": "Original CI PNG inspected: two tiled Foot terminals with readable successful labels; focused right border; workspace 1 and stock i3status visible. No retouching or synthetic image.",
+  "screenshot_sha256": "4632e8a9d58af63101dfcc3b45bc281dbd4d725d3ec48a7a1a8f719fe90dca07",
+  "review": "Original CI PNGs inspected: desktop has two tiled Foot terminals with readable successful labels; focused right border; workspace 1 and stock i3status visible. Launcher PNG shows actual Fuzzel application list; files PNG shows a mapped Thunar folder view. No retouching or synthetic image.",
   "limits": "No physical hardware, PAM unlock, timed idle, backlight, application portal or suspend proof; not full historical MVP acceptance. No battery and disconnected Wi-Fi are actual hosted-runner status."
 }

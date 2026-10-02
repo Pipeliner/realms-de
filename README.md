@@ -40,30 +40,31 @@ B opens the browser; Shift+Q closes a window; H/J/K/L focus; Shift+H/J/K/L move;
 1–6 select workspaces; Shift+1–6 move a window; F toggles fullscreen;
 Shift+Space toggles floating; Shift+C reloads; Ctrl+L locks; Shift+E exits.
 
-The [prototype workflow passed](https://github.com/Pipeliner/realms-de/actions/runs/37067712117)
-for revision `cb8fb37319d05e02d90e6463af459c7a5616d665`, verified 2026-10-02:
+The [prototype workflow passed](https://github.com/Pipeliner/realms-de/actions/runs/37068346758)
+for revision `e69ac6ffd4b7a74555f16ebe6d913445ab05a225`, verified 2026-10-02:
 config validation, two Foot launches through keyboard bindings, focus and
-workspace movement, swaybar/i3status, real screenshot and clean Sway shutdown.
+workspace movement, Fuzzel launch/dismiss, Thunar launch/close, swaybar/i3status,
+real screenshots and clean Sway shutdown.
 This is the prototype's own evidence, not success of the historical packaging
 workflows or completion of the full MVP. Headless proof does not verify physical hardware, PAM unlock,
 screen sharing or suspend/resume. Suspend remains post-MVP. Idle dim at five
 minutes and lock/blank at ten are configured; brightness needs an accessible
 backlight and packaged brightnessctl.
 
-[Download the verified prototype bundle](https://github.com/Pipeliner/realms-de/actions/runs/37067712117/artifacts/11253302040)
+[Download the verified prototype bundle](https://github.com/Pipeliner/realms-de/actions/runs/37068346758/artifacts/11252849746)
 (GitHub sign-in required). It contains `realm-sway-prototype.tar.gz`,
 `SHA256SUMS` and `REVISION`; unwrap the ZIP, extract the tar archive into an
 empty directory, then run `./prototype/realm-prototype` from a text console
 with the upstream packages above installed. The bundle is a trial configuration,
 not a release. Artifact availability was checked 2026-10-02 and expires at
-`2026-10-16T21:36:05Z`; after expiry use a checkout or a freshly verified CI run.
+`2026-10-16T21:42:33Z`; after expiry use a checkout or a freshly verified CI run.
 
 ![Real headless stock-Sway prototype: two tiled Foot terminals and the upstream status bar](docs/assets/sway-prototype.png)
 
 Original 1280×800 CI capture, inspected without retouching. The absent battery
 and disconnected Wi-Fi are real hosted-runner status. See
 [capture provenance and limits](docs/assets/sway-prototype-proof.json) and
-[retained logs/graphical evidence](https://github.com/Pipeliner/realms-de/actions/runs/37067712117/artifacts/11252997420).
+[retained logs/graphical evidence](https://github.com/Pipeliner/realms-de/actions/runs/37068346758/artifacts/11252869673).
 
 ## Historical Rust/River experiment
 
