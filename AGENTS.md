@@ -15,6 +15,11 @@ the same change whenever a contract changes.
 
 ## Repository operations
 
+- The first functional prototype follows Accepted SPEC 0033 (owner direction,
+  2026-10-02): use packaged Sway and applications. Custom palette management,
+  WM, bar, private tool packaging and their integration work are shelved from
+  this path. Preserve prior work; prototype CI supplies its own runtime evidence.
+
 - Keep `README.md` synchronized with current verified project state. When
   delivery, install commands, downloadable artifacts, known limitations or
   human decisions change, update the README in the same change/iteration.

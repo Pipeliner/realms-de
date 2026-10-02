@@ -1,5 +1,11 @@
 # The MVP cut line
 
+Current first-prototype path: [Accepted SPEC 0033](specs/0033-sway-functional-prototype.md)
+uses packaged Sway and stock applications. The Rust/River capabilities and
+milestones below describe the historical broader target; custom WM/bar, palette
+management and private-tool packaging do not gate that functional prototype.
+A headless prototype does not certify the daily-use week defined below.
+
 Accepted 2026-09-27 scope correction: [ADR 0023](adr/0023-reuse-first-session-theme-mvp.md)
 and [SPEC 0030](specs/0030-reuse-first-session-theme-mvp.md). Select themes once
 at login; apply prepares the next login. Compare Waybar before more custom bar
