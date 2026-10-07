@@ -9,6 +9,19 @@ experiment. Its palette, ledger, custom WM/bar and private-tool packaging are
 shelved from the first-prototype path. [SPEC 0033](docs/specs/0033-sway-functional-prototype.md)
 defines the current scope.
 
+## Why this is the fastest useful version
+
+Realm does not need its own DE or WM to demonstrate a usable keyboard-first
+desktop. Sway already provides window management, workspaces, input, outputs
+and a bar. The launcher and configuration together are 109 lines; the prototype
+does not compile or run the previous Realm crates.
+
+Palette management is optional visual polish, not a prerequisite for opening,
+arranging and using applications. Keep stock application themes for now.
+Reconsider a custom component only after a real-machine trial identifies an
+important behavior that configuration or an existing program cannot provide.
+The next useful evidence is that trial, not another framework or theme pipeline.
+
 ## Run the prototype
 
 Use a Linux machine with the upstream programs already installed. Package
@@ -56,7 +69,7 @@ backlight and packaged brightnessctl.
 `SHA256SUMS` and `REVISION`; unwrap the ZIP, extract the tar archive into an
 empty directory, then run `./prototype/realm-prototype` from a text console
 with the upstream packages above installed. The bundle is a trial configuration,
-not a release. Artifact availability was checked 2026-10-02 and expires at
+not a release. Artifact availability was rechecked 2026-10-07 and expires at
 `2026-10-16T21:42:33Z`; after expiry use a checkout or a freshly verified CI run.
 
 ![Real headless stock-Sway prototype: two tiled Foot terminals and the upstream status bar](docs/assets/sway-prototype.png)

@@ -16,6 +16,11 @@ prerequisites for the first usable desktop. Preserve existing Rust/River work
 as shelved experiments; do not delete it or mistake its CI for prototype proof.
 Uniform palette management, ledger/undo, custom orbit semantics, custom shell
 tools, cross-toolkit theme guarantees and framework work are outside this path.
+Reevaluation on 2026-10-07 confirms this cut: no in-house DE/WM or palette
+management is required to demonstrate the scoped keyboard-first workflow.
+New custom components require an observed user-facing gap that upstream
+configuration or an existing application cannot reasonably address; their
+existence in the historical implementation is not a reason to activate them.
 Suspend/resume remains deferred. Manual lock and idle dim at 300 seconds /
 lock-blank at 600 seconds remain configured prototype behavior, with explicit
 hardware/PAM verification limits until tested.
