@@ -1,4 +1,95 @@
-<h1 align="center">✦ realm</h1>
+# Realm: first functional prototype
+
+The active prototype is a small configuration for **packaged Sway**, using
+Foot, Fuzzel, Thunar, swaybar/i3status, swayidle and swaylock. No Realm binary,
+palette generator, private compositor or custom bar is required.
+
+The previous Rust/River implementation is preserved below as a historical
+experiment. Its palette, ledger, custom WM/bar and private-tool packaging are
+shelved from the first-prototype path. [SPEC 0033](docs/specs/0033-sway-functional-prototype.md)
+defines the current scope.
+
+## Why this is the fastest useful version
+
+Realm does not need its own DE or WM to demonstrate a usable keyboard-first
+desktop. Sway already provides window management, workspaces, input, outputs
+and a bar. The launcher and configuration together are 109 lines; the prototype
+does not compile or run the previous Realm crates.
+
+Palette management is optional visual polish, not a prerequisite for opening,
+arranging and using applications. Keep stock application themes for now.
+Reconsider a custom component only after a real-machine trial identifies an
+important behavior that configuration or an existing program cannot provide.
+The next useful evidence is that trial, not another framework or theme pipeline.
+
+## Run the prototype
+
+Use a Linux machine with the upstream programs already installed. Package
+installation and bundle creation in this project are performed in CI. To
+provision your own Ubuntu or Fedora machine, the upstream packages are:
+
+```sh
+# Ubuntu 24.04
+sudo apt install sway foot fuzzel thunar i3status swayidle swaylock brightnessctl xdg-utils xwayland xdg-desktop-portal-wlr xdg-desktop-portal-gtk
+# Fedora: use dnf install with the same package names.
+```
+
+Keep your current desktop installed. From a checkout, log out to a text console,
+log in as your ordinary user, then run:
+
+```sh
+./prototype/realm-prototype
+```
+
+It uses the adjacent config without overwriting your existing application or
+Sway settings. Launch from a text console; launching inside an existing desktop
+is rejected to preserve that desktop's D-Bus activation environment.
+A browser must already be configured
+as the default handler for HTTP URLs. Portals require the distribution's Sway
+integration, wlr backend and GTK fallback; their functionality is unverified.
+
+The keys use Super: Return opens a terminal; D opens the launcher; E opens files;
+B opens the browser; Shift+Q closes a window; H/J/K/L focus; Shift+H/J/K/L move;
+1–6 select workspaces; Shift+1–6 move a window; F toggles fullscreen;
+Shift+Space toggles floating; Shift+C reloads; Ctrl+L locks; Shift+E exits.
+
+The checked-in screenshot comes from a [successful prototype run](https://github.com/Pipeliner/realms-de/actions/runs/37068346758)
+for revision `e69ac6ffd4b7a74555f16ebe6d913445ab05a225`, verified 2026-10-02:
+config validation, two Foot launches through keyboard bindings, focus and
+workspace movement, Fuzzel launch/dismiss, Thunar launch/close, swaybar/i3status,
+real screenshots and clean Sway shutdown.
+This is the prototype's own evidence, not success of the historical packaging
+workflows or completion of the full MVP. Headless proof does not verify physical hardware, PAM unlock,
+screen sharing or suspend/resume. Suspend remains post-MVP. Idle dim at five
+minutes and lock/blank at ten are configured; brightness needs an accessible
+backlight and packaged brightnessctl.
+
+The [fresh prototype workflow passed](https://github.com/Pipeliner/realms-de/actions/runs/37671523078)
+for revision `0e1a65a39f1f506b05185d3bc83ce006bdcc6e70`, verified 2026-10-07.
+Its original desktop, launcher and file-manager screenshots were also inspected;
+the runtime summary confirms the keyboard journeys and compositor exit status 0.
+
+[Download the verified prototype bundle](https://github.com/Pipeliner/realms-de/actions/runs/37671523078/artifacts/11504163987)
+(GitHub sign-in required). It contains `realm-sway-prototype.tar.gz`,
+`SHA256SUMS` and `REVISION`; unwrap the ZIP, extract the tar archive into an
+empty directory, then run `./prototype/realm-prototype` from a text console
+with the upstream packages above installed. The bundle is a trial configuration,
+not a release. Artifact availability was rechecked 2026-10-07 and expires at
+`2026-10-21T19:04:30Z`; after expiry use a checkout or a freshly verified CI run.
+
+![Real headless stock-Sway prototype: two tiled Foot terminals and the upstream status bar](docs/assets/sway-prototype.png)
+
+Original 1280×800 CI capture, inspected without retouching. The absent battery
+and disconnected Wi-Fi are real hosted-runner status. See
+[capture provenance and limits](docs/assets/sway-prototype-proof.json) and
+[retained logs/graphical evidence](https://github.com/Pipeliner/realms-de/actions/runs/37068346758/artifacts/11252869673).
+
+## Historical Rust/River experiment
+
+The remainder records the earlier design and its evidence, not the current
+prototype's requirements or verified behavior.
+
+<h1 align="center">✦ realm — historical design</h1>
 
 <p align="center">
   <strong>a keyboard-first, gapless-tiling, Rust-first Wayland desktop environment</strong><br>

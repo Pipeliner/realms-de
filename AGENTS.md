@@ -15,6 +15,11 @@ the same change whenever a contract changes.
 
 ## Repository operations
 
+- The first functional prototype follows Accepted SPEC 0033 (owner direction,
+  2026-10-02): use packaged Sway and applications. Custom palette management,
+  WM, bar, private tool packaging and their integration work are shelved from
+  this path. Preserve prior work; prototype CI supplies its own runtime evidence.
+
 - Physical linked checkouts are normally capped at two. Do not create raw Git
   worktrees; use the private `.realm-scratch/worktree-retention/retention.py`
   admission/creation entrypoint under diskguard. Source-only checkouts exclude

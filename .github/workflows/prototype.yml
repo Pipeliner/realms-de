@@ -1,0 +1,81 @@
+name: Sway prototype
+
+on:
+  push:
+    branches: [main, codex/sway-prototype]
+    paths:
+      - 'prototype/**'
+      - '.github/workflows/prototype.yml'
+      - 'docs/specs/0033-sway-functional-prototype.md'
+      - 'README.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sway-prototype-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  packaged-sway:
+    name: Stock Sway rendered desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install distribution desktop tools (CI only)
+        timeout-minutes: 7
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            sway xwayland foot fuzzel thunar i3status swaylock swayidle \
+            brightnessctl xdg-utils xdg-desktop-portal-wlr xdg-desktop-portal-gtk \
+            grim wtype dbus dbus-x11 dbus-user-session fonts-dejavu-core python3-pil
+          mkdir -p prototype-evidence
+          dpkg-query -W sway xwayland foot fuzzel thunar i3status swaylock swayidle \
+            brightnessctl xdg-utils xdg-desktop-portal-wlr xdg-desktop-portal-gtk grim wtype \
+            dbus dbus-x11 dbus-user-session fonts-dejavu-core python3-pil \
+            > prototype-evidence/packages.txt
+
+      - name: Verify launcher contracts
+        run: python3 -m unittest discover -s prototype -p 'test*.py' -v
+
+      - name: Validate and render a real headless desktop
+        timeout-minutes: 4
+        run: |
+          timeout --signal=TERM --kill-after=10s 180s \
+            dbus-run-session -- python3 prototype/ci-smoke.py prototype-evidence
+
+      - name: Create relocatable prototype archive (CI only)
+        run: |
+          mkdir -p prototype-delivery
+          tar -czf prototype-delivery/realm-sway-prototype.tar.gz \
+            prototype/realm-prototype prototype/sway.conf README.md \
+            docs/specs/0033-sway-functional-prototype.md \
+            docs/assets/sway-prototype.png docs/assets/sway-prototype-proof.json
+          sha256sum prototype-delivery/realm-sway-prototype.tar.gz \
+            > prototype-delivery/SHA256SUMS
+          printf '%s\n' "$GITHUB_SHA" > prototype-delivery/REVISION
+
+      - name: Retain runtime evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sway-prototype-evidence-${{ github.sha }}
+          path: |
+            prototype-evidence/*.log
+            prototype-evidence/*.json
+            prototype-evidence/*.txt
+            prototype-evidence/*.png
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Retain runnable prototype
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: realm-sway-prototype-${{ github.sha }}
+          path: prototype-delivery/
+          if-no-files-found: error
+          retention-days: 14

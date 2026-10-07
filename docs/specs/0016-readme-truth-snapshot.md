@@ -1,5 +1,10 @@
 # SPEC 0016 — README truthfulness snapshot
 
+> Accepted prototype override (owner direction, 2026-10-02): SPEC 0033 governs
+> the README's leading runnable prototype instructions and verification claims.
+> The snapshot below applies only to the explicitly historical Rust/River
+> section. Its palette/ledger/custom-WM promises do not govern the Sway prototype.
+
 - **Status:** Accepted (2026-08-30; live-VM evidence amendment 2026-09-13; native-VM and snapshot refresh 2026-09-27)
 - **Milestone:** M0
 - **Issue:** [#8](https://github.com/Pipeliner/realms-de/issues/8)
