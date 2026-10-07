@@ -76,6 +76,11 @@ Remote Sway validation and rendered-session tests are required before claiming
 the prototype works. A screenshot must be inspected, with exact run/revision
 and limitations in README. Fast configuration checks are separate from the
 historic Rust/River verification and cannot be blocked by unrelated old jobs.
+When refreshing a delivery, preserve the original checked-in capture provenance
+and record the new verified run, revision, bundle ID, check date and expiry
+separately. README's primary download must match that delivery record; an old
+capture is not relabeled as a new one. Inspect new runtime screenshots before
+recording the refreshed run as verified.
 
 ## Implementation plan
 

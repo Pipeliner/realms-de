@@ -53,7 +53,7 @@ B opens the browser; Shift+Q closes a window; H/J/K/L focus; Shift+H/J/K/L move;
 1–6 select workspaces; Shift+1–6 move a window; F toggles fullscreen;
 Shift+Space toggles floating; Shift+C reloads; Ctrl+L locks; Shift+E exits.
 
-The [prototype workflow passed](https://github.com/Pipeliner/realms-de/actions/runs/37068346758)
+The checked-in screenshot comes from a [successful prototype run](https://github.com/Pipeliner/realms-de/actions/runs/37068346758)
 for revision `e69ac6ffd4b7a74555f16ebe6d913445ab05a225`, verified 2026-10-02:
 config validation, two Foot launches through keyboard bindings, focus and
 workspace movement, Fuzzel launch/dismiss, Thunar launch/close, swaybar/i3status,
@@ -64,13 +64,18 @@ screen sharing or suspend/resume. Suspend remains post-MVP. Idle dim at five
 minutes and lock/blank at ten are configured; brightness needs an accessible
 backlight and packaged brightnessctl.
 
-[Download the verified prototype bundle](https://github.com/Pipeliner/realms-de/actions/runs/37068346758/artifacts/11252849746)
+The [fresh prototype workflow passed](https://github.com/Pipeliner/realms-de/actions/runs/37671523078)
+for revision `0e1a65a39f1f506b05185d3bc83ce006bdcc6e70`, verified 2026-10-07.
+Its original desktop, launcher and file-manager screenshots were also inspected;
+the runtime summary confirms the keyboard journeys and compositor exit status 0.
+
+[Download the verified prototype bundle](https://github.com/Pipeliner/realms-de/actions/runs/37671523078/artifacts/11504163987)
 (GitHub sign-in required). It contains `realm-sway-prototype.tar.gz`,
 `SHA256SUMS` and `REVISION`; unwrap the ZIP, extract the tar archive into an
 empty directory, then run `./prototype/realm-prototype` from a text console
 with the upstream packages above installed. The bundle is a trial configuration,
 not a release. Artifact availability was rechecked 2026-10-07 and expires at
-`2026-10-16T21:42:33Z`; after expiry use a checkout or a freshly verified CI run.
+`2026-10-21T19:04:30Z`; after expiry use a checkout or a freshly verified CI run.
 
 ![Real headless stock-Sway prototype: two tiled Foot terminals and the upstream status bar](docs/assets/sway-prototype.png)
 
