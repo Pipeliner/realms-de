@@ -15,6 +15,15 @@ the same change whenever a contract changes.
 
 ## Repository operations
 
+- Physical linked checkouts are normally capped at two. Do not create raw Git
+  worktrees; use the private `.realm-scratch/worktree-retention/retention.py`
+  admission/creation entrypoint under diskguard. Source-only checkouts exclude
+  historical tracked packaging before materialization. Existing protected
+  checkouts are exceptions, not permission for further growth. Retirement must
+  verify remote source, completion, excluded data, active use and writer fences;
+  never force removal or delete branches to meet the cap. Shared-hook coverage
+  is coordinated by Brain; the helper is not an OS quota.
+
 - Keep `README.md` synchronized with current verified project state. When
   delivery, install commands, downloadable artifacts, known limitations or
   human decisions change, update the README in the same change/iteration.
